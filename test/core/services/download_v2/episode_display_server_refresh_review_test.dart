@@ -250,11 +250,7 @@ void main() {
     final saved = episodeTitleForStorage(episode: 2, title: original);
     expect(saved, original);
     expect(
-      continueWatchingPrimaryLabel(
-        episode: 2,
-        isArabic: true,
-        episodeTitle: saved,
-      ),
+      continueWatchingPrimaryLabel(episode: 2, episodeTitle: saved),
       original,
     );
   });
@@ -269,11 +265,7 @@ void main() {
       ]) {
         expect(episodeTitleForStorage(episode: 2, title: original), original);
         expect(
-          continueWatchingPrimaryLabel(
-            episode: 2,
-            isArabic: true,
-            episodeServerName: original,
-          ),
+          continueWatchingPrimaryLabel(episode: 2, episodeServerName: original),
           original,
         );
       }

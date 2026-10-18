@@ -34,6 +34,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.text('الحساب'), findsOneWidget);
+    expect(find.text('حساب AnimeWitcher'), findsNothing);
     expect(find.text('البريد الإلكتروني'), findsOneWidget);
     expect(find.text('كلمة المرور'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'تسجيل الدخول'), findsOneWidget);

@@ -1,10 +1,109 @@
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/features/details/presentation/widgets/details_desktop_hero.dart';
+import 'package:animewitcher/features/details/presentation/widgets/premium_details_widgets.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  for (final manga in [false, true]) {
+    for (final size in [
+      const Size(390, 844),
+      const Size(844, 390),
+      const Size(1280, 900),
+    ]) {
+      testWidgets(
+        '${manga ? 'manga' : 'anime'} header stays poster-left and LTR inside an Arabic page at $size',
+        (tester) async {
+          tester.view.physicalSize = size;
+          tester.view.devicePixelRatio = 1;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          final item = MultimediaItem(
+            title: 'Tsuihou sareta Cheat Fuyo Majutsushi',
+            url: 'https://example.test/header',
+            posterUrl: '',
+            year: 2026,
+            contentRating: '13+',
+            status: ShowStatus.ongoing,
+          );
+          final showPoster = manga || size.width < 1000;
+          await tester.pumpWidget(
+            ProviderScope(
+              child: MaterialApp(
+                home: Directionality(
+                  textDirection: TextDirection.rtl,
+                  child: Scaffold(
+                    body: DetailsDesktopHero(
+                      compact: size.width < 1000,
+                      manga: manga,
+                      showPoster: showPoster,
+                      displayItem: item,
+                      details: item,
+                      detailsState: AsyncValue<MultimediaItem?>.data(item),
+                      isMovie: false,
+                      itemUrl: item.url,
+                      onRefresh: () async {},
+                      heroActions: const Text('الإجراءات'),
+                      story: const Text('القصة'),
+                      child: const Text('الحلقات والفصول'),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+          await tester.pump();
+
+          final poster = find.byKey(const ValueKey('details-hero-poster'));
+          final title = find.byWidgetPredicate(
+            (widget) =>
+                widget is Text &&
+                widget.data == item.title &&
+                widget.style?.fontWeight == FontWeight.bold,
+          );
+          if (showPoster) {
+            expect(
+              tester.getRect(poster).right,
+              lessThan(tester.getRect(title).left),
+            );
+          } else {
+            expect(poster, findsNothing);
+            expect(tester.getRect(title).left, closeTo(60, 0.5));
+          }
+          expect(
+            tester.renderObject<RenderParagraph>(title).textDirection,
+            TextDirection.ltr,
+          );
+          for (final text
+              in find
+                  .descendant(
+                    of: find.byType(MetadataBar),
+                    matching: find.byType(Text),
+                  )
+                  .evaluate()) {
+            expect(
+              (text.renderObject! as RenderParagraph).textDirection,
+              TextDirection.ltr,
+            );
+          }
+          expect(
+            tester.getRect(find.text('2026')).left,
+            lessThan(tester.getRect(find.text('مستمر')).left),
+          );
+          for (final label in ['الإجراءات', 'القصة', 'الحلقات والفصول']) {
+            expect(
+              Directionality.of(tester.element(find.text(label))),
+              TextDirection.rtl,
+            );
+          }
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
+
   testWidgets(
     'portrait phone hero keeps a wide banner below the top isolation and centers info on the larger poster',
     (tester) async {

@@ -1593,9 +1593,8 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     String description = story;
     String? episodeBadge;
     if (recent) {
-      final episodeName = _decodeHtml(
-        source['episode_name'] ?? source['episodeName'],
-      );
+      final episodeName =
+          (source['episode_name'] ?? source['episodeName'])?.toString() ?? '';
       // Latest-episodes posters show the server label as-is: الفيلم, حلقة 5,
       // حلقة 12 والأخيرة, مترجم, مدبلج, …
       episodeBadge = latestEpisodesPosterBadge(episodeName);
@@ -3085,8 +3084,8 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   }) {
     final docId = _text(fields['doc_id']);
     final chapterId = documentId.isNotEmpty ? documentId : docId;
-    final name = _text(fields['name']);
-    if (chapterId.isEmpty || name.isEmpty) return null;
+    final name = fields['name']?.toString() ?? '';
+    if (chapterId.isEmpty || name.trim().isEmpty) return null;
     final publishedRaw =
         fields['date'] ?? fields['published_at'] ?? fields['publishedAt'];
     final publishedText = _text(publishedRaw);
@@ -5077,9 +5076,10 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   }) {
     var id = _text(source['doc_id'] ?? source['id'] ?? source['episode_id']);
     if (id.isEmpty) id = fallbackId;
-    final serverName = _decodeHtml(
-      source['name'] ?? source['episode_name'] ?? source['episodeName'],
-    );
+    final serverName =
+        (source['name'] ?? source['episode_name'] ?? source['episodeName'])
+            ?.toString() ??
+        '';
     final serverNumber = _serverEpisodeNumber(source);
     // AnimeWitcher's numeric field is authoritative, including an explicit 0
     // for movie/variant entries such as translated and dubbed versions. Never

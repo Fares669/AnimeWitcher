@@ -1,7 +1,8 @@
 group = "dev.xx.video_view"
-version = "1.3.1"
+version = "1.3.3"
 
 plugins {
+	// Flutter 3.44 may fuck with this block unless we have: {}
 	id("com.android.library")
 }
 
@@ -26,7 +27,7 @@ android {
 }
 
 dependencies {
-	val media3Version = "[1.10,1.11)"
+	val media3Version = "1.11.1"
 	implementation("androidx.media3:media3-ui:$media3Version")
 	implementation("androidx.media3:media3-exoplayer:$media3Version")
 	implementation("androidx.media3:media3-exoplayer-hls:$media3Version")

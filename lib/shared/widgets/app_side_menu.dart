@@ -9,9 +9,6 @@ import '../../core/navigation/taskbar_destination.dart';
 import '../../l10n/generated/app_localizations.dart';
 import 'account_avatar_button.dart';
 
-bool _arabic(BuildContext context) =>
-    Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-
 /// A row of the side menu that is not a tab: one of the pages the More tab
 /// used to hold, opened over the app.
 class AppSideMenuEntry {
@@ -79,7 +76,7 @@ class AppSideMenuButton extends StatelessWidget {
     return Padding(
       padding: padding,
       child: Tooltip(
-        message: _arabic(context) ? 'القائمة' : 'Menu',
+        message: 'القائمة',
         child: Material(
           color: overArtwork
               ? Colors.black.withValues(alpha: 0.35)
@@ -377,7 +374,7 @@ class AppSideMenuPanel extends ConsumerWidget {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final l10n = AppLocalizations.of(context)!;
-    final arabic = _arabic(context);
+
     final profile = ref
         .watch(animeWitcherAccountControllerProvider)
         .asData
@@ -386,11 +383,9 @@ class AppSideMenuPanel extends ConsumerWidget {
     final userName = profile?.userName?.trim() ?? '';
     final cover = profile?.coverUrl?.trim() ?? '';
     final title = profile == null
-        ? (arabic ? 'تسجيل الدخول' : 'Sign in')
+        ? 'تسجيل الدخول'
         : (userName.isNotEmpty ? userName : 'AnimeWitcher');
-    final subtitle = profile == null
-        ? (arabic ? 'مزامنة القوائم والتقدم' : 'Sync your lists and progress')
-        : '';
+    final subtitle = profile == null ? 'مزامنة القوائم والتقدم' : '';
 
     return Material(
       key: const ValueKey<String>('app-side-menu'),
@@ -419,9 +414,7 @@ class AppSideMenuPanel extends ConsumerWidget {
                           child: Stack(
                             fit: StackFit.expand,
                             children: [
-                              ColoredBox(
-                                color: colors.surfaceContainerHighest,
-                              ),
+                              ColoredBox(color: colors.surfaceContainerHighest),
                               if (cover.isNotEmpty)
                                 Image.network(
                                   cover,
@@ -509,8 +502,7 @@ class AppSideMenuPanel extends ConsumerWidget {
                             key: ValueKey<String>(
                               'app-side-menu-${destination.id}',
                             ),
-                            icon:
-                                destination.branchIndex == currentBranchIndex
+                            icon: destination.branchIndex == currentBranchIndex
                                 ? destination.selectedIcon
                                 : destination.icon,
                             label: destination.label(l10n),
@@ -567,7 +559,7 @@ class AppSideMenuPanel extends ConsumerWidget {
               top: 12,
               child: IconButton(
                 key: const ValueKey<String>('app-side-menu-close'),
-                tooltip: arabic ? 'إغلاق' : 'Close',
+                tooltip: 'إغلاق',
                 onPressed: onClose,
                 icon: Icon(
                   Icons.close_rounded,

@@ -41,7 +41,6 @@ import '../../../../l10n/generated/app_localizations.dart';
 String _downloadDialogTitle(MultimediaItem parentItem, Episode episode) {
   final label = formatEpisodeLabel(
     episode: episode.episode,
-    isArabic: true,
     title: episode.name,
     isFinal: episode.isFinal,
     serverName: episode.serverName,
@@ -102,12 +101,10 @@ class EpisodeCard extends HookConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context)!;
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+
     final episodeTitle = realEpisodeTitle(episode.name);
     final episodeNumberLabel = formatEpisodePrimaryLabel(
       episode: episode.episode,
-      isArabic: isArabic,
       isFinal: episode.isFinal,
       serverName: episode.serverName,
     );
@@ -423,9 +420,7 @@ class EpisodeCard extends HookConsumerWidget {
                         children: [
                           Row(
                             mainAxisSize: MainAxisSize.min,
-                            textDirection: isArabic
-                                ? TextDirection.rtl
-                                : TextDirection.ltr,
+                            textDirection: TextDirection.rtl,
                             children: [
                               if (hasPrimaryLabel)
                                 Text(
@@ -436,7 +431,7 @@ class EpisodeCard extends HookConsumerWidget {
                                 ),
                               if (episode.isFiller) ...[
                                 const SizedBox(width: 8),
-                                _buildFillerBadge(isArabic),
+                                _buildFillerBadge(),
                               ],
                             ],
                           ),
@@ -563,11 +558,8 @@ class EpisodeCard extends HookConsumerWidget {
     if (commentsTarget == null) return downloadAction;
 
     final commentsButton = EpisodeActionChip(
-      tooltip:
-          Localizations.localeOf(context).languageCode.toLowerCase() == 'ar'
-          ? 'تعليقات الحلقة'
-          : 'Episode comments',
-      icon: Icons.forum_outlined,
+      tooltip: 'تعليقات الحلقة',
+      icon: Icons.chat_bubble_outline_rounded,
       onPressed: () {
         Navigator.of(context).push(
           MaterialPageRoute<void>(
@@ -689,7 +681,7 @@ class EpisodeCard extends HookConsumerWidget {
     }
   }
 
-  Widget _buildFillerBadge(bool isArabic) {
+  Widget _buildFillerBadge() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
@@ -697,7 +689,7 @@ class EpisodeCard extends HookConsumerWidget {
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
-        isArabic ? 'فلر' : 'FILLER',
+        'فلر',
         style: const TextStyle(
           color: Colors.white,
           fontSize: 10,

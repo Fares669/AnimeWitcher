@@ -125,8 +125,6 @@ class SettingsScreen extends ConsumerWidget {
         const PlayerSettings();
 
     final l10n = AppLocalizations.of(context)!;
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
 
     return <Widget>[
       const SizedBox(height: LayoutConstants.spacingXs),
@@ -142,7 +140,7 @@ class SettingsScreen extends ConsumerWidget {
             below: SettingsChoices<AppThemeStyle>(
               values: AppThemeStyle.values,
               selected: ref.watch(appThemeStyleProvider),
-              label: (style) => style.label(arabic: isArabic),
+              label: (style) => style.label(),
               swatch: (style) => style.swatch,
               onSelected: (style) =>
                   ref.read(appThemeStyleProvider.notifier).select(style),
@@ -150,10 +148,8 @@ class SettingsScreen extends ConsumerWidget {
           ),
           SettingsTile(
             icon: Icons.view_carousel_rounded,
-            title: isArabic ? 'شريط المواسم' : 'Seasons bar',
-            subtitle: ref
-                .watch(seasonsBarStyleProvider)
-                .label(arabic: isArabic),
+            title: 'شريط المواسم',
+            subtitle: ref.watch(seasonsBarStyleProvider).label(),
             onTap: () => showSeasonsBarStylePicker(context, ref),
           ),
           SettingsTile(
@@ -233,17 +229,14 @@ class SettingsScreen extends ConsumerWidget {
           SettingsTile(
             key: const ValueKey<String>('settings-manga-tab'),
             icon: Icons.menu_book_rounded,
-            title: isArabic ? 'قسم المانجا منفصل' : 'Manga as its own tab',
-            subtitle: isArabic
-                ? 'المانجا في الشريط بقسم خاص بدل الصفحة الرئيسية'
-                : 'Manga gets a tab in the bar instead of rows on home',
+            title: 'قسم المانجا منفصل',
+            subtitle: 'المانجا في الشريط بقسم خاص بدل الصفحة الرئيسية',
             trailing: Switch(
               value: !generalSettings.hiddenTaskbarItems.contains(
                 TaskbarDestination.manga.id,
               ),
-              onChanged: (show) => ref
-                  .read(generalSettingsProvider.notifier)
-                  .setMangaTab(show),
+              onChanged: (show) =>
+                  ref.read(generalSettingsProvider.notifier).setMangaTab(show),
             ),
             onTap: () => ref
                 .read(generalSettingsProvider.notifier)
@@ -255,10 +248,8 @@ class SettingsScreen extends ConsumerWidget {
           ),
           SettingsTile(
             icon: Icons.dashboard_customize_rounded,
-            title: isArabic ? 'تخصيص شريط المهام' : 'Customize taskbar',
-            subtitle: isArabic
-                ? 'ترتيب العناصر وإخفاؤها أو إظهارها'
-                : 'Reorder, hide, or show taskbar items',
+            title: 'تخصيص شريط المهام',
+            subtitle: 'ترتيب العناصر وإخفاؤها أو إظهارها',
             onTap: () => showTaskbarCustomizationDialog(
               context,
               ref,
@@ -270,10 +261,10 @@ class SettingsScreen extends ConsumerWidget {
           if (appLayoutsAvailable(context))
             SettingsTile(
               icon: Icons.view_quilt_rounded,
-              title: isArabic ? 'شكل التطبيق' : 'App layout',
+              title: 'شكل التطبيق',
               subtitle:
                   (ref.watch(appLayoutStyleProvider) ?? AppLayoutStyle.dock)
-                      .label(arabic: isArabic),
+                      .label(),
               onTap: () => showAppLayoutPicker(context, ref),
               isLast: true,
             ),

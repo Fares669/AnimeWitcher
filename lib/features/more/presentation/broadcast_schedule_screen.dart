@@ -1,6 +1,7 @@
 /// V1.4.8 schedule integration: each broadcast day loads independently with
 /// bounded pages, pull-to-refresh, request cancellation, and safe tab cleanup.
 import 'more_sidebar_shell.dart';
+
 import 'dart:async';
 
 import 'package:animewitcher/shared/widgets/app_page_header.dart';
@@ -203,9 +204,6 @@ class _BroadcastScheduleScreenState
     }
   }
 
-  bool _isArabic(BuildContext context) =>
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-
   @override
   Widget build(BuildContext context) {
     ref.listen<int>(accountDataRevisionProvider, (previous, next) {
@@ -223,38 +221,37 @@ class _BroadcastScheduleScreenState
         _loadDay(animeWitcherBroadcastDays[_selectedDay], refresh: true),
       );
     });
-    final isArabic = _isArabic(context);
+
     final embedded = MorePaneScope.of(context);
     final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(
-        title: isArabic ? 'جدول البث' : 'Broadcast schedule',
+        title: 'جدول البث',
         canPop: !embedded && Navigator.of(context).canPop(),
         onBack: () => Navigator.of(context).pop(),
       ),
       body: Padding(
         padding: EdgeInsets.only(top: headerTop),
         child: Column(
-        children: [
-          _DayTabs(controller: _tabController, isArabic: isArabic),
-          Expanded(
-            child: TabBarView(
-              controller: _tabController,
-              children: [
-                for (final day in animeWitcherBroadcastDays)
-                  _ScheduleDayBody(
-                    day: day,
-                    state:
-                        _dayStates[day] ?? const _BroadcastScheduleDayState(),
-                    isArabic: isArabic,
-                    onRefresh: () => _loadDay(day, refresh: true),
-                    onLoadMore: () => _loadDay(day, refresh: false),
-                  ),
-              ],
+          children: [
+            _DayTabs(controller: _tabController),
+            Expanded(
+              child: TabBarView(
+                controller: _tabController,
+                children: [
+                  for (final day in animeWitcherBroadcastDays)
+                    _ScheduleDayBody(
+                      day: day,
+                      state:
+                          _dayStates[day] ?? const _BroadcastScheduleDayState(),
+                      onRefresh: () => _loadDay(day, refresh: true),
+                      onLoadMore: () => _loadDay(day, refresh: false),
+                    ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
         ),
       ),
     );
@@ -262,29 +259,17 @@ class _BroadcastScheduleScreenState
 }
 
 class _DayTabs extends StatelessWidget {
-  const _DayTabs({required this.controller, required this.isArabic});
+  const _DayTabs({required this.controller});
 
   final TabController controller;
-  final bool isArabic;
 
   @override
   Widget build(BuildContext context) {
-    const english = <String>[
-      'Saturday',
-      'Sunday',
-      'Monday',
-      'Tuesday',
-      'Wednesday',
-      'Thursday',
-      'Friday',
-    ];
     return FilterStyleTabBar(
       controller: controller,
       tabs: [
         for (var i = 0; i < animeWitcherBroadcastDays.length; i++)
-          FilterStyleTab(
-            label: isArabic ? animeWitcherBroadcastDays[i] : english[i],
-          ),
+          FilterStyleTab(label: animeWitcherBroadcastDays[i]),
       ],
     );
   }
@@ -294,14 +279,13 @@ class _ScheduleDayBody extends StatelessWidget {
   const _ScheduleDayBody({
     required this.day,
     required this.state,
-    required this.isArabic,
     required this.onRefresh,
     required this.onLoadMore,
   });
 
   final String day;
   final _BroadcastScheduleDayState state;
-  final bool isArabic;
+
   final Future<void> Function() onRefresh;
   final Future<void> Function() onLoadMore;
 
@@ -321,17 +305,12 @@ class _ScheduleDayBody extends StatelessWidget {
             children: [
               const Icon(Icons.cloud_off_rounded, size: 42),
               const SizedBox(height: 12),
-              Text(
-                isArabic
-                    ? 'تعذر تحميل جدول البث'
-                    : 'Could not load the broadcast schedule',
-                textAlign: TextAlign.center,
-              ),
+              Text('تعذر تحميل جدول البث', textAlign: TextAlign.center),
               const SizedBox(height: 12),
               FilledButton.tonalIcon(
                 onPressed: () => unawaited(onRefresh()),
                 icon: const Icon(Icons.refresh_rounded),
-                label: Text(isArabic ? 'إعادة المحاولة' : 'Retry'),
+                label: Text('إعادة المحاولة'),
               ),
             ],
           ),
@@ -345,12 +324,7 @@ class _ScheduleDayBody extends StatelessWidget {
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(24, 120, 24, 110),
           children: [
-            Text(
-              isArabic
-                  ? 'لا يوجد بث مجدول لهذا اليوم'
-                  : 'No broadcasts scheduled for this day',
-              textAlign: TextAlign.center,
-            ),
+            Text('لا يوجد بث مجدول لهذا اليوم', textAlign: TextAlign.center),
           ],
         ),
       );
@@ -434,9 +408,9 @@ class _ScheduleGrid extends StatelessWidget {
               key: ValueKey('broadcast-$day-${item.url}'),
               item: item,
               heroTag: 'broadcast-$day-${item.id}-$index',
-              onTap: () => DetailsRoute(
-                $extra: DetailsRouteExtra(item: item),
-              ).push<void>(context),
+              onTap: () =>
+                  DetailsRoute($extra: DetailsRouteExtra(item: item))
+                      .push<void>(context),
             );
           },
         ),
@@ -444,4 +418,3 @@ class _ScheduleGrid extends StatelessWidget {
     );
   }
 }
-

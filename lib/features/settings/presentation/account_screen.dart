@@ -64,8 +64,8 @@ class _AnimeWitcherAccountScreenState
       appBar: AppPageAppBar(
         title: appText(
           context,
-          english: 'AnimeWitcher account',
-          arabic: 'حساب AnimeWitcher',
+          english: 'Account',
+          arabic: 'الحساب',
         ),
         canPop: canPop,
       ),
@@ -563,7 +563,7 @@ class _AnimeWitcherAccountScreenState
           onTap: busy ? null : () => _openPrivacySettings(profile),
         ),
         SettingsTile(
-          icon: Icons.forum_rounded,
+          icon: Icons.chat_bubble_outline_rounded,
           title: appText(context, english: 'My comments', arabic: 'تعليقاتي'),
           subtitle: appText(
             context,
@@ -595,6 +595,7 @@ class _AnimeWitcherAccountScreenState
               english: 'The new address must be verified',
               arabic: 'يجب التحقق من البريد الجديد',
             ),
+            subtitleIsDescription: true,
             onTap: busy ? null : () => _openEmailEditor(profile),
           ),
           SettingsTile(

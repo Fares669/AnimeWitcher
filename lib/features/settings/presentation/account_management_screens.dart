@@ -331,14 +331,10 @@ class _AnimeWitcherProfileEditScreenState
   Future<void> _pickImage(AnimeWitcherProfileImageKind kind) async {
     setState(() => _preparingImage = true);
     try {
-      final selection = await FilePicker.pickFiles(
-        type: FileType.image,
-        allowMultiple: false,
-        withData: true,
-      );
+      final selection = await FilePicker.pickFile(type: FileType.image);
       if (selection == null) return;
-      final raw = selection.files.single.bytes;
-      if (raw == null || raw.isEmpty) {
+      final raw = await selection.readAsBytes();
+      if (raw.isEmpty) {
         throw const AnimeWitcherAccountException(
           'invalid-image',
           'The selected image could not be read.',

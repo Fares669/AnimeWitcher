@@ -462,8 +462,7 @@ class _ApplePersistentGlassHeaderOverlayState
     final hardCutInstantBoundary =
         crossesInstantBoundary && !allowInstantBoundaryMorph;
     final involvesInstantRoute =
-        (isInstantRoute || lastWasInstantRoute) &&
-        !allowInstantBoundaryMorph;
+        (isInstantRoute || lastWasInstantRoute) && !allowInstantBoundaryMorph;
 
     // Anime Details is intentionally isolated from the persistent Liquid Glass
     // used by Home/Search/Library. Crossing that boundary is a hard cut: send
@@ -1590,16 +1589,17 @@ Future<bool> appleNativeLiquidGlassAvailable() async {
 Future<String?> showAppleNativeSearchSort({
   required String initialValue,
   required List<Map<String, String>> items,
-  required bool isArabic,
   required Color tintColor,
 }) async {
-  return _appleLiquidGlassPresenterChannel
-      .invokeMethod<String>('showSearchSort', <String, Object?>{
-        'initialValue': initialValue,
-        'items': items,
-        'isArabic': isArabic,
-        'tintColor': tintColor.toARGB32(),
-      });
+  return _appleLiquidGlassPresenterChannel.invokeMethod<String>(
+    'showSearchSort',
+    <String, Object?>{
+      'initialValue': initialValue,
+      'items': items,
+      'isArabic': true,
+      'tintColor': tintColor.toARGB32(),
+    },
+  );
 }
 
 /// Presents the full search filter UI inside the native iOS view hierarchy.
@@ -1611,14 +1611,13 @@ Future<String?> showAppleNativeSearchSort({
 Future<Map<String, dynamic>?> showAppleNativeSearchFilters({
   required Map<String, Object?> options,
   required Map<String, Object?> initialValue,
-  required bool isArabic,
   required Color tintColor,
 }) async {
   final response = await _appleLiquidGlassPresenterChannel
       .invokeMethod<Object?>('showSearchFilters', <String, Object?>{
         'options': options,
         'initialValue': initialValue,
-        'isArabic': isArabic,
+        'isArabic': true,
         'tintColor': tintColor.toARGB32(),
       });
   if (response == null) return null;
@@ -1644,7 +1643,6 @@ class AppleSearchGlassActions extends StatefulWidget {
     required this.filterAccessibilityLabel,
     this.filterCount = 0,
     this.isFilterLoading = false,
-    this.isArabic = false,
     this.height = 42,
     this.tintColor,
   });
@@ -1659,7 +1657,7 @@ class AppleSearchGlassActions extends StatefulWidget {
   final String filterAccessibilityLabel;
   final int filterCount;
   final bool isFilterLoading;
-  final bool isArabic;
+
   final double height;
   final Color? tintColor;
 
@@ -1674,7 +1672,7 @@ class _AppleSearchGlassActionsState extends State<AppleSearchGlassActions> {
   Map<String, Object?> get _state => <String, Object?>{
     'filterCount': widget.filterCount,
     'filterLoading': widget.isFilterLoading,
-    'isArabic': widget.isArabic,
+    'isArabic': true,
     'sortValue': widget.sortValue,
     'sortItems': widget.sortItems
         .map((item) => item.toPlatformValue())

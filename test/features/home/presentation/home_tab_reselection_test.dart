@@ -4,6 +4,7 @@ import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_account_models.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
 import 'package:animewitcher/core/navigation/app_layout_style.dart';
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
@@ -22,6 +23,7 @@ import 'package:animewitcher/shared/widgets/app_scaffold.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -54,6 +56,10 @@ class _HomeData extends HomeData {
     keepCurrentValues.add(keepCurrent);
     await pending?.future;
   }
+
+  void showLoading() => state = const HomeLoading();
+
+  void showSuccess() => state = build();
 }
 
 class _ContinueWatching extends ContinueWatchingNotifier {
@@ -88,85 +94,12 @@ void main() {
 
   for (final layout in <AppLayoutStyle?>[...AppLayoutStyle.values, null]) {
     testWidgets(
-      '${layout?.name ?? 'phone dock'}: reselecting Home scrolls up and shares pull refresh',
+      '${layout?.name ?? 'phone dock'}: reselecting Home animates up and shows pull refresh',
       (tester) async {
-        final phone = layout == null;
-        debugDefaultTargetPlatformOverride = phone
-            ? TargetPlatform.android
-            : null;
-        addTearDown(() => debugDefaultTargetPlatformOverride = null);
-        tester.view.physicalSize = phone
-            ? const Size(390, 844)
-            : const Size(1200, 800);
-        tester.view.devicePixelRatio = 1;
-        addTearDown(tester.view.reset);
-        final storage = _Storage();
-        final data = _HomeData();
-        final history = _ContinueWatching();
-        final container = ProviderContainer(
-          overrides: [
-            storageServiceProvider.overrideWithValue(storage),
-            generalSettingsProvider.overrideWith(_Settings.new),
-            appLayoutStyleProvider.overrideWith(
-              () => _Layout(layout ?? AppLayoutStyle.dock),
-            ),
-            activeProviderProvider.overrideWithValue(
-              AnimeWitcherNativeProvider(Dio(), SettingsRepository(storage)),
-            ),
-            homeDataProvider.overrideWith(() => data),
-            continueWatchingProvider.overrideWith(() => history),
-            animeWitcherAccountControllerProvider.overrideWith(_Account.new),
-            deviceProfileProvider.overrideWith(
-              (ref) async => const DeviceProfile(),
-            ),
-            malRankingProvider.overrideWith((ref, ranking) async => []),
-          ],
+        final (:data, :history, :scroll) = await _pumpHome(
+          tester,
+          layout: layout,
         );
-        final router = GoRouter(
-          initialLocation: '/home',
-          routes: [
-            StatefulShellRoute.indexedStack(
-              builder: (context, state, shell) =>
-                  AppScaffold(navigationShell: shell),
-              branches: [
-                StatefulShellBranch(
-                  routes: [
-                    GoRoute(
-                      path: '/home',
-                      builder: (context, state) => const HomeScreen(),
-                    ),
-                  ],
-                ),
-                StatefulShellBranch(
-                  routes: [
-                    GoRoute(
-                      path: '/search',
-                      builder: (context, state) =>
-                          const Scaffold(body: Text('Search page')),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ],
-        );
-        addTearDown(container.dispose);
-        addTearDown(router.dispose);
-        await tester.pumpWidget(
-          UncontrolledProviderScope(
-            container: container,
-            child: MaterialApp.router(
-              routerConfig: router,
-              locale: const Locale('en'),
-              localizationsDelegates: AppLocalizations.localizationsDelegates,
-              supportedLocales: AppLocalizations.supportedLocales,
-            ),
-          ),
-        );
-        await tester.pumpAndSettle();
-        final scroll = tester
-            .widget<CustomScrollView>(find.byType(CustomScrollView))
-            .controller!;
         final homeState = tester.state(find.byType(HomeScreen));
         scroll.jumpTo(500);
         await tester.pumpAndSettle();
@@ -178,11 +111,32 @@ void main() {
           find.byIcon(TaskbarDestination.home.selectedIcon).hitTestable(),
         );
         await tester.pump();
+        expect(scroll.offset, 500);
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(scroll.offset, allOf(greaterThan(0), lessThan(500)));
+        // Repeated taps during the scroll must not restart it or queue refreshes.
+        await tester.tap(
+          find.byIcon(TaskbarDestination.home.selectedIcon).hitTestable(),
+        );
+        await tester.pump(const Duration(milliseconds: 200));
         expect(scroll.offset, 0);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+        await tester.pump(const Duration(milliseconds: 200));
         expect(data.calls, 1);
         expect(history.calls, 1);
         expect(data.keepCurrentValues, [true]);
         expect(tester.state(find.byType(HomeScreen)), same(homeState));
+        final indicator = tester.state(find.byType(RefreshIndicator));
+        expect(find.byType(RefreshProgressIndicator), findsOneWidget);
+        expect(
+          tester
+              .widget<RefreshProgressIndicator>(
+                find.byType(RefreshProgressIndicator),
+              )
+              .value,
+          isNull,
+        );
 
         // A second tap and pull-refresh during the same request share its work.
         await tester.tap(
@@ -195,6 +149,7 @@ void main() {
         await tester.pump();
         expect(data.calls, 1);
         expect(history.calls, 1);
+        expect(tester.state(find.byType(RefreshIndicator)), same(indicator));
         data.pending!.complete();
         history.pending!.complete();
         await overlappingPull;
@@ -209,6 +164,8 @@ void main() {
         await tester.pump();
         expect(data.calls, 2);
         expect(history.calls, 2);
+        expect(tester.state(find.byType(RefreshIndicator)), same(indicator));
+        expect(find.byType(RefreshProgressIndicator), findsOneWidget);
         await tester.tap(
           find.byIcon(TaskbarDestination.home.selectedIcon).hitTestable(),
         );
@@ -238,16 +195,22 @@ void main() {
         data.pending = Completer<void>();
         history.pending = Completer<void>();
         final failedPull = refresh.onRefresh();
-        final failure = expectLater(failedPull, throwsStateError);
         data.pending!.completeError(StateError('offline'));
         history.pending!.complete();
-        await failure;
+        await failedPull;
+        await tester.pump();
+        expect(find.text('تعذر تحديث الصفحة. حاول مرة أخرى.'), findsOneWidget);
         expect(data.calls, 3);
         data.pending = Completer<void>();
         history.pending = Completer<void>();
         await tester.tap(
           find.byIcon(TaskbarDestination.home.selectedIcon).hitTestable(),
         );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+        await tester.pump(const Duration(milliseconds: 200));
         expect(scroll.offset, 0);
         expect(data.calls, 4);
         expect(history.calls, 4);
@@ -261,6 +224,8 @@ void main() {
         await tester.tap(
           find.byIcon(TaskbarDestination.home.selectedIcon).hitTestable(),
         );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
         data.pending!.complete();
         history.pending!.completeError(StateError('offline sync'));
         await tester.pumpAndSettle();
@@ -273,12 +238,266 @@ void main() {
         await tester.pumpAndSettle();
         expect(data.calls, 6);
         expect(history.calls, 6);
-        await tester.pumpWidget(const SizedBox.shrink());
+        await _disposeHome(tester);
         debugDefaultTargetPlatformOverride = null;
       },
     );
   }
+
+  testWidgets('reduced motion skips the scroll animation', (tester) async {
+    final (:data, :history, :scroll) = await _pumpHome(
+      tester,
+      disableAnimations: true,
+    );
+    scroll.jumpTo(500);
+    await tester.pumpAndSettle();
+    data.pending = Completer<void>();
+    history.pending = Completer<void>();
+
+    await _tapHome(tester);
+    await tester.pump();
+    expect(scroll.offset, 0);
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(data.calls, 1);
+    expect(find.byType(RefreshProgressIndicator), findsOneWidget);
+    data.pending!.complete();
+    history.pending!.complete();
+    await tester.pumpAndSettle();
+    await _disposeHome(tester);
+  });
+
+  testWidgets('disposal during the scroll does not start a refresh', (
+    tester,
+  ) async {
+    final (:data, :history, :scroll) = await _pumpHome(tester);
+    scroll.jumpTo(500);
+    await tester.pumpAndSettle();
+    await _tapHome(tester);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(scroll.offset, allOf(greaterThan(0), lessThan(500)));
+
+    await _disposeHome(tester);
+    await tester.pump(const Duration(seconds: 1));
+    expect(data.calls, 0);
+    expect(history.calls, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a refresh failure after disposal is safe', (tester) async {
+    final (:data, :history, scroll: _) = await _pumpHome(tester);
+    data.pending = Completer<void>();
+    history.pending = Completer<void>();
+    await _tapHome(tester);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(data.calls, 1);
+    expect(history.calls, 1);
+
+    await _disposeHome(tester);
+    data.pending!.completeError(StateError('offline'));
+    history.pending!.completeError(StateError('offline sync'));
+    await tester.pump(const Duration(seconds: 1));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a failed manual pull dismisses the indicator and allows retry', (
+    tester,
+  ) async {
+    final (:data, :history, scroll: _) = await _pumpHome(tester);
+    data.pending = Completer<void>();
+    history.pending = Completer<void>();
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, 400));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(data.calls, 1);
+    expect(find.byType(RefreshProgressIndicator), findsOneWidget);
+
+    data.pending!.completeError(StateError('offline'));
+    history.pending!.complete();
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.byType(RefreshProgressIndicator), findsNothing);
+    data.pending = Completer<void>();
+    history.pending = Completer<void>();
+    await _tapHome(tester);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(data.calls, 2);
+    expect(history.calls, 2);
+    expect(find.byType(RefreshProgressIndicator), findsOneWidget);
+    data.pending!.complete();
+    history.pending!.complete();
+    await tester.pumpAndSettle();
+    await _disposeHome(tester);
+  });
+
+  testWidgets('a mouse pull uses the externally keyed indicator', (
+    tester,
+  ) async {
+    final (:data, :history, scroll: _) = await _pumpHome(tester);
+    data.pending = Completer<void>();
+    history.pending = Completer<void>();
+    final start =
+        tester.getTopLeft(find.byType(CustomScrollView)) +
+        const Offset(200, 100);
+    final gesture = await tester.startGesture(
+      start,
+      kind: PointerDeviceKind.mouse,
+    );
+    await gesture.moveBy(const Offset(0, 100));
+    await gesture.up();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(data.calls, 1);
+    expect(history.calls, 1);
+    expect(find.byType(RefreshProgressIndicator), findsOneWidget);
+    await _tapHome(tester);
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(data.calls, 1);
+    expect(history.calls, 1);
+    data.pending!.complete();
+    history.pending!.complete();
+    await tester.pumpAndSettle();
+    await _disposeHome(tester);
+  });
+  testWidgets('a manual scroll can interrupt the return-to-top animation', (
+    tester,
+  ) async {
+    final (:data, :history, :scroll) = await _pumpHome(tester);
+    scroll.jumpTo(500);
+    await tester.pumpAndSettle();
+    data.pending = Completer<void>();
+    history.pending = Completer<void>();
+    await _tapHome(tester);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -150));
+    await _pumpRefreshAnimations(tester);
+    expect(scroll.offset, greaterThan(0));
+    expect(data.calls, 1);
+    expect(history.calls, 1);
+    expect(find.byType(RefreshProgressIndicator), findsOneWidget);
+    data.pending!.complete();
+    history.pending!.complete();
+    await tester.pumpAndSettle();
+    await _disposeHome(tester);
+  });
+
+  testWidgets('a refresh completed on Search can be reselected visibly', (
+    tester,
+  ) async {
+    final (:data, :history, scroll: _) = await _pumpHome(tester);
+    data.pending = Completer<void>();
+    history.pending = Completer<void>();
+    await _tapHome(tester);
+    await _pumpRefreshAnimations(tester);
+    expect(data.calls, 1);
+    await tester.tap(find.byIcon(TaskbarDestination.search.icon).hitTestable());
+    await tester.pumpAndSettle();
+    data.pending!.complete();
+    history.pending!.complete();
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+
+    data.pending = Completer<void>();
+    history.pending = Completer<void>();
+    await tester.tap(find.byIcon(TaskbarDestination.home.icon).hitTestable());
+    await tester.pump();
+    await _tapHome(tester);
+    await _pumpRefreshAnimations(tester);
+    expect(data.calls, 2);
+    expect(history.calls, 2);
+    final spinner = find.byType(RefreshProgressIndicator);
+    expect(spinner, findsOneWidget);
+    final scale = tester.widget<ScaleTransition>(
+      find.ancestor(of: spinner, matching: find.byType(ScaleTransition)).first,
+    );
+    expect(scale.scale.value, greaterThan(0.9));
+    data.pending!.complete();
+    history.pending!.complete();
+    await tester.pumpAndSettle();
+    await _disposeHome(tester);
+  });
+
+  testWidgets('replacing the indicator does not leave Home reselect locked', (
+    tester,
+  ) async {
+    final (:data, :history, scroll: _) = await _pumpHome(tester);
+    data.pending = Completer<void>();
+    history.pending = Completer<void>();
+    await _tapHome(tester);
+    await _pumpRefreshAnimations(tester);
+    expect(data.calls, 1);
+
+    data.showLoading();
+    await tester.pump();
+    data.pending!.complete();
+    history.pending!.complete();
+    await tester.pump();
+    data.showSuccess();
+    await tester.pumpAndSettle();
+    data.pending = Completer<void>();
+    history.pending = Completer<void>();
+    await _tapHome(tester);
+    await _pumpRefreshAnimations(tester);
+    expect(data.calls, 2);
+    expect(history.calls, 2);
+    expect(find.byType(RefreshProgressIndicator), findsOneWidget);
+    data.pending!.complete();
+    history.pending!.complete();
+    await tester.pumpAndSettle();
+    await _disposeHome(tester);
+  });
+
+  for (final manualPull in [false, true]) {
+    testWidgets(
+      'Home tapped during ${manualPull ? 'manual pull' : 'tab refresh'} dismissal keeps its next spinner visible',
+      (tester) async {
+        final (:data, :history, scroll: _) = await _pumpHome(tester);
+        data.pending = Completer<void>();
+        history.pending = Completer<void>();
+        if (manualPull) {
+          await tester.drag(
+            find.byType(CustomScrollView),
+            const Offset(0, 400),
+          );
+        } else {
+          await _tapHome(tester);
+        }
+        await _pumpRefreshAnimations(tester);
+        expect(data.calls, 1);
+        data.pending!.complete();
+        history.pending!.complete();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+
+        data.pending = Completer<void>();
+        history.pending = Completer<void>();
+        await _tapHome(tester);
+        await _pumpRefreshAnimations(tester);
+        expect(data.calls, 2);
+        expect(history.calls, 2);
+        final spinner = find.byType(RefreshProgressIndicator);
+        expect(spinner, findsOneWidget);
+        final scale = tester.widget<ScaleTransition>(
+          find
+              .ancestor(of: spinner, matching: find.byType(ScaleTransition))
+              .first,
+        );
+        expect(scale.scale.value, greaterThan(0.9));
+        data.pending!.complete();
+        history.pending!.complete();
+        await tester.pumpAndSettle();
+        await _disposeHome(tester);
+      },
+    );
+  }
 }
+
+Future<void> _tapHome(WidgetTester tester) =>
+    tester.tap(find.byIcon(TaskbarDestination.home.selectedIcon).hitTestable());
 
 class _Layout extends AppLayoutStyleNotifier {
   _Layout(this.layout);
@@ -286,4 +505,104 @@ class _Layout extends AppLayoutStyleNotifier {
 
   @override
   AppLayoutStyle? build() => layout;
+}
+
+Future<({_HomeData data, _ContinueWatching history, ScrollController scroll})>
+_pumpHome(
+  WidgetTester tester, {
+  AppLayoutStyle? layout,
+  bool disableAnimations = false,
+}) async {
+  final phone = layout == null;
+  debugDefaultTargetPlatformOverride = phone ? TargetPlatform.android : null;
+  addTearDown(() => debugDefaultTargetPlatformOverride = null);
+  tester.view.physicalSize = phone
+      ? const Size(390, 844)
+      : const Size(1200, 800);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.reset);
+  final storage = _Storage();
+  final data = _HomeData();
+  final history = _ContinueWatching();
+  final container = ProviderContainer(
+    overrides: [
+      storageServiceProvider.overrideWithValue(storage),
+      generalSettingsProvider.overrideWith(_Settings.new),
+      appLayoutStyleProvider.overrideWith(
+        () => _Layout(layout ?? AppLayoutStyle.dock),
+      ),
+      activeProviderProvider.overrideWithValue(
+        AnimeWitcherNativeProvider(Dio(), SettingsRepository(storage)),
+      ),
+      homeDataProvider.overrideWith(() => data),
+      continueWatchingProvider.overrideWith(() => history),
+      animeWitcherAccountControllerProvider.overrideWith(_Account.new),
+      deviceProfileProvider.overrideWith((ref) async => const DeviceProfile()),
+      homeMalRankingPageProvider.overrideWith(
+        (ref, ranking) async =>
+            const ProviderMediaPage(items: [], nextOffset: 0, hasMore: false),
+      ),
+    ],
+  );
+  final router = GoRouter(
+    initialLocation: '/home',
+    routes: [
+      StatefulShellRoute.indexedStack(
+        builder: (context, state, shell) => AppScaffold(navigationShell: shell),
+        branches: [
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/home',
+                builder: (context, state) => const HomeScreen(),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/search',
+                builder: (context, state) =>
+                    const Scaffold(body: Text('Search page')),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ],
+  );
+  addTearDown(container.dispose);
+  addTearDown(router.dispose);
+  await tester.pumpWidget(
+    UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp.router(
+        routerConfig: router,
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(disableAnimations: disableAnimations),
+          child: child!,
+        ),
+        locale: const Locale('en'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+  final scroll = tester
+      .widget<CustomScrollView>(find.byType(CustomScrollView))
+      .controller!;
+  return (data: data, history: history, scroll: scroll);
+}
+
+Future<void> _pumpRefreshAnimations(WidgetTester tester) async {
+  for (var frame = 0; frame < 30; frame++) {
+    await tester.pump(const Duration(milliseconds: 20));
+  }
+}
+
+Future<void> _disposeHome(WidgetTester tester) async {
+  await tester.pumpWidget(const SizedBox.shrink());
+  debugDefaultTargetPlatformOverride = null;
 }

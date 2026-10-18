@@ -99,16 +99,16 @@ enum AppThemeStyle {
   ThemeMode get themeMode =>
       this == AppThemeStyle.light ? ThemeMode.light : ThemeMode.dark;
 
-  String label({required bool arabic}) => switch (this) {
-    AppThemeStyle.dark => arabic ? 'داكن' : 'Dark',
-    AppThemeStyle.light => arabic ? 'فاتح' : 'Light',
-    AppThemeStyle.amber => arabic ? 'كهرماني' : 'Amber',
-    AppThemeStyle.amoled => arabic ? 'أسود نقي' : 'AMOLED black',
-    AppThemeStyle.ocean => arabic ? 'محيطي' : 'Ocean',
-    AppThemeStyle.forest => arabic ? 'غابة' : 'Forest',
-    AppThemeStyle.sakura => arabic ? 'ساكورا' : 'Sakura',
-    AppThemeStyle.violet => arabic ? 'بنفسجي' : 'Violet',
-    AppThemeStyle.crimson => arabic ? 'قرمزي' : 'Crimson',
+  String label() => switch (this) {
+    AppThemeStyle.dark => 'داكن',
+    AppThemeStyle.light => 'فاتح',
+    AppThemeStyle.amber => 'كهرماني',
+    AppThemeStyle.amoled => 'أسود نقي',
+    AppThemeStyle.ocean => 'محيطي',
+    AppThemeStyle.forest => 'غابة',
+    AppThemeStyle.sakura => 'ساكورا',
+    AppThemeStyle.violet => 'بنفسجي',
+    AppThemeStyle.crimson => 'قرمزي',
   };
 
   /// The theme's accent, for a dot beside its name in the pickers.

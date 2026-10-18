@@ -7,8 +7,8 @@ void main() {
     final source = File(
       'lib/features/characters/presentation/character_details_screen.dart',
     ).readAsStringSync();
-    expect(source, contains("isArabic ? 'التعليقات'"));
-    expect(source.contains("isArabic ? 'تعليقات'"), isFalse);
+    expect(source, contains("tooltip: 'التعليقات'"));
+    expect(source.contains("tooltip: 'تعليقات'"), isFalse);
   });
 
   test('character details uses the shared centered progressive header', () {
@@ -31,10 +31,7 @@ void main() {
     ).readAsStringSync();
 
     expect(source, contains('final isLarge = context.isTabletOrLarger'));
-    expect(
-      source,
-      contains('appleUsesPersistentLiquidGlassHeader || isLarge'),
-    );
+    expect(source, contains('appleUsesPersistentLiquidGlassHeader || isLarge'));
     expect(
       source,
       contains('!appleUsesPersistentLiquidGlassHeader && isLarge'),
@@ -45,9 +42,8 @@ void main() {
     final commentsSource = File(
       'lib/features/comments/presentation/animewitcher_comments_screen.dart',
     ).readAsStringSync();
-    final glassSource = File(
-      'lib/shared/widgets/apple_liquid_glass.dart',
-    ).readAsStringSync();
+    final glassSource = File('lib/shared/widgets/apple_liquid_glass.dart')
+        .readAsStringSync();
 
     expect(commentsSource, contains('allowInstantBoundaryMorph: true'));
     expect(glassSource, contains('hardCutInstantBoundary'));
@@ -55,9 +51,8 @@ void main() {
   });
 
   test('details screen hides the empty characters copy', () {
-    final source = File(
-      'lib/features/details/presentation/details_screen.dart',
-    ).readAsStringSync();
+    final source = File('lib/features/details/presentation/details_screen.dart')
+        .readAsStringSync();
     expect(source.contains('لم يتم اضافة الشخصيات حتي الان'), isFalse);
     expect(source.contains('No characters have been added yet'), isFalse);
   });

@@ -53,7 +53,12 @@ Future<void> _awaitArtworkLookups(WidgetTester tester) async {
     find.byWidgetPredicate((widget) => widget is FutureBuilder<File?>),
   )) {
     final future = builder.future;
-    if (future != null) await pumpUntilFuture(tester, future, 'completed downloads artwork lookup');
+    if (future != null)
+      await pumpUntilFuture(
+        tester,
+        future,
+        'completed downloads artwork lookup',
+      );
   }
   await tester.pump();
 }
@@ -217,12 +222,15 @@ Widget _downloadsApp(
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() async {
-    _artworkFixtureRoot = await Directory.systemTemp.createTemp('aw-downloads-tab-artwork-');
+    _artworkFixtureRoot = await Directory.systemTemp.createTemp(
+      'aw-downloads-tab-artwork-',
+    );
     final original = PathProviderPlatform.instance;
     PathProviderPlatform.instance = _ArtworkPaths(_artworkFixtureRoot.path);
     try {
       // Initialize the singleton before any widget fake zone can own its I/O.
-      await DefaultCacheManager().getFileFromCache('downloads-tab-artwork-fixture')
+      await DefaultCacheManager()
+          .getFileFromCache('downloads-tab-artwork-fixture')
           .timeout(const Duration(seconds: 5));
     } finally {
       PathProviderPlatform.instance = original;
@@ -319,7 +327,7 @@ void main() {
       (tester) async {
         final notifications = NotificationService();
         addTearDown(notifications.dispose);
-      if (completed) await _prepareArtworkStorage(tester);
+        if (completed) await _prepareArtworkStorage(tester);
         final notifier = _StubDownloadsNotifier(
           [
             _item(
@@ -345,7 +353,7 @@ void main() {
         if (completed) {
           await tester.tap(find.text(l10n.downloadsTabCompleted));
           await tester.pumpAndSettle();
-        await _awaitArtworkLookups(tester);
+          await _awaitArtworkLookups(tester);
         }
         for (var attempt = 0; attempt < 2; attempt++) {
           await tester.tap(find.byIcon(Icons.delete_outline_rounded));
@@ -1132,6 +1140,76 @@ void main() {
     expect(find.text('Bleach'), findsOneWidget);
     expect(find.text('حلقة'), findsOneWidget);
     expect(find.text('3 حلقات'), findsOneWidget);
+    final countParagraph = tester.renderObject<RenderParagraph>(
+      find.text('3 حلقات'),
+    );
+    final numberBox = countParagraph
+        .getBoxesForSelection(
+          const TextSelection(baseOffset: 0, extentOffset: 1),
+        )
+        .single;
+    final nounBoxes = countParagraph.getBoxesForSelection(
+      const TextSelection(baseOffset: 2, extentOffset: 7),
+    );
+    // In Arabic reading order the number comes first, at the right.
+    expect(
+      numberBox.left,
+      greaterThan(
+        nounBoxes.map((box) => box.right).reduce((a, b) => a > b ? a : b),
+      ),
+    );
+    expect(countParagraph.textDirection, TextDirection.rtl);
+    expect(countParagraph.textAlign, TextAlign.left);
+    ({Rect card, Rect poster, Rect title, Rect phrase, double glyphLeft})
+    completedGeometry() {
+      final group = find.ancestor(
+        of: find.text('Bleach'),
+        matching: find.byType(ExpansionTile),
+      );
+      final paragraph = tester.renderObject<RenderParagraph>(
+        find.text('3 حلقات'),
+      );
+      final boxes = paragraph.getBoxesForSelection(
+        const TextSelection(baseOffset: 0, extentOffset: 7),
+      );
+      final glyphLeft = boxes
+          .map((box) => box.left)
+          .reduce((a, b) => a < b ? a : b);
+      return (
+        card: tester.getRect(group),
+        poster: tester.getRect(
+          find.descendant(of: group, matching: find.byType(ClipRRect)).first,
+        ),
+        title: tester.getRect(find.text('Bleach')),
+        phrase: tester.getRect(find.text('3 حلقات')),
+        glyphLeft: paragraph.localToGlobal(Offset(glyphLeft, 0)).dx,
+      );
+    }
+
+    final leftLayout = completedGeometry();
+    expect(leftLayout.poster.left, lessThan(leftLayout.title.left));
+    expect(leftLayout.title.left, closeTo(leftLayout.poster.right + 16, 0.5));
+    // The whole phrase sits at the left after the 14px icon and 4px gap.
+    expect(leftLayout.glyphLeft, closeTo(leftLayout.title.left + 18, 0.5));
+    expect(leftLayout.glyphLeft, closeTo(leftLayout.phrase.left, 0.5));
+
+    await tester.pumpWidget(
+      _downloadsApp([
+        single,
+        bleachEp(6),
+        bleachEp(5),
+        bleachEp(4),
+      ], shellDirection: TextDirection.rtl),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('المكتملة'));
+    await tester.pumpAndSettle();
+    final arabicLayout = completedGeometry();
+    expect(arabicLayout.card, leftLayout.card);
+    expect(arabicLayout.poster, leftLayout.poster);
+    expect(arabicLayout.title, leftLayout.title);
+    expect(arabicLayout.phrase, leftLayout.phrase);
+    expect(arabicLayout.glyphLeft, closeTo(leftLayout.glyphLeft, 0.5));
     expect(find.text('مكتمل'), findsNothing);
     expect(find.byIcon(Icons.check_circle_rounded), findsNothing);
 

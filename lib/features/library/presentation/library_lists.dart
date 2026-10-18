@@ -11,34 +11,29 @@ import '../../../core/storage/storage_service.dart';
 import 'history_provider.dart';
 import 'library_media_kind.dart';
 
-bool _arabic(BuildContext context) =>
-    Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-
 /// The name of [category] as the [kind] half of the library says it.
 String libraryCategoryLabel(
   BuildContext context,
   LibraryCategory category,
   LibraryMediaKind kind,
 ) {
-  final ar = _arabic(context);
   if (kind == LibraryMediaKind.manga) {
     return switch (category) {
-      LibraryCategory.favorite => ar ? 'المفضلة' : 'Favorites',
-      LibraryCategory.watching => ar ? 'أقرأها حاليًا' : 'Reading',
-      LibraryCategory.continueLater => ar ? 'أكملها لاحقًا' : 'Continue Later',
-      LibraryCategory.planToWatch => ar ? 'أرغب بقراءتها' : 'Plan to Read',
-      LibraryCategory.completed => ar ? 'تمت قراءتها' : 'Completed',
-      LibraryCategory.notInterested =>
-        ar ? 'لا أرغب بقراءتها' : 'Not Interested',
+      LibraryCategory.favorite => 'المفضلة',
+      LibraryCategory.watching => 'أقرأها حاليًا',
+      LibraryCategory.continueLater => 'أكملها لاحقًا',
+      LibraryCategory.planToWatch => 'أرغب بقراءتها',
+      LibraryCategory.completed => 'تمت قراءتها',
+      LibraryCategory.notInterested => 'لا أرغب بقراءتها',
     };
   }
   return switch (category) {
-    LibraryCategory.favorite => ar ? 'المفضلة' : 'Favorites',
-    LibraryCategory.watching => ar ? 'أشاهده حاليًا' : 'Watching',
-    LibraryCategory.continueLater => ar ? 'أكملها لاحقًا' : 'Continue Later',
-    LibraryCategory.planToWatch => ar ? 'أرغب بمشاهدته' : 'Plan to Watch',
-    LibraryCategory.completed => ar ? 'تمت مشاهدته' : 'Completed',
-    LibraryCategory.notInterested => ar ? 'لا أرغب بمشاهدته' : 'Not Interested',
+    LibraryCategory.favorite => 'المفضلة',
+    LibraryCategory.watching => 'أشاهده حاليًا',
+    LibraryCategory.continueLater => 'أكملها لاحقًا',
+    LibraryCategory.planToWatch => 'أرغب بمشاهدته',
+    LibraryCategory.completed => 'تمت مشاهدته',
+    LibraryCategory.notInterested => 'لا أرغب بمشاهدته',
   };
 }
 
@@ -52,20 +47,18 @@ IconData libraryCategoryIcon(LibraryCategory category) => switch (category) {
 };
 
 /// "آخر المشاهدات", the history that moved here from the More page.
-String libraryRecentLabel(BuildContext context) =>
-    _arabic(context) ? 'آخر المشاهدات' : 'Recently watched';
+String libraryRecentLabel(BuildContext context) => 'آخر المشاهدات';
 
 const IconData libraryRecentIcon = Icons.history_rounded;
 
 /// "الشخصيات المفضلة", the favourite characters that moved here from the
 /// More page.
-String libraryCharactersLabel(BuildContext context) =>
-    _arabic(context) ? 'الشخصيات المفضلة' : 'Favorite characters';
+String libraryCharactersLabel(BuildContext context) => 'الشخصيات المفضلة';
 
 String libraryKindLabel(BuildContext context, LibraryMediaKind kind) =>
     switch (kind) {
-      LibraryMediaKind.anime => _arabic(context) ? 'أنمي' : 'Anime',
-      LibraryMediaKind.manga => _arabic(context) ? 'مانجا' : 'Manga',
+      LibraryMediaKind.anime => 'أنمي',
+      LibraryMediaKind.manga => 'مانجا',
     };
 
 /// Only anime has a watch history; the reader keeps its place per chapter,

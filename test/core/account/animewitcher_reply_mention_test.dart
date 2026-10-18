@@ -84,7 +84,7 @@ void main() {
 
   test('already-tagged toast matches the APK Arabic copy', () {
     expect(
-      animeWitcherReplyAlreadyTaggedMessage(isArabic: true),
+      animeWitcherReplyAlreadyTaggedMessage(),
       'لا يمكن اضافة اكثر من تاج',
     );
   });

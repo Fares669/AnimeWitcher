@@ -11,10 +11,7 @@ import 'manga_reader_settings_provider.dart';
 class MangaReaderSettingsScreen extends ConsumerWidget {
   const MangaReaderSettingsScreen({super.key});
 
-  String _t(BuildContext context, String en, String ar) =>
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar'
-      ? ar
-      : en;
+  String _t(BuildContext context, String en, String ar) => ar;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -50,10 +47,7 @@ class MangaReaderSettingsOptions extends ConsumerWidget {
   /// Adds a reset button at the end, for a place without the screen's bar.
   final bool showReset;
 
-  String _t(BuildContext context, String en, String ar) =>
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar'
-      ? ar
-      : en;
+  String _t(BuildContext context, String en, String ar) => ar;
 
   String _modeLabel(BuildContext context, MangaReaderMode mode) =>
       switch (mode) {

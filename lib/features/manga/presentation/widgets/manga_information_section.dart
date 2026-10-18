@@ -23,28 +23,24 @@ class MangaInformationSection extends StatelessWidget {
   }
 
   String? _statusLabel(BuildContext context) {
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     final raw = _clean(item.syncData?['awState']);
     if (raw != null) return raw;
     return switch (item.status) {
-      ShowStatus.ongoing => isArabic ? 'مستمر' : 'Ongoing',
-      ShowStatus.completed => isArabic ? 'مكتمل' : 'Completed',
-      ShowStatus.upcoming => isArabic ? 'قادم' : 'Upcoming',
+      ShowStatus.ongoing => 'مستمر',
+      ShowStatus.completed => 'مكتمل',
+      ShowStatus.upcoming => 'قادم',
     };
   }
 
   @override
   Widget build(BuildContext context) {
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     final sync = item.syncData ?? const <String, String>{};
     final entries = <({String label, String value})>[];
 
     void add(String ar, String en, Object? raw) {
       final value = _clean(raw);
       if (value == null) return;
-      entries.add((label: isArabic ? ar : en, value: value));
+      entries.add((label: ar, value: value));
     }
 
     add('النوع', 'Type', item.catalogType ?? sync['awType']);
@@ -96,16 +92,10 @@ class MangaInformationSection extends StatelessWidget {
                         const SizedBox(height: 4),
                         Text(
                           entry.value,
-                          maxLines: entry.label ==
-                                  (isArabic
-                                      ? 'العنوان الإنجليزي'
-                                      : 'English title')
+                          maxLines: entry.label == 'العنوان الإنجليزي'
                               ? null
                               : 2,
-                          overflow: entry.label ==
-                                  (isArabic
-                                      ? 'العنوان الإنجليزي'
-                                      : 'English title')
+                          overflow: entry.label == 'العنوان الإنجليزي'
                               ? TextOverflow.visible
                               : TextOverflow.ellipsis,
                           style: textTheme.bodyMedium?.copyWith(

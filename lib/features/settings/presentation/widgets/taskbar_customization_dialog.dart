@@ -14,8 +14,7 @@ Future<void> showTaskbarCustomizationDialog(
   Set<String> currentHidden,
 ) async {
   final l10n = AppLocalizations.of(context)!;
-  final isArabic =
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+
   final order = normalizeTaskbarOrder(currentOrder).toList(growable: true);
   final hidden = normalizeHiddenTaskbarItems(currentHidden).toSet();
 
@@ -33,7 +32,7 @@ Future<void> showTaskbarCustomizationDialog(
 
         return AlertDialog(
           surfaceTintColor: Colors.transparent,
-          title: Text(isArabic ? 'تخصيص شريط المهام' : 'Customize taskbar'),
+          title: Text('تخصيص شريط المهام'),
           content: SizedBox(
             width: contentWidth,
             height: maxHeight,
@@ -41,9 +40,7 @@ Future<void> showTaskbarCustomizationDialog(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  isArabic
-                      ? 'اسحب العناصر لتغيير ترتيبها، وأخفِ ما لا تحتاجه. الإعدادات تبقى ظاهرة دائمًا.'
-                      : 'Drag items to reorder them and hide anything you do not need. Settings always remains visible.',
+                  'اسحب العناصر لتغيير ترتيبها، وأخفِ ما لا تحتاجه. الإعدادات تبقى ظاهرة دائمًا.',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
                 const SizedBox(height: 16),
@@ -71,13 +68,7 @@ Future<void> showTaskbarCustomizationDialog(
                         child: ListTile(
                           leading: Icon(destination.icon),
                           title: Text(destination.label(l10n)),
-                          subtitle: isSettings
-                              ? Text(
-                                  isArabic
-                                      ? 'لا يمكن إخفاؤها'
-                                      : 'Cannot be hidden',
-                                )
-                              : null,
+                          subtitle: isSettings ? Text('لا يمكن إخفاؤها') : null,
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [

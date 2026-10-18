@@ -10,6 +10,7 @@ import '../../../../core/utils/download_time_remaining.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../../../shared/widgets/apple_liquid_glass.dart';
 import '../../../details/presentation/widgets/details_hero_actions.dart';
+import '../../../details/presentation/widgets/download_progress_dialog.dart';
 import '../../../details/presentation/widgets/episode_action_chip.dart';
 import '../../../library/presentation/download_progress_v2_provider.dart';
 import '../../../library/presentation/downloads_provider.dart';
@@ -122,9 +123,6 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
 
   bool get _selecting => _selectedChapterIds.isNotEmpty;
 
-  bool get _isArabic =>
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -194,14 +192,14 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     MangaReadingRepository repository,
   ) {
     final colors = Theme.of(context).colorScheme;
-    final all = _isArabic ? 'كل الفصول' : 'All chapters';
+    final all = 'كل الفصول';
     String rangeTitle(int i) =>
-        '${_isArabic ? 'الفصول' : 'Chapters'} '
+        '${'الفصول'} '
         '${mangaChapterRangeLabel(ranges[i], i)}';
     final range = _rangeIndex;
     return PopupMenuButton<int>(
       key: const ValueKey<String>('manga-chapter-range-menu'),
-      tooltip: _isArabic ? 'نطاق الفصول' : 'Chapter range',
+      tooltip: 'نطاق الفصول',
       initialValue: range ?? -1,
       onSelected: (value) =>
           setState(() => _rangeIndex = value < 0 ? null : value),
@@ -223,7 +221,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
                         )
                         .length;
                     if (read == ranges[i].length) {
-                      return _isArabic ? 'مكتمل' : 'Done';
+                      return 'مكتمل';
                     }
                     return '$read/${ranges[i].length}';
                   }(),
@@ -280,7 +278,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
         style: TextStyle(color: colors.onSurface, fontSize: 13),
         decoration: InputDecoration(
           isDense: true,
-          hintText: _isArabic ? 'ابحث عن فصل…' : 'Find a chapter…',
+          hintText: 'ابحث عن فصل…',
           hintStyle: TextStyle(color: colors.onSurfaceVariant, fontSize: 13),
           prefixIcon: Icon(
             Icons.search_rounded,
@@ -315,9 +313,9 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
   Widget _filterChips(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final labels = <MangaChapterFilter, String>{
-      MangaChapterFilter.all: _isArabic ? 'الكل' : 'All',
-      MangaChapterFilter.unread: _isArabic ? 'غير المقروءة' : 'Unread',
-      MangaChapterFilter.downloaded: _isArabic ? 'المنزّلة' : 'Downloaded',
+      MangaChapterFilter.all: 'الكل',
+      MangaChapterFilter.unread: 'غير المقروءة',
+      MangaChapterFilter.downloaded: 'المنزّلة',
     };
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -445,10 +443,9 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
   Widget _selectionBar(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+
     final count = _selectedChapterIds.length;
-    final selectedLabel = isArabic ? 'تم تحديد $count' : '$count selected';
+    final selectedLabel = 'تم تحديد $count';
 
     Widget actionButton({
       required String label,
@@ -519,9 +516,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
                         ),
                       ),
                       IconButton(
-                        tooltip: isArabic
-                            ? 'إلغاء التحديد'
-                            : 'Cancel selection',
+                        tooltip: 'إلغاء التحديد',
                         visualDensity: VisualDensity.compact,
                         onPressed: _clearSelection,
                         icon: const Icon(Icons.close_rounded),
@@ -533,7 +528,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
                     children: <Widget>[
                       Expanded(
                         child: actionButton(
-                          label: isArabic ? 'تمت قراءته' : 'Read',
+                          label: 'تمت قراءته',
                           icon: Icons.visibility_rounded,
                           outlined: false,
                           onPressed: () => _setSelectedRead(true),
@@ -542,7 +537,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: actionButton(
-                          label: isArabic ? 'غير مقروء' : 'Unread',
+                          label: 'غير مقروء',
                           icon: Icons.visibility_off_rounded,
                           outlined: true,
                           onPressed: () => _setSelectedRead(false),
@@ -550,9 +545,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
                       ),
                       const SizedBox(width: 8),
                       IconButton.filledTonal(
-                        tooltip: isArabic
-                            ? 'تحديد جميع الفصول'
-                            : 'Select all chapters',
+                        tooltip: 'تحديد جميع الفصول',
                         onPressed: _selectAll,
                         icon: const Icon(Icons.select_all_rounded),
                         style: IconButton.styleFrom(
@@ -578,6 +571,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
   ) {
     if (widget.onDownload == null) return null;
     DownloadProgressData? data;
+    var progressIdentity = chapter.url;
     final mangaId = chapter.mangaId.trim();
     if (mangaId.isNotEmpty && chapter.id.trim().isNotEmpty) {
       final logicalId = logicalDownloadIdForMangaChapter(
@@ -585,6 +579,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
         chapterId: chapter.id,
       ).value;
       data = progressById[logicalId];
+      if (data != null) progressIdentity = logicalId;
     }
     data ??= progressById[chapter.url];
 
@@ -598,14 +593,10 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
         status == TaskStatus.enqueued ||
         status == TaskStatus.waitingToRetry ||
         status == TaskStatus.paused;
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
 
     if (completedDownload != null || status == TaskStatus.complete) {
       return EpisodeActionChip(
-        tooltip:
-            AppLocalizations.of(context)?.deleteDownload ??
-            (isArabic ? 'حذف الفصل' : 'Delete chapter'),
+        tooltip: AppLocalizations.of(context)?.deleteDownload ?? 'حذف الفصل',
         onPressed: completedDownload != null && widget.onDeleteDownload != null
             ? () => widget.onDeleteDownload!(completedDownload)
             : () {},
@@ -615,10 +606,16 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     }
 
     if (data != null && active) {
+      void showProgress() => DownloadProgressDialog.show(
+        context,
+        chapter.displayName,
+        progressIdentity,
+      );
+
       if (status == TaskStatus.paused) {
         return EpisodeActionChip(
-          tooltip: isArabic ? 'التنزيل متوقف مؤقتًا' : 'Download paused',
-          onPressed: () {},
+          tooltip: 'التنزيل متوقف مؤقتًا',
+          onPressed: showProgress,
           child: Icon(
             Icons.pause_rounded,
             size: 18,
@@ -628,8 +625,8 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
       }
       final value = data.progress.clamp(0.0, 1.0);
       return EpisodeActionChip(
-        tooltip: isArabic ? 'جارٍ تنزيل الفصل' : 'Downloading chapter',
-        onPressed: () {},
+        tooltip: 'جارٍ تنزيل الفصل',
+        onPressed: showProgress,
         child: Padding(
           padding: const EdgeInsets.all(4),
           child: Stack(
@@ -654,8 +651,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
 
     return EpisodeActionChip(
       tooltip:
-          AppLocalizations.of(context)?.mangaDownloadChapter ??
-          (isArabic ? 'تنزيل الفصل' : 'Download chapter'),
+          AppLocalizations.of(context)?.mangaDownloadChapter ?? 'تنزيل الفصل',
       onPressed: () => widget.onDownload!(chapter),
       icon: Icons.save_alt_rounded,
     );
@@ -667,16 +663,11 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     final repository = ref.watch(mangaReadingRepositoryProvider);
     final progressById = ref.watch(downloadProgressProvider);
     final l10n = AppLocalizations.of(context);
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+
     final ascending = ref.watch(episodeSortAscendingProvider);
 
     if (widget.chapters.isEmpty) {
-      final note = Center(
-        child: Text(
-          l10n?.mangaNoChapters ?? (isArabic ? 'لا توجد فصول' : 'No chapters'),
-        ),
-      );
+      final note = Center(child: Text(l10n?.mangaNoChapters ?? 'لا توجد فصول'));
       return widget.embedded ? SliverToBoxAdapter(child: note) : note;
     }
 
@@ -709,7 +700,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
       padding: const EdgeInsets.symmetric(vertical: 32),
       child: Center(
         child: Text(
-          isArabic ? 'لا توجد فصول هنا' : 'No chapters here',
+          'لا توجد فصول هنا',
           key: const ValueKey<String>('manga-chapter-filter-empty'),
           style: TextStyle(
             color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -745,11 +736,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
       );
     }
 
-    final toolbar = _toolbar(
-      context,
-      ranges: ranges,
-      repository: repository,
-    );
+    final toolbar = _toolbar(context, ranges: ranges, repository: repository);
 
     if (widget.embedded) {
       // The page above already names this section, so the tools sit at its
@@ -762,10 +749,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
             child: _withTransition(
               Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: <Widget>[
-                  toolbar,
-                  const SizedBox(height: 8),
-                ],
+                children: <Widget>[toolbar, const SizedBox(height: 8)],
               ),
               key: widget.revealKey,
             ),
@@ -799,7 +783,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
                     runSpacing: 12,
                     children: <Widget>[
                       Text(
-                        l10n?.chapters ?? (isArabic ? 'الفصول' : 'Chapters'),
+                        l10n?.chapters ?? 'الفصول',
                         style: Theme.of(context).textTheme.titleLarge
                             ?.copyWith(fontWeight: FontWeight.bold),
                       ),

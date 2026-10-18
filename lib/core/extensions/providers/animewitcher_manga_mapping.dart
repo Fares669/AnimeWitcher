@@ -5,17 +5,20 @@ import '../../domain/entity/multimedia_item.dart';
 
 final _htmlUnescape = HtmlUnescape();
 
-String _text(Object? value) {
+String _text(Object? value, {bool preserveWhitespace = false}) {
   if (value is Map) {
     final map = _map(value);
     for (final key in const <String>['ar', 'arabic', 'en', 'english', 'value']) {
       final nested = map[key];
-      final text = nested?.toString().trim() ?? '';
-      if (text.isNotEmpty) return text;
+      final text = nested?.toString() ?? '';
+      if (text.trim().isNotEmpty) {
+        return preserveWhitespace ? text : text.trim();
+      }
     }
     return '';
   }
-  return value?.toString().trim() ?? '';
+  final text = value?.toString() ?? '';
+  return preserveWhitespace ? text : text.trim();
 }
 
 Map<String, Object?> _map(Object? value) {
@@ -33,10 +36,14 @@ String _stripHtml(Object? value) {
   return text.replaceAll(RegExp(r'<[^>]+>'), '').trim();
 }
 
-String _firstText(Map<String, Object?> source, Iterable<String> keys) {
+String _firstText(
+  Map<String, Object?> source,
+  Iterable<String> keys, {
+  bool preserveWhitespace = false,
+}) {
   for (final key in keys) {
-    final value = _text(source[key]);
-    if (value.isNotEmpty) return value;
+    final value = _text(source[key], preserveWhitespace: preserveWhitespace);
+    if (value.trim().isNotEmpty) return value;
   }
   return '';
 }
@@ -236,10 +243,11 @@ MangaLatestChapter? mapAnimeWitcherRecentMangaHit(
     'chapter_id',
     'chapterId',
   ]);
-  final chapterName = _firstText(source, const <String>[
-    'chapter_name',
-    'chapterName',
-  ]);
+  final chapterName = _firstText(
+    source,
+    const <String>['chapter_name', 'chapterName'],
+    preserveWhitespace: true,
+  );
   if (mangaId.isEmpty || chapterId.isEmpty || chapterName.isEmpty) return null;
 
   final manga = mapAnimeWitcherMangaHit(<String, Object?>{
@@ -446,16 +454,12 @@ List<MangaChapter> parseMangaLekArchiveChapters({
 
     final numberKey = number.toString();
     if (!seenNumbers.add(numberKey)) continue;
-    final displayNumber = number == number.roundToDouble()
-        ? number.toInt().toString()
-        : number.toString();
-
     chapters.add(
       MangaChapter(
         id: _chapterId(target.toString(), label),
         mangaId: mangaId,
         url: target.toString(),
-        name: 'الفصل ' + displayNumber,
+        name: label,
         number: number,
       ),
     );

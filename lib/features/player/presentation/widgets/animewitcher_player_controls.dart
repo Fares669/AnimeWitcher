@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart' show kDoubleTapSlop, kDoubleTapTimeout;
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons_200.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
@@ -144,6 +144,7 @@ class AnimeWitcherPlayerControlsState
   final List<StreamSubscription<dynamic>> _subscriptions = [];
 
   late final PlayerPlatformService _platformService;
+  late final int _deviceControlSession;
   Offset? _tapPosition;
 
   /// Double taps are told apart by hand. A double-tap recognizer holds every
@@ -195,7 +196,7 @@ class AnimeWitcherPlayerControlsState
     _isIpad = Platform.isIOS && (deviceProfile?.isTablet ?? false);
 
     _platformService = PlayerPlatformService();
-    ref
+    _deviceControlSession = ref
         .read(playerGestureHandlerProvider.notifier)
         .init(
           getSettings: () async =>
@@ -250,12 +251,38 @@ class AnimeWitcherPlayerControlsState
     _scrubFocusNode = FocusNode(debugLabel: 'controls_scrubber');
     _nextEpFocusNode = FocusNode(debugLabel: 'next_episode_prompt');
     _skipFocusNode = FocusNode(debugLabel: 'skip_segment_prompt');
-    try {
-      FlutterVolumeController.updateShowSystemUI(false);
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint("VolumeUI Error: $e");
-      }
+    unawaited(
+      FlutterVolumeController.updateShowSystemUI(false)
+          .catchError((Object error) {
+            if (kDebugMode) debugPrint('Volume UI: $error');
+          }),
+    );
+    final volumeChanges = FlutterVolumeController.addListener(
+      (value) {
+        if (!mounted) return;
+        ref.read(playerGestureHandlerProvider.notifier).syncDeviceVolume(value);
+      },
+      category: AudioSessionCategory.playback,
+      emitOnStart: false,
+    );
+    volumeChanges.onError((Object error) {
+      if (kDebugMode) debugPrint('Device volume listener: $error');
+    });
+    _subscriptions.add(volumeChanges);
+    if (Platform.isAndroid || Platform.isIOS) {
+      _subscriptions.add(
+        ScreenBrightness().onSystemScreenBrightnessChanged.listen(
+          (value) {
+            if (!mounted) return;
+            ref
+                .read(playerGestureHandlerProvider.notifier)
+                .syncDeviceBrightness(value);
+          },
+          onError: (Object error) {
+            if (kDebugMode) debugPrint('Device brightness listener: $error');
+          },
+        ),
+      );
     }
     _isPlaying = widget.player.state.playing;
     _position = widget.player.state.position;
@@ -428,6 +455,9 @@ class AnimeWitcherPlayerControlsState
       s.cancel();
     }
     _subscriptions.clear();
+    ref
+        .read(playerGestureHandlerProvider.notifier)
+        .detachDeviceControls(session: _deviceControlSession);
     _syncPipSession(active: false);
     _pipSettingsSub?.close();
     _revertMessageSub?.close();
@@ -439,18 +469,12 @@ class AnimeWitcherPlayerControlsState
     _hideTimer?.cancel();
     _seekOverlayTimer?.cancel();
     _seekAnimController.dispose();
-    try {
-      ScreenBrightness().resetApplicationScreenBrightness();
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint('Failed to reset brightness: $e');
-      }
-    }
-    try {
-      FlutterVolumeController.updateShowSystemUI(true);
-    } catch (e) {
-      if (kDebugMode) debugPrint('Failed to restore volume UI: $e');
-    }
+    unawaited(
+      FlutterVolumeController.updateShowSystemUI(true)
+          .catchError((Object error) {
+            if (kDebugMode) debugPrint('Failed to restore volume UI: $error');
+          }),
+    );
     SystemChrome.setPreferredOrientations([]); // Reset to system default
     // Clear the PiP method channel handler to prevent a stale handler from
     // accessing the disposed provider after the player exits.
@@ -654,7 +678,7 @@ class AnimeWitcherPlayerControlsState
     );
     ref
         .read(playerGestureHandlerProvider.notifier)
-        .showToast("2.0x", LucideIcons.fastForward200);
+        .showToast("2.0x", LucideIcons200.fastForward);
   }
 
   void _endTouchSpeedHold() {
@@ -671,7 +695,7 @@ class AnimeWitcherPlayerControlsState
         .read(playerGestureHandlerProvider.notifier)
         .showToast(
           "${previousSpeed.toStringAsFixed(1).replaceAll(RegExp(r'\.0$'), '')}x",
-          LucideIcons.play200,
+          LucideIcons200.play,
         );
   }
 
@@ -990,7 +1014,7 @@ class AnimeWitcherPlayerControlsState
         .read(playerGestureHandlerProvider.notifier)
         .showToast(
           playbackSpeedLabel(next),
-          faster ? LucideIcons.fastForward200 : LucideIcons.rewind200,
+          faster ? LucideIcons200.fastForward : LucideIcons200.rewind,
         );
     onUserInteraction();
   }
@@ -1084,13 +1108,13 @@ class AnimeWitcherPlayerControlsState
       if (chromeActions.contains(PlayerChromeAction.pip))
         PlayerIconButton(
           key: const ValueKey<String>('playerPipButton'),
-          icon: LucideIcons.pictureInPicture2200,
+          icon: LucideIcons200.pictureInPicture2,
           tooltip: l10n.pip,
           onPressed: () => unawaited(_enterPip()),
         ),
       if (chromeActions.contains(PlayerChromeAction.rotate))
         PlayerIconButton(
-          icon: LucideIcons.rotateCw200,
+          icon: LucideIcons200.rotateCw,
           iconBuilder: (color, size) =>
               RotateScreenIcon(size: size, color: color),
           tooltip: l10n.rotate,
@@ -1099,7 +1123,7 @@ class AnimeWitcherPlayerControlsState
       if (chromeActions.contains(PlayerChromeAction.episodes))
         _withKeyHint(
           PlayerIconButton(
-            icon: LucideIcons.listVideo200,
+            icon: LucideIcons200.listVideo,
             tooltip: l10n.episodes,
             onPressed: openEpisodesPanel,
           ),
@@ -1110,7 +1134,7 @@ class AnimeWitcherPlayerControlsState
         _withKeyHint(
           PlayerIconButton(
             key: const ValueKey<String>('playerSettingsButton'),
-            icon: LucideIcons.settings200,
+            icon: LucideIcons200.settings,
             tooltip: appText(context, english: 'Settings', arabic: 'الإعدادات'),
             onPressed: toggleSettingsPanel,
             highlight: _settingsOpen,
@@ -1122,8 +1146,8 @@ class AnimeWitcherPlayerControlsState
         _withKeyHint(
           PlayerIconButton(
             icon: _isFullscreen
-                ? LucideIcons.minimize200
-                : LucideIcons.maximize200,
+                ? LucideIcons200.minimize
+                : LucideIcons200.maximize,
             tooltip: _isFullscreen ? l10n.windowed : l10n.fullscreen,
             onPressed: toggleFullscreen,
           ),
@@ -1189,7 +1213,7 @@ class AnimeWitcherPlayerControlsState
                         english: 'This source could not be played',
                         arabic: 'تعذر تشغيل هذا المصدر',
                       ),
-                      LucideIcons.circleAlert200,
+                      LucideIcons200.circleAlert,
                     );
               }
             },
@@ -1219,7 +1243,7 @@ class AnimeWitcherPlayerControlsState
       widget.onResize?.call(_resizeModes[_resizeMode]);
       ref
           .read(playerGestureHandlerProvider.notifier)
-          .showToast(labels[_resizeMode], LucideIcons.ratio200);
+          .showToast(labels[_resizeMode], LucideIcons200.ratio);
     });
   }
 
@@ -1286,8 +1310,6 @@ class AnimeWitcherPlayerControlsState
     if (episode == null) return null;
     final label = formatEpisodeLabel(
       episode: episode.episode,
-      isArabic:
-          Localizations.localeOf(context).languageCode.toLowerCase() == 'ar',
       title: episode.name,
       isFinal: episode.isFinal,
       serverName: episode.serverName,
@@ -1319,7 +1341,7 @@ class AnimeWitcherPlayerControlsState
           children: [
             if (_isSeekingLeft)
               const Icon(
-                LucideIcons.chevronsLeft200,
+                LucideIcons200.chevronsLeft,
                 color: Colors.white,
                 size: 34,
                 shadows: HotstarPlayerStyle.glyphShadows,
@@ -1336,7 +1358,7 @@ class AnimeWitcherPlayerControlsState
             ),
             if (!_isSeekingLeft)
               const Icon(
-                LucideIcons.chevronsRight200,
+                LucideIcons200.chevronsRight,
                 color: Colors.white,
                 size: 34,
                 shadows: HotstarPlayerStyle.glyphShadows,
@@ -1427,6 +1449,8 @@ class AnimeWitcherPlayerControlsState
         : null;
     final storyEpisodeLabel = storyEpisode == null
         ? null
+        : storyEpisode.serverName.trim().isNotEmpty
+        ? storyEpisode.serverName
         : 'الحلقة ${storyEpisode.episode}';
     final hasEpisodePicker = playerNotifier.hasEpisodePicker;
     final episodeLabel = _buildEpisodeLine(
@@ -1811,7 +1835,7 @@ class AnimeWitcherPlayerControlsState
           duration: const Duration(milliseconds: 180),
           child: Center(
             child: _buildActionButton(
-              icon: LucideIcons.lock200,
+              icon: LucideIcons200.lock,
               label: AppLocalizations.of(context)!.unlock,
               onTap: _toggleLock,
               highlight: false,
@@ -1888,7 +1912,7 @@ class AnimeWitcherPlayerControlsState
       if (isTouch) ...[
         if (playerSettings.showLock || _isLocked)
           PlayerIconButton(
-            icon: _isLocked ? LucideIcons.lock200 : LucideIcons.lockOpen200,
+            icon: _isLocked ? LucideIcons200.lock : LucideIcons200.lockOpen,
             tooltip: _isLocked ? l10n.unlock : l10n.lock,
             onPressed: _toggleLock,
             isTv: _isTv,
@@ -1896,14 +1920,14 @@ class AnimeWitcherPlayerControlsState
           ),
         if (isSeries && hasPreviousEpisode && playerSettings.showEpisodeNav)
           PlayerIconButton(
-            icon: LucideIcons.chevronsLeft200,
+            icon: LucideIcons200.chevronsLeft,
             tooltip: appText(context, english: 'Previous', arabic: 'السابق'),
             onPressed: () => unawaited(_playPreviousEpisodeWithSourcePicker()),
             isTv: _isTv,
           ),
         if (isSeries && hasNextEpisode && playerSettings.showEpisodeNav)
           PlayerIconButton(
-            icon: LucideIcons.chevronsRight200,
+            icon: LucideIcons200.chevronsRight,
             tooltip: l10n.next,
             onPressed: () => unawaited(_playNextEpisodeWithSourcePicker()),
             isTv: _isTv,
@@ -1911,14 +1935,14 @@ class AnimeWitcherPlayerControlsState
       ] else if (_isTv) ...[
         if (isSeries && hasPreviousEpisode && playerSettings.showEpisodeNav)
           PlayerIconButton(
-            icon: LucideIcons.chevronsLeft200,
+            icon: LucideIcons200.chevronsLeft,
             tooltip: appText(context, english: 'Previous', arabic: 'السابق'),
             onPressed: () => unawaited(_playPreviousEpisodeWithSourcePicker()),
             isTv: _isTv,
           ),
         if (playerSettings.showSeekButtons)
           PlayerIconButton(
-            icon: LucideIcons.rotateCcw200,
+            icon: LucideIcons200.rotateCcw,
             iconSize: transportGlyph,
             iconBuilder: (color, size) => SeekIcon(
               forward: false,
@@ -1939,7 +1963,7 @@ class AnimeWitcherPlayerControlsState
         playPause,
         if (playerSettings.showSeekButtons)
           PlayerIconButton(
-            icon: LucideIcons.rotateCw200,
+            icon: LucideIcons200.rotateCw,
             iconSize: transportGlyph,
             iconBuilder: (color, size) => SeekIcon(
               forward: true,
@@ -1957,7 +1981,7 @@ class AnimeWitcherPlayerControlsState
           ),
         if (isSeries && hasNextEpisode && playerSettings.showEpisodeNav)
           PlayerIconButton(
-            icon: LucideIcons.chevronsRight200,
+            icon: LucideIcons200.chevronsRight,
             tooltip: l10n.next,
             onPressed: () => unawaited(_playNextEpisodeWithSourcePicker()),
             isTv: _isTv,
@@ -1976,7 +2000,7 @@ class AnimeWitcherPlayerControlsState
               if (playerSettings.showSeekButtons)
                 _withKeyHint(
                   PlayerIconButton(
-                    icon: LucideIcons.rotateCcw200,
+                    icon: LucideIcons200.rotateCcw,
                     iconBuilder: (color, size) => SeekIcon(
                       forward: false,
                       seconds: playerSettings.seekDuration,
@@ -1996,7 +2020,7 @@ class AnimeWitcherPlayerControlsState
               if (playerSettings.showSeekButtons)
                 _withKeyHint(
                   PlayerIconButton(
-                    icon: LucideIcons.rotateCw200,
+                    icon: LucideIcons200.rotateCw,
                     iconBuilder: (color, size) => SeekIcon(
                       forward: true,
                       seconds: playerSettings.seekDuration,
@@ -2052,7 +2076,7 @@ class AnimeWitcherPlayerControlsState
       for (final action in chromeActions)
         switch (action) {
           PlayerChromeAction.playbackSpeed => PlayerIconButton(
-            icon: LucideIcons.gauge200,
+            icon: LucideIcons200.gauge,
             tooltip:
                 "${playbackSpeed.toStringAsFixed(2).replaceAll(RegExp(r'\.00$'), '')}x",
             onPressed: () => PlayerBottomSheets.showSpeedSelection(
@@ -2067,13 +2091,13 @@ class AnimeWitcherPlayerControlsState
           ),
           PlayerChromeAction.pip => PlayerIconButton(
             key: const ValueKey<String>('playerPipButton'),
-            icon: LucideIcons.pictureInPicture2200,
+            icon: LucideIcons200.pictureInPicture2,
             tooltip: l10n.pip,
             onPressed: () => unawaited(_enterPip()),
             isTv: _isTv,
           ),
           PlayerChromeAction.rotate => PlayerIconButton(
-            icon: LucideIcons.rotateCw200,
+            icon: LucideIcons200.rotateCw,
             iconBuilder: (color, size) =>
                 RotateScreenIcon(size: size, color: color),
             tooltip: l10n.rotate,
@@ -2081,14 +2105,14 @@ class AnimeWitcherPlayerControlsState
             isTv: _isTv,
           ),
           PlayerChromeAction.episodes => PlayerIconButton(
-            icon: LucideIcons.listVideo200,
+            icon: LucideIcons200.listVideo,
             tooltip: l10n.episodes,
             onPressed: openEpisodesPanel,
             isTv: _isTv,
           ),
           PlayerChromeAction.anime4k => PlayerIconButton(
             key: const ValueKey<String>('playerAnime4kButton'),
-            icon: LucideIcons.sparkles200,
+            icon: LucideIcons200.sparkles,
             tooltip:
                 'Anime4K · ${playerSettings.anime4kMode.label} '
                 '(${playerSettings.anime4kQuality.suffix})',
@@ -2111,15 +2135,15 @@ class AnimeWitcherPlayerControlsState
             // overlapping squares this replaces read as two of something at
             // the size this is drawn, and the outward arrows that would also
             // suit it are the fullscreen button two places along.
-            icon: LucideIcons.proportions200,
+            icon: LucideIcons200.proportions,
             tooltip: l10n.resize,
             onPressed: cycleResize,
             isTv: _isTv,
           ),
           PlayerChromeAction.desktopFullscreen => PlayerIconButton(
             icon: _isFullscreen
-                ? LucideIcons.minimize200
-                : LucideIcons.maximize200,
+                ? LucideIcons200.minimize
+                : LucideIcons200.maximize,
             tooltip: _isFullscreen ? l10n.windowed : l10n.fullscreen,
             onPressed: toggleFullscreen,
             isTv: _isTv,

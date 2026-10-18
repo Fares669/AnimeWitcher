@@ -221,24 +221,17 @@ String _newsTimeAgo(BuildContext context, DateTime? date) {
   if (date == null) return '';
   final difference = DateTime.now().difference(date);
   final elapsed = difference.isNegative ? Duration.zero : difference;
-  final isArabic = Localizations.localeOf(context).languageCode == 'ar';
 
-  if (elapsed.inMinutes < 1) return isArabic ? 'الآن' : 'just now';
+  if (elapsed.inMinutes < 1) return 'الآن';
   if (elapsed.inHours < 1) {
     final value = elapsed.inMinutes;
-    return isArabic
-        ? 'منذ ' + (value == 1 ? 'دقيقة' : value.toString() + ' دقيقة')
-        : value.toString() + (value == 1 ? ' minute ago' : ' minutes ago');
+    return ('منذ ' + (value == 1 ? 'دقيقة' : value.toString() + ' دقيقة'));
   }
   if (elapsed.inDays < 1) {
     final value = elapsed.inHours;
-    return isArabic
-        ? 'منذ ' + (value == 1 ? 'ساعة' : value.toString() + ' ساعة')
-        : value.toString() + (value == 1 ? ' hour ago' : ' hours ago');
+    return ('منذ ' + (value == 1 ? 'ساعة' : value.toString() + ' ساعة'));
   }
 
   final value = elapsed.inDays;
-  return isArabic
-      ? 'منذ ' + (value == 1 ? 'يوم' : value.toString() + ' يوم')
-      : value.toString() + (value == 1 ? ' day ago' : ' days ago');
+  return ('منذ ' + (value == 1 ? 'يوم' : value.toString() + ' يوم'));
 }

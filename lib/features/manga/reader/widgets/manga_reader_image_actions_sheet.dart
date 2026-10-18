@@ -3,13 +3,11 @@ import 'package:flutter/material.dart';
 class MangaReaderImageActionsSheet extends StatelessWidget {
   const MangaReaderImageActionsSheet({
     super.key,
-    required this.isArabic,
     required this.onSetCover,
     required this.onShare,
     required this.onSave,
   });
 
-  final bool isArabic;
   final VoidCallback onSetCover;
   final VoidCallback onShare;
   final VoidCallback onSave;
@@ -22,21 +20,21 @@ class MangaReaderImageActionsSheet extends StatelessWidget {
           Expanded(
             child: _ReaderImageActionButton(
               icon: Icons.image_outlined,
-              label: isArabic ? 'تعيين كغلاف' : 'Set as cover',
+              label: 'تعيين كغلاف',
               onPressed: onSetCover,
             ),
           ),
           Expanded(
             child: _ReaderImageActionButton(
               icon: Icons.share_outlined,
-              label: isArabic ? 'مشاركة' : 'Share',
+              label: 'مشاركة',
               onPressed: onShare,
             ),
           ),
           Expanded(
             child: _ReaderImageActionButton(
               icon: Icons.save_outlined,
-              label: isArabic ? 'حفظ' : 'Save',
+              label: 'حفظ',
               onPressed: onSave,
             ),
           ),

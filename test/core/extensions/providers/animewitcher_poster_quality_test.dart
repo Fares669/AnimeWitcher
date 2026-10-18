@@ -63,6 +63,7 @@ List<Map<String, dynamic>> get _batchGetResponse => <Map<String, dynamic>>[
 Map<String, dynamic> _recentAlgoliaHit({
   String objectId = 'episode_doc_1100',
   String animeId = 'one_piece',
+  String episodeName = 'حلقة 1100',
   String? aniListPoster = _aniListPoster,
 }) {
   return <String, dynamic>{
@@ -71,7 +72,7 @@ Map<String, dynamic> _recentAlgoliaHit({
         'objectID': objectId,
         'anime_id': animeId,
         'name': 'ون بيس',
-        'episode_name': 'حلقة 1100',
+        'episode_name': episodeName,
         'poster_uri': _smallPoster,
         if (aniListPoster != null) 'poster_url_aniList': aniListPoster,
         'thumb_uri': _episodeStill,
@@ -178,6 +179,20 @@ Iterable<RequestOptions> _batchGets(List<RequestOptions> requests) =>
     requests.where((r) => r.uri.toString().contains('documents:batchGet'));
 
 void main() {
+  test('latest episode badge retains the exact API episode name', () async {
+    const episodeName = '  الحلقة ٠٠٢.٥ &amp; <special>  ';
+    final stub = _stubDio(
+      _recentAlgoliaHit(episodeName: episodeName),
+      homeSections: _recentHomeSectionsDocument(),
+    );
+    final page = await _provider(
+      stub.dio,
+      highQuality: false,
+    ).getHomeSectionPage(_latestSectionTitle);
+
+    expect(page.items.single.episodeBadge, episodeName);
+  });
+
   test('list hits render Algolia posters without Firestore hydrate', () async {
     final stub = _stubDio(_algoliaHit());
     final page = await _provider(

@@ -38,11 +38,7 @@ class SearchStartPage extends StatelessWidget {
           ),
           TextButton.icon(
             onPressed: onClearRecents,
-            icon: const Icon(
-              Icons.delete_outline,
-              size: 16,
-              color: Colors.red,
-            ),
+            icon: const Icon(Icons.delete_outline, size: 16, color: Colors.red),
             label: Text(
               appText(context, english: 'Clear all', arabic: 'مسح الكل'),
               style: const TextStyle(color: Colors.red),
@@ -53,29 +49,32 @@ class SearchStartPage extends StatelessWidget {
     );
   }
 
-  Widget _recentChips(BuildContext context, {WrapAlignment? alignment}) {
+  Widget _recentChips(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      alignment: alignment ?? WrapAlignment.start,
-      children: [
-        for (final recent in recents)
-          InputChip(
-            key: ValueKey<String>('search-recent-$recent'),
-            label: Text(recent),
-            onPressed: () => onRecent(recent),
-            onDeleted: () => onRemoveRecent(recent),
-            deleteIcon: const Icon(Icons.close_rounded, size: 16),
-            side: BorderSide.none,
-            backgroundColor: colors.surfaceContainerHighest.withValues(
-              alpha: 0.6,
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (final recent in recents)
+            Padding(
+              padding: const EdgeInsetsDirectional.only(end: 8),
+              child: InputChip(
+                key: ValueKey<String>('search-recent-$recent'),
+                label: Text(recent, maxLines: 1, softWrap: false),
+                onPressed: () => onRecent(recent),
+                onDeleted: () => onRemoveRecent(recent),
+                deleteIcon: const Icon(Icons.close_rounded, size: 16),
+                side: BorderSide.none,
+                backgroundColor: colors.surfaceContainerHighest.withValues(
+                  alpha: 0.6,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(99),
+                ),
+              ),
             ),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(99),
-            ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 

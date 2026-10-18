@@ -4,7 +4,9 @@ import 'package:animewitcher/shared/widgets/app_page_header.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
+
 import 'package:animewitcher/core/router/app_router.dart';
+
 import '../../../core/utils/image_utils.dart';
 import '../../../core/utils/localized_text.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
@@ -36,6 +38,10 @@ class ViewAllScreen extends StatefulWidget {
   /// user approaches the bottom, so View All never downloads the full catalog.
   final Future<ProviderMediaPage> Function(int offset)? loadPage;
 
+  /// The source cursor after the seeded items, when that page is already loaded.
+  final int? initialOffset;
+  final bool initialHasMore;
+
   /// Forces portrait cards in this View All grid. Used by sections such as
   /// Latest Added Works so mobile keeps the same compact 3-card row layout
   /// as the home section instead of switching to two landscape cards.
@@ -48,6 +54,8 @@ class ViewAllScreen extends StatefulWidget {
     required this.category,
     this.onTap,
     this.loadPage,
+    this.initialOffset,
+    this.initialHasMore = true,
     this.forcePortrait = false,
   });
 
@@ -65,6 +73,7 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
   bool _providerHasMore = true;
   Object? _providerLoadError;
   int _providerOffset = 0;
+  int _emptyProviderPages = 0;
 
   bool get _isProvider => widget.category == ViewAllCategory.providerContent;
 
@@ -87,17 +96,33 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
     }
 
     if (_isProvider) {
+      _providerOffset = widget.initialOffset ?? 0;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        _providerHasMore = widget.loadPage != null;
-        if (_providerHasMore) _loadNextProviderPage();
+        _providerHasMore = widget.loadPage != null && widget.initialHasMore;
+        if (!_providerHasMore) return;
+        if (widget.initialOffset == null || _providerItems.isEmpty) {
+          _loadNextProviderPage();
+        } else {
+          _ensureProviderFill(onlyIfNotScrollable: true);
+        }
       });
     }
   }
 
   String _itemKey(MultimediaItem item) {
     final url = item.url.trim();
-    if (url.isNotEmpty) return url;
+    if (url.isNotEmpty) {
+      final uri = Uri.tryParse(url);
+      if (uri != null &&
+          (uri.host == 'animewitcher.com' ||
+              uri.host == 'www.animewitcher.com') &&
+          uri.pathSegments.length >= 2 &&
+          uri.pathSegments.first == 'watch') {
+        return 'animewitcher:watch:${uri.pathSegments[1]}';
+      }
+      return url;
+    }
     return '${item.id}|${item.title}|${item.posterUrl}';
   }
 
@@ -117,9 +142,14 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
     });
 
     try {
-      final page = await loader(requestedOffset);
+      final page = await loader(requestedOffset)
+          .timeout(const Duration(seconds: 30));
       if (!mounted) return;
+      if (page.hasMore && page.nextOffset <= requestedOffset) {
+        throw StateError('The provider page cursor did not advance.');
+      }
 
+      final previousCount = _providerItems.length;
       for (final item in page.items) {
         if (_providerSeen.add(_itemKey(item))) {
           _providerItems.add(item);
@@ -127,15 +157,20 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
       }
 
       setState(() {
-        final fallbackAdvance = page.items.isNotEmpty ? page.items.length : 1;
-        _providerOffset = page.nextOffset > requestedOffset
-            ? page.nextOffset
-            : requestedOffset + fallbackAdvance;
-        _providerHasMore =
-            page.hasMore &&
-            (page.nextOffset > requestedOffset || page.items.isNotEmpty);
+        if (page.nextOffset > requestedOffset) {
+          _providerOffset = page.nextOffset;
+        }
+        _providerHasMore = page.hasMore;
         _providerLoading = false;
-        _providerLoadError = null;
+        _emptyProviderPages = _providerItems.length == previousCount
+            ? _emptyProviderPages + 1
+            : 0;
+        // Sparse catalogues may skip ranks, but never spin through them forever.
+        if (_providerHasMore && _emptyProviderPages >= 3) {
+          _providerLoadError = StateError(
+            'No new titles in consecutive pages.',
+          );
+        }
       });
 
       WidgetsBinding.instance.addPostFrameCallback(
@@ -150,13 +185,24 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
     }
   }
 
-  void _ensureProviderFill() {
-    if (!mounted || !_providerHasMore || _providerLoading) return;
+  void _ensureProviderFill({bool onlyIfNotScrollable = false}) {
+    if (!mounted ||
+        !_providerHasMore ||
+        _providerLoading ||
+        _providerLoadError != null) {
+      return;
+    }
     if (!_scrollController.hasClients ||
-        _scrollController.position.maxScrollExtent <
-            _scrollController.position.viewportDimension * 0.65) {
+        (onlyIfNotScrollable
+            ? _scrollController.position.maxScrollExtent <= 0
+            : _scrollController.position.extentAfter <= 500)) {
       _loadNextProviderPage();
     }
+  }
+
+  Future<void> _retryProviderPage() {
+    _emptyProviderPages = 0;
+    return _loadNextProviderPage();
   }
 
   Future<void> _checkAspectRatio() async {
@@ -170,7 +216,11 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
   }
 
   void _onScroll() {
-    if (!_isProvider || !_scrollController.hasClients) return;
+    if (!_isProvider ||
+        !_scrollController.hasClients ||
+        _providerLoadError != null) {
+      return;
+    }
     if (_scrollController.position.pixels <
         _scrollController.position.maxScrollExtent - 500) {
       return;
@@ -243,7 +293,7 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
         ),
         child: hasProviderLoadError && items.isEmpty
             ? MouseDragRefreshIndicator(
-                onRefresh: _loadNextProviderPage,
+                onRefresh: _retryProviderPage,
                 child: ListView(
                   padding: EdgeInsets.only(top: headerTop),
                   physics: const AlwaysScrollableScrollPhysics(),
@@ -251,7 +301,7 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
                     SizedBox(height: MediaQuery.sizeOf(context).height * 0.2),
                     _ProviderPageLoadError(
                       isEmptyCatalog: true,
-                      onRetry: _loadNextProviderPage,
+                      onRetry: _retryProviderPage,
                     ),
                   ],
                 ),
@@ -287,12 +337,10 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
                       if (hasProviderLoadError) {
                         return _ProviderPageLoadError(
                           compact: true,
-                          onRetry: _loadNextProviderPage,
+                          onRetry: _retryProviderPage,
                         );
                       }
-                      return AnimePosterShimmer(
-                        isPortrait: _isPortrait,
-                      );
+                      return AnimePosterShimmer(isPortrait: _isPortrait);
                     }
 
                     final item = items[index];
@@ -308,9 +356,8 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
                         if (widget.onTap != null) {
                           widget.onTap!(item);
                         } else {
-                          DetailsRoute(
-                            $extra: DetailsRouteExtra(item: item),
-                          ).push<void>(context);
+                          DetailsRoute($extra: DetailsRouteExtra(item: item))
+                              .push<void>(context);
                         }
                       },
                     );
@@ -338,7 +385,7 @@ class _ProviderPageLoadError extends StatelessWidget {
     final content = Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Icon(Icons.cloud_off_rounded, size: 40),
+        Icon(Icons.cloud_off_rounded, size: compact ? 24 : 40),
         const SizedBox(height: 10),
         Text(
           appText(
@@ -351,15 +398,25 @@ class _ProviderPageLoadError extends StatelessWidget {
                 : 'تعذر تحميل المزيد من النتائج.',
           ),
           textAlign: TextAlign.center,
+          style: compact ? Theme.of(context).textTheme.bodySmall : null,
         ),
         const SizedBox(height: 10),
-        FilledButton.tonalIcon(
-          onPressed: onRetry,
-          icon: const Icon(Icons.refresh_rounded),
-          label: Text(
-            appText(context, english: 'Retry', arabic: 'إعادة المحاولة'),
+        if (compact)
+          TextButton(
+            onPressed: onRetry,
+            style: TextButton.styleFrom(padding: const EdgeInsets.all(4)),
+            child: Text(
+              appText(context, english: 'Retry', arabic: 'إعادة المحاولة'),
+            ),
+          )
+        else
+          FilledButton.tonalIcon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh_rounded),
+            label: Text(
+              appText(context, english: 'Retry', arabic: 'إعادة المحاولة'),
+            ),
           ),
-        ),
       ],
     );
 
@@ -372,6 +429,3 @@ class _ProviderPageLoadError extends StatelessWidget {
           );
   }
 }
-
-
-

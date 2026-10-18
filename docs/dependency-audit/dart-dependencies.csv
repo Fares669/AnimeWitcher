@@ -1,0 +1,257 @@
+package,kind,old_version,new_version,latest_stable,status,source
+_fe_analyzer_shared,transitive,91.0.0,109.0.0,109.0.0,upgraded,hosted
+analysis_server_plugin,transitive,0.3.3,0.3.24,0.3.24,upgraded,hosted
+analyzer,transitive,8.4.0,14.5.0,14.5.0,upgraded,hosted
+analyzer_buffer,transitive,0.1.11,0.3.4,0.3.4,upgraded,hosted
+analyzer_plugin,transitive,0.13.10,0.14.18,0.14.18,upgraded,hosted
+android_file_picker,transitive,,2.1.1,2.1.1,added,hosted
+ansicolor,transitive,2.0.3,2.0.3,2.0.3,unchanged,hosted
+archive,direct main,4.0.9,4.5.2,4.5.2,upgraded,hosted
+args,transitive,2.7.0,2.7.0,2.7.0,unchanged,hosted
+async,transitive,2.13.1,2.13.1,2.13.1,unchanged,hosted
+async_value_notifier,transitive,1.1.0,1.1.0,1.1.0,unchanged,hosted
+background_downloader,direct main,9.6.4,9.6.4,9.6.4,unchanged,hosted
+boolean_selector,transitive,2.1.2,2.1.2,2.1.2,unchanged,hosted
+build,transitive,4.0.7,4.0.11,5.0.0,upgraded,hosted
+build_config,transitive,1.3.2,1.3.3,1.4.0,upgraded,hosted
+build_daemon,transitive,4.1.3,4.1.7,4.1.7,upgraded,hosted
+build_runner,direct dev,2.15.1,2.16.2,2.17.1,upgraded,hosted
+built_collection,transitive,5.1.1,5.1.2,5.1.2,upgraded,hosted
+built_value,transitive,8.12.6,8.13.0,8.13.0,upgraded,hosted
+cached_network_image,direct main,3.4.1,4.0.4,4.0.4,upgraded,hosted
+cached_network_image_platform_interface,transitive,4.1.1,5.0.3,5.0.3,upgraded,hosted
+cached_network_image_web,transitive,1.3.1,2.0.3,2.0.3,upgraded,hosted
+characters,transitive,1.4.1,1.4.1,1.4.1,unchanged,hosted
+checked_yaml,transitive,2.0.4,2.0.4,2.0.4,unchanged,hosted
+ci,transitive,0.1.0,,,removed,hosted
+cli_config,transitive,0.2.0,,,removed,hosted
+cli_util,transitive,0.4.2,,,removed,hosted
+clock,transitive,1.1.2,1.1.3,1.1.3,upgraded,hosted
+code_assets,direct main,2.1.0,2.1.0,2.1.0,unchanged,hosted
+code_builder,transitive,4.11.1,4.13.0,4.13.0,upgraded,hosted
+collection,direct main,1.19.1,1.19.1,1.19.1,unchanged,hosted
+connectivity_plus,direct main,6.1.5,7.3.2,7.3.2,upgraded,hosted
+connectivity_plus_platform_interface,transitive,2.1.0,2.1.0,2.1.0,unchanged,hosted
+convert,transitive,3.1.2,3.1.2,3.1.2,unchanged,hosted
+coverage,transitive,1.15.1,,,removed,hosted
+cross_file,transitive,0.3.5+4,0.3.5+5,0.4.0,upgraded,hosted
+crypto,direct main,3.0.7,3.0.7,3.0.7,unchanged,hosted
+cupertino_ui,transitive,,1.1.3,1.1.3,added,hosted
+custom_lint,direct dev,0.8.1,,0.8.1,removed,hosted
+custom_lint_core,transitive,0.8.1,,,removed,hosted
+custom_lint_visitor,transitive,1.0.0+8.4.0,,,removed,hosted
+dart_style,transitive,3.1.3,3.1.14,3.1.14,upgraded,hosted
+dbus,transitive,0.7.14,0.8.0,0.8.0,upgraded,hosted
+device_info_plus,direct main,13.2.0,13.3.0,13.3.0,upgraded,hosted
+device_info_plus_platform_interface,transitive,8.1.0,8.1.0,8.1.0,unchanged,hosted
+dio,direct main,5.11.0,5.11.1,5.11.1,upgraded,hosted
+dio_web_adapter,transitive,2.2.1,2.2.2,2.2.2,upgraded,hosted
+dpad,direct main,2.0.2,3.1.1,3.1.1,upgraded,hosted
+dynamic_color,direct main,1.8.1,2.1.0,2.1.0,upgraded,hosted
+fake_async,direct dev,1.3.3,1.3.3,1.3.3,unchanged,hosted
+ffi,direct main,2.2.0,2.2.0,2.2.0,unchanged,hosted
+ffi_leak_tracker,transitive,0.1.2,0.1.2,0.1.2,unchanged,hosted
+file,transitive,7.0.1,7.0.1,7.0.1,unchanged,hosted
+file_picker,direct main,12.0.0-beta.7,13.1.0,13.1.0,upgraded,hosted
+file_picker_darwin,transitive,,2.3.2,2.3.2,added,hosted
+file_picker_linux,transitive,,2.0.2,2.0.2,added,hosted
+file_picker_platform_interface,transitive,,4.2.0,4.2.0,added,hosted
+file_picker_web,transitive,,4.2.0,4.2.0,added,hosted
+fixnum,transitive,1.1.1,1.1.1,1.1.1,unchanged,hosted
+flutter,direct main,0.0.0,0.0.0,0.0.0,unchanged,sdk
+flutter_avif_ios,direct main,3.1.0,3.1.0,3.1.0,unchanged,hosted
+flutter_avif_platform_interface,direct main,3.1.0,3.1.0,3.1.0,unchanged,hosted
+flutter_cache_manager,direct main,3.4.2,3.4.5,3.4.5,upgraded,hosted
+flutter_displaymode,direct main,0.7.0,0.7.0,0.7.0,unchanged,hosted
+flutter_hooks,direct main,0.21.3+1,0.21.3+1,0.21.3+1,unchanged,hosted
+flutter_lints,direct dev,6.0.0,6.0.0,6.0.0,unchanged,hosted
+flutter_localizations,direct main,0.0.0,0.0.0,0.0.0,unchanged,sdk
+flutter_plugin_android_lifecycle,transitive,2.0.35,2.0.35,2.0.35,unchanged,hosted
+flutter_riverpod,direct main,3.1.0,3.4.3,3.4.3,upgraded,hosted
+flutter_secure_storage,direct main,10.3.1,11.2.0,11.2.0,upgraded,hosted
+flutter_secure_storage_darwin,transitive,0.3.2,0.4.3,0.4.3,upgraded,hosted
+flutter_secure_storage_linux,transitive,3.0.1,3.0.3,3.0.3,upgraded,hosted
+flutter_secure_storage_platform_interface,transitive,2.0.2,2.1.1,2.1.1,upgraded,hosted
+flutter_secure_storage_web,transitive,2.1.1,2.1.1,2.1.1,unchanged,hosted
+flutter_secure_storage_windows,transitive,4.2.2,4.2.2,4.2.2,unchanged,hosted
+flutter_svg,direct main,2.3.0,2.3.0,2.3.0,unchanged,hosted
+flutter_test,direct dev,0.0.0,0.0.0,0.0.0,unchanged,sdk
+flutter_volume_controller,direct main,2.0.1,2.0.2,2.0.2,upgraded,hosted
+flutter_web_plugins,transitive,0.0.0,0.0.0,0.0.0,unchanged,sdk
+freezed_annotation,transitive,3.1.0,3.1.0,3.1.0,unchanged,hosted
+frontend_server_client,transitive,4.0.0,,,removed,hosted
+glob,transitive,2.1.3,2.2.0,2.2.0,upgraded,hosted
+go_router,direct main,17.3.0,18.1.0,18.1.0,upgraded,hosted
+go_router_builder,direct dev,4.4.0,4.5.0,4.5.0,upgraded,hosted
+google_fonts,direct main,8.2.1,9.0.0,9.0.0,upgraded,hosted
+graphs,transitive,2.3.2,2.3.2,2.3.2,unchanged,hosted
+group_button,transitive,5.3.4,5.3.4,5.3.4,unchanged,hosted
+hive,transitive,2.2.3,2.2.3,2.2.3,unchanged,hosted
+hive_flutter,direct main,1.1.0,1.1.0,1.1.0,unchanged,hosted
+hooks,direct main,2.2.0,2.2.0,2.2.0,unchanged,hosted
+hooks_riverpod,direct main,3.1.0,3.4.3,3.4.3,upgraded,hosted
+html_unescape,direct main,2.0.0,2.0.0,2.0.0,unchanged,hosted
+http,direct main,1.6.0,1.6.0,1.6.0,unchanged,hosted
+http_multi_server,transitive,3.2.2,3.2.2,3.2.2,unchanged,hosted
+http_parser,transitive,4.1.2,4.1.2,4.1.2,unchanged,hosted
+image,direct main,4.8.0,4.12.0,4.12.0,upgraded,hosted
+intl,direct main,0.20.3,0.20.3,0.20.3,unchanged,hosted
+io,transitive,1.0.5,1.1.0,1.1.0,upgraded,hosted
+jni,transitive,1.0.3,1.1.0,1.1.0,upgraded,hosted
+jni_flutter,transitive,1.0.2,1.0.4+1,1.0.4+1,upgraded,hosted
+jni_util,transitive,1.0.0,1.0.0,1.0.0,unchanged,hosted
+json_annotation,transitive,4.12.0,4.12.0,4.12.0,unchanged,hosted
+leak_tracker,transitive,11.0.2,11.0.2,11.0.2,unchanged,hosted
+leak_tracker_flutter_testing,transitive,3.0.10,3.0.10,3.0.10,unchanged,hosted
+leak_tracker_testing,transitive,3.0.2,3.0.2,3.0.2,unchanged,hosted
+lints,transitive,6.1.0,6.1.0,6.1.0,unchanged,hosted
+listen,transitive,,1.0.1,1.0.1,added,hosted
+logging,transitive,1.3.0,1.3.0,1.3.0,unchanged,hosted
+lucide_icons_flutter,direct main,3.1.19,4.0.0,4.0.0,upgraded,hosted
+matcher,transitive,0.12.20,0.12.20,0.12.20,unchanged,hosted
+material_color_utilities,transitive,0.13.0,0.13.0,0.13.1,unchanged,hosted
+material_ui,transitive,,1.7.0,1.7.0,added,hosted
+media_kit,direct main,1.2.6,1.2.6,1.2.6,unchanged,path
+media_kit_libs_android_video,transitive,1.3.8,1.3.8,1.3.8,unchanged,hosted
+media_kit_libs_ios_video,transitive,1.1.4,1.1.4,1.1.4,unchanged,hosted
+media_kit_libs_linux,transitive,1.2.1,1.2.1,1.2.1,unchanged,hosted
+media_kit_libs_macos_video,transitive,1.1.4,1.1.4,1.1.4,unchanged,hosted
+media_kit_libs_video,direct main,1.0.7,1.0.7,1.0.7,unchanged,hosted
+media_kit_libs_windows_video,transitive,1.0.11,1.0.11,1.0.11,unchanged,hosted
+media_kit_video,direct main,2.0.1,2.0.1,2.0.1,unchanged,hosted
+meta,transitive,1.19.0,1.19.0,1.19.0,unchanged,hosted
+mime,transitive,2.0.0,2.1.0,2.1.0,upgraded,hosted
+mockito,transitive,5.6.4,5.8.1,5.8.1,upgraded,hosted
+native_toolchain_c,direct main,0.19.5,0.19.5,0.19.5,unchanged,hosted
+nm,transitive,0.5.0,0.6.0,0.6.0,upgraded,hosted
+node_preamble,transitive,2.0.2,,,removed,hosted
+objective_c,transitive,9.6.0,9.6.2,9.6.2,upgraded,hosted
+octo_image,transitive,2.1.0,2.1.2,2.1.2,upgraded,hosted
+open_file,direct main,4.0.0,4.0.0,4.0.0,unchanged,hosted
+open_file_android,transitive,1.1.0,1.1.0,1.1.0,unchanged,hosted
+open_file_ios,transitive,1.1.0,1.1.0,1.1.0,unchanged,hosted
+open_file_linux,transitive,1.1.0,1.1.0,1.1.0,unchanged,hosted
+open_file_mac,transitive,1.1.0,1.1.0,1.1.0,unchanged,hosted
+open_file_platform_interface,transitive,1.1.0,1.1.0,1.1.0,unchanged,hosted
+open_file_web,transitive,1.1.0,1.1.0,1.1.0,unchanged,hosted
+open_file_windows,transitive,1.1.0,1.1.0,1.1.0,unchanged,hosted
+package_config,transitive,2.2.0,3.0.0,3.0.0,upgraded,hosted
+package_info_plus,direct main,10.2.1,10.2.2,10.2.2,upgraded,hosted
+package_info_plus_platform_interface,transitive,4.1.0,4.1.0,4.1.0,unchanged,hosted
+path,direct main,1.9.1,1.9.1,1.9.1,unchanged,hosted
+path_parsing,transitive,1.1.0,1.1.0,1.1.0,unchanged,hosted
+path_provider,direct main,2.1.6,2.1.6,2.1.6,unchanged,hosted
+path_provider_android,transitive,2.3.1,2.3.1,2.3.1,unchanged,hosted
+path_provider_foundation,transitive,2.6.0,2.6.0,2.6.0,unchanged,hosted
+path_provider_linux,transitive,2.2.2,2.2.2,2.2.2,unchanged,hosted
+path_provider_platform_interface,direct dev,2.1.3,2.1.3,2.1.3,unchanged,hosted
+path_provider_windows,transitive,2.3.0,2.3.0,2.3.0,unchanged,hosted
+permission_handler,direct main,13.0.0,13.0.2,13.0.2,upgraded,hosted
+permission_handler_android,transitive,14.0.0,14.1.0,14.1.0,upgraded,hosted
+permission_handler_apple,transitive,9.5.0,9.6.2,9.6.2,upgraded,hosted
+permission_handler_html,transitive,0.1.4+1,0.1.4+1,0.1.4+1,unchanged,hosted
+permission_handler_platform_interface,transitive,4.4.0,4.4.1,4.4.1,upgraded,hosted
+permission_handler_windows,transitive,0.2.2,0.2.2,0.2.2,unchanged,hosted
+petitparser,transitive,7.0.2,7.1.0,7.1.0,upgraded,hosted
+platform,transitive,3.1.6,3.2.0,3.2.0,upgraded,hosted
+plugin_platform_interface,transitive,2.1.8,2.1.8,2.1.8,unchanged,hosted
+pool,transitive,1.5.2,1.5.3,1.5.3,upgraded,hosted
+posix,transitive,6.5.2,6.5.2,6.5.2,unchanged,hosted
+process,transitive,5.0.6,5.0.6,5.0.6,unchanged,hosted
+protobuf,transitive,3.1.0,3.1.0,6.1.0,unchanged,hosted
+pub_semver,transitive,2.2.0,2.2.1,2.2.1,upgraded,hosted
+pubspec_parse,transitive,1.5.0,1.6.0,1.6.0,upgraded,hosted
+record_use,transitive,1.1.1,1.1.1,1.1.1,unchanged,hosted
+riverpod,transitive,3.1.0,3.4.3,3.4.3,upgraded,hosted
+riverpod_analyzer_utils,transitive,1.0.0-dev.8,1.0.0-dev.12,1.0.0-dev.12,upgraded,hosted
+riverpod_annotation,direct main,4.0.0,4.0.7,4.0.7,upgraded,hosted
+riverpod_generator,direct dev,4.0.0+1,4.0.9,4.0.9,upgraded,hosted
+riverpod_lint,direct dev,3.1.0,3.1.9,3.1.9,upgraded,hosted
+rxdart,transitive,0.28.0,0.28.0,0.28.0,unchanged,hosted
+safe_local_storage,transitive,2.0.6,2.0.6,2.0.6,unchanged,hosted
+screen_brightness,direct main,2.1.11,2.1.11,2.1.11,unchanged,hosted
+screen_brightness_android,transitive,2.1.6,2.1.6,2.1.6,unchanged,hosted
+screen_brightness_ios,transitive,2.1.4,2.1.4,2.1.4,unchanged,hosted
+screen_brightness_macos,transitive,2.1.4,2.1.4,2.1.4,unchanged,hosted
+screen_brightness_ohos,transitive,2.1.4,2.1.4,2.1.4,unchanged,hosted
+screen_brightness_platform_interface,transitive,2.1.2,2.1.2,2.1.2,unchanged,hosted
+screen_brightness_windows,transitive,2.1.2,2.1.2,2.1.2,unchanged,hosted
+screen_retriever,transitive,0.2.2,0.2.2,0.3.0,unchanged,hosted
+screen_retriever_linux,transitive,0.2.2,0.2.2,0.2.2,unchanged,hosted
+screen_retriever_macos,transitive,0.2.2,0.2.2,0.2.2,unchanged,hosted
+screen_retriever_platform_interface,transitive,0.2.2,0.2.2,0.2.2,unchanged,hosted
+screen_retriever_windows,transitive,0.2.2,0.2.2,0.2.2,unchanged,hosted
+share_plus,direct main,13.3.0,13.3.1,13.3.1,upgraded,hosted
+share_plus_platform_interface,transitive,7.2.0,7.2.0,7.2.0,unchanged,hosted
+shared_preferences,direct main,2.5.5,2.5.6,2.5.6,upgraded,hosted
+shared_preferences_android,transitive,2.4.27,2.5.0,2.5.0,upgraded,hosted
+shared_preferences_foundation,transitive,2.5.6,2.6.0,2.6.0,upgraded,hosted
+shared_preferences_linux,transitive,2.4.1,2.4.1,2.4.1,unchanged,hosted
+shared_preferences_platform_interface,transitive,2.4.2,2.4.2,2.4.2,unchanged,hosted
+shared_preferences_web,transitive,2.4.3,2.4.3,2.4.3,unchanged,hosted
+shared_preferences_windows,transitive,2.4.1,2.4.1,2.4.1,unchanged,hosted
+shelf,transitive,1.4.2,1.4.3,1.4.3,upgraded,hosted
+shelf_packages_handler,transitive,3.0.2,,,removed,hosted
+shelf_static,transitive,1.1.3,,,removed,hosted
+shelf_web_socket,transitive,3.0.0,3.0.0,3.0.0,unchanged,hosted
+shimmer,direct main,3.0.0,4.0.0,4.0.0,upgraded,hosted
+sky_engine,transitive,0.0.0,0.0.0,0.0.0,unchanged,sdk
+source_gen,transitive,4.2.4,4.3.1,4.3.1,upgraded,hosted
+source_helper,transitive,1.3.8,1.3.13,1.3.13,upgraded,hosted
+source_map_stack_trace,transitive,2.1.2,,,removed,hosted
+source_maps,transitive,0.10.13,,,removed,hosted
+source_span,transitive,1.10.2,1.10.2,1.10.2,unchanged,hosted
+sqflite,transitive,2.4.3,2.4.4+2,2.4.4+2,upgraded,hosted
+sqflite_android,transitive,2.4.3,2.4.4+1,2.4.4+1,upgraded,hosted
+sqflite_common,transitive,2.5.11,2.5.14,2.5.14,upgraded,hosted
+sqflite_darwin,transitive,2.4.3+1,2.4.4+1,2.4.4+1,upgraded,hosted
+sqflite_platform_interface,transitive,2.4.1,2.4.2,2.4.2,upgraded,hosted
+stack_trace,transitive,1.12.1,1.12.2,1.12.2,upgraded,hosted
+state_notifier,transitive,1.0.0,1.0.0,1.0.0,unchanged,hosted
+stream_channel,transitive,2.1.4,2.1.4,2.1.4,unchanged,hosted
+stream_transform,transitive,2.1.1,2.1.2,2.1.2,upgraded,hosted
+string_scanner,transitive,1.4.1,1.4.1,1.4.1,unchanged,hosted
+super_sliver_list,direct main,0.4.1,0.4.1,0.4.1,unchanged,hosted
+synchronized,transitive,3.4.1+1,3.5.0,3.5.0,upgraded,hosted
+talker,transitive,5.1.20,5.1.20,5.1.20,unchanged,hosted
+talker_flutter,direct main,5.1.20,5.1.20,5.1.20,unchanged,hosted
+talker_logger,transitive,5.1.20,5.1.20,5.1.20,unchanged,hosted
+term_glyph,transitive,1.2.2,1.2.2,1.2.2,unchanged,hosted
+test,transitive,1.31.1,,,removed,hosted
+test_api,transitive,0.7.12,0.7.12,0.7.15,unchanged,hosted
+test_core,transitive,0.6.18,,,removed,hosted
+typed_data,transitive,1.4.0,1.4.0,1.4.0,unchanged,hosted
+universal_platform,transitive,1.1.0,1.1.0,1.1.0,unchanged,hosted
+uri_parser,transitive,3.0.2,3.0.2,3.0.2,unchanged,hosted
+url_launcher,direct main,6.3.2,6.3.3,6.3.3,upgraded,hosted
+url_launcher_android,transitive,6.3.32,6.3.33,6.3.33,upgraded,hosted
+url_launcher_ios,transitive,6.4.1,6.4.2,6.4.2,upgraded,hosted
+url_launcher_linux,transitive,3.2.2,3.2.3,3.2.3,upgraded,hosted
+url_launcher_macos,transitive,3.2.5,3.2.6,3.2.6,upgraded,hosted
+url_launcher_platform_interface,transitive,2.3.2,2.3.2,2.3.2,unchanged,hosted
+url_launcher_web,transitive,2.4.3,2.4.3,2.4.3,unchanged,hosted
+url_launcher_windows,transitive,3.1.5,3.1.6,3.1.6,upgraded,hosted
+uuid,transitive,4.6.0,4.6.0,4.6.0,unchanged,hosted
+vector_graphics,transitive,1.2.3,1.2.3,1.2.3,unchanged,hosted
+vector_graphics_codec,transitive,1.1.13,1.1.13,1.1.13,unchanged,hosted
+vector_graphics_compiler,transitive,1.3.0,1.3.2,1.3.2,upgraded,hosted
+vector_math,transitive,2.4.2,2.4.3,2.4.3,upgraded,hosted
+version,direct main,3.0.2,3.0.2,3.0.2,unchanged,hosted
+video_view,direct main,1.3.1,1.3.3,1.3.3,upgraded,path
+visibility_detector,direct main,0.4.0+2,0.4.0+2,0.4.0+2,unchanged,hosted
+vm_service,transitive,15.2.0,15.4.0,15.4.0,upgraded,hosted
+wakelock_plus,direct main,1.7.0,1.8.1,1.8.1,upgraded,hosted
+wakelock_plus_platform_interface,transitive,1.6.0,1.7.0,1.7.0,upgraded,hosted
+watcher,transitive,1.2.1,1.2.1,1.2.1,unchanged,hosted
+web,transitive,1.1.1,1.1.1,1.1.1,unchanged,hosted
+web_socket,transitive,1.0.1,1.0.1,1.0.1,unchanged,hosted
+web_socket_channel,transitive,3.0.3,3.0.3,3.0.3,unchanged,hosted
+webkit_inspection_protocol,transitive,1.2.1,,,removed,hosted
+win32,transitive,6.3.0,6.4.0,6.4.0,upgraded,hosted
+win32_registry,transitive,3.0.3,3.0.3,3.0.3,unchanged,hosted
+window_manager,direct main,0.5.2,0.5.2,0.5.2,unchanged,hosted
+windows_file_picker,transitive,,2.0.1,2.0.1,added,hosted
+xdg_directories,transitive,1.1.0,1.1.0,1.1.0,unchanged,hosted
+xml,transitive,6.6.1,7.0.1,7.1.0,upgraded,hosted
+yaml,transitive,3.1.3,3.1.4,3.1.4,upgraded,hosted
+yaml_edit,transitive,2.2.4,2.2.4,2.2.4,unchanged,hosted

@@ -3,6 +3,45 @@ import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  for (final name in <String>[
+    '201',
+    '12.5',
+    '٠١٢.٥',
+    '(Extra)',
+    'Chapter 12.5 (Extra)',
+    'MangaLek: الفصل ١٢.٥ (خاص)',
+    '  ٠١٢.٥ &amp; <b>خاص</b>  ',
+  ]) {
+    test('MangaChapter preserves exact server name "$name"', () {
+      final chapter = MangaChapter(
+        id: '12.5',
+        mangaId: 'm1',
+        url: 'chapter://12.5',
+        name: name,
+        number: 12.5,
+      );
+
+      expect(MangaChapter.fromJson(chapter.toJson())?.name, name);
+      expect(chapter.displayName, name);
+    });
+  }
+
+  test('MangaChapter display falls back only for a missing name', () {
+    MangaChapter chapter(String name, {double? number}) => MangaChapter(
+      id: 'c1',
+      mangaId: 'm1',
+      url: 'chapter://c1',
+      name: name,
+      number: number,
+    );
+
+    expect(chapter('201', number: 201).displayName, '201');
+    expect(chapter('Special A').displayName, 'Special A');
+    expect(chapter('  ').displayName, 'الفصل');
+    expect(chapter('', number: 12).displayName, 'الفصل 12');
+    expect(chapter('', number: 12.5).displayName, 'الفصل 12.5');
+  });
+
   test('MangaChapter keeps decimal and special chapter identity', () {
     const decimal = MangaChapter(
       id: '12.5',

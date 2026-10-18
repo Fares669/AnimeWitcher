@@ -196,8 +196,6 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final arabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     final steps = _steps;
     final step = steps[_index.clamp(0, steps.length - 1)];
     final isLast = _index >= steps.length - 1;
@@ -207,45 +205,30 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
     final profile = account.asData?.value.profile;
 
     final options = _StepPanel(
-      arabic: arabic,
       stepNumber: _index + 1,
       stepCount: steps.length,
       title: switch (step) {
-        _Step.appearance => arabic ? 'المظهر' : 'Appearance',
-        _Step.details => arabic ? 'صفحة الأنمي' : 'Anime page',
-        _Step.player => arabic ? 'المشغل' : 'Player',
-        _Step.account => arabic ? 'الحساب' : 'Account',
+        _Step.appearance => 'المظهر',
+        _Step.details => 'صفحة الأنمي',
+        _Step.player => 'المشغل',
+        _Step.account => 'الحساب',
       },
       description: switch (step) {
-        _Step.appearance =>
-          arabic
-              ? 'ألوان التطبيق ومكان قائمة التنقل.'
-              : 'The app\'s colours and where the navigation sits.',
-        _Step.details =>
-          arabic
-              ? 'كيف تظهر المواسم والأفلام فوق الحلقات.'
-              : 'How seasons and movies show above the episodes.',
-        _Step.player =>
-          arabic
-              ? 'تحسين الصورة وتخطي المقدمة والخاتمة.'
-              : 'Picture upscaling and skipping openings and endings.',
-        _Step.account =>
-          arabic
-              ? 'اختياري: سجّل الدخول لحفظ مكتبتك وسجل مشاهدتك.'
-              : 'Optional: sign in to keep your library and history.',
+        _Step.appearance => 'ألوان التطبيق ومكان قائمة التنقل.',
+        _Step.details => 'كيف تظهر المواسم والأفلام فوق الحلقات.',
+        _Step.player => 'تحسين الصورة وتخطي المقدمة والخاتمة.',
+        _Step.account => 'اختياري: سجّل الدخول لحفظ مكتبتك وسجل مشاهدتك.',
       },
       onBack: _index == 0 ? null : () => setState(() => _index--),
       onNext: isLast ? _finish : () => setState(() => _index++),
-      nextLabel: isLast
-          ? (arabic ? 'ابدأ المشاهدة' : 'Start watching')
-          : (arabic ? 'التالي' : 'Next'),
+      nextLabel: isLast ? 'ابدأ المشاهدة' : 'التالي',
       children: switch (step) {
         _Step.appearance => [
-          _Heading(arabic ? 'الألوان' : 'Colours'),
+          _Heading('الألوان'),
           _Choices<AppThemeStyle>(
             values: AppThemeStyle.values,
             selected: themeStyle,
-            label: (style) => style.label(arabic: arabic),
+            label: (style) => style.label(),
             swatch: (style) => style.swatch,
             // Applied at once, so the app around the setup changes too.
             onSelected: (style) =>
@@ -253,7 +236,7 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
           ),
           // Phones have no layout to choose: the bar and the side menu.
           if (_isDesktop) ...[
-            _Heading(arabic ? 'شكل التطبيق' : 'App layout'),
+            _Heading('شكل التطبيق'),
             for (final style in appLayoutChoices(wide: true))
               _OptionTile(
                 selected: style == _effectiveLayout,
@@ -262,8 +245,8 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
                   AppLayoutStyle.sideRail => Icons.view_sidebar_rounded,
                   AppLayoutStyle.topBar => Icons.web_asset_rounded,
                 },
-                title: style.label(arabic: arabic),
-                subtitle: style.description(arabic: arabic),
+                title: style.label(),
+                subtitle: style.description(),
                 onTap: () => setState(() => _layout = style),
               ),
           ],
@@ -278,16 +261,14 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
               dense: true,
               secondary: const Icon(Icons.menu_book_rounded),
               title: Text(
-                arabic ? 'قسم خاص للمانجا في الشريط' : 'Manga as its own tab',
+                'قسم خاص للمانجا في الشريط',
                 style: const TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.w600,
                 ),
               ),
               subtitle: Text(
-                arabic
-                    ? 'وإلا تبقى فصولها الجديدة في الرئيسية مع الأنمي.'
-                    : 'Otherwise its new chapters stay on home with anime.',
+                'وإلا تبقى فصولها الجديدة في الرئيسية مع الأنمي.',
                 style: TextStyle(color: Colors.white.withValues(alpha: 0.55)),
               ),
               value: _mangaTab,
@@ -303,16 +284,11 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
                 SeasonsBarStyle.cards => Icons.photo_library_rounded,
                 SeasonsBarStyle.pills => Icons.smart_button_rounded,
               },
-              title: style.label(arabic: arabic),
+              title: style.label(),
               subtitle: switch (style) {
-                SeasonsBarStyle.cards =>
-                  arabic
-                      ? 'بطاقة بصورة لكل موسم وفيلم.'
-                      : 'A picture card for each season and movie.',
+                SeasonsBarStyle.cards => 'بطاقة بصورة لكل موسم وفيلم.',
                 SeasonsBarStyle.pills =>
-                  arabic
-                      ? 'أزرار صغيرة بالأسماء، تأخذ مساحة أقل.'
-                      : 'Small named buttons that take less room.',
+                  'أزرار صغيرة بالأسماء، تأخذ مساحة أقل.',
               },
               onTap: () => setState(() => _seasons = style),
             ),
@@ -320,12 +296,8 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
         _Step.player => [
           _SwitchTile(
             value: _anime4k,
-            title: arabic
-                ? 'Anime4K · تحسين الصورة'
-                : 'Anime4K · sharper picture',
-            subtitle: arabic
-                ? 'يرفع جودة الأنمي أثناء التشغيل. يحتاج كرت شاشة جيد، ويُنزَّل مرة واحدة.'
-                : 'Upscales anime as it plays. Needs a capable GPU; downloaded once.',
+            title: 'Anime4K · تحسين الصورة',
+            subtitle: 'يرفع جودة الأنمي أثناء التشغيل. يحتاج كرت شاشة جيد، ويُنزَّل مرة واحدة.',
             onChanged: (value) => setState(() => _anime4k = value),
           ),
           if (_anime4k)
@@ -357,12 +329,8 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
             ),
           _SwitchTile(
             value: _skipSegments,
-            title: arabic
-                ? 'تخطي المقدمة والخاتمة'
-                : 'Skip openings and endings',
-            subtitle: arabic
-                ? 'يظهر زر للتخطي عند بدء المقدمة أو الخاتمة.'
-                : 'A skip button appears when an opening or ending starts.',
+            title: 'تخطي المقدمة والخاتمة',
+            subtitle: 'يظهر زر للتخطي عند بدء المقدمة أو الخاتمة.',
             onChanged: (value) => setState(() => _skipSegments = value),
           ),
           // The automatic versions only mean something once skipping is on.
@@ -370,52 +338,34 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
             _SwitchTile(
               nested: true,
               value: _skipIntro,
-              title: arabic
-                  ? 'تخطي المقدمة تلقائيًا'
-                  : 'Skip openings automatically',
-              subtitle: arabic
-                  ? 'بدون الضغط على الزر.'
-                  : 'Without pressing the button.',
+              title: 'تخطي المقدمة تلقائيًا',
+              subtitle: 'بدون الضغط على الزر.',
               onChanged: (value) => setState(() => _skipIntro = value),
             ),
             _SwitchTile(
               nested: true,
               value: _skipCredits,
-              title: arabic
-                  ? 'تخطي الخاتمة تلقائيًا'
-                  : 'Skip endings automatically',
-              subtitle: arabic
-                  ? 'ينتقل مباشرة عند بدء الخاتمة.'
-                  : 'Jumps ahead when the ending starts.',
+              title: 'تخطي الخاتمة تلقائيًا',
+              subtitle: 'ينتقل مباشرة عند بدء الخاتمة.',
               onChanged: (value) => setState(() => _skipCredits = value),
             ),
           ],
-          _Heading(arabic ? 'حلقات الفلر' : 'Filler episodes'),
+          _Heading('حلقات الفلر'),
           _Choices<FillerBehaviour>(
             values: FillerBehaviour.values,
             selected: _filler,
             label: (option) => switch (option) {
-              FillerBehaviour.off => arabic ? 'تشغيلها' : 'Play them',
-              FillerBehaviour.note =>
-                arabic ? 'تنبيه مع زر تخطي' : 'Tell me, with a skip button',
-              FillerBehaviour.skip => arabic ? 'تخطيها' : 'Skip them',
+              FillerBehaviour.off => 'تشغيلها',
+              FillerBehaviour.note => 'تنبيه مع زر تخطي',
+              FillerBehaviour.skip => 'تخطيها',
             },
             onSelected: (option) => setState(() => _filler = option),
           ),
           Text(
             switch (_filler) {
-              FillerBehaviour.off =>
-                arabic
-                    ? 'تُشغّل حلقات الفلر كغيرها.'
-                    : 'Filler is played like any other episode.',
-              FillerBehaviour.note =>
-                arabic
-                    ? 'تظهر ملاحظة على بطاقة الحلقة التالية مع الانتقال إلى ما بعدها.'
-                    : 'The next-episode card says so and offers the one after it.',
-              FillerBehaviour.skip =>
-                arabic
-                    ? 'يستمر التشغيل من حلقة القصة التالية.'
-                    : 'Playback carries on at the next story episode.',
+              FillerBehaviour.off => 'تُشغّل حلقات الفلر كغيرها.',
+              FillerBehaviour.note => 'تظهر ملاحظة على بطاقة الحلقة التالية مع الانتقال إلى ما بعدها.',
+              FillerBehaviour.skip => 'يستمر التشغيل من حلقة القصة التالية.',
             },
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.6),
@@ -427,9 +377,7 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
           if (!AnimeWitcherAccountConfig.firebaseConfigured)
             Text(
               key: const ValueKey<String>('setup-account-unavailable'),
-              arabic
-                  ? 'تسجيل الدخول غير متاح في هذه النسخة من التطبيق: بُنيت بدون مفتاح خدمة الحساب. النسخ من GitHub فيها تسجيل الدخول.'
-                  : 'Sign-in is not available in this copy of the app: it was built without the account service key. Builds from GitHub have it.',
+              'تسجيل الدخول غير متاح في هذه النسخة من التطبيق: بُنيت بدون مفتاح خدمة الحساب. النسخ من GitHub فيها تسجيل الدخول.',
               style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.7),
                 height: 1.5,
@@ -441,7 +389,7 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
               icon: Icons.account_circle_rounded,
               title: profile.userName?.trim().isNotEmpty == true
                   ? profile.userName!.trim()
-                  : (arabic ? 'تم تسجيل الدخول' : 'Signed in'),
+                  : 'تم تسجيل الدخول',
               subtitle: profile.email ?? '',
               onTap: _openSignIn,
             )
@@ -449,7 +397,7 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
             FilledButton.tonalIcon(
               onPressed: _openSignIn,
               icon: const Icon(Icons.login_rounded),
-              label: Text(arabic ? 'تسجيل الدخول' : 'Sign in'),
+              label: Text('تسجيل الدخول'),
               style: FilledButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(
@@ -458,9 +406,7 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
               ),
             ),
             Text(
-              arabic
-                  ? 'يمكنك التخطي والتسجيل لاحقًا من الإعدادات.'
-                  : 'You can skip this and sign in later from settings.',
+              'يمكنك التخطي والتسجيل لاحقًا من الإعدادات.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.55),
@@ -475,12 +421,10 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
     // A phone sees its own home: upright, in the layout it picked.
     final phoneHome = !_isDesktop && step == _Step.appearance;
     final preview = LivePreviewFrame(
-      caption: arabic ? 'معاينة مباشرة' : 'Live preview',
+      caption: 'معاينة مباشرة',
       designSize: phoneHome ? LivePreviewFrame.phoneSize : null,
       note: step == _Step.player && _skipSegments && _skipIntro
-          ? (arabic
-                ? 'مع التخطي التلقائي لا يظهر زر: تبدأ الحلقة بعد المقدمة مباشرة.'
-                : 'With automatic skipping there is no button: the episode carries on past the opening.')
+          ? 'مع التخطي التلقائي لا يظهر زر: تبدأ الحلقة بعد المقدمة مباشرة.'
           : null,
       child: AnimatedSwitcher(
         duration: const Duration(milliseconds: 250),
@@ -505,10 +449,7 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
               skipIntro: _skipIntro,
               skipCredits: _skipCredits,
             ),
-            _Step.account => _AccountPreview(
-              arabic: arabic,
-              signedIn: profile != null,
-            ),
+            _Step.account => _AccountPreview(signedIn: profile != null),
           },
         ),
       ),
@@ -581,7 +522,6 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
 
 class _StepPanel extends StatelessWidget {
   const _StepPanel({
-    required this.arabic,
     required this.stepNumber,
     required this.stepCount,
     required this.title,
@@ -592,7 +532,6 @@ class _StepPanel extends StatelessWidget {
     required this.nextLabel,
   });
 
-  final bool arabic;
   final int stepNumber;
   final int stepCount;
   final String title;
@@ -618,7 +557,7 @@ class _StepPanel extends StatelessWidget {
                 borderRadius: BorderRadius.circular(99),
               ),
             ),
-            child: Text(arabic ? 'رجوع' : 'Back'),
+            child: Text('رجوع'),
           ),
           const SizedBox(width: 10),
         ],
@@ -680,9 +619,7 @@ class _StepPanel extends StatelessWidget {
           ),
           const SizedBox(height: 26),
           Text(
-            arabic
-                ? 'الخطوة $stepNumber من $stepCount'
-                : 'Step $stepNumber of $stepCount',
+            'الخطوة $stepNumber من $stepCount',
             style: TextStyle(color: muted, fontSize: 12),
           ),
           const SizedBox(height: 4),
@@ -911,38 +848,29 @@ class _SwitchTile extends StatelessWidget {
 
 /// What an account keeps, for the sign-in step.
 class _AccountPreview extends StatelessWidget {
-  const _AccountPreview({required this.arabic, required this.signedIn});
+  const _AccountPreview({required this.signedIn});
 
-  final bool arabic;
   final bool signedIn;
 
   @override
   Widget build(BuildContext context) {
     final accent = Theme.of(context).colorScheme.primary;
     final rows = <(IconData, String, String)>[
-      (
-        Icons.video_library_rounded,
-        arabic ? 'مكتبتك وقوائمك' : 'Your library and lists',
-        arabic ? 'نفسها على كل أجهزتك.' : 'The same on every device.',
-      ),
+      (Icons.video_library_rounded, 'مكتبتك وقوائمك', 'نفسها على كل أجهزتك.'),
       (
         Icons.history_rounded,
-        arabic ? 'سجل المشاهدة' : 'Watch history',
-        arabic
-            ? 'تكمل من حيث توقفت، حتى على جهاز آخر.'
-            : 'Carry on where you stopped, even on another device.',
+        'سجل المشاهدة',
+        'تكمل من حيث توقفت، حتى على جهاز آخر.',
       ),
       (
         Icons.forum_rounded,
-        arabic ? 'التعليقات والتقييمات' : 'Comments and ratings',
-        arabic
-            ? 'شارك رأيك في الحلقات والأنميات.'
-            : 'Share what you think of episodes and shows.',
+        'التعليقات والتقييمات',
+        'شارك رأيك في الحلقات والأنميات.',
       ),
     ];
 
     return Directionality(
-      textDirection: arabic ? TextDirection.rtl : TextDirection.ltr,
+      textDirection: TextDirection.rtl,
       child: Container(
         color: const Color(0xFF141413),
         padding: const EdgeInsets.symmetric(horizontal: 90, vertical: 60),

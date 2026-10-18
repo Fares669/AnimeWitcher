@@ -126,6 +126,7 @@ void main() {
     final item = _historyItem().item;
     for (final metadata in [
       (label: 'الحلقة ٢.٥', number: '٢.٥', expected: 'الحلقة ٢.٥'),
+      (label: '  Episode 0002.50  ', number: '2', expected: '  Episode 0002.50  '),
       (label: 'الحلقة الخاصة: العودة / الجزء؟', number: null, expected: 'الحلقة الخاصة: العودة / الجزء؟'),
       (label: '', number: '٢.٥', expected: '٢.٥'),
     ]) {

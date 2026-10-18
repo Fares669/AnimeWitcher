@@ -4,11 +4,11 @@ import 'package:animewitcher/features/skip/data/skip_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  group('reading IntroDB v2 spans', () {
+  group('reading IntroDB v4 spans', () {
     test('takes intro, recap, credits and preview', () {
       // The shape the service actually answers with, milliseconds and all.
       final segments = IntroDbService.parseSegments({
-        'tmdb_id': 209867,
+        'tvdb_id': 465787,
         'intro': [
           {'start_ms': null, 'end_ms': 90069},
         ],

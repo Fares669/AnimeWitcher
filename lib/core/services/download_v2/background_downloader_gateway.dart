@@ -111,6 +111,10 @@ bool _transportSnapshotSettledV2(DownloadTransportSnapshot snapshot) =>
 /// need the child pause/readiness barrier.
 abstract interface class SelfSettlingParallelDownloadTransportHandleV2 {}
 
+/// Resume fences the original native pause and its pending checkpoint even
+/// when an uncertain acknowledgement still exposes a running snapshot.
+abstract interface class PauseFencedDownloadTransportHandleV2 {}
+
 /// V2 transport adapter over background_downloader 9.6.
 ///
 /// background_downloader remains the network/native execution authority. For
@@ -375,6 +379,9 @@ final class PackageBackgroundDownloaderGateway
   final _mangaHandles = <String, MangaChapterTransportHandleV2>{};
   PersistentParallelDownload? _durableParallel;
   final Map<String, Future<bool>> _pendingDurableStarts = {};
+  final Map<String, Future<bool>> _pendingDurablePauses = {};
+  final Map<String, DownloadTask> _pendingDurablePauseCheckpoints = {};
+  final Map<String, DownloadTask> _rejectedDurablePauses = {};
   final Map<String, Completer<void>> _durableSourceVerifications = {};
   StreamSubscription<TaskUpdate>? _durableUpdatesSubscription;
   // Native callbacks can arrive during configure/start, before manifests have
@@ -876,6 +883,8 @@ final class PackageBackgroundDownloaderGateway
   }
 
   Future<void> _cleanupDurableChildTracking(String parentTaskId) async {
+    await _waitForDurablePauseCheckpoints(_durablePauseIdsForParent(parentTaskId));
+    _rejectedDurablePauses.removeWhere((id, _) => id.startsWith('$parentTaskId.part.'));
     if (_isIOS()) {
       try {
         await const MethodChannel(
@@ -948,6 +957,7 @@ final class PackageBackgroundDownloaderGateway
   Future<Set<String>> _durablePartOwnershipIds() async => {
     ...await _activeDurablePartTaskIds(),
     ..._pendingDurableStarts.keys,
+    ..._pendingDurablePauses.keys,
   };
 
   Future<bool> _awaitDurableStart(DownloadTask task, Future<bool> acknowledgement) async {
@@ -1011,6 +1021,75 @@ final class PackageBackgroundDownloaderGateway
         : status;
   }
 
+  Future<void> _waitForDurablePauseCheckpoints(Set<String> ids) async {
+    final deadline = DateTime.now().add(_nativeControlAckTimeoutV2);
+    while (true) {
+      final acknowledgements = _pendingDurablePauses.entries
+          .where((entry) => ids.contains(entry.key)).map((entry) => entry.value).toList();
+      final pending = _pendingDurablePauseCheckpoints.entries
+          .where((entry) => ids.contains(entry.key)).toList(growable: false);
+      if (pending.isEmpty && acknowledgements.isEmpty) return;
+      final remaining = deadline.difference(DateTime.now());
+      if (remaining <= Duration.zero) {
+        throw TimeoutException('Native range resume checkpoint is still being saved');
+      }
+      if (acknowledgements.isNotEmpty) {
+        await Future.wait(acknowledgements).timeout(remaining);
+        continue;
+      }
+      await Future.wait(pending.map((entry) async {
+        final task = entry.value;
+        // ignore: invalid_use_of_visible_for_testing_member
+        final storage = _downloader.database.storage;
+        final resumeData = await storage.retrieveResumeData(entry.key);
+        final paused = await storage.retrievePausedTask(entry.key);
+        final matching = resumeData?.task.taskId == entry.key &&
+            paused?.taskId == entry.key &&
+            resumeData?.task.metaData == task.metaData &&
+            paused?.metaData == task.metaData;
+        if (matching &&
+            identical(_pendingDurablePauseCheckpoints[entry.key], task)) {
+          _pendingDurablePauseCheckpoints.remove(entry.key);
+          _rejectedDurablePauses.remove(entry.key);
+        }
+      })).timeout(remaining);
+      if (!_pendingDurablePauseCheckpoints.keys.any(ids.contains)) return;
+      if (!DateTime.now().isBefore(deadline)) {
+        throw TimeoutException('Native range resume checkpoint is still being saved');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+  }
+
+  Future<bool> _hasExactDurableRangeFile(DownloadTask task) async {
+    final range = _diagnosticRangeBoundsV2(task);
+    if (range == null) return false;
+    final file = File(await task.filePath());
+    return await FileSystemEntity.type(file.path, followLinks: false) ==
+            FileSystemEntityType.file &&
+        await file.length() == range.$2 - range.$1 + 1;
+  }
+
+  Set<String> _durablePauseIdsForParent(String parentTaskId) => {
+    ..._pendingDurablePauses.keys,
+    ..._pendingDurablePauseCheckpoints.keys,
+  }.where((id) => id.startsWith('$parentTaskId.part.')).toSet();
+
+  Future<void> _afterDurablePause(String parentTaskId) async {
+    await _waitForDurablePauseCheckpoints(_durablePauseIdsForParent(parentTaskId));
+    final rejected = _rejectedDurablePauses.entries
+        .where((entry) => entry.key.startsWith('$parentTaskId.part.')).toList();
+    var checkpointLost = false;
+    for (final entry in rejected) {
+      checkpointLost = !await _hasExactDurableRangeFile(entry.value) || checkpointLost;
+      _rejectedDurablePauses.remove(entry.key);
+    }
+    if (checkpointLost) {
+      throw StateError('Download stopped without a resume checkpoint. '
+          'Completed ranges were kept; an unfinished range may need to retry.');
+    }
+  }
+
   PersistentParallelDownload _ensureDurableParallelCoordinator() {
     final existing = _durableParallel;
     if (existing != null) return existing;
@@ -1018,11 +1097,38 @@ final class PackageBackgroundDownloaderGateway
     final coordinator = PersistentParallelDownload(
       startPart: _startDurablePart,
       pausePart: (task) async {
-        if (!await _downloader.pause(task).timeout(_nativeControlAckTimeoutV2)) {
-          throw StateError('Native range did not pause safely');
+        var acknowledgement = _pendingDurablePauses[task.taskId];
+        if (acknowledgement == null) {
+          if (!_pendingDurableStarts.containsKey(task.taskId) &&
+              !(await _activeDurablePartTaskIds()).contains(task.taskId)) {
+            return;
+          }
+          _rejectedDurablePauses.remove(task.taskId);
+          final pause = _downloader.pause(task);
+          acknowledgement = pause;
+          _pendingDurablePauses[task.taskId] = pause;
+          // Keep the original ACK live after timeout: it can still stop its
+          // native writer and deliver a checkpoint after the caller returns.
+          unawaited(pause.then<void>((accepted) {
+            if (!identical(_pendingDurablePauses[task.taskId], pause)) return;
+            if (accepted) {
+              _pendingDurablePauseCheckpoints[task.taskId] = task;
+            } else {
+              _rejectedDurablePauses[task.taskId] = task;
+            }
+            _pendingDurablePauses.remove(task.taskId);
+          }, onError: (Object _, StackTrace _) {
+            if (!identical(_pendingDurablePauses[task.taskId], pause)) return;
+            _rejectedDurablePauses[task.taskId] = task;
+            _pendingDurablePauses.remove(task.taskId);
+          }));
+        }
+        if (!await acknowledgement.timeout(_nativeControlAckTimeoutV2)) {
+          throw StateError('Native range did not preserve its resume checkpoint');
         }
       },
       cancelParts: (ids) async {
+        await _waitForDurablePauseCheckpoints(ids.toSet());
         await _settlePendingDurableStarts(ids);
         if (!await _downloader.cancelTasksWithIds(ids)
             .timeout(_nativeControlAckTimeoutV2)) {
@@ -1079,7 +1185,6 @@ final class PackageBackgroundDownloaderGateway
       },
       manifestFileResolver: privateParallelManifestFileV2,
       promoteFile: promoteCompletedDownloadFileV2,
-      shouldDrainPartOnPause: (_) => _isIOS(),
       onUpdate: (update) {
         _durableHandles[update.task.taskId]?.accept(update);
         if (update is TaskStatusUpdate &&
@@ -1121,6 +1226,7 @@ final class PackageBackgroundDownloaderGateway
       return true;
     }
 
+    await _waitForDurablePauseCheckpoints({task.taskId});
     if (!await claimNativeRangeForDartV2(
       task,
       observedAtMillis: nativeInventoryStartedAtMillis,
@@ -1304,6 +1410,8 @@ final class PackageBackgroundDownloaderGateway
       parent: parent,
       totalBytes: totalBytes,
       coordinator: coordinator,
+      afterPause: () => _afterDurablePause(parent.taskId),
+      beforeResume: () => _waitForDurablePauseCheckpoints(_durablePauseIdsForParent(parent.taskId)),
       initialStatus: restored || initialStatus == DownloadTransportStatus.complete
           ? initialStatus
           : (restoreOnly
@@ -2043,11 +2151,14 @@ DownloadTransportSnapshot durableParallelLiveSnapshotV2({
 final class _DurableParallelDownloadTransportHandle
     implements
         DownloadTransportHandle,
-        SelfSettlingParallelDownloadTransportHandleV2 {
+        SelfSettlingParallelDownloadTransportHandleV2,
+        PauseFencedDownloadTransportHandleV2 {
   _DurableParallelDownloadTransportHandle({
     required this.parent,
     required this.totalBytes,
     required this.coordinator,
+    required this.afterPause,
+    required this.beforeResume,
     required DownloadTransportStatus initialStatus,
   }) : _current = durableParallelInitialSnapshotV2(
          taskId: parent.taskId,
@@ -2063,9 +2174,12 @@ final class _DurableParallelDownloadTransportHandle
   final ParallelDownloadTask parent;
   final int totalBytes;
   final PersistentParallelDownload coordinator;
+  final Future<void> Function() afterPause;
+  final Future<void> Function() beforeResume;
   final StreamController<DownloadTransportSnapshot> _snapshots =
       StreamController<DownloadTransportSnapshot>.broadcast(sync: true);
   DownloadTransportSnapshot _current;
+  Future<bool>? _pauseInFlight;
   bool _disposed = false;
 
   @override
@@ -2078,15 +2192,35 @@ final class _DurableParallelDownloadTransportHandle
   Stream<DownloadTransportSnapshot> get snapshots => _snapshots.stream;
 
   @override
-  Future<bool> pause() =>
-      coordinator.pause(
-        parent,
-        preserveLiveParts: Platform.isIOS,
-        beforePause: () => withdrawNativeRangeParentV2(taskId),
-      );
+  Future<bool> pause() {
+    final existing = _pauseInFlight;
+    if (existing != null) return existing;
+    final pause = _pauseAndWaitForCheckpoint();
+    _pauseInFlight = pause;
+    void clear() {
+      if (identical(_pauseInFlight, pause)) _pauseInFlight = null;
+    }
+    unawaited(pause.then<void>((_) => clear(),
+        onError: (Object _, StackTrace _) => clear()));
+    return pause;
+  }
+
+  Future<bool> _pauseAndWaitForCheckpoint() async {
+    final accepted = await coordinator.pause(
+      parent,
+      beforePause: () => withdrawNativeRangeParentV2(taskId),
+    );
+    if (accepted) await afterPause();
+    return accepted;
+  }
 
   @override
-  Future<bool> resume() => coordinator.start(parent, totalBytes);
+  Future<bool> resume() async {
+    final pause = _pauseInFlight;
+    if (pause != null) await pause;
+    await beforeResume();
+    return coordinator.start(parent, totalBytes);
+  }
 
   @override
   Future<bool> cancel() async {
@@ -2138,16 +2272,22 @@ final class _DurableParallelDownloadTransportHandle
       );
       final durableBytes = coordinator.durableBytesFor(taskId);
       final currentBytes = _current.transferredBytes;
-      final transferredBytes = durableBytes == null
+      final transferredBytes = status == DownloadTransportStatus.complete
+          ? _current.totalBytes
+          : durableBytes == null
           ? currentBytes
           : currentBytes == null || durableBytes > currentBytes
           ? durableBytes
           : currentBytes;
+      final total = _current.totalBytes;
+      final progress = total != null && total > 0 && transferredBytes != null
+          ? (transferredBytes / total).clamp(0.0, 1.0).toDouble()
+          : _current.progress;
       _emit(
         DownloadTransportSnapshot(
           taskId: taskId,
           status: status,
-          progress: _current.progress,
+          progress: progress,
           transferredBytes: transferredBytes,
           totalBytes: _current.totalBytes,
           configuredConnections: parent.chunks,

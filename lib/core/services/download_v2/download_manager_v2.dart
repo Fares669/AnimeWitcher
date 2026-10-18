@@ -793,7 +793,9 @@ final class DownloadManagerV2 {
         } catch (error) {
           // A timeout is ambiguous: a late native pause must not be resumed on
           // startup. Keep paused intent and expose live transport truth.
-          final restored = _isControlTimeout(error) ? pausedRecord : record;
+          final restored = _isControlTimeout(error) ||
+                  handle?.current.status == DownloadTransportStatus.paused
+              ? pausedRecord : record;
           await _store.put(restored);
           _rememberRecord(restored);
           final current = handle?.current;
@@ -945,7 +947,11 @@ final class DownloadManagerV2 {
     }
     if (handle != null &&
         !(handle is MangaChapterTransportHandleV2 && handle.recoveryOnly) &&
-        handle.current.status == DownloadTransportStatus.paused) {
+        (handle.current.status == DownloadTransportStatus.paused ||
+            (record.intent == DownloadUserIntent.paused &&
+                handle is PauseFencedDownloadTransportHandleV2 &&
+                {DownloadTransportStatus.running, DownloadTransportStatus.held}
+                    .contains(handle.current.status)))) {
       if (Platform.isIOS &&
           record.mediaKind != DownloadMediaKind.mangaChapter &&
           record.parallelChunks > 1 &&

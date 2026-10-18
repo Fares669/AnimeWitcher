@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import '../../../support/widget_completion.dart';
+
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/providers/episode_sort_provider.dart';
@@ -7,6 +9,8 @@ import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/core/storage/manga_reading_repository.dart';
 import 'package:animewitcher/core/utils/download_time_remaining.dart';
+import 'package:animewitcher/features/details/presentation/widgets/download_progress_dialog.dart';
+import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/features/library/presentation/download_progress_v2_provider.dart';
 import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
@@ -55,6 +59,37 @@ final class _SwipeSettings extends MangaReaderSettingsNotifier {
   @override
   Future<void> setSettings(MangaReaderSettings value) async {
     state = value;
+  }
+}
+
+final _chapterDownloadProgress =
+    NotifierProvider<
+      _ChapterDownloadProgress,
+      Map<String, DownloadProgressData>
+    >(_ChapterDownloadProgress.new);
+
+final class _ChapterDownloadProgress
+    extends Notifier<Map<String, DownloadProgressData>> {
+  @override
+  Map<String, DownloadProgressData> build() => const {};
+
+  void publish(Map<String, DownloadProgressData> progress) => state = progress;
+}
+
+final class _DownloadCommands extends DownloadsNotifier {
+  final List<String> calls = [];
+
+  @override
+  Future<List<DownloadItem>> build() async => const [];
+
+  @override
+  Future<void> pauseDownload(String taskId) async {
+    calls.add('pause:$taskId');
+  }
+
+  @override
+  Future<void> resumeDownload(String taskId) async {
+    calls.add('resume:$taskId');
   }
 }
 
@@ -159,20 +194,20 @@ void main() {
     await tester.longPress(find.text('Chapter 2'));
     await tester.pump();
 
-    expect(find.text('1 selected'), findsOneWidget);
-    expect(find.text('Read'), findsOneWidget);
-    expect(find.text('Unread'), findsOneWidget);
+    expect(find.text('تم تحديد 1'), findsOneWidget);
+    expect(find.text('تمت قراءته'), findsOneWidget);
+    expect(find.text('غير مقروء'), findsOneWidget);
 
     await tester.tap(find.text('Chapter 1'));
     await tester.pump();
-    expect(find.text('2 selected'), findsOneWidget);
+    expect(find.text('تم تحديد 2'), findsOneWidget);
 
-    await tester.tap(find.text('Read'));
+    await tester.tap(find.text('تمت قراءته'));
     await tester.pumpAndSettle();
 
     expect(repository.get('m1', 'c1')?.isRead, isTrue);
     expect(repository.get('m1', 'c2')?.isRead, isTrue);
-    expect(find.textContaining('selected'), findsNothing);
+    expect(find.textContaining('تم تحديد'), findsNothing);
   });
 
   testWidgets('idle chapter uses the same download icon as anime episodes', (
@@ -204,51 +239,194 @@ void main() {
     expect(find.byIcon(Icons.download_rounded), findsNothing);
   });
 
-  testWidgets('downloading chapter replaces download button with progress ring', (
-    tester,
-  ) async {
-    final logicalId = logicalDownloadIdForMangaChapter(
-      mangaId: 'm1',
-      chapterId: 'c1',
-    ).value;
+  testWidgets(
+    'downloading chapter replaces download button with progress ring',
+    (tester) async {
+      final logicalId = logicalDownloadIdForMangaChapter(
+        mangaId: 'm1',
+        chapterId: 'c1',
+      ).value;
 
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          storageServiceProvider.overrideWithValue(_MemoryStorage()),
-          mangaReadingRepositoryProvider.overrideWithValue(
-            MangaReadingRepository(_MemoryStorage()),
-          ),
-          mangaReaderSettingsProvider.overrideWith(
-            () => _SwipeSettings(const MangaReaderSettings()),
-          ),
-          downloadProgressProvider.overrideWithValue(
-            <String, DownloadProgressData>{
-              logicalId: const DownloadProgressData(
-                taskId: 'task-c1',
-                progress: 0.42,
-                networkSpeed: 1,
-                timeRemaining: Duration(seconds: 5),
-                status: TaskStatus.running,
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            storageServiceProvider.overrideWithValue(_MemoryStorage()),
+            mangaReadingRepositoryProvider.overrideWithValue(
+              MangaReadingRepository(_MemoryStorage()),
+            ),
+            mangaReaderSettingsProvider.overrideWith(
+              () => _SwipeSettings(const MangaReaderSettings()),
+            ),
+            downloadProgressProvider.overrideWithValue(
+              <String, DownloadProgressData>{
+                logicalId: const DownloadProgressData(
+                  taskId: 'task-c1',
+                  progress: 0.42,
+                  networkSpeed: 1,
+                  timeRemaining: Duration(seconds: 5),
+                  status: TaskStatus.running,
+                ),
+              },
+            ),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: MangaChapterList(
+                chapters: const <MangaChapter>[chapter],
+                onDownload: (_) {},
               ),
-            },
-          ),
-        ],
-        child: MaterialApp(
-          home: Scaffold(
-            body: MangaChapterList(
-              chapters: const <MangaChapter>[chapter],
-              onDownload: (_) {},
             ),
           ),
         ),
-      ),
-    );
+      );
 
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
-    expect(find.text('42%'), findsOneWidget);
-    expect(find.byIcon(Icons.save_alt_rounded), findsNothing);
-  });
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.text('42%'), findsOneWidget);
+      expect(find.byIcon(Icons.save_alt_rounded), findsNothing);
+    },
+  );
+
+  for (final status in [
+    TaskStatus.enqueued,
+    TaskStatus.running,
+    TaskStatus.waitingToRetry,
+    TaskStatus.paused,
+  ]) {
+    testWidgets(
+      '$status chapter progress opens the live page dialog and retains controls',
+      (tester) async {
+        final logicalId = logicalDownloadIdForMangaChapter(
+          mangaId: 'm1',
+          chapterId: 'c1',
+        ).value;
+        final progressKey = status == TaskStatus.waitingToRetry
+            ? chapter.url
+            : logicalId;
+        final commands = _DownloadCommands();
+        final storage = _MemoryStorage();
+        DownloadProgressData progress(int completed, {TaskStatus? state}) =>
+            DownloadProgressData(
+              taskId: 'task-c1',
+              progress: completed / 23,
+              completedPages: completed,
+              totalPages: 23,
+              networkSpeed: -1,
+              timeRemaining: Duration.zero,
+              status: state ?? status,
+            );
+        final container = ProviderContainer(
+          overrides: [
+            storageServiceProvider.overrideWithValue(storage),
+            mangaReadingRepositoryProvider.overrideWithValue(
+              MangaReadingRepository(storage),
+            ),
+            mangaReaderSettingsProvider.overrideWith(
+              () => _SwipeSettings(const MangaReaderSettings()),
+            ),
+            downloadsProvider.overrideWith(() => commands),
+            downloadProgressProvider.overrideWith(
+              (ref) => ref.watch(_chapterDownloadProgress),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+        container.read(_chapterDownloadProgress.notifier).publish({
+          progressKey: progress(0),
+        });
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(
+              locale: const Locale('ar'),
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              home: Scaffold(
+                body: MangaChapterList(
+                  chapters: const [chapter],
+                  onDownload: (_) => fail('active chapter must not restart'),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        await tester.tap(
+          find.byTooltip(
+            status == TaskStatus.paused
+                ? 'التنزيل متوقف مؤقتًا'
+                : 'جارٍ تنزيل الفصل',
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(find.byType(DownloadProgressDialog), findsOneWidget);
+        expect(find.text('0/23 صفحة'), findsOneWidget);
+        expect(find.textContaining(' MB'), findsNothing);
+
+        container.read(_chapterDownloadProgress.notifier).publish({
+          progressKey: progress(12),
+        });
+        await tester.pump();
+        expect(find.text('12/23 صفحة'), findsOneWidget);
+        expect(
+          find.descendant(of: find.byType(Dialog), matching: find.text('52%')),
+          findsOneWidget,
+        );
+        final commandLabel = status == TaskStatus.paused
+            ? 'استئناف'
+            : 'إيقاف مؤقت';
+        await tester.tap(find.text(commandLabel));
+        await tester.pump();
+        expect(commands.calls, [
+          status == TaskStatus.paused ? 'resume:task-c1' : 'pause:task-c1',
+        ]);
+
+        await tester.tap(find.text('إغلاق'));
+        await pumpUntil(
+          tester,
+          () => find.byType(DownloadProgressDialog).evaluate().isEmpty,
+          'chapter progress dialog close',
+        );
+        expect(find.byType(DownloadProgressDialog), findsNothing);
+        expect(find.byType(MangaChapterList), findsOneWidget);
+        expect(
+          container.read(_chapterDownloadProgress)[progressKey]?.completedPages,
+          12,
+        );
+        expect(commands.calls, hasLength(1));
+
+        await tester.tap(
+          find.byTooltip(
+            status == TaskStatus.paused
+                ? 'التنزيل متوقف مؤقتًا'
+                : 'جارٍ تنزيل الفصل',
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        container.read(_chapterDownloadProgress.notifier).publish({
+          progressKey: progress(23, state: TaskStatus.complete),
+        });
+        await tester.pump();
+        expect(
+          find.descendant(of: find.byType(Dialog), matching: find.text('100%')),
+          findsOneWidget,
+        );
+        expect(find.text('إيقاف مؤقت'), findsNothing);
+        expect(find.text('استئناف'), findsNothing);
+        expect(find.text('إلغاء'), findsNothing);
+        container.read(_chapterDownloadProgress.notifier).publish(const {});
+        await pumpUntil(
+          tester,
+          () => find.byType(DownloadProgressDialog).evaluate().isEmpty,
+          'removed chapter progress dialog dismissal',
+        );
+        expect(find.byType(DownloadProgressDialog), findsNothing);
+        expect(find.byType(MangaChapterList), findsOneWidget);
+      },
+    );
+  }
 
   testWidgets('completed chapter shows the completed-download delete action', (
     tester,
@@ -392,7 +570,7 @@ void main() {
       ),
     );
 
-    expect(find.text('Chapters'), findsOneWidget);
+    expect(find.text('الفصول'), findsOneWidget);
     expect(find.byIcon(Icons.arrow_downward_rounded), findsOneWidget);
     expect(
       tester.getTopLeft(find.text('Chapter 2')).dy,
@@ -409,7 +587,7 @@ void main() {
     );
   });
 
-  testWidgets('manga chapter labels prefix bare server chapter numbers', (
+  testWidgets('manga chapter labels preserve bare server chapter numbers', (
     tester,
   ) async {
     const bareNameChapter = MangaChapter(
@@ -439,74 +617,77 @@ void main() {
       ),
     );
 
-    expect(find.text('الفصل 201'), findsOneWidget);
-    expect(find.text('201'), findsNothing);
+    expect(find.text('201'), findsOneWidget);
+    expect(find.text('الفصل 201'), findsNothing);
   });
 
-  testWidgets('manga chapter sort follows and updates the shared anime setting', (
-    tester,
-  ) async {
-    final storage = _MemoryStorage()
-      ..playerSettings[episodeSortAscendingSettingKey] = false;
-    const chapters = <MangaChapter>[
-      MangaChapter(
-        id: 'c2',
-        mangaId: 'm1',
-        url: 'https://example.test/c2',
-        name: 'الفصل 2',
-        number: 2,
-      ),
-      MangaChapter(
-        id: 'c1',
-        mangaId: 'm1',
-        url: 'https://example.test/c1',
-        name: 'الفصل 1',
-        number: 1,
-      ),
-    ];
+  testWidgets(
+    'manga chapter sort follows and updates the shared anime setting',
+    (tester) async {
+      final storage = _MemoryStorage()
+        ..playerSettings[episodeSortAscendingSettingKey] = false;
+      const chapters = <MangaChapter>[
+        MangaChapter(
+          id: 'c2',
+          mangaId: 'm1',
+          url: 'https://example.test/c2',
+          name: 'الفصل 2',
+          number: 2,
+        ),
+        MangaChapter(
+          id: 'c1',
+          mangaId: 'm1',
+          url: 'https://example.test/c1',
+          name: 'الفصل 1',
+          number: 1,
+        ),
+      ];
 
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          storageServiceProvider.overrideWithValue(storage),
-          mangaReadingRepositoryProvider.overrideWithValue(
-            MangaReadingRepository(_MemoryStorage()),
-          ),
-          mangaReaderSettingsProvider.overrideWith(
-            () => _SwipeSettings(const MangaReaderSettings()),
-          ),
-        ],
-        child: MaterialApp(
-          home: Scaffold(
-            body: Consumer(
-              builder: (context, ref, _) => Column(
-                children: <Widget>[
-                  Text('ascending:${ref.watch(episodeSortAscendingProvider)}'),
-                  Expanded(child: MangaChapterList(chapters: chapters)),
-                ],
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            storageServiceProvider.overrideWithValue(storage),
+            mangaReadingRepositoryProvider.overrideWithValue(
+              MangaReadingRepository(_MemoryStorage()),
+            ),
+            mangaReaderSettingsProvider.overrideWith(
+              () => _SwipeSettings(const MangaReaderSettings()),
+            ),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: Consumer(
+                builder: (context, ref, _) => Column(
+                  children: <Widget>[
+                    Text(
+                      'ascending:${ref.watch(episodeSortAscendingProvider)}',
+                    ),
+                    Expanded(child: MangaChapterList(chapters: chapters)),
+                  ],
+                ),
               ),
             ),
           ),
         ),
-      ),
-    );
+      );
 
-    expect(find.text('ascending:false'), findsOneWidget);
-    expect(
-      tester.getTopLeft(find.text('الفصل 1')).dy,
-      lessThan(tester.getTopLeft(find.text('الفصل 2')).dy),
-    );
+      expect(find.text('ascending:false'), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.text('الفصل 1')).dy,
+        lessThan(tester.getTopLeft(find.text('الفصل 2')).dy),
+      );
 
-    await tester.tap(find.byKey(const ValueKey('manga-chapter-sort-toggle')));
-    await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('manga-chapter-sort-toggle')));
+      await tester.pumpAndSettle();
 
-    expect(find.text('ascending:true'), findsOneWidget);
-    expect(storage.playerSettings[episodeSortAscendingSettingKey], isTrue);
-    expect(
-      tester.getTopLeft(find.text('الفصل 2')).dy,
-      lessThan(tester.getTopLeft(find.text('الفصل 1')).dy),
-    );
-  });
+      expect(find.text('ascending:true'), findsOneWidget);
+      expect(storage.playerSettings[episodeSortAscendingSettingKey], isTrue);
+      expect(
+        tester.getTopLeft(find.text('الفصل 2')).dy,
+        lessThan(tester.getTopLeft(find.text('الفصل 1')).dy),
+      );
+    },
+  );
 
   testWidgets('read selection closes immediately while cloud sync is pending', (
     tester,
@@ -540,17 +721,16 @@ void main() {
 
     await tester.longPress(find.text('Chapter 1'));
     await tester.pump();
-    expect(find.text('1 selected'), findsOneWidget);
+    expect(find.text('تم تحديد 1'), findsOneWidget);
 
-    await tester.tap(find.text('Read'));
+    await tester.tap(find.text('تمت قراءته'));
     await tester.pump();
     await syncStarted.future;
 
-    expect(find.textContaining('selected'), findsNothing);
+    expect(find.textContaining('تم تحديد'), findsNothing);
     expect(repository.get('m1', 'c1')?.isRead, isTrue);
 
     releaseSync.complete();
     await tester.pumpAndSettle();
   });
-
 }

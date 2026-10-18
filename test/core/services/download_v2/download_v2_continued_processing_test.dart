@@ -293,7 +293,7 @@ void main() {
   });
 
   for (final chapterNumber in [357, 12.5]) {
-    testWidgets('manga banner uses chapter number $chapterNumber instead of stored hash', (tester) async {
+    testWidgets('manga banner preserves server chapter name for $chapterNumber', (tester) async {
       final calls = <MethodCall>[];
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
         calls.add(call);
@@ -307,13 +307,13 @@ void main() {
         mediaKind: DownloadMediaKind.mangaChapter, mediaId: 'm1', unitKey: 'c1', variantKey: 'pages', generation: 1,
         taskId: 'aw_v2_manga_label_g1', intent: DownloadUserIntent.active,
         destinationPath: 'Downloads/manga/Example/الفصل $chapterNumber-124733e7da94',
-        sourceDescriptor: {'chapterNumber': chapterNumber, 'chapterName': 'Chapter $chapterNumber'}, updatedAtMillis: 1,
+        sourceDescriptor: {'chapterNumber': chapterNumber, 'chapterName': '  Chapter $chapterNumber &amp; Special  '}, updatedAtMillis: 1,
       );
       try {
         await observer.observe(record, DownloadTransportSnapshot(
           taskId: record.taskId, status: DownloadTransportStatus.running, progress: .25,
         ));
-        expect((calls.singleWhere((call) => call.method == 'start').arguments as Map)['displayName'], 'الفصل $chapterNumber');
+        expect((calls.singleWhere((call) => call.method == 'start').arguments as Map)['displayName'], '  Chapter $chapterNumber &amp; Special  ');
         final arguments = calls.singleWhere((call) => call.method == 'start').arguments as Map;
         expect(arguments['completedPages'], 0);
         expect(arguments['totalPages'], -1, reason: 'unknown Manga totals must stay page-based');

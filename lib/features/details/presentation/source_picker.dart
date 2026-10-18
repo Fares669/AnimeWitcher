@@ -28,10 +28,10 @@ Future<StreamResult?> showStreamSourcePicker(
 
 /// Uses the server-provided episode label as the picker title when available.
 /// The generic title remains the safe fallback for non-episode content.
-String sourcePickerHeader(String? episodeLabel, {required bool isArabic}) {
-  final label = episodeLabel?.trim() ?? '';
-  if (label.isNotEmpty) return label;
-  return isArabic ? 'اختر المصدر' : 'Choose source';
+String sourcePickerHeader(String? episodeLabel) {
+  final label = episodeLabel ?? '';
+  if (label.trim().isNotEmpty) return label;
+  return 'اختر المصدر';
 }
 
 /// Primary server label for the source picker, or null when there is no episode.
@@ -39,7 +39,6 @@ String? episodePickerTitle(Episode? episode) {
   if (episode == null) return null;
   final label = formatEpisodePrimaryLabel(
     episode: episode.episode,
-    isArabic: true,
     isFinal: episode.isFinal,
     serverName: episode.serverName,
   );
@@ -77,10 +76,9 @@ class _SourcePickerSheetState extends State<_SourcePickerSheet> {
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 4, 20, 14),
               child: Text(
-                sourcePickerHeader(widget.episodeLabel, isArabic: true),
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
+                sourcePickerHeader(widget.episodeLabel),
+                style: Theme.of(context).textTheme.headlineSmall
+                    ?.copyWith(fontWeight: FontWeight.bold),
               ),
             ),
             Flexible(
@@ -168,9 +166,8 @@ class _SourcePickerLoadingLabel extends StatelessWidget {
     return Text(
       l10n?.loading ?? 'جارٍ التحميل...',
       textAlign: TextAlign.center,
-      style: Theme.of(
-        context,
-      ).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w500),
+      style: Theme.of(context).textTheme.bodyLarge
+          ?.copyWith(fontWeight: FontWeight.w500),
     );
   }
 }
@@ -223,9 +220,8 @@ List<StreamSourceQualityGroup> groupStreamSourcesByQuality(
     final qualityCompare = b.qualityScore.compareTo(a.qualityScore);
     if (qualityCompare != 0) return qualityCompare;
 
-    final serverCompare = _serverPriority(
-      a.source.source,
-    ).compareTo(_serverPriority(b.source.source));
+    final serverCompare = _serverPriority(a.source.source)
+        .compareTo(_serverPriority(b.source.source));
     if (serverCompare != 0) return serverCompare;
 
     final nameCompare = a.source.source.toLowerCase().compareTo(
@@ -238,16 +234,13 @@ List<StreamSourceQualityGroup> groupStreamSourcesByQuality(
 
   final grouped = <String, List<StreamResult>>{};
   for (final entry in entries) {
-    grouped.putIfAbsent(entry.qualityLabel, () => <StreamResult>[]).add(
-      entry.source,
-    );
+    grouped
+        .putIfAbsent(entry.qualityLabel, () => <StreamResult>[])
+        .add(entry.source);
   }
   return <StreamSourceQualityGroup>[
     for (final entry in grouped.entries)
-      StreamSourceQualityGroup(
-        qualityLabel: entry.key,
-        sources: entry.value,
-      ),
+      StreamSourceQualityGroup(qualityLabel: entry.key, sources: entry.value),
   ];
 }
 
@@ -342,9 +335,8 @@ class _SourceQualityHeader extends StatelessWidget {
         alignment: AlignmentDirectional.centerStart,
         child: Text(
           label,
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+          style: Theme.of(context).textTheme.titleMedium
+              ?.copyWith(fontWeight: FontWeight.w800),
         ),
       ),
     );

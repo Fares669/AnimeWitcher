@@ -115,9 +115,7 @@ class CustomBottomNavBar extends StatelessWidget {
           child: _NavTabCell(
             icon: Icons.newspaper_rounded,
             selectedIcon: Icons.newspaper_rounded,
-            label: localizations.localeName.toLowerCase().startsWith('ar')
-                ? 'الأخبار'
-                : 'News',
+            label: 'الأخبار',
             isSelected: false,
             onTap: openNews,
           ),

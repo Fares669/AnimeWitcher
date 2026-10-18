@@ -466,7 +466,7 @@ void main() {
                           'values': <Map<String, dynamic>>[
                             _mapField(<String, dynamic>{
                               'doc_id': _stringField('42.5'),
-                              'name': _stringField('الفصل 42.5'),
+                              'name': _stringField('  ٠٤٢.٥ &amp; <b>خاص</b>  '),
                               'thumb_uri': _stringField(
                                 'https://img.example/ch42.webp',
                               ),
@@ -500,7 +500,7 @@ void main() {
 
       expect(chapters, hasLength(1));
       expect(chapters.single.id, '42.5');
-      expect(chapters.single.name, 'الفصل 42.5');
+      expect(chapters.single.name, '  ٠٤٢.٥ &amp; <b>خاص</b>  ');
       expect(chapters.single.number, 42.5);
       expect(queriedChaptersCollection, isFalse);
       expect(

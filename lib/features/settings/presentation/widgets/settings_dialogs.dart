@@ -739,11 +739,7 @@ void showThemeDialog(
               for (final style in AppThemeStyle.values)
                 RadioListTile<AppThemeStyle>(
                   value: style,
-                  title: Text(
-                    style.label(
-                      arabic: l10n.localeName.toLowerCase().startsWith('ar'),
-                    ),
-                  ),
+                  title: Text(style.label()),
                 ),
             ],
           ),

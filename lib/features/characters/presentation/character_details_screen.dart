@@ -61,9 +61,6 @@ class _CharacterDetailsScreenState
     });
   }
 
-  bool _isArabic(BuildContext context) =>
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-
   AnimeWitcherNativeProvider? _resolveProvider() {
     final active = ref.read(activeProviderProvider);
     if (active is AnimeWitcherNativeProvider) return active;
@@ -146,20 +143,22 @@ class _CharacterDetailsScreenState
     }
   }
 
-  void _showSignInRequired(bool isArabic) {
-    ref.read(notificationServiceProvider).showInfo(
-      isArabic ? 'يجب تسجيل الدخول' : 'Sign in first',
-      icon: Icons.lock_outline_rounded,
-      duration: const Duration(seconds: 3),
-    );
+  void _showSignInRequired() {
+    ref
+        .read(notificationServiceProvider)
+        .showInfo(
+          'يجب تسجيل الدخول',
+          icon: Icons.lock_outline_rounded,
+          duration: const Duration(seconds: 3),
+        );
   }
 
   Future<void> _toggleFavorite() async {
     if (_favoriteBusy) return;
-    final isArabic = _isArabic(context);
+
     final service = ref.read(animeWitcherAccountServiceProvider);
     if (!service.isSignedIn) {
-      _showSignInRequired(isArabic);
+      _showSignInRequired();
       if (!mounted) return;
       await Navigator.of(context, rootNavigator: true).push(
         MaterialPageRoute<void>(
@@ -189,11 +188,9 @@ class _CharacterDetailsScreenState
         _favoriteBusy = false;
       });
       if (error.code == 'not-signed-in') {
-        _showSignInRequired(isArabic);
+        _showSignInRequired();
       } else {
-        ref.read(notificationServiceProvider).showError(
-          isArabic ? 'تعذر تحديث المفضلة' : 'Could not update favorites',
-        );
+        ref.read(notificationServiceProvider).showError('تعذر تحديث المفضلة');
       }
     } catch (_) {
       if (!mounted) return;
@@ -201,9 +198,7 @@ class _CharacterDetailsScreenState
         _favorite = previous;
         _favoriteBusy = false;
       });
-      ref.read(notificationServiceProvider).showError(
-        isArabic ? 'تعذر تحديث المفضلة' : 'Could not update favorites',
-      );
+      ref.read(notificationServiceProvider).showError('تعذر تحديث المفضلة');
     }
   }
 
@@ -225,9 +220,7 @@ class _CharacterDetailsScreenState
   Future<void> _openMal() async {
     final url = _document?.url?.trim() ?? '';
     if (url.isEmpty) {
-      ref.read(notificationServiceProvider).showInfo(
-        _isArabic(context) ? 'لا يوجد رابط' : 'No link available',
-      );
+      ref.read(notificationServiceProvider).showInfo('لا يوجد رابط');
       return;
     }
     final uri = Uri.tryParse(url);
@@ -240,20 +233,18 @@ class _CharacterDetailsScreenState
   ) {
     const favoriteRed = Color(0xFFFF3B30);
     final colors = Theme.of(context).colorScheme;
-    final isArabic = _isArabic(context);
+
     final hasDocument = _document != null;
 
     return <AppleLiquidGlassToolbarButton>[
       AppleLiquidGlassToolbarButton(
-        tooltip: isArabic ? 'التعليقات' : 'Comments',
+        tooltip: 'التعليقات',
         icon: Icons.chat_bubble_outline_rounded,
         color: colors.onSurface,
         onPressed: hasDocument ? _openComments : null,
       ),
       AppleLiquidGlassToolbarButton(
-        tooltip: _favorite
-            ? (isArabic ? 'إزالة من المفضلة' : 'Remove favorite')
-            : (isArabic ? 'إضافة إلى المفضلة' : 'Add to favorites'),
+        tooltip: _favorite ? 'إزالة من المفضلة' : 'إضافة إلى المفضلة',
         icon: _favorite
             ? Icons.favorite_rounded
             : Icons.favorite_border_rounded,
@@ -261,7 +252,7 @@ class _CharacterDetailsScreenState
         onPressed: _favoriteBusy ? null : _toggleFavorite,
       ),
       AppleLiquidGlassToolbarButton(
-        tooltip: isArabic ? 'المزيد' : 'More',
+        tooltip: 'المزيد',
         icon: Icons.more_horiz_rounded,
         color: colors.onSurface,
         onPressed: hasDocument ? _openMal : null,
@@ -270,9 +261,7 @@ class _CharacterDetailsScreenState
   }
 
   void _openAnime(MultimediaItem item) {
-    DetailsRoute(
-      $extra: DetailsRouteExtra(item: item),
-    ).push<void>(context);
+    DetailsRoute($extra: DetailsRouteExtra(item: item)).push<void>(context);
   }
 
   @override
@@ -289,7 +278,7 @@ class _CharacterDetailsScreenState
         if (mounted) setState(() => _favorite = favorite);
       }());
     });
-    final isArabic = _isArabic(context);
+
     final document = _document;
     final name = document?.name.isNotEmpty == true
         ? document!.name
@@ -304,7 +293,7 @@ class _CharacterDetailsScreenState
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(
-        title: name.isEmpty ? (isArabic ? 'الشخصية' : 'Character') : name,
+        title: name.isEmpty ? 'الشخصية' : name,
         onBack: () => Navigator.of(context).maybePop(),
         actions: appleUsesPersistentLiquidGlassHeader || isLarge
             ? const <Widget>[]
@@ -325,196 +314,165 @@ class _CharacterDetailsScreenState
               child: const Center(child: AppLoadingIndicator()),
             )
           : _error != null && document == null
-              ? Padding(
-                  padding: EdgeInsets.only(top: headerTop),
-                  child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          isArabic ? 'لا يوجد بيانات' : 'No data',
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 12),
-                        FilledButton.tonalIcon(
-                          onPressed: _load,
-                          icon: const Icon(Icons.refresh_rounded),
-                          label: Text(isArabic ? 'إعادة المحاولة' : 'Retry'),
-                        ),
-                      ],
-                      ),
-                    ),
-                  ),
-                )
-              : MouseDragRefreshIndicator(
-                  onRefresh: _load,
-                  child: ListView(
-                    padding: EdgeInsets.fromLTRB(
-                      20,
-                      headerTop + 16,
-                      20,
-                      110,
-                    ),
+          ? Padding(
+              padding: EdgeInsets.only(top: headerTop),
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Center(
-                        child: SizedBox(
-                          width: 168,
-                          height: 236,
-                          child: Hero(
-                            tag: 'character-${widget.characterId}',
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(18),
-                              child: ArtworkDecode(
-                                paintedWidth: 240,
-                                builder: (context, decodeWidth) {
-                                  final url = imageUrl ?? '';
-                                  if (url.isEmpty) {
-                                    return ThumbnailErrorPlaceholder(
-                                      label: name,
-                                    );
-                                  }
-                                  return CachedNetworkImage(
-                                    imageUrl: url,
-                                    fit: BoxFit.cover,
-                                    memCacheWidth: decodeWidth,
-                                    placeholder: (_, _) =>
-                                        ShimmerPlaceholder(
-                                      borderRadius: 18,
-                                    ),
-                                    errorWidget: (_, _, _) =>
-                                        ThumbnailErrorPlaceholder(label: name),
-                                  );
-                                },
-                              ),
-                            ),
-                          ),
-                        ),
+                      Text('لا يوجد بيانات', textAlign: TextAlign.center),
+                      const SizedBox(height: 12),
+                      FilledButton.tonalIcon(
+                        onPressed: _load,
+                        icon: const Icon(Icons.refresh_rounded),
+                        label: Text('إعادة المحاولة'),
                       ),
-                      const SizedBox(height: 16),
-                      Text(
-                        name,
-                        textAlign: TextAlign.center,
-                        textDirection: TextDirection.ltr,
-                        style: Theme.of(context).textTheme.headlineSmall
-                            ?.copyWith(fontWeight: FontWeight.w800),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        isArabic
-                            ? '$likes أعجب بهذه الشخصية'
-                            : '$likes liked this character',
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurfaceVariant,
-                            ),
-                      ),
-                      if (!appleUsesPersistentLiquidGlassHeader && isLarge) ...[
-                        const SizedBox(height: 20),
-                        Center(
-                          child: AppleLiquidGlassActionGroup(
-                            height: 46,
-                            fallbackColor: colors.surfaceContainerHigh,
-                            children: headerButtons,
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 28),
-                      if (_animesLoading)
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 24),
-                          child: Center(child: AppLoadingIndicator()),
-                        )
-                      else if (_animesError != null)
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              isArabic ? 'الأنميات' : 'Anime',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleLarge
-                                  ?.copyWith(fontWeight: FontWeight.w800),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              isArabic
-                                  ? 'تعذر تحميل الأنميات'
-                                  : 'Could not load anime',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.copyWith(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .onSurfaceVariant,
-                                  ),
-                            ),
-                            const SizedBox(height: 12),
-                            FilledButton.tonalIcon(
-                              onPressed: () {
-                                final current = _document;
-                                final provider = _resolveProvider();
-                                if (current == null || provider == null) {
-                                  unawaited(_load());
-                                  return;
-                                }
-                                setState(() {
-                                  _animesError = null;
-                                  _animesLoading = true;
-                                });
-                                unawaited(_loadAnimes(provider, current));
-                              },
-                              icon: const Icon(Icons.refresh_rounded),
-                              label: Text(
-                                isArabic ? 'إعادة المحاولة' : 'Retry',
-                              ),
-                            ),
-                          ],
-                        )
-                      else if (_animes.isEmpty)
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              isArabic ? 'الأنميات' : 'Anime',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleLarge
-                                  ?.copyWith(fontWeight: FontWeight.w800),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              isArabic ? 'لا يوجد بيانات' : 'No data',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.copyWith(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .onSurfaceVariant,
-                                  ),
-                            ),
-                          ],
-                        )
-                      else
-                        CharacterAnimesGrid(
-                          title: isArabic ? 'الأنميات' : 'Anime',
-                          items: [
-                            for (final show in _animes)
-                              show.item.copyWith(
-                                relationLabel: show.roleLabel,
-                              ),
-                          ],
-                          onItemTap: _openAnime,
-                        ),
                     ],
                   ),
                 ),
+              ),
+            )
+          : MouseDragRefreshIndicator(
+              onRefresh: _load,
+              child: ListView(
+                padding: EdgeInsets.fromLTRB(20, headerTop + 16, 20, 110),
+                children: [
+                  Center(
+                    child: SizedBox(
+                      width: 168,
+                      height: 236,
+                      child: Hero(
+                        tag: 'character-${widget.characterId}',
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(18),
+                          child: ArtworkDecode(
+                            paintedWidth: 240,
+                            builder: (context, decodeWidth) {
+                              final url = imageUrl ?? '';
+                              if (url.isEmpty) {
+                                return ThumbnailErrorPlaceholder(label: name);
+                              }
+                              return CachedNetworkImage(
+                                imageUrl: url,
+                                fit: BoxFit.cover,
+                                memCacheWidth: decodeWidth,
+                                placeholder: (_, _) =>
+                                    ShimmerPlaceholder(borderRadius: 18),
+                                errorWidget: (_, _, _) =>
+                                    ThumbnailErrorPlaceholder(label: name),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    name,
+                    textAlign: TextAlign.center,
+                    textDirection: TextDirection.ltr,
+                    style: Theme.of(context).textTheme.headlineSmall
+                        ?.copyWith(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '$likes أعجب بهذه الشخصية',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  if (!appleUsesPersistentLiquidGlassHeader && isLarge) ...[
+                    const SizedBox(height: 20),
+                    Center(
+                      child: AppleLiquidGlassActionGroup(
+                        height: 46,
+                        fallbackColor: colors.surfaceContainerHigh,
+                        children: headerButtons,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 28),
+                  if (_animesLoading)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 24),
+                      child: Center(child: AppLoadingIndicator()),
+                    )
+                  else if (_animesError != null)
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'الأنميات',
+                          style: Theme.of(context).textTheme.titleLarge
+                              ?.copyWith(fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'تعذر تحميل الأنميات',
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
+                              ),
+                        ),
+                        const SizedBox(height: 12),
+                        FilledButton.tonalIcon(
+                          onPressed: () {
+                            final current = _document;
+                            final provider = _resolveProvider();
+                            if (current == null || provider == null) {
+                              unawaited(_load());
+                              return;
+                            }
+                            setState(() {
+                              _animesError = null;
+                              _animesLoading = true;
+                            });
+                            unawaited(_loadAnimes(provider, current));
+                          },
+                          icon: const Icon(Icons.refresh_rounded),
+                          label: Text('إعادة المحاولة'),
+                        ),
+                      ],
+                    )
+                  else if (_animes.isEmpty)
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'الأنميات',
+                          style: Theme.of(context).textTheme.titleLarge
+                              ?.copyWith(fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'لا يوجد بيانات',
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
+                              ),
+                        ),
+                      ],
+                    )
+                  else
+                    CharacterAnimesGrid(
+                      title: 'الأنميات',
+                      items: [
+                        for (final show in _animes)
+                          show.item.copyWith(relationLabel: show.roleLabel),
+                      ],
+                      onItemTap: _openAnime,
+                    ),
+                ],
+              ),
+            ),
     );
   }
 }
-

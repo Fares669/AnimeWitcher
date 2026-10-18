@@ -213,12 +213,7 @@ class _MangaPageImageState extends State<MangaPageImage>
             FilledButton.tonalIcon(
               onPressed: _retry,
               icon: const Icon(Icons.refresh_rounded),
-              label: Text(
-                Localizations.localeOf(context).languageCode.toLowerCase() ==
-                        'ar'
-                    ? 'إعادة المحاولة'
-                    : 'Retry',
-              ),
+              label: Text('إعادة المحاولة'),
             ),
           ],
         ),

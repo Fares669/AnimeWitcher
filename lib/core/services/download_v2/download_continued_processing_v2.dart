@@ -670,6 +670,8 @@ final class IosDownloadContinuedProcessingObserverV2
 
   String _displayName(LogicalDownloadRecordV2 record) {
     if (record.mediaKind == DownloadMediaKind.mangaChapter) {
+      final chapterName = record.sourceDescriptor['chapterName']?.toString() ?? '';
+      if (chapterName.trim().isNotEmpty) return chapterName;
       final number = double.tryParse(
         record.sourceDescriptor['chapterNumber']?.toString() ?? '',
       );
@@ -678,11 +680,6 @@ final class IosDownloadContinuedProcessingObserverV2
             ? number.toInt().toString()
             : number.toString();
         return 'الفصل $label';
-      }
-      final chapterName =
-          record.sourceDescriptor['chapterName']?.toString().trim() ?? '';
-      if (chapterName.isNotEmpty) {
-        return chapterName;
       }
       // Old records may have no chapter metadata; directory dots are not extensions.
       final name = p.basename(record.destinationPath).trim();

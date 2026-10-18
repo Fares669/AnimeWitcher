@@ -259,6 +259,11 @@ class MultimediaItem {
     final String? typeStr =
         (json['type'] as String?) ?? (json['contentType'] as String?);
     final MultimediaContentType type = MultimediaItem.parseContentType(typeStr);
+    final episodeBadge =
+        json['episodeBadge'] ??
+        json['episode_badge'] ??
+        json['badgeText'] ??
+        json['badge_text'];
 
     return MultimediaItem(
       title: title,
@@ -345,12 +350,9 @@ class MultimediaItem {
       tmdbId: json['tmdbId'] as int?,
       imdbId: json['imdbId'] as String?,
       source: json['source'] as String?,
-      episodeBadge: _parseOptionalString(
-        json['episodeBadge'] ??
-            json['episode_badge'] ??
-            json['badgeText'] ??
-            json['badge_text'],
-      ),
+      episodeBadge: _parseOptionalString(episodeBadge) == null
+          ? null
+          : episodeBadge.toString(),
       catalogType: _catalogTypeFromJson(json, typeStr),
       publishedAt: _parseDateTime(
         json['publishedAt'] ?? json['published_at'] ?? json['date'],
@@ -759,9 +761,7 @@ class Episode {
     final name = json['name'] != null
         ? _unescape.convert(json['name'] as String)
         : '';
-    final serverName = json['serverName'] != null
-        ? _unescape.convert(json['serverName'] as String)
-        : '';
+    final serverName = (json['serverName'] as String?) ?? '';
     return Episode(
       name: name,
       url: (json['url'] as String?) ?? '',

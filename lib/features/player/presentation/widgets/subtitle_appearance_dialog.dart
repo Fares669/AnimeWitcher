@@ -285,7 +285,24 @@ class DpadColorCircle extends StatelessWidget {
       },
       child: DpadFocusable(
         onSelect: onTap,
-        builder: (context, isFocused, child) {
+        child: Container(
+          margin: const EdgeInsets.all(2),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: isTransparent ? Colors.transparent : Color(colorValue),
+          ),
+          child: isTransparent
+              ? const Center(
+                  child: Icon(
+                    Icons.disabled_by_default_outlined,
+                    size: 16,
+                    color: Colors.red,
+                  ),
+                )
+              : null,
+        ),
+        builder: (context, state, child) {
+          final isFocused = state.focused;
           final size = isFocused ? 38.0 : 28.0;
           return AnimatedContainer(
             duration: const Duration(milliseconds: 150),
@@ -304,22 +321,7 @@ class DpadColorCircle extends StatelessWidget {
             child: InkWell(
               onTap: onTap,
               borderRadius: BorderRadius.circular(size / 2),
-              child: Container(
-                margin: const EdgeInsets.all(2),
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: isTransparent ? Colors.transparent : Color(colorValue),
-                ),
-                child: isTransparent
-                    ? const Center(
-                        child: Icon(
-                          Icons.disabled_by_default_outlined,
-                          size: 16,
-                          color: Colors.red,
-                        ),
-                      )
-                    : null,
-              ),
+              child: child,
             ),
           );
         },
@@ -345,7 +347,9 @@ class DpadButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return DpadFocusable(
       onSelect: onPressed,
-      builder: (context, isFocused, child) {
+      child: Text(label),
+      builder: (context, state, child) {
+        final isFocused = state.focused;
         final baseColor = isPrimary
             ? Theme.of(context).colorScheme.primary
             : Colors.transparent;
@@ -378,22 +382,21 @@ class DpadButton extends StatelessWidget {
                 boxShadow: isFocused
                     ? [
                         BoxShadow(
-                          color: Theme.of(context).colorScheme.primary.withValues(
-                            alpha: 0.3,
-                          ),
+                          color: Theme.of(context).colorScheme.primary
+                              .withValues(alpha: 0.3),
                           blurRadius: 8,
                           offset: const Offset(0, 2),
                         ),
                       ]
                     : null,
               ),
-              child: Text(
-                label,
+              child: DefaultTextStyle.merge(
                 style: TextStyle(
                   color: textColor,
                   fontWeight: FontWeight.bold,
                   fontSize: 14,
                 ),
+                child: child,
               ),
             ),
           ),
@@ -522,12 +525,12 @@ class _SubtitleAppearanceDialogState
 
   Future<void> _pickCustomFont() async {
     try {
-      final result = await FilePicker.pickFiles(
+      final result = await FilePicker.pickFile(
         type: FileType.custom,
         allowedExtensions: ['ttf', 'otf'],
       );
-      if (result != null && result.files.single.path != null) {
-        final path = result.files.single.path!;
+      if (result != null && result.path != null) {
+        final path = result.path!;
         setState(() {
           _localSettings = _localSettings.copyWith(
             subTypefaceFilePath: () => path,

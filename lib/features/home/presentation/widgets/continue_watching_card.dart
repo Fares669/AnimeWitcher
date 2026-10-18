@@ -148,7 +148,6 @@ class _ContinueWatchingCardState extends ConsumerState<ContinueWatchingCard> {
     final episodeServerName = widget.historyItem.episodeServerName ?? '';
     final primaryLabel = continueWatchingPrimaryLabel(
       episode: episodeNumber,
-      isArabic: true,
       episodeTitle: episodeTitleRaw,
       episodeServerName: episodeServerName,
       episodeServerNumber: widget.historyItem.episodeServerNumber,

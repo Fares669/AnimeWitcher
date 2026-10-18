@@ -10,8 +10,6 @@ void requireLibrarySignIn(bool signedIn) {
   }
 }
 
-String librarySignInRequiredMessage({required bool isArabic}) {
-  return isArabic
-      ? 'سجل الدخول لإضافة الأعمال إلى المفضلة والقوائم'
-      : 'Sign in to add titles to favorites and lists';
+String librarySignInRequiredMessage() {
+  return 'سجل الدخول لإضافة الأعمال إلى المفضلة والقوائم';
 }

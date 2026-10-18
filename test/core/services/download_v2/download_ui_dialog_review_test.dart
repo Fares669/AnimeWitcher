@@ -82,6 +82,37 @@ DownloadProgressData _progress(TaskStatus status, double progress) =>
     );
 
 void main() {
+  testWidgets('Arabic status heading is right aligned without reversing metrics', (tester) async {
+    final notifications = NotificationService();
+    addTearDown(notifications.dispose);
+    await _openDialog(tester, _progress(TaskStatus.running, .4), _Commands(), notifications);
+
+    final heading = tester.widget<Text>(find.text('جارٍ التنزيل'));
+    expect(heading.textDirection, TextDirection.rtl);
+    expect(heading.textAlign, TextAlign.start);
+    final subtitle = find.text('Episode selected');
+    expect(Directionality.of(tester.element(subtitle)), TextDirection.ltr);
+    expect(tester.getRect(find.text('جارٍ التنزيل')).right,
+      closeTo(tester.getRect(find.byType(LinearProgressIndicator)).right + 16 +
+        tester.getSize(find.text('40%')).width, 1));
+    expect(tester.getTopLeft(find.text('السرعة')).dx,
+      lessThan(tester.getTopLeft(find.text('المتبقي')).dx));
+  });
+
+  testWidgets('manga unknown total preserves downloaded pages without inventing a percentage', (tester) async {
+    final notifications = NotificationService();
+    addTearDown(notifications.dispose);
+    await _openDialog(tester, const DownloadProgressData(
+      taskId: 'selected-task', progress: 0, completedPages: 5,
+      networkSpeed: -1, timeRemaining: Duration.zero, status: TaskStatus.running,
+    ), _Commands(), notifications);
+
+    expect(find.text('5/? صفحة'), findsOneWidget);
+    expect(find.text('--%'), findsOneWidget);
+    expect(tester.widget<LinearProgressIndicator>(find.byType(LinearProgressIndicator)).value, isNull);
+    expect(find.textContaining(' MB'), findsNothing);
+  });
+
   testWidgets('Manga dialog displays completed pages instead of file size', (tester) async {
     final notifications = NotificationService();
     addTearDown(notifications.dispose);

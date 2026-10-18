@@ -1,11 +1,13 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons_200.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:media_kit/media_kit.dart';
 import 'package:video_view/video_view.dart' as vv;
+
 import '../player_controller.dart';
 import '../player_gesture_handler.dart';
 import '../../../../shared/widgets/custom_widgets.dart';
@@ -518,7 +520,7 @@ class PlayerPlayPauseButton extends StatelessWidget {
           child: isSpinning
               ? const _PlayerSpinner()
               : _HoverTintedIcon(
-                  icon: isPlaying ? LucideIcons.pause200 : LucideIcons.play200,
+                  icon: isPlaying ? LucideIcons200.pause : LucideIcons200.play,
                   color: foregroundColor ?? Colors.white,
                   hoverColor: hoverColor,
                   size: iconSize ?? size * 0.88,
@@ -595,12 +597,9 @@ class _PlayerVolumeControlState extends ConsumerState<PlayerVolumeControl> {
   /// so only the newest is kept and everything it overtook is dropped.
   double? _pendingLevel;
   bool _committing = false;
+  int _refreshSerial = 0;
 
-  /// The loudest the engine will go, as a multiple of the track's own level.
-  ///
-  /// mpv can amplify past the level a recording carries; ExoPlayer cannot,
-  /// and asking it to would clip at its own ceiling under a slider that
-  /// pretended otherwise.
+  /// Device volume uses the same range regardless of the playback engine.
   double get _maxVolume =>
       ref.read(playerControllerProvider).supportsVolumeBoost ? 2.0 : 1.0;
 
@@ -611,18 +610,32 @@ class _PlayerVolumeControlState extends ConsumerState<PlayerVolumeControl> {
   }
 
   Future<void> _refresh() async {
-    final level = await ref
-        .read(playerControllerProvider.notifier)
-        .getVolumeLevel();
-    if (!mounted) return;
-    final clamped = level.clamp(0.0, _maxVolume);
-    setState(() {
-      _volume = clamped;
-      if (clamped > 0) _lastNonZero = clamped;
-    });
+    final serial = ++_refreshSerial;
+    try {
+      final level = await ref
+          .read(playerControllerProvider.notifier)
+          .getVolumeLevel();
+      if (!mounted ||
+          serial != _refreshSerial ||
+          _committing ||
+          _dragValue != null) {
+        return;
+      }
+      final clamped = level.clamp(0.0, _maxVolume);
+      setState(() {
+        _volume = clamped;
+        if (clamped > 0) _lastNonZero = clamped;
+      });
+    } catch (_) {
+      if (!mounted || serial != _refreshSerial) return;
+      ref
+          .read(playerGestureHandlerProvider.notifier)
+          .showToast('تعذّر قراءة صوت الجهاز', Icons.error_outline);
+    }
   }
 
   Future<void> _commit(double value) async {
+    _refreshSerial++;
     if (_committing) {
       _pendingLevel = value;
       return;
@@ -634,10 +647,21 @@ class _PlayerVolumeControlState extends ConsumerState<PlayerVolumeControl> {
         if (!mounted) return;
         await ref.read(playerControllerProvider.notifier).setVolumeLevel(next);
         final queued = _pendingLevel;
-        if (queued == null) return;
+        if (queued == null) {
+          if (_dragValue == null) unawaited(_refresh());
+          return;
+        }
         _pendingLevel = null;
         next = queued;
       }
+    } catch (_) {
+      _pendingLevel = null;
+      if (!mounted) return;
+      setState(() => _dragValue = null);
+      unawaited(_refresh());
+      ref
+          .read(playerGestureHandlerProvider.notifier)
+          .showToast('تعذّر تغيير صوت الجهاز', Icons.error_outline);
     } finally {
       _committing = false;
     }
@@ -654,7 +678,7 @@ class _PlayerVolumeControlState extends ConsumerState<PlayerVolumeControl> {
   }
 
   IconData _iconFor(double value) =>
-      value <= 0.0 ? LucideIcons.volumeX200 : LucideIcons.volume2200;
+      value <= 0.0 ? LucideIcons200.volumeX : LucideIcons200.volume2;
 
   /// Where on the track the recording's own level sits.
   ///
@@ -1390,9 +1414,7 @@ class _SeekBarState extends State<_SeekBar> {
                               width: thumbWidth,
                               height: thumbHeight,
                               decoration: BoxDecoration(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .primary
+                                color: Theme.of(context).colorScheme.primary
                                     .withValues(alpha: thumbOpacity),
                                 borderRadius: BorderRadius.circular(
                                   thumbRadius,

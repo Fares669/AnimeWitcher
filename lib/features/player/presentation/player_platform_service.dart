@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 
 import 'player_pip.dart';
 
@@ -15,6 +16,50 @@ class PlayerPlatformService {
 
   final MethodChannel _pipChannel;
   final bool? _nativePip;
+
+  Future<double> getVolumeLevel() async {
+    final value = await FlutterVolumeController.getVolume();
+    if (value == null || !value.isFinite) {
+      throw StateError('Device volume is unavailable');
+    }
+    return value.clamp(0.0, 1.0);
+  }
+
+  Future<double> setVolumeLevel(
+    double value, {
+    required Future<void> Function(double) setEngineVolume,
+  }) async {
+    if (!value.isFinite) throw ArgumentError.value(value, 'volume');
+    final target = value.clamp(0.0, 1.0);
+    // Keep one volume control: engine attenuation must not multiply OS volume.
+    await setEngineVolume(1.0);
+    await FlutterVolumeController.setVolume(target);
+    // iOS applies MPVolumeView asynchronously; its listener reports the actual
+    // level later. An immediate read here would return the previous value.
+    return target;
+  }
+
+  Future<double> changeVolume(
+    double step, {
+    required Future<void> Function(double) setEngineVolume,
+  }) async {
+    if (!step.isFinite) throw ArgumentError.value(step, 'step');
+    if (step == 0) return getVolumeLevel();
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      await setEngineVolume(1.0);
+      // A fixed 5% increment rounds down to zero on 15-step Android outputs.
+      if (step > 0) {
+        await FlutterVolumeController.raiseVolume(null);
+      } else {
+        await FlutterVolumeController.lowerVolume(null);
+      }
+      return getVolumeLevel();
+    }
+    return setVolumeLevel(
+      await getVolumeLevel() + step,
+      setEngineVolume: setEngineVolume,
+    );
+  }
 
   bool get _usesNativePip {
     if (_nativePip != null) return _nativePip;

@@ -316,55 +316,52 @@ void main() {
     expect(await cache.get('expired-m1', chapter), isNull);
   });
 
-  test(
-    'reader preloads the adjacent chapter after current chapter loads',
-    () async {
-      final temp = await Directory.systemTemp.createTemp('aw_reader_preload_');
-      addTearDown(() => temp.delete(recursive: true));
-      final provider = _ReaderProvider();
-      final cache = _RecordingReaderPageCache(cacheDirectory: temp);
-      const first = MangaChapter(
-        id: 'c1',
-        mangaId: 'm1',
-        url: 'https://example.test/chapter/1',
-        name: 'Chapter 1',
-        number: 1,
-      );
-      const second = MangaChapter(
-        id: 'c2',
-        mangaId: 'm1',
-        url: 'https://example.test/chapter/2',
-        name: 'Chapter 2',
-        number: 2,
-      );
-      final manga = MultimediaItem(
-        title: 'Reader Manga',
-        url: 'https://animewitcher.com/manga/m1',
-        posterUrl: '',
-        contentType: MultimediaContentType.manga,
-        provider: provider.packageName,
-      );
-      final controller = MangaReaderController(
-        provider: provider,
-        progressRepository: _ReaderProgressRepository(),
-        manga: manga,
-        chapter: first,
-        chapters: const <MangaChapter>[first, second],
-        pageCache: cache,
-      );
-      addTearDown(controller.dispose);
+  test('reader preloads the adjacent chapter after current chapter loads', () async {
+    final temp = await Directory.systemTemp.createTemp('aw_reader_preload_');
+    addTearDown(() => temp.delete(recursive: true));
+    final provider = _ReaderProvider();
+    final cache = _RecordingReaderPageCache(cacheDirectory: temp);
+    const first = MangaChapter(
+      id: 'c1',
+      mangaId: 'm1',
+      url: 'https://example.test/chapter/1',
+      name: 'Chapter 1',
+      number: 1,
+    );
+    const second = MangaChapter(
+      id: 'c2',
+      mangaId: 'm1',
+      url: 'https://example.test/chapter/2',
+      name: 'Chapter 2',
+      number: 2,
+    );
+    final manga = MultimediaItem(
+      title: 'Reader Manga',
+      url: 'https://animewitcher.com/manga/m1',
+      posterUrl: '',
+      contentType: MultimediaContentType.manga,
+      provider: provider.packageName,
+    );
+    final controller = MangaReaderController(
+      provider: provider,
+      progressRepository: _ReaderProgressRepository(),
+      manga: manga,
+      chapter: first,
+      chapters: const <MangaChapter>[first, second],
+      pageCache: cache,
+    );
+    addTearDown(controller.dispose);
 
-      await controller.load();
-      // Provider entry precedes the background write; teardown needs the latter.
-      await cache.waitUntilWritten('c2');
+    await controller.load();
+    // Provider entry precedes the background write; teardown needs the latter.
+    await cache.waitUntilWritten('c2');
 
-      expect(provider.requestedChapterIds, containsAll(<String>['c1', 'c2']));
-      expect(
-        (await cache.get('m1', second))?.map((page) => page.imageUrl),
-        pages.map((page) => page.imageUrl),
-      );
-    },
-  );
+    expect(provider.requestedChapterIds, containsAll(<String>['c1', 'c2']));
+    expect(
+      (await cache.get('m1', second))?.map((page) => page.imageUrl),
+      pages.map((page) => page.imageUrl),
+    );
+  });
 
   test('Mangayomi chapter read action toggles read and unread', () async {
     final progress = _RecordingReaderProgressRepository();
@@ -546,7 +543,6 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: MangaReaderImageActionsSheet(
-            isArabic: false,
             onSetCover: () => cover++,
             onShare: () => share++,
             onSave: () => save++,
@@ -555,13 +551,13 @@ void main() {
       ),
     );
 
-    expect(find.text('Set as cover'), findsOneWidget);
-    expect(find.text('Share'), findsOneWidget);
-    expect(find.text('Save'), findsOneWidget);
+    expect(find.text('تعيين كغلاف'), findsOneWidget);
+    expect(find.text('مشاركة'), findsOneWidget);
+    expect(find.text('حفظ'), findsOneWidget);
 
-    await tester.tap(find.text('Set as cover'));
-    await tester.tap(find.text('Share'));
-    await tester.tap(find.text('Save'));
+    await tester.tap(find.text('تعيين كغلاف'));
+    await tester.tap(find.text('مشاركة'));
+    await tester.tap(find.text('حفظ'));
     await tester.pump();
 
     expect(cover, 1);
@@ -630,7 +626,7 @@ void main() {
         id: 'c1',
         mangaId: 'm1',
         url: 'https://example.test/chapter/1',
-        name: 'الفصل 1',
+        name: '  ٠١ &amp; <b>خاص</b>  ',
       );
       final manga = MultimediaItem(
         title: 'Reader Manga',
@@ -671,6 +667,7 @@ void main() {
       expect(find.byIcon(Icons.bookmark_rounded), findsNothing);
       expect(find.byIcon(Icons.bookmark_border_rounded), findsNothing);
       expect(find.byIcon(Icons.refresh_rounded), findsOneWidget);
+      expect(find.text('  ٠١ &amp; <b>خاص</b>  '), findsOneWidget);
 
       // The mode's name shows for a moment as the reader opens; let it go.
       await tester.pump(const Duration(seconds: 2));

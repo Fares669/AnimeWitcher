@@ -144,7 +144,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey<String>('episode-range-8')));
       await tester.pumpAndSettle();
       expect(episodeRangeIndex.value, 8);
-      expect(find.text('Episodes 801–900'), findsOneWidget);
+      expect(find.text('الحلقات 801–900'), findsOneWidget);
 
       await tester.tap(
         find.byKey(const ValueKey<String>('episode-filter-downloaded')),

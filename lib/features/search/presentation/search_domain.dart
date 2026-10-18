@@ -73,18 +73,13 @@ final searchDomainProvider =
 /// What a search category is called, as the filter sheet lists it.
 String searchDomainLabel(BuildContext context, SearchDomain domain) {
   final l10n = AppLocalizations.of(context);
-  final isArabic =
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+
   return switch (domain) {
-    SearchDomain.all => isArabic ? 'الكل' : 'All',
-    SearchDomain.anime =>
-      l10n?.searchDomainAnime ?? (isArabic ? 'أنمي' : 'Anime'),
-    SearchDomain.animation =>
-      l10n?.searchDomainAnimation ?? (isArabic ? 'انميشن' : 'Animation'),
-    SearchDomain.manga =>
-      l10n?.searchDomainManga ?? (isArabic ? 'مانجا' : 'Manga'),
-    SearchDomain.characters =>
-      l10n?.searchDomainCharacters ?? (isArabic ? 'شخصيات' : 'Characters'),
+    SearchDomain.all => 'الكل',
+    SearchDomain.anime => l10n?.searchDomainAnime ?? 'أنمي',
+    SearchDomain.animation => l10n?.searchDomainAnimation ?? 'انميشن',
+    SearchDomain.manga => l10n?.searchDomainManga ?? 'مانجا',
+    SearchDomain.characters => l10n?.searchDomainCharacters ?? 'شخصيات',
   };
 }
 
@@ -98,17 +93,11 @@ IconData searchDomainIcon(SearchDomain domain) => switch (domain) {
 
 /// The search field's hint, naming what is being searched.
 String searchDomainHint(BuildContext context, SearchDomain domain) {
-  final isArabic =
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
   return switch (domain) {
-    SearchDomain.all => isArabic ? 'ابحث عن الكل' : 'Search everything',
-    SearchDomain.anime => isArabic
-        ? 'ابحث عن انمي'
-        : (AppLocalizations.of(context)?.searchHint ?? 'Search anime'),
-    SearchDomain.animation =>
-      isArabic ? 'ابحث عن انميشن' : 'Search animation',
-    SearchDomain.manga => isArabic ? 'ابحث عن مانجا' : 'Search manga',
-    SearchDomain.characters =>
-      isArabic ? 'ابحث عن شخصيات' : 'Search characters',
+    SearchDomain.all => 'ابحث عن الكل',
+    SearchDomain.anime => 'ابحث عن انمي',
+    SearchDomain.animation => 'ابحث عن انميشن',
+    SearchDomain.manga => 'ابحث عن مانجا',
+    SearchDomain.characters => 'ابحث عن شخصيات',
   };
 }

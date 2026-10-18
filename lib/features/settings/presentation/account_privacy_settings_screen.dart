@@ -73,7 +73,6 @@ class _AnimeWitcherPrivacySettingsScreenState
 
   @override
   Widget build(BuildContext context) {
-    final isArabic = Localizations.localeOf(context).languageCode == 'ar';
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(
@@ -100,12 +99,10 @@ class _AnimeWitcherPrivacySettingsScreenState
             child: Text(
               appText(
                 context,
-                english:
-                    'These choices are saved to your AnimeWitcher profile. Turning a visibility option off keeps that part of your profile private.',
-                arabic:
-                    'تُحفظ هذه الخيارات في ملف AnimeWitcher. إيقاف خيار الظهور يجعل هذا الجزء من ملفك خاصًا.',
+                english: 'These choices are saved to your AnimeWitcher profile. Turning a visibility option off keeps that part of your profile private.',
+                arabic: 'تُحفظ هذه الخيارات في ملف AnimeWitcher. إيقاف خيار الظهور يجعل هذا الجزء من ملفك خاصًا.',
               ),
-              textAlign: isArabic ? TextAlign.right : TextAlign.left,
+              textAlign: TextAlign.right,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
@@ -127,14 +124,14 @@ class _AnimeWitcherPrivacySettingsScreenState
                 ),
                 subtitle: appText(
                   context,
-                  english: 'Allow other AnimeWitcher users to view your favorites',
+                  english:
+                      'Allow other AnimeWitcher users to view your favorites',
                   arabic: 'السماح لمستخدمي AnimeWitcher بعرض مفضلتك',
                 ),
                 value: _settings.showFavoritesToUsers,
                 enabled: !_saving,
-                onChanged: (value) => _update(
-                  _settings.copyWith(showFavoritesToUsers: value),
-                ),
+                onChanged: (value) =>
+                    _update(_settings.copyWith(showFavoritesToUsers: value)),
               ),
               _PreferenceTile(
                 icon: Icons.forum_outlined,
@@ -145,14 +142,14 @@ class _AnimeWitcherPrivacySettingsScreenState
                 ),
                 subtitle: appText(
                   context,
-                  english: 'Let other users view your comments from your profile',
+                  english:
+                      'Let other users view your comments from your profile',
                   arabic: 'السماح للمستخدمين بعرض تعليقاتك من ملفك',
                 ),
                 value: _settings.showCommentsToUsers,
                 enabled: !_saving,
-                onChanged: (value) => _update(
-                  _settings.copyWith(showCommentsToUsers: value),
-                ),
+                onChanged: (value) =>
+                    _update(_settings.copyWith(showCommentsToUsers: value)),
               ),
               _PreferenceTile(
                 icon: Icons.rate_review_outlined,
@@ -169,9 +166,8 @@ class _AnimeWitcherPrivacySettingsScreenState
                 value: _settings.showReviewsToUsers,
                 enabled: !_saving,
                 isLast: true,
-                onChanged: (value) => _update(
-                  _settings.copyWith(showReviewsToUsers: value),
-                ),
+                onChanged: (value) =>
+                    _update(_settings.copyWith(showReviewsToUsers: value)),
               ),
             ],
           ),
@@ -192,17 +188,14 @@ class _AnimeWitcherPrivacySettingsScreenState
                 ),
                 subtitle: appText(
                   context,
-                  english:
-                      'Filters titles tagged Ecchi from catalog results. Your library and history are kept.',
-                  arabic:
-                      'يخفي الأعمال ذات وسم إيتشي من نتائج الكتالوج، مع الاحتفاظ بمكتبتك وسجلك.',
+                  english: 'Filters titles tagged Ecchi from catalog results. Your library and history are kept.',
+                  arabic: 'يخفي الأعمال ذات وسم إيتشي من نتائج الكتالوج، مع الاحتفاظ بمكتبتك وسجلك.',
                 ),
                 value: _settings.hideEcchiAnime,
                 enabled: !_saving,
                 isLast: true,
-                onChanged: (value) => _update(
-                  _settings.copyWith(hideEcchiAnime: value),
-                ),
+                onChanged: (value) =>
+                    _update(_settings.copyWith(hideEcchiAnime: value)),
               ),
             ],
           ),
@@ -217,7 +210,11 @@ class _AnimeWitcherPrivacySettingsScreenState
                     )
                   : const Icon(Icons.save_outlined),
               label: Text(
-                appText(context, english: 'Save changes', arabic: 'حفظ التغييرات'),
+                appText(
+                  context,
+                  english: 'Save changes',
+                  arabic: 'حفظ التغييرات',
+                ),
               ),
             ),
           ),
@@ -254,10 +251,7 @@ class _PreferenceTile extends StatelessWidget {
       subtitle: subtitle,
       isLast: isLast,
       onTap: enabled ? () => onChanged(!value) : null,
-      trailing: Switch(
-        value: value,
-        onChanged: enabled ? onChanged : null,
-      ),
+      trailing: Switch(value: value, onChanged: enabled ? onChanged : null),
     );
   }
 }

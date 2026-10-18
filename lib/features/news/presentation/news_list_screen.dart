@@ -95,7 +95,6 @@ class _NewsListScreenState extends State<NewsListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isArabic = Localizations.localeOf(context).languageCode == 'ar';
     final size = MediaQuery.sizeOf(context);
     final columns = newsListColumnCount(size);
     final landscapeExtent = newsListLandscapeMainAxisExtent(
@@ -106,7 +105,7 @@ class _NewsListScreenState extends State<NewsListScreen> {
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(
-        title: isArabic ? 'الأخبار' : 'News',
+        title: 'الأخبار',
         onBack: () => Navigator.of(context).maybePop(),
       ),
       body: MouseDragRefreshIndicator(
@@ -174,4 +173,3 @@ class _NewsListScreenState extends State<NewsListScreen> {
     );
   }
 }
-

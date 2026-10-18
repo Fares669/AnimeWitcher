@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:animewitcher/core/account/animewitcher_comment_models.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import 'package:animewitcher/shared/widgets/animated_sort_menu_button.dart';
+
 import '../../../../core/utils/window_controls_inset.dart';
 
 /// Shared key for the details comments/reviews trailing sort control.
@@ -52,12 +53,11 @@ class AnimeWitcherCommentSortControl extends StatelessWidget {
   final List<AppleNativeMenuItem> items;
   final ValueChanged<String> onSelected;
 
-  static String labelFor(AnimeWitcherCommentSort sort, bool isArabic) {
+  static String labelFor(AnimeWitcherCommentSort sort) {
     return switch (sort) {
-      AnimeWitcherCommentSort.newest => isArabic ? 'الأحدث' : 'Newest',
-      AnimeWitcherCommentSort.oldest => isArabic ? 'الأقدم' : 'Oldest',
-      AnimeWitcherCommentSort.mostLiked =>
-        isArabic ? 'الأكثر اعجابا' : 'Most liked',
+      AnimeWitcherCommentSort.newest => 'الأحدث',
+      AnimeWitcherCommentSort.oldest => 'الأقدم',
+      AnimeWitcherCommentSort.mostLiked => 'الأكثر اعجابا',
     };
   }
 
@@ -77,35 +77,34 @@ class AnimeWitcherCommentSortControl extends StatelessWidget {
     };
   }
 
-  static List<AppleNativeMenuItem> menuItems(bool isArabic) {
+  static List<AppleNativeMenuItem> menuItems() {
     return <AppleNativeMenuItem>[
       AppleNativeMenuItem(
         value: AnimeWitcherCommentSort.newest.name,
-        label: labelFor(AnimeWitcherCommentSort.newest, isArabic),
+        label: labelFor(AnimeWitcherCommentSort.newest),
         systemImage: systemImageFor(AnimeWitcherCommentSort.newest),
         icon: fallbackIconFor(AnimeWitcherCommentSort.newest),
       ),
       AppleNativeMenuItem(
         value: AnimeWitcherCommentSort.oldest.name,
-        label: labelFor(AnimeWitcherCommentSort.oldest, isArabic),
+        label: labelFor(AnimeWitcherCommentSort.oldest),
         systemImage: systemImageFor(AnimeWitcherCommentSort.oldest),
         icon: fallbackIconFor(AnimeWitcherCommentSort.oldest),
       ),
       AppleNativeMenuItem(
         value: AnimeWitcherCommentSort.mostLiked.name,
-        label: labelFor(AnimeWitcherCommentSort.mostLiked, isArabic),
+        label: labelFor(AnimeWitcherCommentSort.mostLiked),
         systemImage: systemImageFor(AnimeWitcherCommentSort.mostLiked),
         icon: fallbackIconFor(AnimeWitcherCommentSort.mostLiked),
       ),
     ];
   }
 
-  static double persistentWidth(bool isArabic) => size;
+  static double persistentWidth() => size;
 
   /// iOS persistent Liquid Glass trailing button from the details header.
   static List<AppleLiquidGlassToolbarButton> persistentButtons({
     required BuildContext context,
-    required bool isArabic,
     required String tooltip,
     required AnimeWitcherCommentSort sort,
     required ValueChanged<String> onSelected,
@@ -113,7 +112,7 @@ class AnimeWitcherCommentSortControl extends StatelessWidget {
     final colors = Theme.of(context).colorScheme;
     return <AppleLiquidGlassToolbarButton>[
       AppleLiquidGlassToolbarButton(
-        width: persistentWidth(isArabic),
+        width: persistentWidth(),
         tooltip: tooltip,
         icon: fallbackIconFor(sort),
         systemImage: systemImageFor(sort),
@@ -124,7 +123,7 @@ class AnimeWitcherCommentSortControl extends StatelessWidget {
         menuTintColor: colors.primary,
         onPressed: null,
         selectedMenuValue: sort.name,
-        menuItems: menuItems(isArabic),
+        menuItems: menuItems(),
         onMenuSelected: onSelected,
       ),
     ];

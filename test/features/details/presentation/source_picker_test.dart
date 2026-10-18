@@ -24,9 +24,8 @@ Future<void> _writeShot(WidgetTester tester, String filename) async {
   );
   final image = await boundary.toImage(pixelRatio: 2);
   final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-  File(
-    '${artifacts.path}/$filename',
-  ).writeAsBytesSync(bytes!.buffer.asUint8List());
+  File('${artifacts.path}/$filename')
+      .writeAsBytesSync(bytes!.buffer.asUint8List());
 }
 
 void main() {
@@ -34,15 +33,20 @@ void main() {
     test(
       'uses the server episode label instead of a generic source prompt',
       () {
-        expect(sourcePickerHeader('الحلقة 10', isArabic: true), 'الحلقة 10');
-        expect(sourcePickerHeader('الفيلم', isArabic: true), 'الفيلم');
-        expect(sourcePickerHeader('مترجم', isArabic: true), 'مترجم');
+        expect(sourcePickerHeader('الحلقة 10'), 'الحلقة 10');
+        expect(sourcePickerHeader('الفيلم'), 'الفيلم');
+        expect(sourcePickerHeader('مترجم'), 'مترجم');
+        expect(sourcePickerHeader('  الحلقة ٠٠٢.٥  '), '  الحلقة ٠٠٢.٥  ');
       },
     );
 
     test('keeps the localized generic prompt when no episode is available', () {
-      expect(sourcePickerHeader(null, isArabic: true), 'اختر المصدر');
-      expect(sourcePickerHeader('  ', isArabic: false), 'Choose source');
+      expect(sourcePickerHeader(null), 'اختر المصدر');
+      expect(sourcePickerHeader('  '), 'اختر المصدر');
+      expect(
+        sourcePickerHeader('Episode 12: The Journey'),
+        'Episode 12: The Journey',
+      );
     });
   });
 
@@ -97,10 +101,11 @@ void main() {
       '720p',
       '480p',
     ]);
-    expect(
-      groups.first.sources.map((source) => source.source),
-      <String>['PD', 'MF2', 'ST'],
-    );
+    expect(groups.first.sources.map((source) => source.source), <String>[
+      'PD',
+      'MF2',
+      'ST',
+    ]);
   });
 
   test('auto selection keeps quality ahead of server priority', () {
@@ -132,45 +137,52 @@ void main() {
     expect(selected?.url, 'st-720');
   });
 
-  test('automatic fallback exhausts servers at a quality before dropping quality', () async {
-    final attempted = <String>[];
-    final selected = await resolvePreferredStreamSource(
-      const <StreamResult>[
-        StreamResult(
-          url: 'pd-1080-token',
-          source: 'PD',
-          quality: '1080',
-          requiresResolution: true,
-        ),
-        StreamResult(
-          url: 'mf-1080-token',
-          source: 'MF',
-          quality: '1080',
-          requiresResolution: true,
-        ),
-        StreamResult(
-          url: 'pd-720-token',
-          source: 'PD',
-          quality: '720',
-          requiresResolution: true,
-        ),
-      ],
-      qualityPriority: const <String>['1080p', '720p'],
-      serverPriority: const <String>['PD', 'MF'],
-      resolveCandidate: (StreamResult candidate) async {
-        attempted.add(candidate.url);
-        if (candidate.url == 'mf-1080-token') {
-          return const <StreamResult>[
-            StreamResult(url: 'mf-1080-direct', source: 'MF', quality: '1080'),
-          ];
-        }
-        return const <StreamResult>[];
-      },
-    );
+  test(
+    'automatic fallback exhausts servers at a quality before dropping quality',
+    () async {
+      final attempted = <String>[];
+      final selected = await resolvePreferredStreamSource(
+        const <StreamResult>[
+          StreamResult(
+            url: 'pd-1080-token',
+            source: 'PD',
+            quality: '1080',
+            requiresResolution: true,
+          ),
+          StreamResult(
+            url: 'mf-1080-token',
+            source: 'MF',
+            quality: '1080',
+            requiresResolution: true,
+          ),
+          StreamResult(
+            url: 'pd-720-token',
+            source: 'PD',
+            quality: '720',
+            requiresResolution: true,
+          ),
+        ],
+        qualityPriority: const <String>['1080p', '720p'],
+        serverPriority: const <String>['PD', 'MF'],
+        resolveCandidate: (StreamResult candidate) async {
+          attempted.add(candidate.url);
+          if (candidate.url == 'mf-1080-token') {
+            return const <StreamResult>[
+              StreamResult(
+                url: 'mf-1080-direct',
+                source: 'MF',
+                quality: '1080',
+              ),
+            ];
+          }
+          return const <StreamResult>[];
+        },
+      );
 
-    expect(selected?.url, 'mf-1080-direct');
-    expect(attempted, <String>['pd-1080-token', 'mf-1080-token']);
-  });
+      expect(selected?.url, 'mf-1080-direct');
+      expect(attempted, <String>['pd-1080-token', 'mf-1080-token']);
+    },
+  );
 
   testWidgets('shows a loading state in the sheet until servers arrive', (
     tester,

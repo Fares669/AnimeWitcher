@@ -1060,6 +1060,49 @@ void main() {
     },
   );
 
+  for (final fenced in [false, true]) {
+    test('running transfer resumes paused intent only with native pause fence=$fenced', () async {
+      final f = _fixture(pauseFenced: fenced);
+      addTearDown(f.manager.dispose);
+      await f.manager.start(f.request);
+      final taskId = f.gateway.startedSpecs.single.taskId;
+      final handle = f.gateway.handleFor(taskId)!;
+      handle.onPause = () async => throw TimeoutException('native pause ACK unknown');
+      await expectLater(f.manager.pause(f.request.logicalId), throwsA(isA<TimeoutException>()));
+      expect((await f.store.get(f.request.logicalId))?.intent, DownloadUserIntent.paused);
+      expect(handle.current.status, DownloadTransportStatus.running);
+      if (fenced) {
+        await f.manager.resume(f.request.logicalId);
+        expect(handle.resumeCalls, 1);
+        expect((await f.store.get(f.request.logicalId))?.intent, DownloadUserIntent.active);
+      } else {
+        await expectLater(f.manager.resume(f.request.logicalId), throwsStateError);
+        expect(handle.resumeCalls, 0);
+      }
+      expect(f.gateway.startedSpecs, hasLength(1));
+      expect((await f.store.get(f.request.logicalId))?.generation, 1);
+      expect(handle.cancelCalls, 0);
+    });
+  }
+
+  test('stopped transport checkpoint failure preserves durable paused user intent', () async {
+    final f = _fixture();
+    addTearDown(f.manager.dispose);
+    await f.manager.start(f.request);
+    final taskId = f.gateway.startedSpecs.single.taskId;
+    final handle = f.gateway.handleFor(taskId)!;
+    handle.onPause = () async {
+      handle.emit(DownloadTransportStatus.paused);
+      throw StateError('Download stopped without a resume checkpoint');
+    };
+    await expectLater(f.manager.pause(f.request.logicalId), throwsStateError);
+    expect((await f.store.get(f.request.logicalId))?.intent, DownloadUserIntent.paused,
+      reason: 'a stopped writer must not become eligible for automatic relaunch');
+    expect(f.manager.snapshotFor(f.request.logicalId)?.status, DownloadTransportStatus.paused);
+    expect(f.gateway.startedSpecs, hasLength(1));
+    expect(handle.cancelCalls, 0);
+  });
+
   test('failed pause never cancels transport or publishes fake paused state', () async {
     final f = _fixture();
     await f.manager.start(f.request);
@@ -1221,12 +1264,13 @@ void main() {
 _Fixture _fixture({
   String destinationPath = 'downloads/anime/episode-12.mp4',
   int parallelChunks = 1,
+  bool pauseFenced = false,
   NativeParallelPauseReadinessV2? pauseReadiness,
   List<DownloadPresentationObserverV2> presentationObservers = const [],
   DownloadDiagnosticsV2? diagnostics,
 }) {
   final store = InMemoryLogicalDownloadStoreV2();
-  final gateway = _FakeGateway();
+  final gateway = _FakeGateway(pauseFenced: pauseFenced);
   final resolver = StaticSourceResolverV2();
   final logicalId = logicalDownloadIdFor(
     animeId: 'anilist:21',
@@ -1277,6 +1321,8 @@ final class _Fixture {
 }
 
 final class _FakeGateway implements BackgroundDownloaderGateway {
+  _FakeGateway({this.pauseFenced = false});
+  final bool pauseFenced;
   final List<DownloadTaskSpecV2> startedSpecs = <DownloadTaskSpecV2>[];
   final List<String> removedTracking = <String>[];
   final Map<String, _FakeHandle> _handles = <String, _FakeHandle>{};
@@ -1288,13 +1334,12 @@ final class _FakeGateway implements BackgroundDownloaderGateway {
   @override
   Future<DownloadTransportHandle> start(DownloadTaskSpecV2 spec) async {
     startedSpecs.add(spec);
-    final handle = _FakeHandle(
-      DownloadTransportSnapshot(
-        taskId: spec.taskId,
-        status: DownloadTransportStatus.running,
-        progress: 0,
-      ),
+    final snapshot = DownloadTransportSnapshot(
+      taskId: spec.taskId,
+      status: DownloadTransportStatus.running,
+      progress: 0,
     );
+    final handle = pauseFenced ? _PauseFencedFakeHandle(snapshot) : _FakeHandle(snapshot);
     _handles[spec.taskId] = handle;
     return handle;
   }
@@ -1324,7 +1369,7 @@ final class _FakeGateway implements BackgroundDownloaderGateway {
   }
 }
 
-final class _FakeHandle implements DownloadTransportHandle {
+class _FakeHandle implements DownloadTransportHandle {
   _FakeHandle(this._current);
 
   DownloadTransportSnapshot _current;
@@ -1402,4 +1447,9 @@ final class _RecordingPresentationObserver
 
   @override
   Future<void> dispose() async {}
+}
+
+final class _PauseFencedFakeHandle extends _FakeHandle
+    implements PauseFencedDownloadTransportHandleV2 {
+  _PauseFencedFakeHandle(super.current);
 }

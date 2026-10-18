@@ -106,11 +106,9 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel> {
     if (tabs.isEmpty) return const SizedBox.shrink();
     if (!tabs.contains(_tab)) _tab = tabs.first;
     final accent = Theme.of(context).colorScheme.primary;
-    final arabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
 
     return Directionality(
-      textDirection: arabic ? TextDirection.rtl : TextDirection.ltr,
+      textDirection: TextDirection.rtl,
       child: Container(
         width: 300,
         padding: const EdgeInsets.all(14),
@@ -336,13 +334,9 @@ extension on _PlayerSettingsPanelState {
             for (var index = 0; index < list.length; index++) ...[
               if (list[index].sectionLabel != null &&
                   (index == 0 ||
-                      list[index - 1].sectionLabel !=
-                          list[index].sectionLabel))
+                      list[index - 1].sectionLabel != list[index].sectionLabel))
                 Padding(
-                  padding: EdgeInsets.only(
-                    top: index == 0 ? 2 : 12,
-                    bottom: 4,
-                  ),
+                  padding: EdgeInsets.only(top: index == 0 ? 2 : 12, bottom: 4),
                   child: Text(
                     list[index].sectionLabel!,
                     style: const TextStyle(
@@ -368,9 +362,7 @@ extension on _PlayerSettingsPanelState {
                       if (list[index].sectionLabel != null) ...[
                         Icon(
                           Icons.play_circle_outline_rounded,
-                          color: list[index].selected
-                              ? accent
-                              : Colors.white70,
+                          color: list[index].selected ? accent : Colors.white70,
                           size: 24,
                         ),
                         const SizedBox(width: 10),
@@ -379,9 +371,7 @@ extension on _PlayerSettingsPanelState {
                         child: Text(
                           list[index].label,
                           style: TextStyle(
-                            color: list[index].selected
-                                ? accent
-                                : Colors.white,
+                            color: list[index].selected ? accent : Colors.white,
                             fontSize: 13,
                             fontWeight: list[index].selected
                                 ? FontWeight.w700

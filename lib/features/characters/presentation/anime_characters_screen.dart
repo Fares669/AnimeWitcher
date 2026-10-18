@@ -26,6 +26,7 @@ class AnimeCharactersScreen extends ConsumerStatefulWidget {
 
   final String animeId;
   final String? animeTitle;
+
   /// APK `CharactersByIds` role filter: `Main` or `Supporting`.
   final String? characterType;
 
@@ -34,8 +35,7 @@ class AnimeCharactersScreen extends ConsumerStatefulWidget {
       _AnimeCharactersScreenState();
 }
 
-class _AnimeCharactersScreenState
-    extends ConsumerState<AnimeCharactersScreen> {
+class _AnimeCharactersScreenState extends ConsumerState<AnimeCharactersScreen> {
   final List<Actor> _cast = <Actor>[];
   Object? _error;
   bool _loading = true;
@@ -47,9 +47,6 @@ class _AnimeCharactersScreenState
       unawaited(_load());
     });
   }
-
-  bool _isArabic(BuildContext context) =>
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
 
   AnimeWitcherNativeProvider? _resolveProvider() {
     final active = ref.read(activeProviderProvider);
@@ -98,15 +95,14 @@ class _AnimeCharactersScreenState
 
   @override
   Widget build(BuildContext context) {
-    final isArabic = _isArabic(context);
     final role = widget.characterType?.trim();
     final title = role == 'Main'
         ? animeWitcherMainCharactersHeader
         : role == 'Supporting'
-            ? animeWitcherSupportingCharactersHeader
-            : (widget.animeTitle?.trim().isNotEmpty == true
-                ? widget.animeTitle!
-                : (isArabic ? 'الشخصيات' : 'Characters'));
+        ? animeWitcherSupportingCharactersHeader
+        : (widget.animeTitle?.trim().isNotEmpty == true
+              ? widget.animeTitle!
+              : 'الشخصيات');
     final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -117,89 +113,83 @@ class _AnimeCharactersScreenState
       body: _loading
           ? const AnimeCatalogShimmer(characterCaptionSpace: true)
           : _error != null
-              ? Padding(
-                  padding: EdgeInsets.only(top: headerTop),
-                  child: Center(
-                  child: FilledButton.tonalIcon(
-                    onPressed: _load,
-                    icon: const Icon(Icons.refresh_rounded),
-                    label: Text(isArabic ? 'إعادة المحاولة' : 'Retry'),
-                    ),
+          ? Padding(
+              padding: EdgeInsets.only(top: headerTop),
+              child: Center(
+                child: FilledButton.tonalIcon(
+                  onPressed: _load,
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: Text('إعادة المحاولة'),
+                ),
+              ),
+            )
+          : _cast.isEmpty
+          ? Padding(
+              padding: EdgeInsets.only(top: headerTop),
+              child: Center(child: Text(animeWitcherCharactersEmptyMessage)),
+            )
+          : MouseDragRefreshIndicator(
+              onRefresh: _load,
+              child: CatalogDirection(
+                child: GridView.builder(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: EdgeInsets.fromLTRB(
+                    MultimediaCardLayout.catalogGridHorizontalPadding(context),
+                    headerTop + 16,
+                    MultimediaCardLayout.catalogGridHorizontalPadding(context),
+                    110,
                   ),
-                )
-              : _cast.isEmpty
-                  ? Padding(
-                      padding: EdgeInsets.only(top: headerTop),
-                      child: Center(
-                        child: Text(
-                        isArabic
-                            ? animeWitcherCharactersEmptyMessage
-                            : 'No characters have been added yet',
+                  gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
+                    context,
+                    maxCrossAxisExtent: 140,
+                    childAspectRatio:
+                        MultimediaCardLayout.characterGridAspectRatio,
+                    crossAxisSpacing:
+                        MultimediaCardLayout.catalogGridCrossAxisSpacing(
+                          context,
+                          fallback: 12,
                         ),
-                      ),
-                    )
-                  : MouseDragRefreshIndicator(
-                      onRefresh: _load,
-                      child: CatalogDirection(
-                        child: GridView.builder(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          padding: EdgeInsets.fromLTRB(
-            MultimediaCardLayout.catalogGridHorizontalPadding(context),
-            headerTop + 16,
-            MultimediaCardLayout.catalogGridHorizontalPadding(context),
-            110,
-          ),
-                          gridDelegate:
-                              ResponsiveBreakpoints.animeGridDelegate(
-                            context,
-                            maxCrossAxisExtent: 140,
-                            childAspectRatio: MultimediaCardLayout.characterGridAspectRatio,
-                            crossAxisSpacing: MultimediaCardLayout.catalogGridCrossAxisSpacing(
-                              context,
-                              fallback: 12,
-                            ),
-                            mainAxisSpacing: MultimediaCardLayout.catalogGridMainAxisSpacing(
-                              context,
-                              fallback: 14,
-                            ),
-                            handsetPortraitCrossAxisCount:
-                                MultimediaCardLayout.handsetPortraitGridColumns,
-                            horizontalPadding: MultimediaCardLayout.catalogGridHorizontalPadding(
-                              context,
-                            ),
-                          ),
-                          itemCount: _cast.length,
-                          itemBuilder: (context, index) {
-                            final actor = _cast[index];
-                            final id = actor.id?.trim() ?? '';
-                            return CharacterPosterCard(
-                              character: AnimeWitcherCharacterHit(
-                                id: id,
-                                name: actor.name,
-                                imageUrl: actor.image,
-                                likes: actor.likes,
-                              ),
-                              onTap: id.isEmpty
-                                  ? () {}
-                                  : () {
-                                      Navigator.of(context).push(
-                                        MaterialPageRoute<void>(
-                                          builder: (_) =>
-                                              CharacterDetailsScreen(
-                                            characterId: id,
-                                            initialName: actor.name,
-                                            initialImageUrl: actor.image,
-                                          ),
-                                        ),
-                                      );
-                                    },
-                            );
-                          },
+                    mainAxisSpacing:
+                        MultimediaCardLayout.catalogGridMainAxisSpacing(
+                          context,
+                          fallback: 14,
                         ),
+                    handsetPortraitCrossAxisCount:
+                        MultimediaCardLayout.handsetPortraitGridColumns,
+                    horizontalPadding:
+                        MultimediaCardLayout.catalogGridHorizontalPadding(
+                          context,
+                        ),
+                  ),
+                  itemCount: _cast.length,
+                  itemBuilder: (context, index) {
+                    final actor = _cast[index];
+                    final id = actor.id?.trim() ?? '';
+                    return CharacterPosterCard(
+                      character: AnimeWitcherCharacterHit(
+                        id: id,
+                        name: actor.name,
+                        imageUrl: actor.image,
+                        likes: actor.likes,
                       ),
-                    ),
+                      onTap: id.isEmpty
+                          ? () {}
+                          : () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                  builder: (_) => CharacterDetailsScreen(
+                                    characterId: id,
+                                    initialName: actor.name,
+                                    initialImageUrl: actor.image,
+                                  ),
+                                ),
+                              );
+                            },
+                    );
+                  },
+                ),
+              ),
+            ),
     );
   }
 }
-
-

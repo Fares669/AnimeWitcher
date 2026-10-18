@@ -1,0 +1,107 @@
+--- common.C@1.10.1
+
++++ common.C@1.11.1
+
+@@ -97,7 +97,9 @@
+
+ field 25 ENCODING_PCM_32BIT_BIG_ENDIAN I []
+ field 25 ENCODING_PCM_8BIT I []
+ field 25 ENCODING_PCM_DOUBLE I []
++field 25 ENCODING_PCM_DOUBLE_BIG_ENDIAN I []
+ field 25 ENCODING_PCM_FLOAT I []
++field 25 ENCODING_PCM_FLOAT_BIG_ENDIAN I []
+ field 25 FIRST_FRAME_NOT_RENDERED I []
+ field 25 FIRST_FRAME_NOT_RENDERED_AFTER_STREAM_CHANGE I []
+ field 25 FIRST_FRAME_NOT_RENDERED_ONLY_ALLOWED_IF_STARTED I []
+@@ -251,7 +253,6 @@
+
+ field 25 WAKE_MODE_NETWORK I []
+ field 25 WAKE_MODE_NONE I []
+ field 25 WIDEVINE_UUID Ljava/util/UUID; []
+-method 9 generateAudioSessionIdV21 (Landroid/content/Context;)I []
+ method 9 getErrorCodeForMediaDrmErrorCode (I)I []
+ method 9 getFormatSupportString (I)Ljava/lang/String; []
+ method 9 msToUs (J)J []
+--- common.MimeTypes@1.10.1
+
++++ common.MimeTypes@1.11.1
+
+@@ -42,6 +42,7 @@
+
+ field 25 AUDIO_DTS Ljava/lang/String; []
+ field 25 AUDIO_DTS_EXPRESS Ljava/lang/String; []
+ field 25 AUDIO_DTS_HD Ljava/lang/String; []
++field 25 AUDIO_DTS_UHD_P2 Ljava/lang/String; []
+ field 25 AUDIO_DTS_X Ljava/lang/String; []
+ field 25 AUDIO_EXOPLAYER_MIDI Ljava/lang/String; []
+ field 25 AUDIO_E_AC3 Ljava/lang/String; []
+--- common.Format@1.10.1
+
++++ common.Format@1.11.1
+
+@@ -4,6 +4,7 @@
+
+ field 17 averageBitrate I []
+ field 17 bitrate I []
+ field 17 channelCount I []
++field 17 channelMask I []
+ field 17 codecs Ljava/lang/String; []
+ field 17 colorInfo Landroidx/media3/common/ColorInfo; []
+ field 17 containerMimeType Ljava/lang/String; []
+@@ -27,8 +28,10 @@
+
+ field 17 maxNumReorderSamples I []
+ field 17 maxSubLayers I []
+ field 17 metadata Landroidx/media3/common/Metadata; []
++field 17 mirrorHorizontal Z []
+ field 17 pcmEncoding I []
+ field 17 peakBitrate I []
++field 17 pixelFormat I []
+ field 17 pixelWidthHeightRatio F []
+ field 17 primaryTrackGroupId Ljava/lang/String; []
+ field 17 projectionData [B []
+@@ -37,6 +40,7 @@
+
+ field 17 sampleMimeType Ljava/lang/String; []
+ field 17 sampleRate I []
+ field 17 selectionFlags I []
++field 17 selectionPriority F []
+ field 17 stereoMode I []
+ field 17 subsampleOffsetUs J []
+ field 17 tileCountHorizontal I []
+--- exoplayer.ExoPlayer@1.10.1
+
++++ exoplayer.ExoPlayer@1.11.1
+
+@@ -57,6 +57,7 @@
+
+ method 1025 setAudioSessionId (I)V []
+ method 1025 setAuxEffectInfo (Landroidx/media3/common/AuxEffectInfo;)V []
+ method 1025 setCameraMotionListener (Landroidx/media3/exoplayer/video/spherical/CameraMotionListener;)V []
++method 1025 setEnforceAdPlaybackOnTimelineRefresh (Z)V []
+ method 1025 setForegroundMode (Z)V []
+ method 1025 setHandleAudioBecomingNoisy (Z)V []
+ method 1025 setImageOutput (Landroidx/media3/exoplayer/image/ImageOutput;)V []
+--- exoplayer.ExoPlayer$Builder@1.10.1
+
++++ exoplayer.ExoPlayer$Builder@1.11.1
+
+@@ -12,7 +12,7 @@
+
+ method 1 <init> (Landroid/content/Context;Landroidx/media3/exoplayer/RenderersFactory;Landroidx/media3/exoplayer/source/MediaSource$Factory;Landroidx/media3/exoplayer/trackselection/TrackSelector;Landroidx/media3/exoplayer/LoadControl;Landroidx/media3/exoplayer/upstream/BandwidthMeter;Landroidx/media3/exoplayer/analytics/AnalyticsCollector;)V []
+ method 1 <init> (Landroid/content/Context;Landroidx/media3/exoplayer/source/MediaSource$Factory;)V []
+ method 1 build ()Landroidx/media3/exoplayer/ExoPlayer; []
+-method 1 experimentalAvoidLoadingWhileEnded (Z)Landroidx/media3/exoplayer/ExoPlayer$Builder; []
++method 1 enablePerStreamMediaProgression (Z)Landroidx/media3/exoplayer/ExoPlayer$Builder; []
+ method 1 experimentalSetDynamicSchedulingEnabled (Z)Landroidx/media3/exoplayer/ExoPlayer$Builder; []
+ method 1 experimentalSetForegroundModeTimeoutMs (J)Landroidx/media3/exoplayer/ExoPlayer$Builder; []
+ method 1 setAnalyticsCollector (Landroidx/media3/exoplayer/analytics/AnalyticsCollector;)Landroidx/media3/exoplayer/ExoPlayer$Builder; []
+@@ -22,6 +22,7 @@
+
+ method 1 setClock (Landroidx/media3/common/util/Clock;)Landroidx/media3/exoplayer/ExoPlayer$Builder; []
+ method 1 setDetachSurfaceTimeoutMs (J)Landroidx/media3/exoplayer/ExoPlayer$Builder; []
+ method 1 setDeviceVolumeControlEnabled (Z)Landroidx/media3/exoplayer/ExoPlayer$Builder; []
++method 1 setEnforceAdPlaybackOnTimelineRefresh (Z)Landroidx/media3/exoplayer/ExoPlayer$Builder; []
+ method 1 setHandleAudioBecomingNoisy (Z)Landroidx/media3/exoplayer/ExoPlayer$Builder; []
+ method 1 setLivePlaybackSpeedControl (Landroidx/media3/exoplayer/LivePlaybackSpeedControl;)Landroidx/media3/exoplayer/ExoPlayer$Builder; []
+ method 1 setLoadControl (Landroidx/media3/exoplayer/LoadControl;)Landroidx/media3/exoplayer/ExoPlayer$Builder; []

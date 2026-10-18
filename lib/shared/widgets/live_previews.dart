@@ -8,7 +8,7 @@ library;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons_200.dart';
 
 import 'package:animewitcher/core/navigation/app_layout_style.dart';
 import 'package:animewitcher/core/theme/app_theme.dart';
@@ -813,7 +813,7 @@ class _PlayerSettingsPreviewState extends State<PlayerSettingsPreview> {
                     children: [
                       Row(
                         children: [
-                          _controlIcon(LucideIcons.volume2200),
+                          _controlIcon(LucideIcons200.volume2),
                           Container(
                             width: 70,
                             height: 3,
@@ -832,15 +832,15 @@ class _PlayerSettingsPreviewState extends State<PlayerSettingsPreview> {
                           // Speed, Anime4K and size live in the ⚙ panel.
                           if (b.showEpisodes)
                             _hinted(
-                              _controlIcon(LucideIcons.listVideo200),
+                              _controlIcon(LucideIcons200.listVideo),
                               'E',
                             ),
                           if (b.showPlaybackSpeed ||
                               b.showResize ||
                               (widget.anime4k && b.showAnime4kButton))
-                            _hinted(_controlIcon(LucideIcons.settings200), 'S'),
+                            _hinted(_controlIcon(LucideIcons200.settings), 'S'),
                           if (b.showFullscreen)
-                            _hinted(_controlIcon(LucideIcons.maximize200), 'F'),
+                            _hinted(_controlIcon(LucideIcons200.maximize), 'F'),
                         ],
                       ),
                       Row(
@@ -858,7 +858,7 @@ class _PlayerSettingsPreviewState extends State<PlayerSettingsPreview> {
                             ),
                           const SizedBox(width: 18),
                           _hinted(
-                            _controlIcon(LucideIcons.pause200, size: 30),
+                            _controlIcon(LucideIcons200.pause, size: 30),
                             'Space',
                           ),
                           const SizedBox(width: 18),

@@ -44,7 +44,7 @@ void main() {
     await _pump(tester);
 
     expect(find.byIcon(Icons.person_outline_rounded), findsOneWidget);
-    expect(find.byTooltip('Sign in'), findsOneWidget);
+    expect(find.byTooltip('تسجيل الدخول'), findsOneWidget);
   });
 
   testWidgets('signed in without a photo it shows the first letter', (

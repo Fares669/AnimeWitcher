@@ -14,8 +14,6 @@ Future<void> showAppLayoutPicker(
   WidgetRef ref, {
   bool firstRun = false,
 }) {
-  final arabic =
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
   // A desktop or a tablet picks from three, a phone from the dock and the
   // side menu.
   final wide = appLayoutsAvailable(context);
@@ -40,11 +38,7 @@ Future<void> showAppLayoutPicker(
             // A short phone scrolls rather than running the cards into the
             // buttons.
             scrollable: true,
-            title: Text(
-              firstRun
-                  ? (arabic ? 'اختر شكل التطبيق' : 'Choose a layout')
-                  : (arabic ? 'شكل التطبيق' : 'App layout'),
-            ),
+            title: Text(firstRun ? 'اختر شكل التطبيق' : 'شكل التطبيق'),
             content: SizedBox(
               width: width,
               child: Column(
@@ -52,9 +46,7 @@ Future<void> showAppLayoutPicker(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    arabic
-                        ? 'مكان قائمة التنقل. يمكنك تغييره لاحقًا من الإعدادات.'
-                        : 'Where the navigation sits. You can change it later in settings.',
+                    'مكان قائمة التنقل. يمكنك تغييره لاحقًا من الإعدادات.',
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                   const SizedBox(height: 16),
@@ -70,7 +62,6 @@ Future<void> showAppLayoutPicker(
                           Expanded(
                             child: AppLayoutOptionCard(
                               style: choices[i],
-                              arabic: arabic,
                               selected: choices[i] == selected,
                               phone: true,
                               onTap: () =>
@@ -90,7 +81,6 @@ Future<void> showAppLayoutPicker(
                             width: width >= 600 ? (width - 24) / 3 : width,
                             child: AppLayoutOptionCard(
                               style: style,
-                              arabic: arabic,
                               selected: style == selected,
                               onTap: () => setState(() => selected = style),
                             ),
@@ -104,14 +94,14 @@ Future<void> showAppLayoutPicker(
               if (!firstRun)
                 TextButton(
                   onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: Text(arabic ? 'إلغاء' : 'Cancel'),
+                  child: Text('إلغاء'),
                 ),
               FilledButton(
                 onPressed: () {
                   ref.read(appLayoutStyleProvider.notifier).select(selected);
                   Navigator.of(dialogContext).pop();
                 },
-                child: Text(arabic ? 'تطبيق' : 'Apply'),
+                child: Text('تطبيق'),
               ),
             ],
           );
@@ -127,14 +117,13 @@ class AppLayoutOptionCard extends StatelessWidget {
   const AppLayoutOptionCard({
     super.key,
     required this.style,
-    required this.arabic,
     required this.selected,
     required this.onTap,
     this.phone = false,
   });
 
   final AppLayoutStyle style;
-  final bool arabic;
+
   final bool selected;
   final VoidCallback onTap;
 
@@ -177,7 +166,7 @@ class AppLayoutOptionCard extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      style.label(arabic: arabic),
+                      style.label(),
                       style: Theme.of(context).textTheme.titleSmall
                           ?.copyWith(fontWeight: FontWeight.w700),
                     ),
@@ -192,7 +181,7 @@ class AppLayoutOptionCard extends StatelessWidget {
               ),
               const SizedBox(height: 2),
               Text(
-                style.description(arabic: arabic),
+                style.description(),
                 // A phone's card is narrow: room for the whole line.
                 maxLines: phone ? 3 : 2,
                 overflow: TextOverflow.ellipsis,
