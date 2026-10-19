@@ -74,8 +74,7 @@ class DetailsDesktopHero extends ConsumerWidget {
   final Future<void> Function() onRefresh;
 
   /// Opens the fullscreen poster viewer at the largest available artwork.
-  /// Reached by tapping the anime's name, which is what stands where the
-  /// poster used to.
+  /// Reached by tapping the poster; the title only supports copying.
   final VoidCallback? onPosterTap;
 
   /// Actions for this anime, shown beneath its metadata. They used to sit in
@@ -350,10 +349,6 @@ class DetailsDesktopHero extends ConsumerWidget {
                             children: [
                               GestureDetector(
                                 behavior: HitTestBehavior.opaque,
-                                // The poster is no longer in the hero, so the
-                                // name carries the way into the artwork viewer
-                                // rather than leaving it unreachable here.
-                                onTap: onPosterTap,
                                 onLongPress: () => _copyAnimeTitle(context),
                                 child: displayItem.logoUrl != null
                                     ? ArtworkDecode(

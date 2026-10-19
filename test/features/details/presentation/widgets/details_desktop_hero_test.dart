@@ -104,6 +104,61 @@ void main() {
     }
   }
 
+  for (final manga in [false, true]) {
+    for (final compact in [false, true]) {
+      testWidgets(
+        '${manga ? 'manga' : 'anime'} ${compact ? 'phone' : 'desktop'} opens artwork only from the poster',
+        (tester) async {
+          tester.view.physicalSize = compact
+              ? const Size(390, 844)
+              : const Size(1280, 900);
+          tester.view.devicePixelRatio = 1;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          final item = MultimediaItem(
+            title: 'Poster gesture test',
+            url: 'https://example.test/poster-gesture',
+            posterUrl: '',
+          );
+          var opens = 0;
+          await tester.pumpWidget(
+            ProviderScope(
+              child: MaterialApp(
+                home: Scaffold(
+                  body: DetailsDesktopHero(
+                    compact: compact,
+                    manga: manga,
+                    showPoster: true,
+                    displayItem: item,
+                    details: item,
+                    detailsState: AsyncValue<MultimediaItem?>.data(item),
+                    isMovie: false,
+                    itemUrl: item.url,
+                    onRefresh: () async {},
+                    onPosterTap: () => opens++,
+                  ),
+                ),
+              ),
+            ),
+          );
+          await tester.pump();
+          final title = find.byWidgetPredicate(
+            (widget) => widget is Text &&
+                widget.data == item.title &&
+                widget.style?.fontWeight == FontWeight.bold,
+          );
+          await tester.tap(title);
+          await tester.pump();
+          expect(opens, 0);
+          await tester.tap(find.byKey(const ValueKey('details-hero-poster')));
+          await tester.pump();
+          expect(opens, 1);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
+
   testWidgets(
     'portrait phone hero keeps a wide banner below the top isolation and centers info on the larger poster',
     (tester) async {
