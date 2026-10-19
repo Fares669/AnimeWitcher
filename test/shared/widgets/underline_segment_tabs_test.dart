@@ -12,10 +12,9 @@ void main() {
     TargetPlatform.iOS,
   ]) {
     testWidgets('wide page tabs are centered on $platform', (tester) async {
-      debugDefaultTargetPlatformOverride = platform;
-      addTearDown(() => debugDefaultTargetPlatformOverride = null);
-      await tester.binding.setSurfaceSize(const Size(1200, 800));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
+      tester.view.physicalSize = const Size(1200, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
       final controller = TabController(length: 4, vsync: tester);
       addTearDown(controller.dispose);
       await tester.pumpWidget(
@@ -47,15 +46,14 @@ void main() {
       await tester.pumpAndSettle();
       expect(controller.index, 2);
       expect(tester.takeException(), isNull);
-    });
+    }, variant: TargetPlatformVariant({platform}));
   }
 
   for (final size in [const Size(390, 844), const Size(844, 390)]) {
     testWidgets('phone tabs keep start alignment at $size', (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-      addTearDown(() => debugDefaultTargetPlatformOverride = null);
-      await tester.binding.setSurfaceSize(size);
-      addTearDown(() => tester.binding.setSurfaceSize(null));
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
       final controller = TabController(length: 2, vsync: tester);
       addTearDown(controller.dispose);
       await tester.pumpWidget(
@@ -76,7 +74,7 @@ void main() {
         TabAlignment.start,
       );
       expect(tester.takeException(), isNull);
-    });
+    }, variant: TargetPlatformVariant({TargetPlatform.iOS}));
   }
 
   testWidgets(
