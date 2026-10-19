@@ -5,6 +5,7 @@ import '../network/poster_cache.dart';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/painting.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:path_provider/path_provider.dart';
@@ -15,6 +16,7 @@ import 'package:path/path.dart' as p;
 import 'dart:io';
 
 import 'download_persistence_worker.dart';
+import 'scoped_cache_files.dart';
 
 import '../domain/entity/multimedia_item.dart';
 import '../services/download_concurrency.dart';
@@ -1558,66 +1560,68 @@ class StorageService {
         await _downloadMetadata('hive.deleteBox', []);
       } catch (_) {}
 
-      // Clear Cache Manager (Images)
-      // ... (rest of the code)
-      try {
-        await DefaultCacheManager().emptyCache();
-        await posterCacheManager.emptyCache();
-      } catch (e) {
-        if (kDebugMode) debugPrint("Error clearing cache manager: $e");
-      }
-
-      // Clear Temporary Directory
-      try {
-        final tempDir = await getTemporaryDirectory();
-        if (await tempDir.exists()) {
-          await tempDir.delete(recursive: true);
-        }
-      } catch (e) {
-        if (kDebugMode) debugPrint("Error clearing temp dir: $e");
-      }
+      // The OS temp root can be shared with other apps (Windows).
+      await clearImageVideoCache();
     } catch (e) {
       if (kDebugMode) debugPrint('Error deleting data: $e');
     }
   }
 
+  Future<ScopedCacheFiles> _imageVideoCacheFiles() async {
+    final files = <File>[];
+    final directories = <Directory>[];
+    final temp = Directory(
+      await (await getTemporaryDirectory()).resolveSymbolicLinks(),
+    );
+    for (final manager in [DefaultCacheManager(), posterCacheManager]) {
+      // Await the store's existing repository initialization. Do not open another
+      // repository connection or count the shared generic cache directory.
+      await manager.store.getCacheSize();
+      final directory = Directory(p.join(temp.path, manager.config.cacheKey));
+      directories.add(directory);
+      final indexed = await manager.config.repo.getAllObjects();
+      for (final entry in indexed) {
+        final name = entry.relativePath;
+        if (name.isEmpty ||
+            p.isAbsolute(name) ||
+            name == '.' ||
+            name == '..' ||
+            p.basename(name) != name ||
+            name.contains('\\')) {
+          throw FileSystemException('Invalid indexed cache filename', name);
+        }
+        files.add(File(p.join(directory.path, name)));
+      }
+    }
+    return ScopedCacheFiles(
+      trackedFiles: files,
+      trackedDirectories: directories,
+      ownedDirectories: [
+        Directory(p.join(temp.path, 'manga_reader_chapter_cache')),
+      ],
+    );
+  }
+
   Future<int> computeImageVideoCacheBytes() async {
     if (kIsWeb) return 0;
-    var total = 0;
-    try {
-      final tempDir = await getTemporaryDirectory();
-      if (await tempDir.exists()) {
-        await for (final entity in tempDir.list(
-          recursive: true,
-          followLinks: false,
-        )) {
-          if (entity is File) {
-            try {
-              total += await entity.length();
-            } catch (_) {}
-          }
-        }
-      }
-    } catch (e) {
-      if (kDebugMode) debugPrint('Error computing cache size: $e');
-    }
-    return total;
+    return (await _imageVideoCacheFiles()).bytes();
   }
 
   Future<void> clearImageVideoCache() async {
     if (kIsWeb) return;
-    try {
-      await DefaultCacheManager().emptyCache();
-    } catch (e) {
-      if (kDebugMode) debugPrint('Error clearing image cache: $e');
+    final snapshot = await _imageVideoCacheFiles();
+    // Delete only indexed media and the app-owned reader cache. Unrelated temp
+    // files, downloads and ambiguous orphan files are deliberately untouched.
+    await snapshot.clear();
+    // Leave disk-index rows to the cache manager's missing-file/expiry cleanup.
+    // Deleting snapshot IDs here could erase a refreshed row and orphan its new
+    // file. Missing files contribute zero bytes to our counter.
+    for (final manager in [DefaultCacheManager(), posterCacheManager]) {
+      manager.store.emptyMemoryCache();
     }
-    try {
-      final tempDir = await getTemporaryDirectory();
-      if (await tempDir.exists()) {
-        await tempDir.delete(recursive: true);
-      }
-    } catch (e) {
-      if (kDebugMode) debugPrint('Error clearing temp dir: $e');
-    }
+    PaintingBinding.instance.imageCache.clear();
+    // Preserve live-image tracking: removing it cannot release mounted images
+    // and may cause duplicate decodes. New requests may refill the disk cache.
+    // Clearing disk cache is not a promise to reduce the process RSS to zero.
   }
 }
