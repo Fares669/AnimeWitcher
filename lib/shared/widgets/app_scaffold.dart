@@ -113,24 +113,36 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
     final navBarTotalHeight = CustomBottomNavBar.height + bottomInset;
     final mq = MediaQuery.of(context);
 
-    Widget withShellPopScope(Widget child) => PopScope(
-      canPop: shellBackLeavesApp(
-        isAtDefaultHome: isAtDefaultHome,
-        isDesktopPlatform: isDesktopPlatform,
-      ),
-      onPopInvokedWithResult: (didPop, result) {
-        if (didPop || isAtDefaultHome) return;
-        widget.navigationShell.goBranch(defaultIndex);
-      },
-      child: child,
-    );
-
     void onDestination(TaskbarDestination destination) =>
         _onItemTapped(destination.branchIndex, context);
     final currentIndex = widget.navigationShell.currentIndex;
 
+    // Every layout shares the same fixed browse menu, independent of the
+    // customizable taskbar order and visibility.
+    Widget withSideMenu(Widget child) => AppSideMenuShell(
+      destinations: const <TaskbarDestination>[],
+      entries: phoneFixedSideMenuEntries(
+        context,
+        ref,
+        currentBranchIndex: currentIndex,
+        onDestination: onDestination,
+      ),
+      currentBranchIndex: currentIndex,
+      onDestination: onDestination,
+      onAccount: () => openAccountScreen(context),
+      canOpen: _tabAtItsFirstPage,
+      canPopWhenClosed: shellBackLeavesApp(
+        isAtDefaultHome: isAtDefaultHome,
+        isDesktopPlatform: isDesktopPlatform,
+      ),
+      onBackWhenClosed: () {
+        if (!isAtDefaultHome) widget.navigationShell.goBranch(defaultIndex);
+      },
+      child: child,
+    );
+
     if (layout == AppLayoutStyle.sideRail) {
-      return withShellPopScope(
+      return withSideMenu(
         Scaffold(
           backgroundColor: Theme.of(context).scaffoldBackgroundColor,
           body: Row(
@@ -170,7 +182,7 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
       // below it. Only the padding changes between them, so the shell keeps
       // its place in the tree and no branch loses its state on a switch.
       final overArtwork = currentIndex == TaskbarDestination.home.branchIndex;
-      return withShellPopScope(
+      return withSideMenu(
         Scaffold(
           backgroundColor: Theme.of(context).scaffoldBackgroundColor,
           body: Stack(
@@ -202,12 +214,6 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
       );
     }
 
-    // A phone's bar leaves More out: its pages are in the side menu.
-    final dockDestinations = layoutsAvailable
-        ? taskbarDestinations
-        : taskbarDestinations
-              .where((d) => d != TaskbarDestination.settings)
-              .toList(growable: false);
     final dock = Scaffold(
       resizeToAvoidBottomInset: false,
       extendBody: true,
@@ -226,7 +232,8 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
         padding: EdgeInsets.only(left: 24, right: 24, bottom: bottomInset),
         child: CustomBottomNavBar(
           currentBranchIndex: currentIndex,
-          destinations: dockDestinations,
+          destinations: taskbarDestinations,
+          showMenu: layoutsAvailable,
           onTap: onDestination,
           onNews: layoutsAvailable ? () => openNewsScreen(context, ref) : null,
           // A phone reaches the account through the side menu; a wider
@@ -235,30 +242,6 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
         ),
       ),
     );
-    if (layoutsAvailable) return withShellPopScope(dock);
-
-    // The phone side menu is intentionally independent from the dock:
-    // hiding/reordering bottom items must never change this fixed browse list.
-    return AppSideMenuShell(
-      destinations: const <TaskbarDestination>[],
-      entries: phoneFixedSideMenuEntries(
-        context,
-        ref,
-        currentBranchIndex: currentIndex,
-        onDestination: onDestination,
-      ),
-      currentBranchIndex: currentIndex,
-      onDestination: onDestination,
-      onAccount: () => openAccountScreen(context),
-      canOpen: _tabAtItsFirstPage,
-      canPopWhenClosed: shellBackLeavesApp(
-        isAtDefaultHome: isAtDefaultHome,
-        isDesktopPlatform: isDesktopPlatform,
-      ),
-      onBackWhenClosed: () {
-        if (!isAtDefaultHome) widget.navigationShell.goBranch(defaultIndex);
-      },
-      child: dock,
-    );
+    return withSideMenu(dock);
   }
 }

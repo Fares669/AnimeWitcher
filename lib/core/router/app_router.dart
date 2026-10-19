@@ -7,7 +7,7 @@ import '../../features/home/presentation/home_screen.dart';
 import '../../features/search/presentation/search_screen.dart';
 import '../../features/library/presentation/library_screen.dart';
 import '../../features/library/presentation/downloads_screen.dart';
-import '../../features/more/presentation/more_screen.dart';
+import '../../features/settings/presentation/settings_screen.dart';
 import '../../features/details/presentation/details_screen.dart';
 import '../../features/manga/presentation/manga_details_screen.dart';
 import '../../features/manga/presentation/manga_home_screen.dart';
@@ -156,7 +156,7 @@ class SettingsBranchData extends StatefulShellBranchData {
 class SettingsRoute extends _AppGoRouteData with $SettingsRoute {
   const SettingsRoute();
   @override
-  Widget build(BuildContext context, GoRouterState state) => const MoreScreen();
+  Widget build(BuildContext context, GoRouterState state) => const SettingsScreen();
 }
 
 class MangaBranchData extends StatefulShellBranchData {
