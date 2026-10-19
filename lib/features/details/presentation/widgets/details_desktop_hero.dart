@@ -2,6 +2,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart' show Bidi;
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
@@ -476,10 +477,11 @@ class DetailsDesktopHero extends ConsumerWidget {
     );
   }
 
-  /// Keep the poster physically left and the title/metadata LTR without
-  /// changing the reading direction of the page's actions or synopsis.
+  /// Phones keep the poster on the right with RTL information; preserve the
+  /// desktop header's left-hand poster and LTR information.
   Widget _withPoster(BuildContext context, String? posterUrl, Widget title) {
-    final info = Directionality(textDirection: TextDirection.ltr, child: title);
+    final direction = compact ? TextDirection.rtl : TextDirection.ltr;
+    final info = Directionality(textDirection: direction, child: title);
     if (!showPoster) {
       return Align(alignment: Alignment.centerLeft, child: info);
     }
@@ -527,7 +529,7 @@ class DetailsDesktopHero extends ConsumerWidget {
       ),
     );
     return Row(
-      textDirection: TextDirection.ltr,
+      textDirection: direction,
       crossAxisAlignment: isPortraitPhone
           ? CrossAxisAlignment.center
           : CrossAxisAlignment.end,
@@ -557,7 +559,10 @@ class DetailsDesktopHero extends ConsumerWidget {
       displayItem.title,
       maxLines: compact ? 3 : 2,
       overflow: TextOverflow.ellipsis,
-      textAlign: TextAlign.start,
+      textDirection: compact && Bidi.detectRtlDirectionality(displayItem.title)
+          ? TextDirection.rtl
+          : TextDirection.ltr,
+      textAlign: compact ? TextAlign.right : TextAlign.start,
       style: TextStyle(
         color: textColor,
         fontSize: compact ? 22 : 44,

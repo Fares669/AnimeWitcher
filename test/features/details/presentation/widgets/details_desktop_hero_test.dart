@@ -7,6 +7,56 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  for (final entry in <String, TextDirection>{
+    'مغامرات البطل في العالم الآخر': TextDirection.rtl,
+    'The Long Adventure in Another World': TextDirection.ltr,
+    '2026 مغامرات البطل في العالم الآخر': TextDirection.rtl,
+    '86 The Long Adventure in Another World': TextDirection.ltr,
+    'مغامرات Naruto في العالم الآخر': TextDirection.rtl,
+    'Naruto and the Adventure in العالم': TextDirection.ltr,
+  }.entries) {
+    testWidgets('title keeps natural direction: ${entry.key}', (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final item = MultimediaItem(
+        title: entry.key,
+        url: 'https://example.test/title-direction',
+        posterUrl: '',
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            home: Scaffold(
+              body: DetailsDesktopHero(
+                compact: true,
+                showPoster: true,
+                displayItem: item,
+                details: item,
+                detailsState: AsyncValue<MultimediaItem?>.data(item),
+                isMovie: false,
+                itemUrl: item.url,
+                onRefresh: () async {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      final title = find.byWidgetPredicate(
+        (widget) => widget is Text && widget.data == entry.key &&
+            widget.style?.fontWeight == FontWeight.bold,
+      );
+      final text = tester.widget<Text>(title);
+      expect(text.textDirection, entry.value);
+      expect(text.textAlign, TextAlign.right);
+      expect(text.overflow, TextOverflow.ellipsis);
+      expect(text.data, entry.key);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   for (final manga in [false, true]) {
     for (final size in [
       const Size(390, 844),
@@ -14,7 +64,7 @@ void main() {
       const Size(1280, 900),
     ]) {
       testWidgets(
-        '${manga ? 'manga' : 'anime'} header stays poster-left and LTR inside an Arabic page at $size',
+        '${manga ? 'manga' : 'anime'} header uses phone RTL and desktop LTR at $size',
         (tester) async {
           tester.view.physicalSize = size;
           tester.view.devicePixelRatio = 1;
@@ -28,7 +78,9 @@ void main() {
             contentRating: '13+',
             status: ShowStatus.ongoing,
           );
-          final showPoster = manga || size.width < 1000;
+          final compact = size.width < 1000;
+          final direction = compact ? TextDirection.rtl : TextDirection.ltr;
+          final showPoster = manga || compact;
           await tester.pumpWidget(
             ProviderScope(
               child: MaterialApp(
@@ -36,7 +88,7 @@ void main() {
                   textDirection: TextDirection.rtl,
                   child: Scaffold(
                     body: DetailsDesktopHero(
-                      compact: size.width < 1000,
+                      compact: compact,
                       manga: manga,
                       showPoster: showPoster,
                       displayItem: item,
@@ -64,10 +116,17 @@ void main() {
                 widget.style?.fontWeight == FontWeight.bold,
           );
           if (showPoster) {
-            expect(
-              tester.getRect(poster).right,
-              lessThan(tester.getRect(title).left),
-            );
+            if (compact) {
+              expect(
+                tester.getRect(poster).left,
+                greaterThan(tester.getRect(title).right),
+              );
+            } else {
+              expect(
+                tester.getRect(poster).right,
+                lessThan(tester.getRect(title).left),
+              );
+            }
           } else {
             expect(poster, findsNothing);
             expect(tester.getRect(title).left, closeTo(60, 0.5));
@@ -75,6 +134,10 @@ void main() {
           expect(
             tester.renderObject<RenderParagraph>(title).textDirection,
             TextDirection.ltr,
+          );
+          expect(
+            tester.widget<Text>(title).textAlign,
+            compact ? TextAlign.right : TextAlign.start,
           );
           for (final text
               in find
@@ -85,12 +148,14 @@ void main() {
                   .evaluate()) {
             expect(
               (text.renderObject! as RenderParagraph).textDirection,
-              TextDirection.ltr,
+              direction,
             );
           }
           expect(
             tester.getRect(find.text('2026')).left,
-            lessThan(tester.getRect(find.text('مستمر')).left),
+            compact
+                ? greaterThan(tester.getRect(find.text('مستمر')).left)
+                : lessThan(tester.getRect(find.text('مستمر')).left),
           );
           for (final label in ['الإجراءات', 'القصة', 'الحلقات والفصول']) {
             expect(
