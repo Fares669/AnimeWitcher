@@ -146,41 +146,70 @@ class PlayerPlatformService {
     }
   }
 
+  Future<void> _orientationChange = Future<void>.value();
+  Future<void>? _orientationRestore;
+  bool _orientationEnded = false;
+
+  bool get _isMobile =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
+
+  void _setOrientation(List<DeviceOrientation> orientations) {
+    if (!_isMobile || _orientationEnded) return;
+    _orientationChange = _orientationChange
+        .then((_) async {
+          if (_orientationEnded) return;
+          await SystemChrome.setPreferredOrientations(orientations);
+        })
+        .catchError((Object error) {
+          if (kDebugMode) debugPrint('Player orientation: $error');
+        });
+  }
+
+  /// Ends this route's orientation session before navigation or engine teardown.
+  Future<void> restoreOrientation({
+    required bool isTablet,
+    required bool isTv,
+  }) {
+    _orientationEnded = true;
+    return _orientationRestore ??= _orientationChange
+        .then((_) async {
+          if (!_isMobile || isTv) return;
+          await SystemChrome.setPreferredOrientations(
+            isTablet ? const [] : const [DeviceOrientation.portraitUp],
+          );
+        })
+        .catchError((Object error) {
+          if (kDebugMode) debugPrint('Player orientation restoration: $error');
+        });
+  }
+
   void toggleOrientation(BuildContext context) {
     final orientation = MediaQuery.of(context).orientation;
-    if (orientation == Orientation.landscape) {
-      SystemChrome.setPreferredOrientations([
-        DeviceOrientation.portraitUp,
-        DeviceOrientation.portraitDown,
-      ]);
-    } else {
-      SystemChrome.setPreferredOrientations([
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]);
-    }
+    _setOrientation(
+      orientation == Orientation.landscape
+          ? const [DeviceOrientation.portraitUp, DeviceOrientation.portraitDown]
+          : const [
+              DeviceOrientation.landscapeLeft,
+              DeviceOrientation.landscapeRight,
+            ],
+    );
   }
 
   void updateOrientation(int? width, int? height) {
-    try {
-      if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) return;
-    } catch (e) {
-      if (kDebugMode) debugPrint('PlayerPlatformService.updateOrientation: $e');
-    }
-
-    if (width != null && height != null && width > 0 && height > 0) {
-      if (width >= height) {
-        SystemChrome.setPreferredOrientations([
-          DeviceOrientation.landscapeLeft,
-          DeviceOrientation.landscapeRight,
-        ]);
-      } else {
-        SystemChrome.setPreferredOrientations([
-          DeviceOrientation.portraitUp,
-          DeviceOrientation.portraitDown,
-        ]);
-      }
-    }
+    if (width == null || height == null || width <= 0 || height <= 0) return;
+    _setOrientation(
+      width >= height
+          ? const [
+              DeviceOrientation.landscapeLeft,
+              DeviceOrientation.landscapeRight,
+            ]
+          : const [
+              DeviceOrientation.portraitUp,
+              DeviceOrientation.portraitDown,
+            ],
+    );
   }
 
   Future<bool> toggleFullscreen() async {

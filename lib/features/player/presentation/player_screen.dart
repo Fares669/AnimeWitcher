@@ -28,6 +28,7 @@ import 'widgets/player_ltr.dart';
 import 'player_controller.dart';
 import 'player_shortcuts.dart';
 import 'player_teardown.dart';
+import 'player_platform_service.dart';
 import 'player_gesture_handler.dart';
 
 TextStyle _getSubtitleTextStyle(String? fontFamily, TextStyle baseStyle) {
@@ -97,6 +98,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   // KeyEvent *and* a route pop). This timestamp de-dupes them so one physical
   // press performs exactly one back action â see [_consumeBack].
   DateTime? _lastBackAt;
+
+  final _platformService = PlayerPlatformService();
 
   bool _isExiting = false;
   bool _isTv = false;
@@ -346,28 +349,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     applePersistentGlassHeaderController.hide(this);
     WidgetsBinding.instance.removeObserver(this);
 
-    // Restore the system UI FIRST, before any disposal that could throw and
-    // skip this. Full screen is set for all mobile in initState, so it must
-    // always be cleared on exit (on FireTV, leaving it active also makes the
-    // system swallow hardware back-button events).
-    //
-    // Which calls that takes, and in which order, is decided per platform in
-    // immersive_mode.dart - the two phones answer different ones.
-    if (Platform.isAndroid || Platform.isIOS) {
-      // Orientation first, then the bars: turning the phone back to portrait
-      // reconfigures the window, and asking after that change rather than
-      // before it means the request is not the one being overwritten.
-      if (!_isTv) {
-        if (_isTablet) {
-          SystemChrome.setPreferredOrientations([]);
-        } else {
-          SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    // Direct route removals also restore orientation; normal Back awaits this
+    // before popping. The controls share this service and cannot relock it.
+    unawaited(
+      _restoreOrientation().then((_) {
+        if (Platform.isAndroid || Platform.isIOS) {
+          applyImmersiveFullScreen(false);
         }
-      }
-      // The bars come back. Full screen belongs to watching an episode, and
-      // this is the end of one.
-      applyImmersiveFullScreen(false);
-    }
+      }),
+    );
 
     _settingsSub?.close();
     _playerStateSub?.close();
@@ -678,9 +668,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     return false;
   }
 
+  Future<void> _restoreOrientation() => _platformService.restoreOrientation(
+    isTablet: _isTablet,
+    isTv: _isTv,
+  );
+
   Future<void> _handleBack() async {
     if (!context.mounted || _isExiting) return;
     _isExiting = true;
+    final orientationRestored = _restoreOrientation();
     _startupTimeoutTimer?.cancel();
     // Invalidate startup/resume work BEFORE stop yields. A late cloud bookmark
     // must not reopen the engine after stop, or target a subsequently opened route.
@@ -709,6 +705,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       }
     }
 
+    await orientationRestored;
     if (mounted) context.pop();
   }
 
@@ -949,6 +946,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
                       Positioned.fill(
                         child: RepaintBoundary(
                           child: AnimeWitcherPlayerControls(
+                            platformService: _platformService,
                             key: _controlsKeyFinal,
                             isLoading: isLoading,
                             player: _player,
