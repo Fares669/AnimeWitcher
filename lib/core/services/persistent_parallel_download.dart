@@ -686,6 +686,36 @@ class PersistentParallelDownload {
     return true;
   }
 
+  /// Reconcile a settled pause when the OS stopped a range without resume data.
+  /// Only disk-proven bytes survive that boundary; do not carry native progress
+  /// into the next resume/relaunch. The caller must first prove no native writer
+  /// remains, and the serialized session must still be paused.
+  Future<void> reconcileStoppedPartProgress(
+    String parentTaskId,
+    Map<String, int> durableBytesByChild,
+  ) async {
+    final session = _sessions[parentTaskId];
+    if (_disposed || session == null || session.deleted || session.completed) return;
+    await session.serialize(() async {
+      if (session.deleted || session.completed) return;
+      if (session.active || !session.pauseRequested ||
+          session.parts.any((part) => part.launched)) {
+        throw StateError('Cannot reconcile a range while its writer may be active');
+      }
+      for (final entry in durableBytesByChild.entries) {
+        if (!session.partsByTaskId.containsKey(entry.key)) {
+          throw StateError('Stopped range belongs to another parent');
+        }
+        if (!resetUndurablePartProgress(entry.key, durableBytes: entry.value) &&
+            session.partsByTaskId[entry.key]?.complete != true) {
+          throw StateError('Invalid settled range checkpoint');
+        }
+      }
+      await _persist(session);
+      await _status(session, TaskStatus.paused);
+    });
+  }
+
   /// Clear the one-shot source-refresh fence after a confirmed fresh native
   /// enqueue has retired the old source's resumeData. Like progress repair,
   /// this is called by [startPart] while its session is already serialized.
@@ -710,6 +740,22 @@ class PersistentParallelDownload {
     }
   }
 
+  /// Abort source-identity probes without waiting behind the session FIFO.
+  /// Used by user stop controls; never cancels a native download writer.
+  void interruptSourceReplacement(String parentTaskId) {
+    final session = _sessions[parentTaskId];
+    if (session == null) return;
+    session.sourceReplacementEpoch++;
+    if (!session.sourceReplacementActive) return;
+    for (final part in session.parts) {
+      try {
+        cancelPartSourceVerification?.call(part.task.taskId);
+      } catch (_) {
+        // The epoch still prevents publication if transport cancellation fails.
+      }
+    }
+  }
+
   /// Replace only the remote source of a paused/restored multipart job.
   /// Every range identity, byte boundary, credible progress value and local
   /// part file is retained. This is used when a signed CDN URL expires.
@@ -725,105 +771,114 @@ class PersistentParallelDownload {
       transferredBytes: session.creditedBytes,
       expectedBytes: session.size,
     );
+    final replacementEpoch = session.sourceReplacementEpoch;
     return session.serialize(() async {
-      if (_disposed || session.deleted || session.active) return null;
-
-      // Before retaining any visible byte from the previous signed source,
-      // prove that the refreshed URL serves the same resource. Validators are
-      // checked when available; otherwise every visible part prefix is compared
-      // byte-for-byte. Hidden native resumeData cannot be proven here and is
-      // therefore fenced so the gateway re-fetches only that immutable Range.
-      var refreshedValidator = session.resourceValidatorQualified
-          ? session.resourceValidator : null;
-      final verifier = verifyPartSource;
-      for (final part in session.parts) {
-        File? localFile;
-        var localBytes = 0;
-        try {
-          final saved = await canonicalizePartialDownloadFile(
-            destinationPath: await part.task.filePath(),
-          );
-          if (saved != null) {
-            localFile = saved.file;
-            localBytes = saved.bytes;
-          } else {
-            final candidate = File(await part.task.filePath());
-            if (await candidate.exists()) {
-              localFile = candidate;
-              localBytes = await candidate.length();
+      if (_disposed || session.deleted || session.active ||
+          session.sourceReplacementEpoch != replacementEpoch) return null;
+      session.sourceReplacementActive = true;
+      try {
+        // Before retaining any visible byte from the previous signed source,
+        // prove that the refreshed URL serves the same resource. Validators are
+        // checked when available; otherwise every visible part prefix is compared
+        // byte-for-byte. Hidden native resumeData cannot be proven here and is
+        // therefore fenced so the gateway re-fetches only that immutable Range.
+        var refreshedValidator = session.resourceValidatorQualified
+            ? session.resourceValidator : null;
+        final verifier = verifyPartSource;
+        for (final part in session.parts) {
+          if (session.sourceReplacementEpoch != replacementEpoch) return null;
+          File? localFile;
+          var localBytes = 0;
+          try {
+            final saved = await canonicalizePartialDownloadFile(
+              destinationPath: await part.task.filePath(),
+            );
+            if (saved != null) {
+              localFile = saved.file;
+              localBytes = saved.bytes;
+            } else {
+              final candidate = File(await part.task.filePath());
+              if (await candidate.exists()) {
+                localFile = candidate;
+                localBytes = await candidate.length();
+              }
             }
-          }
-        } catch (_) {}
+          } catch (_) {}
 
-        if (part.complete && localBytes != part.size) return null;
-        if (localFile == null || localBytes <= 0) continue;
-        if (verifier == null) return null;
+          if (session.sourceReplacementEpoch != replacementEpoch) return null;
+          if (part.complete && localBytes != part.size) return null;
+          if (localFile == null || localBytes <= 0) continue;
+          if (verifier == null) return null;
 
-        final probeHeaders = Map<String, String>.from(headers)
-          ..removeWhere(
-            (key, _) =>
-                key.toLowerCase() == 'range' || key.toLowerCase() == 'if-range',
-          );
-        probeHeaders['Range'] = 'bytes=${part.from}-${part.to}';
-        probeHeaders['Accept-Encoding'] = 'identity';
-        final probeTask = part.task.copyWith(url: url, headers: probeHeaders);
-        final ({bool matches, String? validator}) probe;
-        try {
-          probe = await verifier(probeTask, localFile, localBytes, session.size);
-        } on DownloadSourceVerificationException {
-          return null;
-        }
-        if (!probe.matches) return null;
-        final observed = probe.validator;
-        if (observed != null) {
-          if (refreshedValidator != null && refreshedValidator != observed) {
+          final probeHeaders = Map<String, String>.from(headers)
+            ..removeWhere(
+              (key, _) =>
+                  key.toLowerCase() == 'range' || key.toLowerCase() == 'if-range',
+            );
+          probeHeaders['Range'] = 'bytes=${part.from}-${part.to}';
+          probeHeaders['Accept-Encoding'] = 'identity';
+          final probeTask = part.task.copyWith(url: url, headers: probeHeaders);
+          final ({bool matches, String? validator}) probe;
+          try {
+            probe = await verifier(probeTask, localFile, localBytes, session.size);
+          } on DownloadSourceVerificationException {
             return null;
           }
-          refreshedValidator = observed;
+          if (session.sourceReplacementEpoch != replacementEpoch || !probe.matches) return null;
+          final observed = probe.validator;
+          if (observed != null) {
+            if (refreshedValidator != null && refreshedValidator != observed) {
+              return null;
+            }
+            refreshedValidator = observed;
+          }
         }
-      }
 
-      final updated = task.copyWith(
-        url: url,
-        headers: Map<String, String>.from(headers),
-      );
-      session.task = updated;
-      session.sourceRefreshPending = false;
-      session.resourceValidator = refreshedValidator;
-      session.resourceValidatorQualified = true;
-      for (final part in session.parts) {
-        final childHeaders = Map<String, String>.from(headers)
-          ..removeWhere(
-            (key, _) =>
-                key.toLowerCase() == 'range' || key.toLowerCase() == 'if-range',
-          );
-        childHeaders['Range'] = 'bytes=${part.from}-${part.to}';
-        childHeaders['Accept-Encoding'] = 'identity';
-        final validator = session.resourceValidator;
-        if (validator != null) childHeaders['If-Range'] = validator;
-
-        // Native resumeData can embed the old signed URL. Fence every unfinished
-        // child: a crash can leave visible/opaque bytes before progress reaches
-        // the manifest. The gateway must use a fresh immutable-range request.
-        part.sourceValidationRequired = !part.complete;
-        part.task = part.task.copyWith(
+        if (session.sourceReplacementEpoch != replacementEpoch) return null;
+        final updated = task.copyWith(
           url: url,
-          headers: childHeaders,
-          retries: kDownloadPartRetries,
+          headers: Map<String, String>.from(headers),
         );
-        _refreshPartAttemptMetadata(session, part);
+        session.task = updated;
+        session.sourceRefreshPending = false;
+        session.resourceValidator = refreshedValidator;
+        session.resourceValidatorQualified = true;
+        for (final part in session.parts) {
+          final childHeaders = Map<String, String>.from(headers)
+            ..removeWhere(
+              (key, _) =>
+                  key.toLowerCase() == 'range' || key.toLowerCase() == 'if-range',
+            );
+          childHeaders['Range'] = 'bytes=${part.from}-${part.to}';
+          childHeaders['Accept-Encoding'] = 'identity';
+          final validator = session.resourceValidator;
+          if (validator != null) childHeaders['If-Range'] = validator;
+
+          // Native resumeData can embed the old signed URL. Fence every unfinished
+          // child: a crash can leave visible/opaque bytes before progress reaches
+          // the manifest. The gateway must use a fresh immutable-range request.
+          part.sourceValidationRequired = !part.complete;
+          part.task = part.task.copyWith(
+            url: url,
+            headers: childHeaders,
+            retries: kDownloadPartRetries,
+          );
+          _refreshPartAttemptMetadata(session, part);
+        }
+        await _persist(session);
+        final record = await recordForId(task.taskId);
+        await saveRecord(
+          TaskRecord(
+            session.task,
+            record?.status ?? TaskStatus.paused,
+            session.progress,
+            session.size,
+          ),
+        );
+        return session.task;
+      } finally {
+        session.sourceReplacementActive = false;
       }
-      await _persist(session);
-      final record = await recordForId(task.taskId);
-      await saveRecord(
-        TaskRecord(
-          session.task,
-          record?.status ?? TaskStatus.paused,
-          session.progress,
-          session.size,
-        ),
-      );
-      return session.task;
     });
   }
 
@@ -2526,6 +2581,22 @@ class PersistentParallelDownload {
                   'timeoutKind': error.timeoutKind!.name,
               },
             });
+            if (error is DownloadSourceVerificationException &&
+                error.reason == DownloadSourceVerificationFailure.http &&
+                isDownloadUrlRefreshStatus(error.httpStatus, include404: true)) {
+              // A lost completion callback can leave an exact saved range that
+              // needs this probe after its signed URL has expired. Renew through
+              // the same ownership-fenced path as a native HTTP failure; merely
+              // exhausting the probe traps every Resume on the expired source.
+              await _parkPartFailure(
+                session,
+                part,
+                TaskStatusUpdate(part.task, TaskStatus.failed).copyWith(
+                  responseStatusCode: error.httpStatus,
+                ),
+              );
+              return;
+            }
             retry = retryable && probeAttempt < 3;
             if (retry) {
               delay = sourceVerificationRetryDelay * (1 << (probeAttempt - 1));
@@ -3775,6 +3846,7 @@ class PersistentParallelDownload {
     // slow-start pump may already be queued ahead of _pause; it must observe
     // the user's pause intent synchronously and stop before another enqueue.
     final previousPauseRequested = session.pauseRequested;
+    interruptSourceReplacement(task.taskId);
     session.pauseRequested = true;
     for (final part in session.parts) {
       _cancelSourceVerification(part);
@@ -4269,6 +4341,7 @@ class PersistentParallelDownload {
     final session = _sessions[task.taskId]!;
     final wasActive = session.active;
     final wasPauseRequested = session.pauseRequested;
+    interruptSourceReplacement(task.taskId);
     // Fence admission immediately, but retain callbacks, bytes and writer leases
     // until the gateway proves accepted cancellation and native settlement.
     session.pauseRequested = true;
@@ -5316,6 +5389,8 @@ class _ParallelSession {
   DateTime? lastHostProfileSampleAt;
   Future<void> _pending = Future<void>.value();
   Future<void> parentRecordWrite = Future<void>.value();
+  int sourceReplacementEpoch = 0;
+  bool sourceReplacementActive = false;
 
   int get size => parts.fold(0, (sum, part) => sum + part.size);
   int get creditedBytes =>
