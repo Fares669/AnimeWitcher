@@ -1,6 +1,8 @@
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/shared/widgets/app_navigation_bars.dart';
+import 'package:animewitcher/shared/widgets/app_side_menu.dart';
+import 'package:animewitcher/shared/widgets/custom_bottom_nav.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,7 +13,6 @@ const _destinations = <TaskbarDestination>[
   TaskbarDestination.manga,
   TaskbarDestination.library,
   TaskbarDestination.downloads,
-  TaskbarDestination.settings,
 ];
 
 Future<void> _pumpTopBar(WidgetTester tester, Size size) async {
@@ -44,6 +45,60 @@ Future<void> _pumpTopBar(WidgetTester tester, Size size) async {
 }
 
 void main() {
+  for (final layout in ['rail', 'top', 'dock']) {
+    testWidgets('$layout exposes the shared menu button on large screens', (
+      tester,
+    ) async {
+      tester.view.physicalSize = Size(1280, layout == 'rail' ? 400 : 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      var opened = 0;
+      final bar = switch (layout) {
+        'rail' => AppSideRail(
+          destinations: _destinations,
+          currentBranchIndex: 0,
+          onTap: (_) {},
+          onNews: () {},
+          onAccount: () {},
+        ),
+        'top' => AppTopBar(
+          destinations: _destinations,
+          currentBranchIndex: 0,
+          overArtwork: false,
+          onTap: (_) {},
+          onNews: () {},
+          onAccount: () {},
+        ),
+        _ => CustomBottomNavBar(
+          destinations: _destinations,
+          currentBranchIndex: 0,
+          onTap: (_) {},
+          showMenu: true,
+        ),
+      };
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            locale: const Locale('ar'),
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: Scaffold(
+              body: AppSideMenuScope(
+                open: () => opened++,
+                child: Align(alignment: Alignment.topLeft, child: bar),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('المزيد'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('app-side-menu-button')));
+      expect(opened, 1);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('a tablet held upright keeps every page on the top bar', (
     tester,
   ) async {

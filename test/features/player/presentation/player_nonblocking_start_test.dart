@@ -23,6 +23,8 @@ class _Player extends Fake implements media.Player {
   final positions = StreamController<Duration>.broadcast(sync: true);
   final durations = StreamController<Duration>.broadcast(sync: true);
   final errors = StreamController<String>.broadcast(sync: true);
+  final buffers = StreamController<bool>.broadcast(sync: true);
+  bool seekThrows = false;
   final opened = <String>[];
   Completer<void>? pendingPause;
   Completer<void>? pendingOpen;
@@ -38,7 +40,7 @@ class _Player extends Fake implements media.Player {
   media.PlayerState get state => value;
   @override
   media.PlayerStream get stream =>
-      _Streams(positions.stream, durations.stream, errors.stream);
+      _Streams(positions.stream, durations.stream, errors.stream, buffers.stream);
   @override
   media.PlatformPlayer? get platform => native;
   @override
@@ -65,6 +67,7 @@ class _Player extends Fake implements media.Player {
   @override
   Future<void> seek(Duration position) async {
     seeks.add(position);
+    if (seekThrows) throw StateError("Seek unavailable");
     if (settleSeek) advance(position);
     if (!seekSignal.isCompleted) seekSignal.complete();
   }
@@ -78,6 +81,7 @@ class _Player extends Fake implements media.Player {
     await positions.close();
     await durations.close();
     await errors.close();
+    await buffers.close();
   }
 }
 
@@ -148,7 +152,7 @@ class _ReadinessNative extends Fake implements media.NativePlayer {
 }
 
 class _Streams extends Fake implements media.PlayerStream {
-  _Streams(this.position, this.duration, this.error);
+  _Streams(this.position, this.duration, this.error, this.buffering);
   @override
   final Stream<Duration> position;
   @override
@@ -158,7 +162,7 @@ class _Streams extends Fake implements media.PlayerStream {
   @override
   Stream<bool> get completed => const Stream.empty();
   @override
-  Stream<bool> get buffering => const Stream.empty();
+  final Stream<bool> buffering;
   @override
   Stream<double> get rate => const Stream.empty();
   @override
@@ -717,9 +721,181 @@ void main() {
     },
   );
 
+  test(
+    'brief buffering foreground does not refresh a healthy source',
+    () async {
+      await startSource();
+      final pending = Completer<List<StreamResult>>();
+      catalog.pendingStreams = pending;
+      player.buffers.add(true);
+      await Future<void>.delayed(const Duration(milliseconds: 450));
+      controller.setAppBackgrounded(false);
+      await flush();
+      expect(catalog.streamCalls, 0);
+      expect(connectivityChecks, 0);
+      // No error, no pause, no ten-minute expiry, no 12-second stall occurred.
+    },
+  );
+
+  test('transient error waits for progress before refreshing source', () async {
+    await startSource();
+    final pending = Completer<List<StreamResult>>();
+    catalog.pendingStreams = pending;
+    player.advance(const Duration(seconds: 6));
+    player.errors.add('Failed to open external subtitle');
+    await flush();
+    expect(catalog.streamCalls, 0);
+    player.advance(const Duration(seconds: 7));
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
+    expect(catalog.streamCalls, 0);
+    expect(connectivityChecks, 0);
+  });
+
+  test('recovery regression: reopen error at zero respects in-flight guard', () async {
+    await startSource(live: true);
+    player.value = player.value.copyWith(duration: const Duration(minutes: 24));
+    player.advance(const Duration(seconds: 90));
+    final pending = Completer<void>();
+    player.pendingPause = pending;
+    player.errors.add('Network stalled');
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
+    await flush();
+    expect(player.opened, hasLength(2));
+    expect(player.state.position, Duration.zero);
+    player.errors.add('Network stalled while reopen is preparing');
+    await flush();
+    expect(controller.currentState.sourceAttempts.first.status.name, isNot('failed'));
+    expect(controller.currentState.uiPhase.kind.name, isNot('error'));
+    pending.complete();
+    await flush();
+  });
+
+  test('recovery regression: old position callback cannot unlock in-flight check', () async {
+    await startSource(live: true);
+    pendingConnectivity = Completer<List<String>>();
+    player.errors.add('Network stalled');
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
+    await flush();
+    expect(connectivityChecks, 1);
+    player.advance(const Duration(seconds: 6));
+    player.errors.add('Network stalled again');
+    await flush();
+    expect(connectivityChecks, 1);
+    pendingConnectivity!.complete(<String>['none']);
+    await flush();
+  });
+
+  test('recovery regression: reconnect retains checkpoint across engine reset', () async {
+    await startSource(live: true);
+    player.value = player.value.copyWith(duration: const Duration(minutes: 24));
+    player.advance(const Duration(seconds: 90));
+    pendingConnectivity = Completer<List<String>>();
+    player.errors.add('Network stalled');
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
+    await flush();
+    player.value = player.value.copyWith(position: Duration.zero);
+    pendingConnectivity!.complete(<String>['wifi']);
+    await flush();
+    expect(player.opened, hasLength(2));
+    expect(player.seeks, [const Duration(seconds: 90)]);
+    expect(player.state.position, const Duration(seconds: 90));
+    expect(player.state.playing, isTrue);
+  });
+
+  test('engine reset to zero is not mistaken for recovery progress', () async {
+    await startSource(live: true);
+    player.value = player.value.copyWith(duration: const Duration(minutes: 24));
+    player.advance(const Duration(seconds: 90));
+    player.errors.add('Network stalled');
+    player.value = player.value.copyWith(position: Duration.zero);
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
+    await flush();
+    expect(player.opened, hasLength(2));
+    expect(player.seeks, [const Duration(seconds: 90)]);
+    expect(player.state.position, const Duration(seconds: 90));
+  });
+
+  test('recovery regression: generic HLS name retains VOD bookmark', () async {
+    history.position = 90000;
+    player.value = player.value.copyWith(duration: const Duration(minutes: 24));
+    final episode = _episode(1);
+    await controller.init(
+      player: player,
+      item: _item([episode]),
+      videoUrl: 'https://video.test/episode/stream.m3u8',
+      episode: episode,
+      selectedSource: StreamResult(url: 'https://video.test/episode/stream.m3u8', source: 'Selected'),
+    );
+    expect(controller.currentState.isLive, isFalse);
+    expect(player.seeks, [const Duration(seconds: 90)]);
+    expect(player.state.position, const Duration(seconds: 90));
+  });
+
+  test('recovery regression: failed recovery seek stays paused instead of playing zero', () async {
+    await startSource(live: true);
+    player.value = player.value.copyWith(duration: const Duration(minutes: 24));
+    player.advance(const Duration(seconds: 90));
+    player.seekThrows = true;
+    player.errors.add('Network stalled');
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
+    await flush();
+    expect(player.opened, hasLength(2));
+    expect(player.seeks, [const Duration(seconds: 90)]);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(player.state.position, Duration.zero);
+    expect(player.state.playing, isFalse);
+    controller.disposeController(player: player);
+    await flush();
+  });
+  test('connected network notification during brief buffering does not reopen', () async {
+    await startSource();
+    player.buffers.add(true);
+    await Future<void>.delayed(const Duration(milliseconds: 450));
+    final delivered = Completer<void>();
+    await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .handlePlatformMessage(
+          'dev.fluttercommunity.plus/connectivity_status',
+          const StandardMethodCodec().encodeSuccessEnvelope(['wifi']),
+          (_) => delivered.complete(),
+        );
+    await delivered.future;
+    await flush();
+    expect(connectivityChecks, 0);
+    expect(catalog.streamCalls, 0);
+    expect(player.opened, hasLength(1));
+  });
+
+  test('pausing during the error observation window cancels recovery', () async {
+    await startSource();
+    player.errors.add('Connection reset by peer');
+    await controller.pause();
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
+    expect(connectivityChecks, 0);
+    expect(catalog.streamCalls, 0);
+    expect(player.opened, hasLength(1));
+    expect(player.state.playing, isFalse);
+  });
+
+  test('offline recovery checkpoint clears when original playback advances', () async {
+    await startSource(live: true);
+    pendingConnectivity = Completer<List<String>>();
+    player.errors.add('Connection reset by peer');
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
+    pendingConnectivity!.complete(['none']);
+    await flush();
+    player.advance(const Duration(seconds: 20));
+    await controller.pause();
+    await controller.play();
+    await flush();
+    expect(player.opened, hasLength(1));
+    expect(connectivityChecks, 1);
+    expect(player.state.position, const Duration(seconds: 20));
+  });
+
   test('local playback recovery never checks a router connection', () async {
     await startSource(local: true);
     player.errors.add('Connection reset by peer');
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
     await flush();
     expect(connectivityChecks, 0);
     expect(catalog.streamCalls, 0);
@@ -731,6 +907,7 @@ void main() {
     final pending = Completer<List<StreamResult>>();
     catalog.pendingStreams = pending;
     player.errors.add('Connection reset by peer');
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
     await flush();
     expect(catalog.streamCalls, 1, reason: 'Recovery must reach the pending resolver');
     final replacement = await replaceRoute();
@@ -747,6 +924,7 @@ void main() {
     final pending = Completer<List<String>>();
     pendingConnectivity = pending;
     player.errors.add('Connection reset by peer');
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
     await flush();
     expect(connectivityChecks, 1);
     final replacement = await replaceRoute();
@@ -807,6 +985,14 @@ void main() {
     player.advance(const Duration(seconds: 5));
     await flush();
   }
+
+  test('explicit live metadata still skips saved VOD bookmarks', () async {
+    history.position = 90000;
+    player.value = player.value.copyWith(duration: const Duration(minutes: 24));
+    await startLive();
+    expect(controller.currentState.isLive, isTrue);
+    expect(player.seeks, isEmpty);
+  });
 
   test('replacement route resets an old pending stall recovery', () async {
     await startLive();
