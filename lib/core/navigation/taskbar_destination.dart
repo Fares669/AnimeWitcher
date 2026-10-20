@@ -6,6 +6,7 @@ enum TaskbarDestination {
   search,
   library,
   downloads,
+  // Retained only to keep existing router branch indices and links stable.
   settings,
 
   /// Manga as a tab of its own. Hidden until the viewer turns it on; while
@@ -67,7 +68,6 @@ const List<String> defaultTaskbarOrderIds = <String>[
   'manga',
   'library',
   'downloads',
-  'settings',
 ];
 
 TaskbarDestination? taskbarDestinationFromId(String id) {
@@ -90,13 +90,17 @@ List<TaskbarDestination> normalizeTaskbarOrder(Iterable<String> storedIds) {
 
   for (final id in storedIds) {
     final destination = taskbarDestinationFromId(id);
-    if (destination != null && seen.add(destination)) {
+    if (destination != null &&
+        destination != TaskbarDestination.settings &&
+        seen.add(destination)) {
       result.add(destination);
     }
   }
 
   for (final destination in TaskbarDestination.values) {
-    if (seen.add(destination)) result.add(destination);
+    if (destination != TaskbarDestination.settings && seen.add(destination)) {
+      result.add(destination);
+    }
   }
 
   return List<TaskbarDestination>.unmodifiable(result);
@@ -116,13 +120,11 @@ List<TaskbarDestination> visibleTaskbarDestinations(
   Iterable<String> hiddenIds,
 ) {
   final hidden = normalizeHiddenTaskbarItems(hiddenIds);
-  return normalizeTaskbarOrder(orderIds)
-      .where(
-        (destination) =>
-            destination == TaskbarDestination.settings ||
-            !hidden.contains(destination.id),
-      )
+  final visible = normalizeTaskbarOrder(orderIds)
+      .where((destination) => !hidden.contains(destination.id))
       .toList(growable: false);
+  // Older preferences could hide every tab except More.
+  return visible.isEmpty ? const [TaskbarDestination.home] : visible;
 }
 
 String resolveInitialTaskbarRoute(
@@ -130,13 +132,7 @@ String resolveInitialTaskbarRoute(
   Iterable<String> orderIds,
   Iterable<String> hiddenIds,
 ) {
+  final visible = visibleTaskbarDestinations(orderIds, hiddenIds);
   final preferred = taskbarDestinationForRoute(preferredRoute);
-  final hidden = normalizeHiddenTaskbarItems(hiddenIds);
-  if (preferred != null &&
-      (preferred == TaskbarDestination.settings ||
-          !hidden.contains(preferred.id))) {
-    return preferred.route;
-  }
-
-  return visibleTaskbarDestinations(orderIds, hiddenIds).first.route;
+  return visible.contains(preferred) ? preferred!.route : visible.first.route;
 }

@@ -7,6 +7,7 @@ import '../../core/navigation/taskbar_destination.dart';
 import '../../core/utils/responsive_breakpoints.dart';
 import '../../l10n/generated/app_localizations.dart';
 import 'account_avatar_button.dart';
+import 'app_side_menu.dart';
 
 /// Room left at the window's right edge for the caption buttons
 /// (minimise, maximise, close), which the title bar draws over everything.
@@ -55,8 +56,13 @@ class AppSideRail extends StatelessWidget {
       ),
       child: Column(
         children: [
-          ..._destinationItems(l10n, accent),
-          const Spacer(),
+          const AppSideMenuButton(),
+          const SizedBox(height: 8),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Column(children: [..._destinationItems(l10n, accent)]),
+            ),
+          ),
           _RailItem(
             icon: Icons.newspaper_rounded,
             label: 'الأخبار',
@@ -224,6 +230,8 @@ class AppTopBar extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                AppSideMenuButton(overArtwork: overArtwork),
+                const SizedBox(width: 8),
                 if (width >= 1000) ...[
                   Text(
                     'AnimeWitcher',
@@ -281,7 +289,7 @@ class AppTopBar extends StatelessWidget {
               children: [
                 Positioned(left: 24, top: 0, bottom: 0, child: corner),
                 Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 260 + reserve / 2),
+                  padding: EdgeInsets.symmetric(horizontal: 310 + reserve / 2),
                   child: Center(child: pages),
                 ),
               ],
