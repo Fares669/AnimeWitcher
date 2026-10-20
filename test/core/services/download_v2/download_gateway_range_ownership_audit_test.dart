@@ -205,13 +205,12 @@ void main() {
     expect(f.downloader.resumedIds, contains(f.child.taskId));
   });
 
-  test('native pause without resumeData reports checkpoint failure after stopping writer', () async {
+  test('native pause without resumeData succeeds after settling and preserving durable ranges', () async {
     final f = await _Fixture.create();
     addTearDown(f.dispose);
     f.downloader.pauseAccepted = false;
     f.downloader.stopOnRejectedPause = true;
-    await expectLater(f.handle.pause(), throwsA(isA<StateError>().having(
-      (error) => error.message, 'message', contains('resume checkpoint'))));
+    expect(await f.handle.pause(), isTrue);
     expect(f.downloader.native, isEmpty);
     expect(f.handle.current.status, DownloadTransportStatus.paused);
     expect(f.handle.current.activeConnections, 0);
@@ -222,6 +221,235 @@ void main() {
     expect(await File('${f.part.path}.download').readAsBytes(), [1, 2],
       reason: 'range restart must retain the durable partial prefix');
   });
+
+  test('missing iOS checkpoint reconciles lost in-flight bytes before pause returns', () async {
+    final f = await _Fixture.create();
+    addTearDown(f.dispose);
+    await f.part.delete(); // URLSession's private temporary bytes did not survive.
+    final observed = <DownloadTransportSnapshot>[];
+    final subscription = f.handle.snapshots.listen(observed.add);
+    addTearDown(subscription.cancel);
+    f.downloader.pauseAccepted = false;
+    f.downloader.stopOnRejectedPause = true;
+    expect(await f.handle.pause(), isTrue);
+    expect(f.handle.current.status, DownloadTransportStatus.paused);
+    expect(f.handle.current.activeConnections, 0);
+    expect(f.handle.current.transferredBytes, 0);
+    expect(f.handle.current.progress, 0);
+    expect(observed.where((snapshot) => snapshot.status == DownloadTransportStatus.paused),
+      everyElement(isA<DownloadTransportSnapshot>().having(
+        (snapshot) => snapshot.transferredBytes, 'settled paused bytes', 0)));
+    final checkpoint = jsonDecode(await f.manifest.readAsString()) as Map;
+    final child = (checkpoint['parts'] as List).first as Map;
+    expect(child['credibleProgress'], 0);
+    expect(child['durableBytes'], 0);
+    // Late callbacks belong to the canceled native execution, not recovery.
+    f.downloader.updatesController.add(TaskProgressUpdate(f.child, .9, 4));
+    f.downloader.updatesController.add(TaskStatusUpdate(f.child, TaskStatus.failed));
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(f.handle.current.progress, 0);
+    expect(f.handle.current.status, DownloadTransportStatus.paused);
+    expect(f.downloader.enqueueCalls, 0);
+    expect(await f.handle.resume(), isTrue);
+  });
+
+  for (final prefixSurvives in [false, true]) {
+    test('checkpointless pause preserves completed sibling and restart truth, prefix=$prefixSurvives', () async {
+      final f = await _Fixture.create(completedSibling: true);
+      addTearDown(f.dispose);
+      final before = jsonDecode(await f.manifest.readAsString()) as Map;
+      final siblingTask = Task.createFromJson(Map<String, dynamic>.from(
+        ((before['parts'] as List)[1] as Map)['task'] as Map));
+      final sibling = File(await siblingTask.filePath());
+      final digest = sha256.convert(await sibling.readAsBytes());
+      if (!prefixSurvives) await f.part.delete();
+      f.downloader.pauseAccepted = false;
+      f.downloader.stopOnRejectedPause = true;
+      expect(await f.handle.pause(), isTrue);
+      expect(f.handle.current.transferredBytes, prefixSurvives ? 6 : 4);
+      expect(f.handle.current.progress, prefixSurvives ? .75 : .5);
+      expect(sha256.convert(await sibling.readAsBytes()), digest);
+      final persisted = jsonDecode(await f.manifest.readAsString()) as Map;
+      final completed = (persisted['parts'] as List)[1] as Map;
+      expect(completed['complete'], isTrue);
+      expect(completed['durableBytes'], 4);
+      // A new gateway/coordinator reconstructs only the surviving bytes.
+      final restarted = (await _gateway(f.downloader).attach(f.handle.taskId))!;
+      expect(restarted.current.transferredBytes, prefixSurvives ? 6 : 4);
+      expect(restarted.current.progress, prefixSurvives ? .75 : .5);
+      expect(await restarted.pause(), isTrue);
+      expect(sha256.convert(await sibling.readAsBytes()), digest);
+    });
+  }
+
+  test('repeated checkpointless pause and resume never throws or credits lost bytes', () async {
+    final f = await _Fixture.create();
+    addTearDown(f.dispose);
+    await f.part.delete();
+    f.downloader.pauseAccepted = false;
+    f.downloader.stopOnRejectedPause = true;
+    for (var attempt = 0; attempt < 9; attempt++) {
+      expect(await f.handle.pause(), isTrue);
+      expect(f.handle.current.progress, 0);
+      expect(f.handle.current.activeConnections, 0);
+      expect(f.downloader.native, isEmpty);
+      expect(await f.handle.resume(), isTrue);
+    }
+    expect(await f.handle.pause(), isTrue);
+    expect(f.handle.current.progress, 0);
+  });
+
+  for (final scenario in ['same-resource', 'changed-bytes', 'changed-size', 'expired']) {
+    test('in-place source renewal retains exact completed ranges: $scenario', () async {
+      final previousHttp = HttpOverrides.current;
+      HttpOverrides.global = null;
+      addTearDown(() { HttpOverrides.global = previousHttp; });
+      final f = await _Fixture.create(completedSibling: true);
+      addTearDown(f.dispose);
+      f.downloader.pauseAccepted = false;
+      f.downloader.stopOnRejectedPause = true;
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final requestedRanges = <String>[];
+      server.listen((request) async {
+        final range = request.headers.value(HttpHeaders.rangeHeader)!;
+        requestedRanges.add(range);
+        final bounds = RegExp(r'bytes=(\d+)-(\d+)').firstMatch(range)!;
+        final from = int.parse(bounds[1]!);
+        final to = int.parse(bounds[2]!);
+        final response = request.response;
+        if (scenario == 'expired') {
+          response.statusCode = 403;
+        } else {
+          response.statusCode = 206;
+          response.headers.set(HttpHeaders.contentRangeHeader, 'bytes $from-$to/8');
+          response.contentLength = to - from + 1;
+          response.add([for (var offset = from; offset <= to; offset++)
+            scenario == 'changed-bytes' ? 99 : offset + 1]);
+        }
+        await response.close();
+      });
+      final before = jsonDecode(await f.manifest.readAsString()) as Map;
+      final siblingTask = Task.createFromJson(Map<String, dynamic>.from(
+        ((before['parts'] as List)[1] as Map)['task'] as Map));
+      final sibling = File(await siblingTask.filePath());
+      final originalHash = sha256.convert(await sibling.readAsBytes());
+      final renewal = f.handle as SourceRenewingDownloadTransportHandleV2;
+      final url = 'http://${server.address.address}:${server.port}/fresh-video';
+      expect(await renewal.replaceSource(url: url, headers: {},
+        expectedBytes: scenario == 'changed-size' ? 9 : 8), scenario == 'same-resource');
+      expect(f.downloader.cancelCalls, 0);
+      expect(f.downloader.enqueueCalls, 0);
+      expect(await f.part.readAsBytes(), [1, 2]);
+      expect(sha256.convert(await sibling.readAsBytes()), originalHash);
+      final after = jsonDecode(await f.manifest.readAsString()) as Map;
+      expect((after['parts'] as List).map((part) => part['task']['taskId']),
+          (before['parts'] as List).map((part) => part['task']['taskId']));
+      expect((after['parts'] as List)[1]['complete'], isTrue);
+      final childUrl = (after['parts'] as List).first['task']['url'];
+      expect(childUrl, scenario == 'same-resource' ? url : f.child.url);
+      if (scenario == 'same-resource') {
+        expect(requestedRanges, ['bytes=0-1', 'bytes=4-7']);
+        expect(f.handle.current.progress, .75);
+      }
+      if (scenario == 'changed-size') expect(requestedRanges, isEmpty);
+    });
+  }
+
+  test('first stopped-pause checkpoint failure preserves the pause repair fence', () async {
+    final f = await _Fixture.create();
+    addTearDown(f.dispose);
+    expect(await f.handle.resume(), isTrue);
+    await f.part.delete();
+    f.downloader.pauseAccepted = false;
+    f.downloader.stopOnRejectedPause = true;
+    final blocked = await Directory('${f.manifest.path}.tmp').create();
+    addTearDown(() async { if (await blocked.exists()) await blocked.delete(); });
+    final snapshots = <DownloadTransportSnapshot>[];
+    final subscription = f.handle.snapshots.listen(snapshots.add);
+    addTearDown(subscription.cancel);
+    await expectLater(f.handle.pause(), throwsA(isA<DownloadPauseCheckpointException>()));
+    expect(f.downloader.native, isEmpty);
+    expect(snapshots.where((snapshot) => snapshot.status == DownloadTransportStatus.paused), isEmpty);
+    await blocked.delete();
+    expect(await f.handle.resume(), isTrue);
+    final checkpoint = jsonDecode(await f.manifest.readAsString()) as Map;
+    expect((checkpoint['parts'] as List).first['credibleProgress'], 0);
+  });
+
+  test('failed stopped-pause checkpoint stays fenced until repair is persisted', () async {
+    final f = await _Fixture.create();
+    addTearDown(f.dispose);
+    expect(await f.handle.resume(), isTrue);
+    await f.part.delete();
+    f.downloader.pauseAccepted = false;
+    f.downloader.stopOnRejectedPause = true;
+    final blocked = Directory('${f.manifest.path}.tmp');
+    var injected = false;
+    f.downloader.testStorage.onStoreRecord = (record) async {
+      if (!injected && record.taskId == f.handle.taskId && record.status == TaskStatus.paused) {
+        injected = true;
+        await blocked.create();
+      }
+    };
+    addTearDown(() async {
+      f.downloader.testStorage.onStoreRecord = null;
+      if (await blocked.exists()) await blocked.delete();
+    });
+    final snapshots = <DownloadTransportSnapshot>[];
+    final subscription = f.handle.snapshots.listen(snapshots.add);
+    addTearDown(subscription.cancel);
+    await expectLater(f.handle.pause(), throwsA(isA<DownloadPauseCheckpointException>()));
+    expect(injected, isTrue);
+    expect(f.downloader.native, isEmpty);
+    expect(snapshots.where((snapshot) => snapshot.status == DownloadTransportStatus.paused), isEmpty);
+    final starts = f.downloader.enqueueCalls;
+    await expectLater(f.handle.resume(), throwsA(isA<DownloadPauseCheckpointException>()));
+    expect(f.downloader.enqueueCalls, starts, reason: 'failed repair cannot start a new writer');
+    await blocked.delete();
+    f.downloader.testStorage.onStoreRecord = null;
+    expect(await f.handle.resume(), isTrue);
+    final checkpoint = jsonDecode(await f.manifest.readAsString()) as Map;
+    expect((checkpoint['parts'] as List).first['credibleProgress'], 0);
+  });
+
+  for (final control in ['pause', 'cancel', 'interrupt']) {
+    test('$control interrupts in-flight source renewal HTTP verification', () async {
+      final previousHttp = HttpOverrides.current;
+      HttpOverrides.global = null;
+      addTearDown(() { HttpOverrides.global = previousHttp; });
+      final f = await _Fixture.create(completedSibling: true);
+      addTearDown(f.dispose);
+      f.downloader.pauseAccepted = false;
+      f.downloader.stopOnRejectedPause = true;
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() async {
+        if (!release.isCompleted) release.complete();
+        await server.close(force: true);
+      });
+      server.listen((request) async {
+        if (!entered.isCompleted) entered.complete();
+        await release.future;
+        request.response.statusCode = 403;
+        try { await request.response.close(); } catch (_) {}
+      });
+      final renewable = f.handle as SourceRenewingDownloadTransportHandleV2;
+      final renewing = renewable.replaceSource(
+        url: 'http://${server.address.address}:${server.port}/fresh', headers: {}, expectedBytes: 8);
+      await entered.future.timeout(const Duration(seconds: 2));
+      final stopping = switch (control) {
+        'pause' => f.handle.pause(),
+        'cancel' => f.handle.cancel(),
+        _ => Future<bool>.sync(() { renewable.interruptSourceRenewal(); return true; }),
+      };
+      expect(await stopping.timeout(const Duration(seconds: 2)), isTrue);
+      expect(await renewing.timeout(const Duration(seconds: 2)), isFalse);
+      expect(release.isCompleted, isFalse, reason: 'control did not wait for the stalled server');
+      expect(f.downloader.enqueueCalls, 0);
+    });
+  }
 
   test('a range completed during native pause keeps its file without needing resumeData', () async {
     final f = await _Fixture.create();
@@ -705,7 +933,7 @@ final class _Fixture {
   final File manifest;
   final DownloadTransportHandle handle;
   final PackageBackgroundDownloaderGateway gateway;
-  static Future<_Fixture> create() async {
+  static Future<_Fixture> create({bool completedSibling = false}) async {
     final root = await Directory.systemTemp.createTemp('aw-gateway-owned-range-');
     final parent = _parent(root);
     final parts = await Directory('${await parent.filePath()}.parts').create();
@@ -718,14 +946,19 @@ final class _Fixture {
       ),
     ];
     final part = await File(await children.first.filePath()).writeAsBytes([1, 2]);
+    if (completedSibling) {
+      await File(await children.last.filePath()).writeAsBytes([5, 6, 7, 8], flush: true);
+    }
     await File(p.join(parts.path, 'manifest.json')).writeAsString(jsonEncode({
       'schemaVersion': 2, 'parentTaskId': parent.taskId, 'generation': 1,
       'checkpointSequence': 1, 'expectedBytes': 8, 'totalBytes': 8,
       'parts': [
         for (var index = 0; index < 2; index++) {
           'task': children[index].toJson(), 'from': index * 4, 'to': index * 4 + 3,
-          'progress': index == 0 ? .5 : 0, 'credibleProgress': index == 0 ? .5 : 0,
-          'durableBytes': 0, 'complete': false, 'attemptGeneration': 1,
+          'progress': index == 0 ? .5 : (completedSibling ? 1.0 : 0.0),
+          'credibleProgress': index == 0 ? .5 : (completedSibling ? 1.0 : 0.0),
+          'durableBytes': index == 1 && completedSibling ? 4 : 0,
+          'complete': index == 1 && completedSibling, 'attemptGeneration': 1,
         },
       ],
     }));
@@ -876,8 +1109,12 @@ final class _Storage implements PersistentStorage {
   final records = <String, TaskRecord>{};
   final paused = <Task>[];
   final resumeData = <String, ResumeData>{};
+  Future<void> Function(TaskRecord)? onStoreRecord;
   @override
-  Future<void> storeTaskRecord(TaskRecord record) async { records[record.taskId] = record; }
+  Future<void> storeTaskRecord(TaskRecord record) async {
+    await onStoreRecord?.call(record);
+    records[record.taskId] = record;
+  }
   @override
   Future<TaskRecord?> retrieveTaskRecord(String id) async => records[id];
   @override

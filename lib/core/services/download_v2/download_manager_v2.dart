@@ -123,6 +123,7 @@ final class DownloadManagerV2 {
       <String, StreamSubscription<DownloadTransportSnapshot>>{};
   final Set<DownloadLogicalId> _parallelPausePending = <DownloadLogicalId>{};
   final Map<String, Future<bool>> _unsettledResumeAcks = <String, Future<bool>>{};
+  final Map<DownloadLogicalId, int> _pendingStopControls = <DownloadLogicalId, int>{};
   final Map<DownloadLogicalId, int> _lastPositiveSpeedAtMillis =
       <DownloadLogicalId, int>{};
   final Map<String, int> _lastNativeSpeedProjectionAtMillis = <String, int>{};
@@ -794,6 +795,7 @@ final class DownloadManagerV2 {
           // A timeout is ambiguous: a late native pause must not be resumed on
           // startup. Keep paused intent and expose live transport truth.
           final restored = _isControlTimeout(error) ||
+                  error is DownloadPauseCheckpointException ||
                   handle?.current.status == DownloadTransportStatus.paused
               ? pausedRecord : record;
           await _store.put(restored);
@@ -926,6 +928,18 @@ final class DownloadManagerV2 {
     }
 
     final handle = await _recordHandle(record);
+    if (record.mediaKind != DownloadMediaKind.mangaChapter &&
+        record.intent == DownloadUserIntent.active &&
+        handle != null &&
+        {
+          DownloadTransportStatus.queued,
+          DownloadTransportStatus.running,
+          DownloadTransportStatus.held,
+        }.contains(handle.current.status)) {
+      // A repeated Resume must not turn an already accepted resume into Restart.
+      _activateHandle(logicalId, handle);
+      return handle.current;
+    }
     if (handle is MangaChapterTransportHandleV2 &&
         !handle.recoveryOnly &&
         {
@@ -2099,6 +2113,14 @@ final class DownloadManagerV2 {
     Future<T> Function() command,
   ) {
     final elapsed = Stopwatch()..start();
+    final stops = action == 'pause' || action == 'cancel' || action == 'delete';
+    if (stops) {
+      _pendingStopControls.update(logicalId, (count) => count + 1, ifAbsent: () => 1);
+      final handle = _handlesByTaskId[_currentTaskIds[logicalId]];
+      if (handle is SourceRenewingDownloadTransportHandleV2) {
+        (handle as SourceRenewingDownloadTransportHandleV2).interruptSourceRenewal();
+      }
+    }
     var taskId = _currentTaskIds[logicalId];
     void record(String phase, [Object? error]) {
       taskId = _currentTaskIds[logicalId] ?? taskId;
@@ -2126,7 +2148,15 @@ final class DownloadManagerV2 {
             record(_isControlTimeout(error) ? 'timedOut' : 'rejected', error);
             Error.throwWithStackTrace(error, stack);
           },
-        );
+        ).whenComplete(() {
+          if (!stops) return;
+          final pending = _pendingStopControls[logicalId] ?? 0;
+          if (pending <= 1) {
+            _pendingStopControls.remove(logicalId);
+          } else {
+            _pendingStopControls[logicalId] = pending - 1;
+          }
+        });
   }
 
   Future<bool> _resumeHandleAndAwaitAcknowledgement(
@@ -3104,6 +3134,20 @@ final class DownloadManagerV2 {
     }
   }
 
+  Future<bool> _yieldSourceRenewalToStop(
+    LogicalDownloadRecordV2 record,
+    DownloadTransportHandle handle,
+  ) async {
+    if (!_pendingStopControls.containsKey(record.logicalId)) return false;
+    try {
+      await _awaitControlAcknowledgement('pause', handle.pause());
+    } catch (_) {
+      // An uncertain pause must still preserve stop intent and live ownership.
+    }
+    await _preservePausedResumeFailure(record, handle);
+    return true;
+  }
+
   void _scheduleSourceRefresh(
     DownloadLogicalId logicalId,
     String failedTaskId,
@@ -3114,6 +3158,15 @@ final class DownloadManagerV2 {
         if (record == null ||
             record.intent != DownloadUserIntent.active ||
             record.taskId != failedTaskId) {
+          return;
+        }
+        final renewableHandle = record.mediaKind == DownloadMediaKind.videoEpisode
+            ? await _recordHandle(record) : null;
+        if (renewableHandle is SourceRenewingDownloadTransportHandleV2 &&
+            (renewableHandle!.current.status != DownloadTransportStatus.failed ||
+                renewableHandle.current.failureCategory != DownloadFailureCategory.sourceExpired)) {
+          // In-place renewal retains the task ID; old duplicate failures must
+          // not renew an already replaced source or spend its retry budget.
           return;
         }
         if (record.mediaKind == DownloadMediaKind.mangaChapter) {
@@ -3152,12 +3205,31 @@ final class DownloadManagerV2 {
         );
         final request = _requestFromRecord(record);
         try {
+          if (renewableHandle is SourceRenewingDownloadTransportHandleV2) {
+            final source = await _sourceResolver.resolve(record.sourceDescriptor);
+            if (_recordChanges.isClosed) return;
+            if (await _yieldSourceRenewalToStop(record, renewableHandle!)) return;
+            final renewed = await (renewableHandle as SourceRenewingDownloadTransportHandleV2)
+                .replaceSource(url: source.url, headers: source.headers,
+                    expectedBytes: source.expectedBytes);
+            if (await _yieldSourceRenewalToStop(record, renewableHandle)) return;
+            if (!renewed) {
+              throw StateError('Renewed source could not safely retain downloaded ranges');
+            }
+            if (_recordChanges.isClosed) return;
+            await _resumeRecordUnsafe(record.copyWith(
+              expectedBytes: source.expectedBytes ?? record.expectedBytes,
+            ), request);
+            return;
+          }
           await _startFreshGeneration(
             request,
             record,
             cancelPreviousEvenIfFinal: true,
           );
         } catch (error) {
+          if (renewableHandle is SourceRenewingDownloadTransportHandleV2 &&
+              await _yieldSourceRenewalToStop(record, renewableHandle!)) return;
           final current = await _store.get(logicalId);
           // The fresh start may already have saved this as an unknown failure;
           // it is the expired source that failed, and the UI says so.
@@ -3313,6 +3385,7 @@ final class DownloadManagerV2 {
     _handlesByTaskId.clear();
     await presentationDisposal;
     _unsettledResumeAcks.clear();
+    _pendingStopControls.clear();
     _recordsByLogicalId.clear();
     _lastPositiveSpeedAtMillis.clear();
     _lastNativeSpeedProjectionAtMillis.clear();
