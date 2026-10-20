@@ -24,14 +24,12 @@ Future<void> _pumpScreen(
   double safeTop = 0,
   VoidCallback? openMenu,
 }) async {
-  debugDefaultTargetPlatformOverride = platform;
   debugWindowControlsInsetOverride = platform == TargetPlatform.windows
       ? 128
       : 0;
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
   addTearDown(() {
-    debugDefaultTargetPlatformOverride = null;
     debugWindowControlsInsetOverride = null;
     tester.view.resetPhysicalSize();
     tester.view.resetDevicePixelRatio();
@@ -105,7 +103,7 @@ void main() {
         expect(tester.widget<FilterStyleTabBar>(tabs).controller.index, 0);
         expect(find.text(l10n.noDownloadsYet), findsOneWidget);
         expect(tester.takeException(), isNull);
-      });
+      }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
     }
   }
 
@@ -127,7 +125,7 @@ void main() {
       expect(tester.getTopRight(find.byType(FilterStyleTabBar)).dx, 390);
       expect(tester.getSize(find.byType(TabBarView)).width, 390);
       expect(tester.takeException(), isNull);
-    });
+    }, variant: TargetPlatformVariant.only(platform));
   }
 
   for (final platform in [TargetPlatform.macOS, TargetPlatform.linux]) {
@@ -147,6 +145,6 @@ void main() {
       );
       expect(tester.getTopRight(find.byType(FilterStyleTabBar)).dx, 1200);
       expect(tester.takeException(), isNull);
-    });
+    }, variant: TargetPlatformVariant.only(platform));
   }
 }

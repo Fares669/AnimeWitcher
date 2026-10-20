@@ -20,8 +20,6 @@ void main() {
       testWidgets(
         '${compact ? 'phone' : 'Windows'} title keeps natural direction: ${entry.key}',
         (tester) async {
-          debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-          addTearDown(() => debugDefaultTargetPlatformOverride = null);
           tester.view.physicalSize = compact
               ? const Size(390, 844)
               : const Size(1280, 900);
@@ -65,6 +63,7 @@ void main() {
           expect(text.data, entry.key);
           expect(tester.takeException(), isNull);
         },
+        variant: TargetPlatformVariant.only(TargetPlatform.windows),
       );
     }
   }
@@ -74,8 +73,6 @@ void main() {
       testWidgets(
         'Windows ${manga ? 'manga' : 'anime'} poster stays right in $ambientDirection',
         (tester) async {
-          debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-          addTearDown(() => debugDefaultTargetPlatformOverride = null);
           tester.view.physicalSize = const Size(1280, 900);
           tester.view.devicePixelRatio = 1;
           addTearDown(tester.view.resetPhysicalSize);
@@ -137,6 +134,7 @@ void main() {
           expect(opens, 1);
           expect(tester.takeException(), isNull);
         },
+        variant: TargetPlatformVariant.only(TargetPlatform.windows),
       );
     }
   }
@@ -150,8 +148,6 @@ void main() {
       testWidgets(
         '${manga ? 'manga' : 'anime'} header preserves phone RTL and other desktop LTR at $size',
         (tester) async {
-          debugDefaultTargetPlatformOverride = TargetPlatform.linux;
-          addTearDown(() => debugDefaultTargetPlatformOverride = null);
           tester.view.physicalSize = size;
           tester.view.devicePixelRatio = 1;
           addTearDown(tester.view.resetPhysicalSize);
@@ -251,6 +247,7 @@ void main() {
           }
           expect(tester.takeException(), isNull);
         },
+        variant: TargetPlatformVariant.only(TargetPlatform.linux),
       );
     }
   }
