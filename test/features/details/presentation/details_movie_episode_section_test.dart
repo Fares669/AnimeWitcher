@@ -17,6 +17,7 @@ import 'package:animewitcher/features/library/presentation/library_media_kind.da
 import 'package:animewitcher/features/library/presentation/library_provider.dart';
 import 'package:animewitcher/features/library/presentation/library_state.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -113,6 +114,57 @@ final class _ReadyDetailsController extends DetailsController {
 }
 
 void main() {
+  for (final platform in <TargetPlatform>[
+    TargetPlatform.windows,
+    TargetPlatform.macOS,
+    TargetPlatform.linux,
+    TargetPlatform.android,
+    TargetPlatform.iOS,
+  ]) {
+    testWidgets(
+      'wide anime poster is restored only on Windows ($platform)',
+      (tester) async {
+        tester.view.physicalSize = const Size(1280, 900);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final item = MultimediaItem(
+          title: 'Anime',
+          url: 'https://example.test/windows-poster',
+          posterUrl: '',
+          contentType: MultimediaContentType.anime,
+        );
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              storageServiceProvider.overrideWithValue(_Storage()),
+              logicalDownloadStoreV2Provider.overrideWithValue(
+                InMemoryLogicalDownloadStoreV2(),
+              ),
+              libraryProvider.overrideWith(_EmptyLibrary.new),
+              detailsControllerProvider(item.url).overrideWith(
+                () => _ReadyDetailsController(item),
+              ),
+            ],
+            child: MaterialApp(
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              theme: ThemeData.dark(),
+              home: DetailsScreen(item: item),
+            ),
+          ),
+        );
+        await tester.pump();
+        expect(
+          find.byKey(const ValueKey('details-hero-poster')),
+          platform == TargetPlatform.windows ? findsOneWidget : findsNothing,
+        );
+        expect(tester.takeException(), isNull);
+      },
+      variant: TargetPlatformVariant(<TargetPlatform>{platform}),
+    );
+  }
+
   testWidgets('episode comments use the anime outline and retain their target', (
     tester,
   ) async {

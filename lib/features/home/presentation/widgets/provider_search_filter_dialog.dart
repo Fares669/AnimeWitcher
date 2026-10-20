@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../../../core/extensions/base_provider.dart';
+import '../../../../core/navigation/app_layout_style.dart';
+import '../../../../shared/widgets/app_back_button.dart';
 
 /// One of the main categories the sheet can switch between, such as anime
 /// or manga, shown in its header.
@@ -72,9 +74,6 @@ class _ProviderSearchFilterDialogState
   bool _allYears = false;
   final Map<String, Future<ProviderSearchFilterOptions>> _optionsByCategory =
       {};
-
-  /// Years shown before "more": the list runs back decades.
-  static const int _yearsShown = 5;
 
   String _t(String english, String arabic) => arabic;
 
@@ -219,10 +218,9 @@ class _ProviderSearchFilterDialogState
             ),
             Row(
               children: [
-                IconButton(
+                AppBackButton(
                   key: const ValueKey<String>('filterBack'),
                   tooltip: _t('Back', 'رجوع'),
-                  icon: const Icon(Icons.arrow_back_rounded),
                   onPressed: () => Navigator.of(context).pop(),
                 ),
                 const Spacer(),
@@ -361,9 +359,12 @@ class _ProviderSearchFilterDialogState
           ),
         ),
     ];
+    final viewport = MediaQuery.sizeOf(context);
+    final yearsPerRow =
+        appLayoutsAvailable(context) || viewport.width > viewport.height ? 10 : 5;
     final years = _allYears
         ? options.years
-        : options.years.take(_yearsShown).toList(growable: false);
+        : options.years.take(yearsPerRow).toList(growable: false);
     // Years picked beyond the first few stay in view.
     final shownYears = <String>[
       ...years,
@@ -415,7 +416,7 @@ class _ProviderSearchFilterDialogState
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Five years to a row, the newest five first.
+                    // Start with one row; expansion keeps the same column count.
                     AnimatedSize(
                       key: const ValueKey<String>(
                         'filter-year-size-transition',
@@ -428,11 +429,11 @@ class _ProviderSearchFilterDialogState
                       child: _ChipWrap(
                         values: shownYears,
                         selected: _years,
-                        columns: _yearsShown,
+                        columns: yearsPerRow,
                         onToggle: (value) => _toggle(_years, value),
                       ),
                     ),
-                    if (options.years.length > _yearsShown)
+                    if (options.years.length > yearsPerRow)
                       Align(
                         alignment: AlignmentDirectional.centerStart,
                         child: TextButton(
@@ -723,6 +724,18 @@ class _ChipWrap extends StatelessWidget {
   Widget _chip(BuildContext context, String value) {
     final colors = Theme.of(context).colorScheme;
     final on = selected.contains(value);
+    final label = Text(
+      value,
+      maxLines: 1,
+      textAlign: TextAlign.center,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        fontSize: 12.5,
+        color: on ? colors.primary : colors.onSurface,
+        fontWeight: on ? FontWeight.w700 : FontWeight.w500,
+      ),
+    );
+    final compact = columns != null && columns! >= 10;
     return Material(
       key: ValueKey<String>('filterChip-$value'),
       color: on
@@ -739,18 +752,13 @@ class _ChipWrap extends StatelessWidget {
         customBorder: const StadiumBorder(),
         onTap: () => onToggle(value),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
-          child: Text(
-            value,
-            maxLines: 1,
-            textAlign: TextAlign.center,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 12.5,
-              color: on ? colors.primary : colors.onSurface,
-              fontWeight: on ? FontWeight.w700 : FontWeight.w500,
-            ),
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 4 : 11,
+            vertical: 6,
           ),
+          child: compact
+              ? FittedBox(fit: BoxFit.scaleDown, child: label)
+              : label,
         ),
       ),
     );

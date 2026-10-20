@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/shared/widgets/account_avatar_button.dart';
+import 'package:animewitcher/shared/widgets/app_side_menu.dart';
 
 class CustomBottomNavBar extends StatelessWidget {
   final int currentBranchIndex;
@@ -20,6 +21,9 @@ class CustomBottomNavBar extends StatelessWidget {
   /// Null leaves it out.
   final VoidCallback? onAccount;
 
+  /// Wider docks keep the menu reachable from every tab.
+  final bool showMenu;
+
   const CustomBottomNavBar({
     super.key,
     required this.currentBranchIndex,
@@ -27,6 +31,7 @@ class CustomBottomNavBar extends StatelessWidget {
     required this.onTap,
     this.onNews,
     this.onAccount,
+    this.showMenu = false,
   });
 
   static const double height = 64;
@@ -63,7 +68,8 @@ class CustomBottomNavBar extends StatelessWidget {
     final count =
         destinations.length +
         (onNews == null ? 0 : 1) +
-        (onAccount == null ? 0 : 1);
+        (onAccount == null ? 0 : 1) +
+        (showMenu ? 1 : 0);
     final selectedIndex = destinations.indexWhere(
       (destination) => destination.branchIndex == currentBranchIndex,
     );
@@ -110,6 +116,8 @@ class CustomBottomNavBar extends StatelessWidget {
             },
           ),
         ),
+      if (showMenu)
+        const Expanded(child: Center(child: AppSideMenuButton())),
       if (onNews case final openNews?)
         Expanded(
           child: _NavTabCell(

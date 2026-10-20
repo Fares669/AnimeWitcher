@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../core/navigation/app_layout_style.dart';
+
 /// One tab for [FilterStyleTabBar], matching search-filter icon+label tabs.
 class FilterStyleTab extends StatelessWidget {
   const FilterStyleTab({
@@ -111,7 +113,11 @@ class FilterStyleTabBar extends StatelessWidget implements PreferredSizeWidget {
     return TabBar(
       controller: controller,
       isScrollable: isScrollable,
-      tabAlignment: isScrollable ? TabAlignment.start : TabAlignment.fill,
+      tabAlignment: !isScrollable
+          ? TabAlignment.fill
+          : appLayoutsAvailable(context)
+          ? TabAlignment.center
+          : TabAlignment.start,
       padding: padding,
       labelPadding: labelPadding,
       indicatorSize: indicatorSize,

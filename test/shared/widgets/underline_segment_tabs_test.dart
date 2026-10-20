@@ -1,8 +1,82 @@
 import 'package:animewitcher/shared/widgets/underline_segment_tabs.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  for (final platform in [
+    TargetPlatform.windows,
+    TargetPlatform.macOS,
+    TargetPlatform.linux,
+    TargetPlatform.android,
+    TargetPlatform.iOS,
+  ]) {
+    testWidgets('wide page tabs are centered on $platform', (tester) async {
+      tester.view.physicalSize = const Size(1200, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final controller = TabController(length: 4, vsync: tester);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Directionality(
+            textDirection: TextDirection.rtl,
+            child: Scaffold(
+              body: FilterStyleTabBar(
+                controller: controller,
+                tabs: const [
+                  FilterStyleTab(label: 'السابق'),
+                  FilterStyleTab(label: 'الحالي'),
+                  FilterStyleTab(label: 'القادم'),
+                  FilterStyleTab(label: 'المواسم الأخرى'),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(
+        tester.widget<TabBar>(find.byType(TabBar)).tabAlignment,
+        TabAlignment.center,
+      );
+      final first = tester.getRect(find.byType(Tab).first);
+      final last = tester.getRect(find.byType(Tab).last);
+      expect((last.left + first.right) / 2, closeTo(600, 1));
+      await tester.tap(find.text('القادم'));
+      await tester.pumpAndSettle();
+      expect(controller.index, 2);
+      expect(tester.takeException(), isNull);
+    }, variant: TargetPlatformVariant({platform}));
+  }
+
+  for (final size in [const Size(390, 844), const Size(844, 390)]) {
+    testWidgets('phone tabs keep start alignment at $size', (tester) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final controller = TabController(length: 2, vsync: tester);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: FilterStyleTabBar(
+              controller: controller,
+              tabs: const [
+                FilterStyleTab(label: 'السابق'),
+                FilterStyleTab(label: 'الحالي'),
+              ],
+            ),
+          ),
+        ),
+      );
+      expect(
+        tester.widget<TabBar>(find.byType(TabBar)).tabAlignment,
+        TabAlignment.start,
+      );
+      expect(tester.takeException(), isNull);
+    }, variant: TargetPlatformVariant({TargetPlatform.iOS}));
+  }
+
   testWidgets(
     'equal-width filter tabs keep a label-sized child without overflow',
     (tester) async {

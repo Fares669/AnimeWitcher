@@ -1,6 +1,8 @@
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/features/home/presentation/widgets/provider_search_filter_dialog.dart';
+import 'package:animewitcher/shared/widgets/app_back_button.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -83,9 +85,19 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('filterCategory-manga')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('filterBack')));
+    final back = find.byKey(const ValueKey('filterBack'));
+    expect(tester.widget(back), isA<AppBackButton>());
+    expect(
+      find.descendant(
+        of: back,
+        matching: find.byIcon(Icons.arrow_back_ios_new_rounded),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(back);
     await tester.pumpAndSettle();
 
+    expect(find.byType(ProviderSearchFilterDialog), findsNothing);
     expect(applied, isNull);
   });
 
@@ -257,6 +269,54 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('filterChip-2023')), findsOneWidget);
   });
+
+  for (final size in [
+    const Size(568, 320),
+    const Size(844, 390),
+    const Size(600, 900),
+    const Size(1280, 800),
+  ]) {
+    testWidgets('year grid uses ten readable cells per row at $size', (
+      tester,
+    ) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final years = [for (var y = 2028; y >= 2009; y--) '$y'];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ProviderSearchFilterDialog(
+            options: ProviderSearchFilterOptions(years: years),
+            initialValue: const ProviderSearchFilters(),
+            asSheet: true,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final top = tester
+          .getRect(find.byKey(const ValueKey('filterChip-2028')))
+          .top;
+      for (var y = 2028; y >= 2019; y--) {
+        final chip = find.byKey(ValueKey('filterChip-$y'));
+        expect(tester.getRect(chip).top, top);
+        final paragraph = tester.renderObject<RenderParagraph>(
+          find.descendant(of: chip, matching: find.byType(RichText)),
+        );
+        expect(paragraph.didExceedMaxLines, isFalse, reason: '$y at $size');
+      }
+      expect(find.byKey(const ValueKey('filterChip-2018')), findsNothing);
+      await tester.tap(find.text('عرض المزيد'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.getRect(find.byKey(const ValueKey('filterChip-2018'))).top,
+        greaterThan(top),
+      );
+      await tester.tap(find.byKey(const ValueKey('filterChip-2028')));
+      await tester.pump();
+      expect(find.text('تطبيق (1)'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets('release years animate between collapsed and expanded heights', (
     tester,
