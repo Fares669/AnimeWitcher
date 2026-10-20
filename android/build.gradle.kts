@@ -23,8 +23,10 @@ subprojects {
     // Standardize subproject build directories
     val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
     project.layout.buildDirectory.value(newSubprojectBuildDir)
+}
 
-    // Ensure :app is evaluated first for dependency resolution
+subprojects {
+    // Relocate every build directory before :app captures generated ProGuard paths.
     project.evaluationDependsOn(":app")
 
     /**
