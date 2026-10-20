@@ -1,4 +1,5 @@
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:flutter/services.dart';
@@ -106,6 +107,9 @@ class DetailsDesktopHero extends ConsumerWidget {
   final bool compact;
 
   double get _side => compact ? 16 : 60;
+
+  bool get _rightAlignedHeader =>
+      compact || (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows);
 
   double _posterWidthFor(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
@@ -477,10 +481,12 @@ class DetailsDesktopHero extends ConsumerWidget {
     );
   }
 
-  /// Phones keep the poster on the right with RTL information; preserve the
-  /// desktop header's left-hand poster and LTR information.
+  /// Phones and Windows keep the poster on the right with RTL information.
+  /// Other desktop platforms retain their existing left-hand layout.
   Widget _withPoster(BuildContext context, String? posterUrl, Widget title) {
-    final direction = compact ? TextDirection.rtl : TextDirection.ltr;
+    final direction = _rightAlignedHeader
+        ? TextDirection.rtl
+        : TextDirection.ltr;
     final info = Directionality(textDirection: direction, child: title);
     if (!showPoster) {
       return Align(alignment: Alignment.centerLeft, child: info);
@@ -559,10 +565,11 @@ class DetailsDesktopHero extends ConsumerWidget {
       displayItem.title,
       maxLines: compact ? 3 : 2,
       overflow: TextOverflow.ellipsis,
-      textDirection: compact && Bidi.detectRtlDirectionality(displayItem.title)
+      textDirection:
+          _rightAlignedHeader && Bidi.detectRtlDirectionality(displayItem.title)
           ? TextDirection.rtl
           : TextDirection.ltr,
-      textAlign: compact ? TextAlign.right : TextAlign.start,
+      textAlign: _rightAlignedHeader ? TextAlign.right : TextAlign.start,
       style: TextStyle(
         color: textColor,
         fontSize: compact ? 22 : 44,

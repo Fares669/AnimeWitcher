@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -13,6 +14,19 @@ class DownloadsScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
+      return Scaffold(
+        backgroundColor: Colors.transparent,
+        body: DownloadsTab(
+          // Move the tabs into the title row without covering caption buttons.
+          headerPadding: EdgeInsets.only(
+            top: 8,
+            right: windowControlsTrailingInset,
+          ),
+        ),
+      );
+    }
+
     final profile = ref.watch(deviceProfileProvider).asData?.value;
     final isTv = profile?.isTv == true || context.isTv;
     final isWidescreen = isTv || context.isTabletOrLarger;

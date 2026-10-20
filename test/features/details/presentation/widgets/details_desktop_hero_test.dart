@@ -1,60 +1,144 @@
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/features/details/presentation/widgets/details_desktop_hero.dart';
 import 'package:animewitcher/features/details/presentation/widgets/premium_details_widgets.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  for (final entry in <String, TextDirection>{
-    'مغامرات البطل في العالم الآخر': TextDirection.rtl,
-    'The Long Adventure in Another World': TextDirection.ltr,
-    '2026 مغامرات البطل في العالم الآخر': TextDirection.rtl,
-    '86 The Long Adventure in Another World': TextDirection.ltr,
-    'مغامرات Naruto في العالم الآخر': TextDirection.rtl,
-    'Naruto and the Adventure in العالم': TextDirection.ltr,
-  }.entries) {
-    testWidgets('title keeps natural direction: ${entry.key}', (tester) async {
-      tester.view.physicalSize = const Size(390, 844);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      final item = MultimediaItem(
-        title: entry.key,
-        url: 'https://example.test/title-direction',
-        posterUrl: '',
-      );
-      await tester.pumpWidget(
-        ProviderScope(
-          child: MaterialApp(
-            home: Scaffold(
-              body: DetailsDesktopHero(
-                compact: true,
-                showPoster: true,
-                displayItem: item,
-                details: item,
-                detailsState: AsyncValue<MultimediaItem?>.data(item),
-                isMovie: false,
-                itemUrl: item.url,
-                onRefresh: () async {},
+  for (final compact in [false, true]) {
+    for (final entry in <String, TextDirection>{
+      'مغامرات البطل في العالم الآخر': TextDirection.rtl,
+      'The Long Adventure in Another World': TextDirection.ltr,
+      '2026 مغامرات البطل في العالم الآخر': TextDirection.rtl,
+      '86 The Long Adventure in Another World': TextDirection.ltr,
+      'مغامرات Naruto في العالم الآخر': TextDirection.rtl,
+      'Naruto and the Adventure in العالم': TextDirection.ltr,
+    }.entries) {
+      testWidgets(
+        '${compact ? 'phone' : 'Windows'} title keeps natural direction: ${entry.key}',
+        (tester) async {
+          debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+          addTearDown(() => debugDefaultTargetPlatformOverride = null);
+          tester.view.physicalSize = compact
+              ? const Size(390, 844)
+              : const Size(1280, 900);
+          tester.view.devicePixelRatio = 1;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          final item = MultimediaItem(
+            title: entry.key,
+            url: 'https://example.test/title-direction',
+            posterUrl: '',
+          );
+          await tester.pumpWidget(
+            ProviderScope(
+              child: MaterialApp(
+                home: Scaffold(
+                  body: DetailsDesktopHero(
+                    compact: compact,
+                    showPoster: true,
+                    displayItem: item,
+                    details: item,
+                    detailsState: AsyncValue<MultimediaItem?>.data(item),
+                    isMovie: false,
+                    itemUrl: item.url,
+                    onRefresh: () async {},
+                  ),
+                ),
               ),
             ),
-          ),
-        ),
+          );
+          await tester.pump();
+          final title = find.byWidgetPredicate(
+            (widget) =>
+                widget is Text &&
+                widget.data == entry.key &&
+                widget.style?.fontWeight == FontWeight.bold,
+          );
+          final text = tester.widget<Text>(title);
+          expect(text.textDirection, entry.value);
+          expect(text.textAlign, TextAlign.right);
+          expect(text.overflow, TextOverflow.ellipsis);
+          expect(text.data, entry.key);
+          expect(tester.takeException(), isNull);
+        },
       );
-      await tester.pump();
-      final title = find.byWidgetPredicate(
-        (widget) => widget is Text && widget.data == entry.key &&
-            widget.style?.fontWeight == FontWeight.bold,
+    }
+  }
+
+  for (final manga in [false, true]) {
+    for (final ambientDirection in TextDirection.values) {
+      testWidgets(
+        'Windows ${manga ? 'manga' : 'anime'} poster stays right in $ambientDirection',
+        (tester) async {
+          debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+          addTearDown(() => debugDefaultTargetPlatformOverride = null);
+          tester.view.physicalSize = const Size(1280, 900);
+          tester.view.devicePixelRatio = 1;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          final item = MultimediaItem(
+            title: 'Windows poster alignment',
+            url: 'https://example.test/windows-poster',
+            posterUrl: '',
+            year: 2026,
+            status: ShowStatus.ongoing,
+          );
+          var opens = 0;
+          await tester.pumpWidget(
+            ProviderScope(
+              child: MaterialApp(
+                home: Directionality(
+                  textDirection: ambientDirection,
+                  child: Scaffold(
+                    body: DetailsDesktopHero(
+                      manga: manga,
+                      showPoster: true,
+                      displayItem: item,
+                      details: item,
+                      detailsState: AsyncValue<MultimediaItem?>.data(item),
+                      isMovie: false,
+                      itemUrl: item.url,
+                      onRefresh: () async {},
+                      onPosterTap: () => opens++,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+          await tester.pump();
+          final poster = find.byKey(const ValueKey('details-hero-poster'));
+          final info = find.byKey(const ValueKey('details-hero-info'));
+          final title = find.byWidgetPredicate(
+            (widget) =>
+                widget is Text &&
+                widget.data == item.title &&
+                widget.style?.fontWeight == FontWeight.bold,
+          );
+          expect(tester.getRect(poster).right, closeTo(1220, 0.5));
+          expect(
+            tester.getRect(poster).left,
+            greaterThan(tester.getRect(info).right),
+          );
+          expect(tester.widget<Text>(title).textDirection, TextDirection.ltr);
+          expect(tester.widget<Text>(title).textAlign, TextAlign.right);
+          expect(tester.widget<Text>(title).overflow, TextOverflow.ellipsis);
+          expect(
+            tester.getRect(find.text('2026')).left,
+            greaterThan(tester.getRect(find.text('مستمر')).left),
+          );
+          await tester.tap(title);
+          expect(opens, 0);
+          await tester.tap(poster);
+          expect(opens, 1);
+          expect(tester.takeException(), isNull);
+        },
       );
-      final text = tester.widget<Text>(title);
-      expect(text.textDirection, entry.value);
-      expect(text.textAlign, TextAlign.right);
-      expect(text.overflow, TextOverflow.ellipsis);
-      expect(text.data, entry.key);
-      expect(tester.takeException(), isNull);
-    });
+    }
   }
 
   for (final manga in [false, true]) {
@@ -64,8 +148,10 @@ void main() {
       const Size(1280, 900),
     ]) {
       testWidgets(
-        '${manga ? 'manga' : 'anime'} header uses phone RTL and desktop LTR at $size',
+        '${manga ? 'manga' : 'anime'} header preserves phone RTL and other desktop LTR at $size',
         (tester) async {
+          debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+          addTearDown(() => debugDefaultTargetPlatformOverride = null);
           tester.view.physicalSize = size;
           tester.view.devicePixelRatio = 1;
           addTearDown(tester.view.resetPhysicalSize);
@@ -208,7 +294,8 @@ void main() {
           );
           await tester.pump();
           final title = find.byWidgetPredicate(
-            (widget) => widget is Text &&
+            (widget) =>
+                widget is Text &&
                 widget.data == item.title &&
                 widget.style?.fontWeight == FontWeight.bold,
           );

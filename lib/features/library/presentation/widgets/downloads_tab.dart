@@ -97,7 +97,9 @@ Future<void> _removeMissingDownload(
 }
 
 class DownloadsTab extends ConsumerStatefulWidget {
-  const DownloadsTab({super.key});
+  const DownloadsTab({super.key, this.headerPadding = EdgeInsets.zero});
+
+  final EdgeInsetsGeometry headerPadding;
 
   @override
   ConsumerState<DownloadsTab> createState() => _DownloadsTabState();
@@ -144,25 +146,28 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Directionality(
-          textDirection: TextDirection.rtl,
-          child: Row(
-            children: [
-              Expanded(
-                child: FilterStyleTabBar(
-                  controller: _tabs,
-                  isScrollable: false,
-                  tabs: [
-                    FilterStyleTab(label: l10n.downloads),
-                    FilterStyleTab(label: l10n.downloadsTabCompleted),
-                  ],
+        Padding(
+          padding: widget.headerPadding,
+          child: Directionality(
+            textDirection: TextDirection.rtl,
+            child: Row(
+              children: [
+                Expanded(
+                  child: FilterStyleTabBar(
+                    controller: _tabs,
+                    isScrollable: false,
+                    tabs: [
+                      FilterStyleTab(label: l10n.downloads),
+                      FilterStyleTab(label: l10n.downloadsTabCompleted),
+                    ],
+                  ),
                 ),
-              ),
-              // The side menu's button, in the corner it comes from.
-              const AppSideMenuButton(
-                padding: EdgeInsetsDirectional.only(start: 4, end: 12),
-              ),
-            ],
+                // The side menu's button, in the corner it comes from.
+                const AppSideMenuButton(
+                  padding: EdgeInsetsDirectional.only(start: 4, end: 12),
+                ),
+              ],
+            ),
           ),
         ),
         Expanded(
