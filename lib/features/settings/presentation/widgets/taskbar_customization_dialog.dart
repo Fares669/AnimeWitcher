@@ -40,7 +40,7 @@ Future<void> showTaskbarCustomizationDialog(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'اسحب العناصر لتغيير ترتيبها، وأخفِ ما لا تحتاجه. الإعدادات تبقى ظاهرة دائمًا.',
+                  'اسحب العناصر لتغيير ترتيبها، وأخفِ ما لا تحتاجه. الإعدادات متاحة من القائمة الجانبية.',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
                 const SizedBox(height: 16),
@@ -57,10 +57,7 @@ Future<void> showTaskbarCustomizationDialog(
                     },
                     itemBuilder: (context, index) {
                       final destination = order[index];
-                      final isSettings =
-                          destination == TaskbarDestination.settings;
-                      final visible =
-                          isSettings || !hidden.contains(destination.id);
+                      final visible = !hidden.contains(destination.id);
 
                       return Card(
                         key: ValueKey(destination.id),
@@ -68,23 +65,20 @@ Future<void> showTaskbarCustomizationDialog(
                         child: ListTile(
                           leading: Icon(destination.icon),
                           title: Text(destination.label(l10n)),
-                          subtitle: isSettings ? Text('لا يمكن إخفاؤها') : null,
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Switch(
                                 value: visible,
-                                onChanged: isSettings
-                                    ? null
-                                    : (value) {
-                                        setState(() {
-                                          if (value) {
-                                            hidden.remove(destination.id);
-                                          } else {
-                                            hidden.add(destination.id);
-                                          }
-                                        });
-                                      },
+                                onChanged: (value) {
+                                  setState(() {
+                                    if (value) {
+                                      hidden.remove(destination.id);
+                                    } else {
+                                      hidden.add(destination.id);
+                                    }
+                                  });
+                                },
                               ),
                               ReorderableDragStartListener(
                                 index: index,

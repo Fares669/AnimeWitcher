@@ -835,12 +835,19 @@ void showClearCacheDialog(BuildContext context, WidgetRef ref) {
         TextButton(
           onPressed: () async {
             Navigator.pop<void>(dialogContext);
-            await ref.read(settingsRepositoryProvider).clearImageVideoCache();
-            ref.invalidate(cacheSizeProvider);
-            if (callerContext.mounted) {
-              ref
-                  .read(notificationServiceProvider)
-                  .showSuccess(l10n.cacheCleared);
+            final repository = ref.read(settingsRepositoryProvider);
+            final notifications = ref.read(notificationServiceProvider);
+            try {
+              await repository.clearImageVideoCache();
+              if (callerContext.mounted) {
+                notifications.showSuccess(l10n.cacheCleared);
+              }
+            } catch (error) {
+              if (callerContext.mounted) {
+                notifications.showError(l10n.errorPrefix(error.toString()));
+              }
+            } finally {
+              if (callerContext.mounted) ref.invalidate(cacheSizeProvider);
             }
           },
           style: TextButton.styleFrom(
