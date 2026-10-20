@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'poster_plate.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 
@@ -354,6 +355,9 @@ class MultimediaCard extends StatelessWidget {
       width: double.infinity,
       height: double.infinity,
       memCacheWidth: decodeWidth,
+      queueStaticPosterDecode: !kIsWeb &&
+          ResponsiveBreakpoints.isDesktopPlatform() &&
+          decodeWidth != null,
       filterQuality: FilterQuality.medium,
       // Harbor's plate: the card's own colour, from its title, until the
       // picture is in.
