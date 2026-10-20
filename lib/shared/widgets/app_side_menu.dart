@@ -33,30 +33,38 @@ class AppSideMenuEntry {
   final bool dividerBefore;
 }
 
-/// Lets a page open the side menu from a button of its own. Present only
-/// while the side-menu layout is drawn, so a page that asks outside it gets
-/// nothing and draws no button.
+/// Shares the side-menu action and page-button visibility with each layout.
 class AppSideMenuScope extends InheritedWidget {
-  const AppSideMenuScope({super.key, required this.open, required super.child});
+  const AppSideMenuScope({
+    super.key,
+    required this.open,
+    this.showPageButtons = true,
+    required super.child,
+  });
 
   /// Slides the page aside and shows the menu.
   final VoidCallback open;
+
+  /// The top bar supplies its own menu control instead of page buttons.
+  final bool showPageButtons;
 
   static AppSideMenuScope? maybeOf(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<AppSideMenuScope>();
 
   @override
-  bool updateShouldNotify(AppSideMenuScope oldWidget) => open != oldWidget.open;
+  bool updateShouldNotify(AppSideMenuScope oldWidget) =>
+      open != oldWidget.open || showPageButtons != oldWidget.showPageButtons;
 }
 
 /// The round menu button a page puts in its top-left corner, the way the
-/// side menu comes from that side. Draws nothing unless the side-menu layout
-/// is on.
+/// side menu comes from that side. Page controls hide when the top bar
+/// supplies the menu button.
 class AppSideMenuButton extends StatelessWidget {
   const AppSideMenuButton({
     super.key,
     this.overArtwork = false,
     this.padding = EdgeInsets.zero,
+    this.inNavigationBar = false,
   });
 
   /// White on dark glass, for home's artwork.
@@ -65,12 +73,17 @@ class AppSideMenuButton extends StatelessWidget {
   /// Room around the button, kept only when there is a button.
   final EdgeInsetsGeometry padding;
 
+  /// Keeps the navigation bar's control available when page buttons are hidden.
+  final bool inNavigationBar;
+
   static const double size = 40;
 
   @override
   Widget build(BuildContext context) {
     final scope = AppSideMenuScope.maybeOf(context);
-    if (scope == null) return const SizedBox.shrink();
+    if (scope == null || (!scope.showPageButtons && !inNavigationBar)) {
+      return const SizedBox.shrink();
+    }
     final colors = Theme.of(context).colorScheme;
     final foreground = overArtwork ? Colors.white : colors.onSurface;
     return Padding(
@@ -117,6 +130,7 @@ class AppSideMenuShell extends StatefulWidget {
     required this.onBackWhenClosed,
     required this.child,
     this.entries = const <AppSideMenuEntry>[],
+    this.showPageMenuButtons = true,
   });
 
   /// The pages under the tabs, after a divider.
@@ -138,6 +152,8 @@ class AppSideMenuShell extends StatefulWidget {
   final VoidCallback onBackWhenClosed;
 
   final Widget child;
+
+  final bool showPageMenuButtons;
 
   /// The menu's width: most of a phone, never more than a comfortable column.
   static double menuWidthFor(double screenWidth) =>
@@ -261,7 +277,11 @@ class _AppSideMenuShellState extends State<AppSideMenuShell>
             child: AnimatedBuilder(
               animation: _menu,
               // The pages, built once: only where they are drawn moves.
-              child: AppSideMenuScope(open: _open, child: widget.child),
+              child: AppSideMenuScope(
+                open: _open,
+                showPageButtons: widget.showPageMenuButtons,
+                child: widget.child,
+              ),
               builder: (context, page) {
                 final t = _menu.value;
                 final radius = 28 * t;

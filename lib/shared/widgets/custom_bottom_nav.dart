@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
-import 'package:animewitcher/shared/widgets/account_avatar_button.dart';
 import 'package:animewitcher/shared/widgets/app_side_menu.dart';
 
 class CustomBottomNavBar extends StatelessWidget {
@@ -17,10 +16,6 @@ class CustomBottomNavBar extends StatelessWidget {
   /// button of its own instead of a row on home. Null leaves it out.
   final VoidCallback? onNews;
 
-  /// The account picture at the end, where the news button is shown too.
-  /// Null leaves it out.
-  final VoidCallback? onAccount;
-
   /// Wider docks keep the menu reachable from every tab.
   final bool showMenu;
 
@@ -30,7 +25,6 @@ class CustomBottomNavBar extends StatelessWidget {
     required this.destinations,
     required this.onTap,
     this.onNews,
-    this.onAccount,
     this.showMenu = false,
   });
 
@@ -63,13 +57,8 @@ class CustomBottomNavBar extends StatelessWidget {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
-    // The news and account cells count, so the highlight lands on the right
-    // tab.
-    final count =
-        destinations.length +
-        (onNews == null ? 0 : 1) +
-        (onAccount == null ? 0 : 1) +
-        (showMenu ? 1 : 0);
+    // Include the news and menu cells when positioning the tab highlight.
+    final count = destinations.length + (onNews == null ? 0 : 1) + (showMenu ? 1 : 0);
     final selectedIndex = destinations.indexWhere(
       (destination) => destination.branchIndex == currentBranchIndex,
     );
@@ -116,8 +105,6 @@ class CustomBottomNavBar extends StatelessWidget {
             },
           ),
         ),
-      if (showMenu)
-        const Expanded(child: Center(child: AppSideMenuButton())),
       if (onNews case final openNews?)
         Expanded(
           child: _NavTabCell(
@@ -128,11 +115,9 @@ class CustomBottomNavBar extends StatelessWidget {
             onTap: openNews,
           ),
         ),
-      if (onAccount case final openAccount?)
-        Expanded(
-          child: Center(
-            child: AccountAvatarButton(onTap: openAccount, size: 34),
-          ),
+      if (showMenu)
+        const Expanded(
+          child: Center(child: AppSideMenuButton(inNavigationBar: true)),
         ),
     ];
 

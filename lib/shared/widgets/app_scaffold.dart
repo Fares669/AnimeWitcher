@@ -120,6 +120,7 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
     // Every layout shares the same fixed browse menu, independent of the
     // customizable taskbar order and visibility.
     Widget withSideMenu(Widget child) => AppSideMenuShell(
+      showPageMenuButtons: layout != AppLayoutStyle.topBar,
       destinations: const <TaskbarDestination>[],
       entries: phoneFixedSideMenuEntries(
         context,
@@ -236,9 +237,6 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
           showMenu: layoutsAvailable,
           onTap: onDestination,
           onNews: layoutsAvailable ? () => openNewsScreen(context, ref) : null,
-          // A phone reaches the account through the side menu; a wider
-          // dock has room for it beside the news.
-          onAccount: layoutsAvailable ? () => openAccountScreen(context) : null,
         ),
       ),
     );
