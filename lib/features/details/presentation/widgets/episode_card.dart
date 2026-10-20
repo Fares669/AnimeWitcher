@@ -49,6 +49,54 @@ String _downloadDialogTitle(MultimediaItem parentItem, Episode episode) {
 }
 
 class EpisodeCard extends HookConsumerWidget {
+  static const double _thumbnailAspectRatio = 16 / 9;
+  static const double _focusedBorderWidth = 2;
+  static const double _actionSpacing = 8;
+
+  /// Fits the rail's image, two title lines and download/comment controls,
+  /// including the thicker focus border and the viewer's text scale.
+  static double railHeight(BuildContext context, {required double width}) {
+    final theme = Theme.of(context);
+    double textHeight(TextStyle? style, int lines) {
+      final painter = TextPainter(
+        text: TextSpan(
+          text: List.filled(lines, 'الحلقة').join('\n'),
+          style: style,
+        ),
+        textDirection: TextDirection.rtl,
+        textScaler: MediaQuery.textScalerOf(context),
+        maxLines: lines,
+      )..layout();
+      final height = painter.height;
+      painter.dispose();
+      return height;
+    }
+
+    final labelsHeight =
+        textHeight(
+          theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+          1,
+        ) +
+        2 +
+        textHeight(
+          theme.textTheme.bodySmall?.copyWith(
+            fontWeight: FontWeight.w500,
+            height: 1.25,
+          ),
+          2,
+        );
+    const actionsHeight = EpisodeActionChip.defaultSize * 2 + _actionSpacing;
+    final contentHeight = labelsHeight > actionsHeight
+        ? labelsHeight
+        : actionsHeight;
+    const insets = (LayoutConstants.spacingSm + _focusedBorderWidth) * 2;
+    return (insets +
+            (width - insets) / _thumbnailAspectRatio +
+            LayoutConstants.spacingSm +
+            contentHeight)
+        .ceilToDouble();
+  }
+
   final Episode episode;
   final MultimediaItem parentItem;
   final double? width;
@@ -383,7 +431,7 @@ class EpisodeCard extends HookConsumerWidget {
                             ? 0.1
                             : 0.5,
                       ),
-                width: isSelected || isFocused.value ? 2 : 1,
+                width: isSelected || isFocused.value ? _focusedBorderWidth : 1,
               ),
             ),
             clipBehavior: Clip.antiAlias,
@@ -573,7 +621,7 @@ class EpisodeCard extends HookConsumerWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         downloadAction,
-        const SizedBox(height: 8),
+        const SizedBox(height: _actionSpacing),
         ExcludeFocus(child: commentsButton),
       ],
     );
@@ -752,7 +800,7 @@ class EpisodeCard extends HookConsumerWidget {
           child: SizedBox(
             width: width ?? 140,
             child: AspectRatio(
-              aspectRatio: 16 / 9,
+              aspectRatio: _thumbnailAspectRatio,
               child: buildThumbnailImage(),
             ),
           ),

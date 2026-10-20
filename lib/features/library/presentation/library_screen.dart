@@ -11,6 +11,7 @@ import '../../../core/storage/storage_service.dart';
 import '../../../core/utils/layout_constants.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
+import '../../../shared/widgets/app_side_menu.dart';
 import '../../characters/presentation/characters_screen.dart';
 import '../../more/presentation/recent_watched_screen.dart';
 import 'history_provider.dart';
@@ -62,10 +63,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
           constraints: const BoxConstraints(maxWidth: 440),
           child: Padding(
             padding: const EdgeInsets.only(top: 8),
-            child: LibraryFilterPanel(
-              prefs: _prefs,
-              kind: kind,
-            ),
+            child: LibraryFilterPanel(prefs: _prefs, kind: kind),
           ),
         ),
       ),
@@ -116,84 +114,97 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
         ? libraryRecentLabel(context)
         : libraryCategoryLabel(context, category, kind);
     final theme = Theme.of(context);
+    final showPageMenu =
+        AppSideMenuScope.maybeOf(context)?.showPageButtons ?? false;
 
     return ListenableBuilder(
       listenable: _prefs,
       builder: (context, _) => Scaffold(
         backgroundColor: Colors.transparent,
-        body: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        body: Stack(
           children: [
-            SizedBox(
-              width: 272,
-              child: LibrarySideList(
-                kind: kind,
-                category: category,
-                recentSelected: _recent,
-                charactersSelected: _characters,
-                onCharacters: () => setState(() {
-                  _recent = false;
-                  _characters = true;
-                }),
-                counts: counts,
-                recentCount: recentCount,
-                prefs: _prefs,
-                onFilter: () => _openFilter(kind),
-                onRecent: () => setState(() {
-                  _recent = true;
-                  _characters = false;
-                }),
-                onSelect: (listKind, listCategory) {
-                  setState(() {
-                    _recent = false;
-                    _characters = false;
-                  });
-                  unawaited(
-                    ref
-                        .read(libraryProvider.notifier)
-                        .select(listKind, listCategory),
-                  );
-                },
-              ),
-            ),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Container(
-                    height: LayoutConstants.dashboardHeaderHeight,
-                    padding: const EdgeInsets.only(
-                      top: 8,
-                      left: LayoutConstants.dashboardContentPadding,
-                      right: LayoutConstants.dashboardContentPadding,
-                    ),
-                    alignment: AlignmentDirectional.centerStart,
-                    child: Text(
-                      _recent || _characters
-                          ? title
-                          : '${libraryKindLabel(context, kind)} · $title',
-                      key: const ValueKey<String>('library-pane-title'),
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SizedBox(
+                  width: 272,
+                  child: LibrarySideList(
+                    kind: kind,
+                    category: category,
+                    recentSelected: _recent,
+                    charactersSelected: _characters,
+                    onCharacters: () => setState(() {
+                      _recent = false;
+                      _characters = true;
+                    }),
+                    counts: counts,
+                    recentCount: recentCount,
+                    prefs: _prefs,
+                    onFilter: () => _openFilter(kind),
+                    onRecent: () => setState(() {
+                      _recent = true;
+                      _characters = false;
+                    }),
+                    onSelect: (listKind, listCategory) {
+                      setState(() {
+                        _recent = false;
+                        _characters = false;
+                      });
+                      unawaited(
+                        ref
+                            .read(libraryProvider.notifier)
+                            .select(listKind, listCategory),
+                      );
+                    },
+                  ),
+                ),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Container(
+                        height: LayoutConstants.dashboardHeaderHeight,
+                        padding: EdgeInsets.only(
+                          top: 8,
+                          left: showPageMenu
+                              ? 64
+                              : LayoutConstants.dashboardContentPadding,
+                          right: LayoutConstants.dashboardContentPadding,
+                        ),
+                        alignment: AlignmentDirectional.centerStart,
+                        child: Text(
+                          _recent || _characters
+                              ? title
+                              : '${libraryKindLabel(context, kind)} · $title',
+                          key: const ValueKey<String>('library-pane-title'),
+                          style: theme.textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                       ),
-                    ),
+                      Expanded(
+                        child: _characters
+                            ? const CharactersScreen(
+                                key: ValueKey<String>('library-characters'),
+                                favoritesOnly: true,
+                                embedded: true,
+                              )
+                            : _recent
+                            ? RecentWatchedBody(
+                                key: const ValueKey<String>('library-recent'),
+                                sort: _prefs.sort,
+                              )
+                            : BookmarksTab(sort: _prefs.sort),
+                      ),
+                    ],
                   ),
-                  Expanded(
-                    child: _characters
-                        ? const CharactersScreen(
-                            key: ValueKey<String>('library-characters'),
-                            favoritesOnly: true,
-                            embedded: true,
-                          )
-                        : _recent
-                        ? RecentWatchedBody(
-                            key: const ValueKey<String>('library-recent'),
-                            sort: _prefs.sort,
-                          )
-                        : BookmarksTab(sort: _prefs.sort),
-                  ),
-                ],
-              ),
+                ),
+              ],
+            ),
+            Positioned(
+              top: MediaQuery.viewPaddingOf(context).top + 8,
+              left: 12,
+              child: const AppSideMenuButton(),
             ),
           ],
         ),
