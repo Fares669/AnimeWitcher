@@ -2326,27 +2326,136 @@ abstract class AppLocalizations {
   /// **'التالي'**
   String get upNext;
 
+  /// No description provided for @manga.
+  ///
+  /// In ar, this message translates to:
+  /// **'مانجا'**
   String get manga;
+
+  /// No description provided for @manhwa.
+  ///
+  /// In ar, this message translates to:
+  /// **'مانهوا'**
   String get manhwa;
+
+  /// No description provided for @chapters.
+  ///
+  /// In ar, this message translates to:
+  /// **'الفصول'**
   String get chapters;
+
+  /// No description provided for @latestChapters.
+  ///
+  /// In ar, this message translates to:
+  /// **'فصول جديدة'**
   String get latestChapters;
+
+  /// No description provided for @mangaDetails.
+  ///
+  /// In ar, this message translates to:
+  /// **'التفاصيل'**
   String get mangaDetails;
+
+  /// No description provided for @mangaNoChapters.
+  ///
+  /// In ar, this message translates to:
+  /// **'لا توجد فصول'**
   String get mangaNoChapters;
+
+  /// No description provided for @mangaNoPages.
+  ///
+  /// In ar, this message translates to:
+  /// **'لا توجد صفحات'**
   String get mangaNoPages;
+
+  /// No description provided for @mangaDownloadChapter.
+  ///
+  /// In ar, this message translates to:
+  /// **'تنزيل الفصل'**
   String get mangaDownloadChapter;
+
+  /// No description provided for @mangaDeleteChapter.
+  ///
+  /// In ar, this message translates to:
+  /// **'حذف الفصل'**
   String get mangaDeleteChapter;
+
+  /// No description provided for @mangaCompleted.
+  ///
+  /// In ar, this message translates to:
+  /// **'مكتمل'**
   String get mangaCompleted;
+
+  /// No description provided for @mangaLibraryType.
+  ///
+  /// In ar, this message translates to:
+  /// **'نوع المكتبة'**
   String get mangaLibraryType;
+
+  /// No description provided for @mangaReadingNow.
+  ///
+  /// In ar, this message translates to:
+  /// **'أقرأها حالياً'**
   String get mangaReadingNow;
+
+  /// No description provided for @mangaContinueLater.
+  ///
+  /// In ar, this message translates to:
+  /// **'أكملها لاحقاً'**
   String get mangaContinueLater;
+
+  /// No description provided for @mangaPlanToRead.
+  ///
+  /// In ar, this message translates to:
+  /// **'أرغب بقراءتها'**
   String get mangaPlanToRead;
+
+  /// No description provided for @mangaCompletedReading.
+  ///
+  /// In ar, this message translates to:
+  /// **'تمت قراءتها'**
   String get mangaCompletedReading;
+
+  /// No description provided for @mangaNotInterested.
+  ///
+  /// In ar, this message translates to:
+  /// **'لا أرغب بقراءتها'**
   String get mangaNotInterested;
+
+  /// No description provided for @searchDomainAnime.
+  ///
+  /// In ar, this message translates to:
+  /// **'أنمي'**
   String get searchDomainAnime;
+
+  /// No description provided for @searchDomainAnimation.
+  ///
+  /// In ar, this message translates to:
+  /// **'انميشن'**
   String get searchDomainAnimation;
+
+  /// No description provided for @searchDomainManga.
+  ///
+  /// In ar, this message translates to:
+  /// **'مانجا'**
   String get searchDomainManga;
+
+  /// No description provided for @searchDomainCharacters.
+  ///
+  /// In ar, this message translates to:
+  /// **'شخصيات'**
   String get searchDomainCharacters;
+
+  /// No description provided for @searchDomainTooltip.
+  ///
+  /// In ar, this message translates to:
+  /// **'نوع البحث'**
   String get searchDomainTooltip;
+
+  /// No description provided for @mangaChapterCount.
+  ///
+  /// In ar, this message translates to:
+  /// **'{count, plural, =1{فصل} =2{فصلان} other{{count} فصول}}'**
   String mangaChapterCount(int count);
 }
 
