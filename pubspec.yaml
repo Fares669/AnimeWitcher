@@ -25,6 +25,8 @@ dependencies:
   dio: ^5.11.1
   google_fonts: ^9.0.0
   cached_network_image: ^4.0.4
+  octo_image: ^2.1.2
+  file: ^7.0.1
   package_info_plus: ^10.2.2
   shared_preferences: ^2.5.6
   path_provider: ^2.1.6

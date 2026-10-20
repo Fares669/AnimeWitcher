@@ -1,10 +1,12 @@
 import 'dart:async';
 
 import 'package:animewitcher/core/network/poster_cache.dart';
+import 'package:animewitcher/core/network/queued_poster_image_provider.dart';
 import 'package:animewitcher/shared/widgets/poster_plate.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:octo_image/octo_image.dart';
 
 import '../../core/services/artwork_fallback_service.dart';
 import '../../core/utils/artwork_host_fallback.dart';
@@ -31,6 +33,7 @@ class FallbackPosterImage extends ConsumerStatefulWidget {
     this.width,
     this.height,
     this.memCacheWidth,
+    this.queueStaticPosterDecode = false,
     this.filterQuality = FilterQuality.medium,
     this.fadeInDuration = const Duration(milliseconds: 120),
   });
@@ -68,6 +71,9 @@ class FallbackPosterImage extends ConsumerStatefulWidget {
   final double? width;
   final double? height;
   final int? memCacheWidth;
+
+  /// Opt-in for standard-quality desktop cards, not heroes or the player.
+  final bool queueStaticPosterDecode;
   final FilterQuality filterQuality;
   final Duration fadeInDuration;
 
@@ -336,35 +342,60 @@ class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
           : widget.placeholder(context);
     }
 
-    final image = CachedNetworkImage(
-      key: ValueKey<String>('$url#$_retry'),
-      imageUrl: url,
-      cacheManager: posterCacheManager,
-      fit: widget.fit,
-      alignment: widget.alignment,
-      width: widget.width,
-      height: widget.height,
-      memCacheWidth: widget.memCacheWidth,
-      filterQuality: widget.filterQuality,
-      placeholder: (context, _) => widget.placeholder(context),
-      errorWidget: (context, _, _) {
-        // Only the catalog's own URL is worth replacing; if the replacement
-        // fails too there is nothing further to try.
-        if (_fallbackUrl == null && !_primaryFailed) {
-          _primaryFailed = true;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) _resolveFallback();
-          });
-        }
+    Widget errorBuilder(BuildContext context, Object error, StackTrace? stack) {
+      // Only the catalog's own URL is worth replacing; if the replacement
+      // fails too there is nothing further to try.
+      if (_fallbackUrl == null && !_primaryFailed) {
+        _primaryFailed = true;
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _scheduleRetry(url);
+          if (mounted) _resolveFallback();
         });
-        return widget.errorWidget(context);
-      },
-      fadeOutDuration: Duration.zero,
-      fadeInDuration: widget.fadeInDuration,
-      useOldImageOnUrlChange: true,
-    );
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scheduleRetry(url);
+      });
+      return widget.errorWidget(context);
+    }
+
+    final key = ValueKey<String>('$url#$_retry');
+    final Widget image;
+    if (widget.queueStaticPosterDecode) {
+      // CachedNetworkImage itself renders through OctoImage. Keep its visual
+      // options and original cache provider semantics, adding only the codec
+      // adapter at the public provider boundary.
+      image = OctoImage(
+        key: key,
+        image: QueuedPosterImageProvider(url),
+        fit: widget.fit,
+        alignment: widget.alignment,
+        width: widget.width,
+        height: widget.height,
+        memCacheWidth: widget.memCacheWidth,
+        filterQuality: widget.filterQuality,
+        placeholderBuilder: widget.placeholder,
+        errorBuilder: errorBuilder,
+        fadeOutDuration: Duration.zero,
+        fadeInDuration: widget.fadeInDuration,
+        gaplessPlayback: true,
+      );
+    } else {
+      image = CachedNetworkImage(
+        key: key,
+        imageUrl: url,
+        cacheManager: posterCacheManager,
+        fit: widget.fit,
+        alignment: widget.alignment,
+        width: widget.width,
+        height: widget.height,
+        memCacheWidth: widget.memCacheWidth,
+        filterQuality: widget.filterQuality,
+        placeholder: (context, _) => widget.placeholder(context),
+        errorWidget: (context, _, error) => errorBuilder(context, error, null),
+        fadeOutDuration: Duration.zero,
+        fadeInDuration: widget.fadeInDuration,
+        useOldImageOnUrlChange: true,
+      );
+    }
     return MouseRegion(
       opaque: false,
       hitTestBehavior: HitTestBehavior.translucent,
