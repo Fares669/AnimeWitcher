@@ -80,6 +80,30 @@ abstract interface class DownloadTransportHandle {
   Future<bool> cancel();
 }
 
+/// The coordinator accepted a pause, but its recovery checkpoint could not be
+/// validated/persisted. Keep the user's paused intent even though no safely
+/// settled paused snapshot was published; resume must retry the checkpoint.
+final class DownloadPauseCheckpointException implements Exception {
+  const DownloadPauseCheckpointException(this.cause);
+  final Object cause;
+  @override
+  String toString() => 'Download pause checkpoint could not be saved: $cause';
+}
+
+/// Optional in-place source renewal for transports with durable range ownership.
+/// A false result preserves the old checkpoint; callers must not fall back to
+/// cancellation/restart because the new source could be a different resource.
+abstract interface class SourceRenewingDownloadTransportHandleV2 {
+  /// Interrupt current verification before a stop command waits in its FIFO.
+  void interruptSourceRenewal();
+
+  Future<bool> replaceSource({
+    required String url,
+    required Map<String, String> headers,
+    int? expectedBytes,
+  });
+}
+
 /// Package terminal-status signal for one ordinary task. Parallel parents keep
 /// their snapshot/child-ownership settlement path.
 abstract interface class CompletingDownloadTransportHandleV2 {
@@ -1061,15 +1085,6 @@ final class PackageBackgroundDownloaderGateway
     }
   }
 
-  Future<bool> _hasExactDurableRangeFile(DownloadTask task) async {
-    final range = _diagnosticRangeBoundsV2(task);
-    if (range == null) return false;
-    final file = File(await task.filePath());
-    return await FileSystemEntity.type(file.path, followLinks: false) ==
-            FileSystemEntityType.file &&
-        await file.length() == range.$2 - range.$1 + 1;
-  }
-
   Set<String> _durablePauseIdsForParent(String parentTaskId) => {
     ..._pendingDurablePauses.keys,
     ..._pendingDurablePauseCheckpoints.keys,
@@ -1079,14 +1094,47 @@ final class PackageBackgroundDownloaderGateway
     await _waitForDurablePauseCheckpoints(_durablePauseIdsForParent(parentTaskId));
     final rejected = _rejectedDurablePauses.entries
         .where((entry) => entry.key.startsWith('$parentTaskId.part.')).toList();
-    var checkpointLost = false;
-    for (final entry in rejected) {
-      checkpointLost = !await _hasExactDurableRangeFile(entry.value) || checkpointLost;
-      _rejectedDurablePauses.remove(entry.key);
+    if (rejected.isEmpty) return;
+    // iOS cancelByProducingResumeData may stop the writer but return no blob.
+    // That is a recoverable pause, not a failed user command. Never infer this
+    // from the negative ACK alone: require fresh, successful native inventory.
+    final live = await _durablePartOwnershipIds();
+    if (live.any((id) => id.startsWith('$parentTaskId.part.'))) {
+      throw StateError('Native range writer has not stopped');
     }
-    if (checkpointLost) {
-      throw StateError('Download stopped without a resume checkpoint. '
-          'Completed ranges were kept; an unfinished range may need to retry.');
+    final durableBytes = <String, int>{};
+    for (final entry in rejected) {
+      final bounds = _diagnosticRangeBoundsV2(entry.value);
+      if (bounds == null) throw StateError('Missing stopped range bounds');
+      final file = await findPartialDownloadFile(
+        destinationPath: await entry.value.filePath(),
+      );
+      var bytes = 0;
+      if (file != null) {
+        if (await FileSystemEntity.type(file.path, followLinks: false) !=
+            FileSystemEntityType.file) {
+          throw FileSystemException('Unsafe stopped range checkpoint', file.path);
+        }
+        bytes = await file.length();
+        if (bytes < 0 || bytes > bounds.$2 - bounds.$1 + 1) {
+          throw FileSystemException('Invalid stopped range length', file.path);
+        }
+      }
+      durableBytes[entry.key] = bytes;
+    }
+    await _ensureDurableParallelCoordinator()
+        .reconcileStoppedPartProgress(parentTaskId, durableBytes);
+    for (final entry in rejected) {
+      if (identical(_rejectedDurablePauses[entry.key], entry.value)) {
+        _rejectedDurablePauses.remove(entry.key);
+      }
+      _diagnostics.recordTransport('recovery.decision', {
+        'taskId': parentTaskId,
+        'childTaskId': entry.key,
+        'reason': 'pausedWithoutNativeCheckpoint',
+        'durableBytes': durableBytes[entry.key],
+        'result': true,
+      });
     }
   }
 
@@ -2152,7 +2200,8 @@ final class _DurableParallelDownloadTransportHandle
     implements
         DownloadTransportHandle,
         SelfSettlingParallelDownloadTransportHandleV2,
-        PauseFencedDownloadTransportHandleV2 {
+        PauseFencedDownloadTransportHandleV2,
+        SourceRenewingDownloadTransportHandleV2 {
   _DurableParallelDownloadTransportHandle({
     required this.parent,
     required this.totalBytes,
@@ -2171,7 +2220,7 @@ final class _DurableParallelDownloadTransportHandle
              coordinator.activeConnectionCountFor(parent.taskId) ?? 0,
        );
 
-  final ParallelDownloadTask parent;
+  ParallelDownloadTask parent;
   final int totalBytes;
   final PersistentParallelDownload coordinator;
   final Future<void> Function() afterPause;
@@ -2180,6 +2229,7 @@ final class _DurableParallelDownloadTransportHandle
       StreamController<DownloadTransportSnapshot>.broadcast(sync: true);
   DownloadTransportSnapshot _current;
   Future<bool>? _pauseInFlight;
+  bool _pauseNeedsRepair = false;
   bool _disposed = false;
 
   @override
@@ -2206,18 +2256,71 @@ final class _DurableParallelDownloadTransportHandle
   }
 
   Future<bool> _pauseAndWaitForCheckpoint() async {
-    final accepted = await coordinator.pause(
-      parent,
-      beforePause: () => withdrawNativeRangeParentV2(taskId),
-    );
-    if (accepted) await afterPause();
+    final bool accepted;
+    try {
+      accepted = await coordinator.pause(
+        parent,
+        beforePause: () => withdrawNativeRangeParentV2(taskId),
+      );
+    } catch (error) {
+      // Disk/record persistence can fail after the coordinator stopped its
+      // writers but before it returned. Keep pause intent and retry repair;
+      // never publish a settled snapshot or silently resume on relaunch.
+      if (!coordinator.isActive(taskId) &&
+          coordinator.activeConnectionCountFor(taskId) == 0) {
+        _pauseNeedsRepair = true;
+        if (error is! TimeoutException) {
+          throw DownloadPauseCheckpointException(error);
+        }
+      }
+      rethrow;
+    }
+    if (accepted) {
+      _pauseNeedsRepair = true;
+      try {
+        await afterPause();
+      } on TimeoutException {
+        rethrow;
+      } catch (error) {
+        throw DownloadPauseCheckpointException(error);
+      }
+      _pauseNeedsRepair = false;
+      if (_current.status != DownloadTransportStatus.complete &&
+          _current.status != DownloadTransportStatus.canceled) {
+        accept(TaskStatusUpdate(parent, TaskStatus.paused), settledPause: true);
+      }
+    }
     return accepted;
   }
 
   @override
+  void interruptSourceRenewal() => coordinator.interruptSourceReplacement(taskId);
+
+  @override
+  Future<bool> replaceSource({
+    required String url,
+    required Map<String, String> headers,
+    int? expectedBytes,
+  }) async {
+    if (_disposed || url.isEmpty ||
+        (expectedBytes != null && expectedBytes > 0 && expectedBytes != totalBytes)) {
+      return false;
+    }
+    // Withdraw background offers and settle writers/checkpoints before checking
+    // byte identity. Renewal never starts a worker or deletes the old ranges.
+    if (!await pause()) return false;
+    final renewed = await coordinator.replaceSource(parent, url: url, headers: headers);
+    if (renewed == null) return false;
+    parent = renewed;
+    accept(TaskStatusUpdate(parent, TaskStatus.paused));
+    return true;
+  }
+
+  @override
   Future<bool> resume() async {
-    final pause = _pauseInFlight;
-    if (pause != null) await pause;
+    final pendingPause = _pauseInFlight;
+    if (pendingPause != null) await pendingPause;
+    if (_pauseNeedsRepair && !await pause()) return false;
     await beforeResume();
     return coordinator.start(parent, totalBytes);
   }
@@ -2244,8 +2347,14 @@ final class _DurableParallelDownloadTransportHandle
     return true;
   }
 
-  void accept(TaskUpdate update) {
+  void accept(TaskUpdate update, {bool settledPause = false}) {
     if (_disposed || update.task.taskId != taskId) return;
+    // Coordinator pause stops admission first. Its early status is not proof
+    // that OS checkpoint writes and lost-progress reconciliation have settled.
+    if (!settledPause && _pauseInFlight != null &&
+        update is TaskStatusUpdate && update.status == TaskStatus.paused) {
+      return;
+    }
     if (update is TaskProgressUpdate) {
       final total = update.expectedFileSize > 0
           ? update.expectedFileSize
@@ -2272,8 +2381,14 @@ final class _DurableParallelDownloadTransportHandle
       );
       final durableBytes = coordinator.durableBytesFor(taskId);
       final currentBytes = _current.transferredBytes;
+      // A settled pause may have lost OS-private in-flight bytes. Publish the
+      // reconciled aggregate, not a high-water mark from the running snapshot.
+      final pausedProgress = status == DownloadTransportStatus.paused
+          ? coordinator.progressFor(taskId) : null;
       final transferredBytes = status == DownloadTransportStatus.complete
           ? _current.totalBytes
+          : pausedProgress != null && _current.totalBytes != null
+          ? (pausedProgress * _current.totalBytes!).round()
           : durableBytes == null
           ? currentBytes
           : currentBytes == null || durableBytes > currentBytes
