@@ -345,6 +345,45 @@ void main() {
     expect(find.byKey(const ValueKey('app-side-menu-button')), findsNothing);
   });
 
+  testWidgets('top bar hides page menu buttons and keeps its own control', (
+    tester,
+  ) async {
+    var opened = 0;
+    void open() => opened++;
+    for (final showPageButtons in [true, false, true]) {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AppSideMenuScope(
+            open: open,
+            showPageButtons: showPageButtons,
+            child: const Scaffold(
+              body: Column(
+                children: [
+                  AppSideMenuButton(key: ValueKey('page-menu')),
+                  AppSideMenuButton(
+                    key: ValueKey('navigation-menu'),
+                    inNavigationBar: true,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(
+        find.byKey(const ValueKey('app-side-menu-button')),
+        findsNWidgets(showPageButtons ? 2 : 1),
+      );
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const ValueKey('navigation-menu')),
+          matching: find.byType(InkWell),
+        ),
+      );
+    }
+    expect(opened, 3);
+  });
+
   testWidgets('the More pages sit under the tabs and open from the menu', (
     tester,
   ) async {

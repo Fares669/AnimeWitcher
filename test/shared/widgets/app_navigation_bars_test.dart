@@ -53,6 +53,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
       var opened = 0;
+      var newsOpened = 0;
       final bar = switch (layout) {
         'rail' => AppSideRail(
           destinations: _destinations,
@@ -74,6 +75,7 @@ void main() {
           currentBranchIndex: 0,
           onTap: (_) {},
           showMenu: true,
+          onNews: () => newsOpened++,
         ),
       };
       await tester.pumpWidget(
@@ -85,6 +87,7 @@ void main() {
             home: Scaffold(
               body: AppSideMenuScope(
                 open: () => opened++,
+                showPageButtons: layout != 'top',
                 child: Align(alignment: Alignment.topLeft, child: bar),
               ),
             ),
@@ -93,6 +96,25 @@ void main() {
       );
       await tester.pump();
       expect(find.text('المزيد'), findsNothing);
+      final menu = find.byKey(const ValueKey('app-side-menu-button'));
+      final news = find.byIcon(Icons.newspaper_rounded);
+      if (layout == 'dock') {
+        expect(find.byKey(const ValueKey('account-avatar-button')), findsNothing);
+        expect(tester.getCenter(menu).dx, lessThan(tester.getCenter(news).dx));
+        await tester.tap(news);
+        expect(newsOpened, 1);
+      } else if (layout == 'rail') {
+        final gap = tester.getTopLeft(news).dy - tester.getBottomLeft(menu).dy;
+        expect(gap, inInclusiveRange(0, 32));
+        expect(
+          tester.getCenter(news).dy,
+          lessThan(
+            tester.getCenter(
+              find.byKey(const ValueKey('account-avatar-button')),
+            ).dy,
+          ),
+        );
+      }
       await tester.tap(find.byKey(const ValueKey('app-side-menu-button')));
       expect(opened, 1);
       expect(tester.takeException(), isNull);

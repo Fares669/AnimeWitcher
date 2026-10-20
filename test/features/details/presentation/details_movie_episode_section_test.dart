@@ -10,6 +10,7 @@ import 'package:animewitcher/features/details/presentation/widgets/anime_informa
 import 'package:animewitcher/features/details/presentation/widgets/details_hero_actions.dart';
 import 'package:animewitcher/features/details/presentation/widgets/details_layout_widgets.dart';
 import 'package:animewitcher/features/details/presentation/widgets/episode_card.dart';
+import 'package:animewitcher/features/details/presentation/widgets/episode_view_mode.dart';
 import 'package:animewitcher/features/details/presentation/widgets/episode_action_chip.dart';
 import 'package:animewitcher/features/comments/presentation/animewitcher_comments_screen.dart';
 import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
@@ -114,6 +115,88 @@ final class _ReadyDetailsController extends DetailsController {
 }
 
 void main() {
+  testWidgets('episode rail fits comment actions at fractional scale and focus', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1920, 1080);
+    tester.view.devicePixelRatio = 1.25;
+    addTearDown(tester.view.reset);
+    final previousMode = episodeViewMode.value;
+    episodeViewMode.value = EpisodeViewMode.rail;
+    addTearDown(() => episodeViewMode.value = previousMode);
+    final episode = Episode(
+      name: 'القصة التي بدأت في المدينة الجديدة وما حدث بعدها',
+      url: 'anime|rail-episode-1',
+      episode: 1,
+    );
+    final item = MultimediaItem(
+      title: 'Anime',
+      url: 'https://animewitcher.com/watch/rail-layout',
+      posterUrl: '',
+      provider: animeWitcherNativeProviderId,
+      episodes: [episode],
+    );
+    final container = ProviderContainer(
+      overrides: [
+        storageServiceProvider.overrideWithValue(_Storage()),
+        downloadsProvider.overrideWith(_EmptyDownloads.new),
+        logicalDownloadStoreV2Provider.overrideWithValue(
+          InMemoryLogicalDownloadStoreV2(),
+        ),
+        detailsControllerProvider(item.url).overrideWith(
+          () => _ReadyDetailsController(item),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    for (final scale in [1.0, 1.5, 2.0]) {
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            locale: const Locale('ar'),
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            theme: ThemeData.dark(),
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(
+                textScaler: TextScaler.linear(scale),
+              ),
+              child: child!,
+            ),
+            home: Scaffold(
+              body: SingleChildScrollView(
+                child: DetailsDesktopEpisodeColumn(
+                  parentItem: item,
+                  itemUrl: item.url,
+                  isMovie: false,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byIcon(Icons.chat_bubble_outline_rounded), findsOneWidget);
+      expect(tester.takeException(), isNull, reason: 'text scale $scale');
+      final focus = tester.widget<Focus>(
+        find.byWidgetPredicate(
+          (widget) => widget is Focus && widget.focusNode?.debugLabel == 'ep_body',
+        ),
+      ).focusNode!;
+      focus.requestFocus();
+      await tester.pumpAndSettle();
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: 'focused at text scale $scale',
+      );
+      focus.unfocus();
+      await tester.pumpAndSettle();
+    }
+  });
+
   for (final platform in <TargetPlatform>[
     TargetPlatform.windows,
     TargetPlatform.macOS,
