@@ -60,7 +60,6 @@ void main() {
         '../users/x',
         'anime_list/a/comments/..',
         'https://host/anime_list/a/comments/c',
-        'anime_list/a/comments/%2e%2e',
         'anime_list//comments/c',
       ]) {
         expect(
@@ -120,6 +119,19 @@ void main() {
       }
     }
   });
+  test(
+    'encoded-looking IDs remain literal and are never decoded as traversal',
+    () {
+      for (final id in ['%2e%2e', '%2F', 'title #1?']) {
+        final path = 'anime_list/a/comments/$id';
+        expect(
+          item({'type': 'anime_comment_like', 'comment_doc_ref': path})
+              .targetPath,
+          path,
+        );
+      }
+    },
+  );
   test('notification ownership rejects other users and nested documents', () {
     expect(
       animeWitcherOwnsNotificationPath('users/p/notifications/n', 'p'),

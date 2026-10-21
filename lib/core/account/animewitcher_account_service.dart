@@ -868,18 +868,35 @@ class AnimeWitcherAccountService {
   ) {
     return _notificationRequest((profile, token) async {
       _checkNotificationPath(notification.path, profile);
-      final target = notification.actionText == null
-          ? null
-          : animeWitcherNotificationTargetPath(notification.targetPath);
-      if (target == null) return null;
+      final target = animeWitcherNotificationTargetPath(notification.targetPath);
+      if (target == null) {
+        throw const AnimeWitcherAccountException(
+          'notification-target-reference',
+          'رابط الإشعار غير صالح أو غير مدعوم',
+        );
+      }
       final document = await _firestore.getDocument(target, token);
-      if (document == null ||
-          document.path != target ||
-          document.fields['published'] == false) {
-        return null;
+      if (document == null) return null;
+      if (document.path != target) {
+        throw const AnimeWitcherAccountException(
+          'notification-target-content',
+          'تعذر قراءة محتوى التعليق أو المراجعة',
+        );
+      }
+      if (document.fields['published'] == false) {
+        throw const AnimeWitcherAccountException(
+          'notification-target-hidden',
+          'هذا المحتوى غير متاح للعرض حالياً',
+        );
       }
       final comment = AnimeWitcherComment.fromDocument(document);
-      return comment.text.isEmpty ? null : comment;
+      if (comment.text.isEmpty) {
+        throw const AnimeWitcherAccountException(
+          'notification-target-content',
+          'تعذر قراءة محتوى التعليق أو المراجعة',
+        );
+      }
+      return comment;
     });
   }
 

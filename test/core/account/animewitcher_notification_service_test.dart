@@ -342,6 +342,74 @@ void main() {
       }
     },
   );
+  for (final reference in [
+    'anime_list/Anime Title/episodes/الحلقة 1/comments/c',
+    'anime_list/Anime Title %2F #1?/comments/c',
+    '/anime_list/a/comments/c/',
+    'projects/animewitcher-1c66d/databases/(default)/documents/anime_list/a/comments/c',
+  ]) {
+    test('opens supported comment reference $reference', () async {
+      final expectedPath = reference.contains('Anime Title')
+          ? reference
+          : 'anime_list/a/comments/c';
+      final fields = FirestoreValueCodec.decodeFields({
+        'type': {'stringValue': 'episode_comment_reply'},
+        'comment_doc_ref': {'stringValue': reference},
+      });
+      final item = AnimeWitcherNotification.fromDocument(
+        FirestoreDocument(
+          id: 'n',
+          path: 'users/profile/notifications/n',
+          fields: fields,
+        ),
+      );
+      response = {
+        'name':
+            'projects/animewitcher-1c66d/databases/(default)/documents/$expectedPath',
+        'fields': {
+          'comment': {'stringValue': 'existing comment'},
+        },
+      };
+      final target = await service.loadNotificationTarget(item);
+      expect(target?.text, 'existing comment');
+      expect(target?.path, expectedPath);
+      expect(requests.single.method, 'GET');
+      if (reference.contains('%2F')) {
+        expect(requests.single.path, contains('%252F'));
+        expect(requests.single.queryParameters, isEmpty);
+      }
+      expect(
+        Uri.decodeComponent(requests.single.path),
+        endsWith('/documents/$expectedPath'),
+      );
+    });
+  }
+  test(
+    'new notification type still opens its validated comment reference',
+    () async {
+      final item = AnimeWitcherNotification.fromDocument(
+        const FirestoreDocument(
+          id: 'n',
+          path: 'users/profile/notifications/n',
+          fields: {
+            'type': 'future_comment_action',
+            'comment_doc_ref': 'anime_list/a/comments/c',
+          },
+        ),
+      );
+      response = {
+        'name': 'projects/animewitcher-1c66d/databases/(default)/documents/anime_list/a/comments/c',
+        'fields': {
+          'comment': {'stringValue': 'existing comment'},
+        },
+      };
+      expect(
+        (await service.loadNotificationTarget(item))?.text,
+        'existing comment',
+      );
+    },
+  );
+
   test(
     'deleted target returns no route while network errors remain errors',
     () async {
@@ -364,6 +432,103 @@ void main() {
       );
     },
   );
+  for (final project in ['foreign', 'animewitcher-1c66d']) {
+    test('referenceValue preserves project identity for $project', () async {
+      final fields = FirestoreValueCodec.decodeFields({
+        'type': {'stringValue': 'anime_comment_reply'},
+        'comment_doc_ref': {
+          'referenceValue':
+              'projects/$project/databases/(default)/documents/anime_list/a/comments/c',
+        },
+      });
+      final item = AnimeWitcherNotification.fromDocument(
+        FirestoreDocument(
+          id: 'n',
+          path: 'users/profile/notifications/n',
+          fields: fields,
+        ),
+      );
+      response = {
+        'name': 'projects/animewitcher-1c66d/databases/(default)/documents/anime_list/a/comments/c',
+        'fields': {
+          'comment': {'stringValue': 'existing comment'},
+        },
+      };
+      if (project == 'foreign') {
+        await expectLater(
+          service.loadNotificationTarget(item),
+          throwsA(
+            isA<AnimeWitcherAccountException>().having(
+              (e) => e.code,
+              'code',
+              'notification-target-reference',
+            ),
+          ),
+        );
+        expect(requests, isEmpty);
+      } else {
+        expect(
+          (await service.loadNotificationTarget(item))?.text,
+          'existing comment',
+        );
+      }
+    });
+  }
+  test('existing empty target is invalid response, not deleted', () async {
+    final item = AnimeWitcherNotification.fromDocument(
+      const FirestoreDocument(
+        id: 'n',
+        path: 'users/profile/notifications/n',
+        fields: {
+          'type': 'anime_comment_like',
+          'comment_doc_ref': 'anime_list/a/comments/c',
+        },
+      ),
+    );
+    response = {
+      'name': 'projects/animewitcher-1c66d/databases/(default)/documents/anime_list/a/comments/c',
+      'fields': <String, dynamic>{},
+    };
+    await expectLater(
+      service.loadNotificationTarget(item),
+      throwsA(
+        isA<AnimeWitcherAccountException>().having(
+          (e) => e.code,
+          'code',
+          'notification-target-content',
+        ),
+      ),
+    );
+  });
+  test('unpublished target remains unavailable', () async {
+    final item = AnimeWitcherNotification.fromDocument(
+      const FirestoreDocument(
+        id: 'n',
+        path: 'users/profile/notifications/n',
+        fields: {
+          'type': 'anime_comment_like',
+          'comment_doc_ref': 'anime_list/a/comments/c',
+        },
+      ),
+    );
+    response = {
+      'name': 'projects/animewitcher-1c66d/databases/(default)/documents/anime_list/a/comments/c',
+      'fields': {
+        'comment': {'stringValue': 'hidden comment'},
+        'published': {'booleanValue': false},
+      },
+    };
+    await expectLater(
+      service.loadNotificationTarget(item),
+      throwsA(
+        isA<AnimeWitcherAccountException>().having(
+          (e) => e.code,
+          'code',
+          'notification-target-hidden',
+        ),
+      ),
+    );
+  });
   test(
     'target resolution rejects arbitrary references before network',
     () async {
@@ -374,7 +539,16 @@ void main() {
           fields: {'type': 'review_reply', 'review_doc_ref': 'users/private'},
         ),
       );
-      expect(await service.loadNotificationTarget(item), isNull);
+      await expectLater(
+        service.loadNotificationTarget(item),
+        throwsA(
+          isA<AnimeWitcherAccountException>().having(
+            (e) => e.code,
+            'code',
+            'notification-target-reference',
+          ),
+        ),
+      );
       expect(requests, isEmpty);
     },
   );

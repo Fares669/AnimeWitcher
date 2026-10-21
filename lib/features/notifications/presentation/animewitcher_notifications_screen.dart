@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
+import '../../../core/account/animewitcher_account_models.dart';
 import '../../../core/account/animewitcher_notification_models.dart';
 import '../../../core/account/firestore_rest_client.dart';
+import '../../../core/services/notification_service.dart';
 import '../../../core/utils/request_generation.dart';
 import '../../../core/utils/avatar_image.dart';
 import '../../../core/utils/relative_time.dart';
@@ -122,7 +124,6 @@ class _NotificationsState
 
   Future<void> _markSeen(int generation, String accountId) async {
     if (!_current(generation, accountId)) return;
-    final messenger = ScaffoldMessenger.of(context);
     try {
       await ref
           .read(animeWitcherAccountServiceProvider)
@@ -132,15 +133,15 @@ class _NotificationsState
       }
     } catch (_) {
       if (!_current(generation, accountId)) return;
-      messenger.showSnackBar(
-        SnackBar(
-          content: const Text('تعذر تحديث عداد الإشعارات'),
-          action: SnackBarAction(
-            label: 'إعادة المحاولة',
-            onPressed: () => _markSeen(generation, accountId),
-          ),
-        ),
-      );
+      ref
+          .read(notificationServiceProvider)
+          .showToast(
+            message: 'تعذر تحديث عداد الإشعارات',
+            type: ToastType.error,
+            actionLabel: 'إعادة المحاولة',
+            onAction: () => _markSeen(generation, accountId),
+            duration: const Duration(seconds: 4),
+          );
     }
   }
 
@@ -191,9 +192,17 @@ class _NotificationsState
           );
         }
       }
-    } catch (_) {
+    } catch (error) {
       if (_current(generation, accountId)) {
-        _showError('تعذر تنفيذ العملية، حاول مرة أخرى');
+        final code = error is AnimeWitcherAccountException ? error.code : null;
+        _showError(switch (code) {
+          'notification-target-reference' =>
+            'رابط الإشعار غير صالح أو غير مدعوم',
+          'notification-target-hidden' => 'هذا المحتوى غير متاح للعرض حالياً',
+          'notification-target-content' =>
+            'تعذر قراءة محتوى التعليق أو المراجعة',
+          _ => 'تعذر تنفيذ العملية، حاول مرة أخرى',
+        });
       }
     } finally {
       if (_current(generation, accountId)) {
@@ -203,8 +212,7 @@ class _NotificationsState
   }
 
   void _showError(String message) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
+    ref.read(notificationServiceProvider).showError(message);
   }
 
   @override

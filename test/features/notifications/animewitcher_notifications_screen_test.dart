@@ -9,6 +9,7 @@ import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:animewitcher/core/account/firestore_rest_client.dart';
 import 'package:animewitcher/core/storage/secure_token_storage.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
+import 'package:animewitcher/core/services/notification_service.dart';
 import 'package:animewitcher/features/notifications/presentation/animewitcher_notifications_screen.dart';
 import 'package:animewitcher/shared/widgets/account_notifications_button.dart';
 import 'package:flutter/material.dart';
@@ -23,6 +24,7 @@ class _Service extends AnimeWitcherAccountService {
       );
   bool fail = false;
   bool failWrite = false;
+  bool failSeen = false;
   bool more = false;
   final cursors = <FirestoreDocument?>[];
   List<AnimeWitcherNotification> nextItems = [];
@@ -32,6 +34,7 @@ class _Service extends AnimeWitcherAccountService {
   int clicked = 0;
   Completer<void>? deleting;
   AnimeWitcherComment? target;
+  AnimeWitcherAccountException? targetError;
   String user = 'p';
   Completer<AnimeWitcherNotificationPage>? pending;
   List<AnimeWitcherNotification> items = [];
@@ -67,6 +70,7 @@ class _Service extends AnimeWitcherAccountService {
   @override
   Future<void> markNotificationsSeen(String profileId) async {
     seen++;
+    if (failSeen) throw Exception('offline');
   }
 
   @override
@@ -85,7 +89,11 @@ class _Service extends AnimeWitcherAccountService {
   @override
   Future<AnimeWitcherComment?> loadNotificationTarget(
     AnimeWitcherNotification notification,
-  ) async => target;
+  ) async {
+    if (targetError != null) throw targetError!;
+    return target;
+  }
+
   @override
   Future<AnimeWitcherCommentPage> loadReplies(
     AnimeWitcherComment parent, {
@@ -115,14 +123,76 @@ AnimeWitcherNotification _item() => AnimeWitcherNotification.fromDocument(
 Widget _app(
   _Service service, {
   Widget home = const AnimeWitcherNotificationsScreen(),
+  NotificationService? toasts,
 }) => ProviderScope(
   overrides: [
     animeWitcherAccountServiceProvider.overrideWithValue(service),
     animeWitcherAccountControllerProvider.overrideWith(_Account.new),
+    if (toasts != null) notificationServiceProvider.overrideWithValue(toasts),
   ],
   child: MaterialApp(theme: ThemeData.dark(), home: home),
 );
 void main() {
+  testWidgets('unavailable target uses the shared error pill, not a SnackBar', (
+    tester,
+  ) async {
+    final service = _Service()..items = [_item()];
+    final toasts = NotificationService();
+    addTearDown(toasts.clearToasts);
+    await tester.pumpWidget(_app(service, toasts: toasts));
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('سارة'));
+    await tester.pump();
+    expect(toasts.toasts.single.message, 'المحتوى غير متاح أو تم حذفه');
+    expect(toasts.toasts.single.type, ToastType.error);
+    expect(find.byType(SnackBar), findsNothing);
+    toasts.clearToasts();
+  });
+  for (final reason in {
+    'notification-target-reference': 'رابط الإشعار غير صالح أو غير مدعوم',
+    'notification-target-hidden': 'هذا المحتوى غير متاح للعرض حالياً',
+    'notification-target-content': 'تعذر قراءة محتوى التعليق أو المراجعة',
+  }.entries) {
+    testWidgets('target failure ${reason.key} uses safe precise feedback', (
+      tester,
+    ) async {
+      final service = _Service()
+        ..items = [_item()]
+        ..targetError = AnimeWitcherAccountException(
+          reason.key,
+          'private path/token must not be shown',
+        );
+      final toasts = NotificationService();
+      addTearDown(toasts.clearToasts);
+      await tester.pumpWidget(_app(service, toasts: toasts));
+      await tester.pumpAndSettle();
+      await tester.tap(find.textContaining('سارة'));
+      await tester.pump();
+      expect(toasts.toasts.single.message, reason.value);
+      expect(service.clicked, 0);
+      toasts.clearToasts();
+    });
+  }
+  testWidgets('seen-counter error uses shared pill and retains retry', (
+    tester,
+  ) async {
+    final service = _Service()..failSeen = true;
+    final toasts = NotificationService();
+    addTearDown(toasts.clearToasts);
+    await tester.pumpWidget(_app(service, toasts: toasts));
+    await tester.pumpAndSettle();
+    final toast = toasts.toasts.single;
+    expect(toast.message, 'تعذر تحديث عداد الإشعارات');
+    expect(toast.type, ToastType.error);
+    expect(toast.actionLabel, 'إعادة المحاولة');
+    expect(toast.onAction, isNotNull);
+    expect(find.byType(SnackBar), findsNothing);
+    service.failSeen = false;
+    toast.onAction!();
+    await tester.pump();
+    expect(service.seen, 2);
+    toasts.clearToasts();
+  });
   testWidgets('initial error does not reset seen; retry displays empty inbox', (
     tester,
   ) async {

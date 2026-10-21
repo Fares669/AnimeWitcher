@@ -1,3 +1,4 @@
+import 'animewitcher_account_config.dart';
 import 'firestore_rest_client.dart';
 
 const animeWitcherNotificationPageSize = 20;
@@ -20,25 +21,40 @@ bool animeWitcherOwnsNotificationPath(String path, String profileId) {
 
 String? _targetPath(dynamic raw, {required bool review}) {
   if (raw is! String) return null;
-  final parts = raw.split('/');
-  if (!parts.every(_safeSegment)) return null;
+  const resourcePrefix =
+      'projects/${AnimeWitcherAccountConfig.projectId}/databases/(default)/documents/';
+  var path = raw.startsWith(resourcePrefix)
+      ? raw.substring(resourcePrefix.length)
+      : raw;
+  path = path.replaceFirst(RegExp(r'^/+'), '').replaceFirst(RegExp(r'/+$'), '');
+  final parts = path.split('/');
+  // IDs may contain spaces; REST encodes each segment before requesting it.
+  if (!parts.every(
+    (part) =>
+        part.isNotEmpty &&
+        part != '.' &&
+        part != '..' &&
+        !RegExp(r'[/\\\x00-\x1f\x7f]').hasMatch(part),
+  )) {
+    return null;
+  }
   if (review) {
     return parts.length == 4 &&
             parts[0] == 'anime_list' &&
             parts[2] == 'reviews'
-        ? raw
+        ? path
         : null;
   }
   if (parts.length == 4 &&
       const {'anime_list', 'characters_list', 'news'}.contains(parts[0]) &&
       parts[2] == 'comments') {
-    return raw;
+    return path;
   }
   if (parts.length == 6 &&
       parts[0] == 'anime_list' &&
       parts[2] == 'episodes' &&
       parts[4] == 'comments') {
-    return raw;
+    return path;
   }
   return null;
 }
@@ -124,7 +140,7 @@ class AnimeWitcherNotification {
         raw is String && raw.trim().isNotEmpty ? raw.trim() : null;
     final photo = text(actor['pic']);
     final uri = photo == null ? null : Uri.tryParse(photo);
-    final value = AnimeWitcherNotification(
+    return AnimeWitcherNotification(
       path: document.path,
       type: text(fields['type']) ?? '',
       clicked: fields['clicked'] == true,
@@ -140,16 +156,6 @@ class AnimeWitcherNotification {
       targetPath: fields['review_doc_ref'] != null
           ? _targetPath(fields['review_doc_ref'], review: true)
           : _targetPath(fields['comment_doc_ref'], review: false),
-    );
-    if (value.actionText != null) return value;
-    return AnimeWitcherNotification(
-      path: value.path,
-      type: value.type,
-      clicked: value.clicked,
-      actorName: value.actorName,
-      actorPhotoUrl: value.actorPhotoUrl,
-      date: value.date,
-      contextName: value.contextName,
     );
   }
 }
