@@ -486,6 +486,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                 ),
               ),
             ),
+            Positioned(
+              top: MediaQuery.viewPaddingOf(context).top + 8,
+              left: 12,
+              child: const AppSideMenuButton(),
+            ),
           ],
         ),
       );

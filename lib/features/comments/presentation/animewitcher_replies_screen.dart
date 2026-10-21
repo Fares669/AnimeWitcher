@@ -16,9 +16,14 @@ import 'widgets/animewitcher_comment_sort_control.dart';
 import '../../../core/utils/avatar_image.dart';
 
 class AnimeWitcherRepliesScreen extends ConsumerStatefulWidget {
-  const AnimeWitcherRepliesScreen({super.key, required this.parentComment});
+  const AnimeWitcherRepliesScreen({
+    super.key,
+    required this.parentComment,
+    this.showParent = false,
+  });
 
   final AnimeWitcherComment parentComment;
+  final bool showParent;
 
   @override
   ConsumerState<AnimeWitcherRepliesScreen> createState() =>
@@ -42,6 +47,7 @@ class _AnimeWitcherRepliesScreenState
   bool _loadingMore = false;
   bool _hasMore = true;
   bool _publishing = false;
+  bool _parentRevealed = false;
   String? _userTagId;
   final RequestGeneration _loadGeneration = RequestGeneration();
 
@@ -333,6 +339,7 @@ class _AnimeWitcherRepliesScreenState
   }
 
   Widget _buildRepliesBody(BuildContext context) {
+    if (widget.showParent) return _buildNotificationThread(context);
     if (_loadingInitial) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -409,7 +416,62 @@ class _AnimeWitcherRepliesScreenState
     );
   }
 
-  Widget _buildReplyCard(BuildContext context, AnimeWitcherComment reply) {
+  Widget _buildNotificationThread(BuildContext context) {
+    final parent = widget.parentComment;
+    final showText = !parent.spoiler || _parentRevealed;
+    return MouseDragRefreshIndicator(
+      onRefresh: _loadInitial,
+      child: ListView(
+        controller: _scrollController,
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.fromLTRB(
+          12,
+          appPageHeaderContentTopInset(context) + 12,
+          12,
+          24,
+        ),
+        children: [
+          Text(
+            parent.isReview ? 'المراجعة' : 'التعليق الأصلي',
+            textAlign: TextAlign.right,
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          const SizedBox(height: 8),
+          if (showText)
+            _buildReplyCard(context, parent, showActions: false)
+          else
+            TextButton.icon(
+              onPressed: () => setState(() => _parentRevealed = true),
+              icon: const Icon(Icons.visibility_off_outlined),
+              label: const Text('تعليق يحتوي على حرق — اضغط للعرض'),
+            ),
+          const SizedBox(height: 16),
+          if (_loadingInitial)
+            const Center(child: CircularProgressIndicator())
+          else ...[
+            if (_loadError != null)
+              TextButton(
+                onPressed: _loadInitial,
+                child: const Text('تعذر تحميل الردود. إعادة المحاولة'),
+              ),
+            if (_replies.isEmpty && _loadError == null)
+              const Text('لا توجد ردود بعد.', textAlign: TextAlign.center),
+            for (final reply in _replies) ...[
+              _buildReplyCard(context, reply),
+              const SizedBox(height: 8),
+            ],
+            if (_loadingMore) const Center(child: CircularProgressIndicator()),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReplyCard(
+    BuildContext context,
+    AnimeWitcherComment reply, {
+    bool showActions = true,
+  }) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final photo = reply.userPhotoUrl?.trim() ?? '';
@@ -474,73 +536,74 @@ class _AnimeWitcherRepliesScreenState
                 style: theme.textTheme.bodyMedium?.copyWith(height: 1.45),
               ),
             ),
-            const SizedBox(height: 8),
-            Directionality(
-              textDirection: TextDirection.rtl,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  Tooltip(
-                    message: 'رد',
-                    child: InkWell(
-                      key: ValueKey<String>('reply-mention-${reply.path}'),
-                      onTap: () => _mentionReply(reply),
+            if (showActions) const SizedBox(height: 8),
+            if (showActions)
+              Directionality(
+                textDirection: TextDirection.rtl,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    Tooltip(
+                      message: 'رد',
+                      child: InkWell(
+                        key: ValueKey<String>('reply-mention-${reply.path}'),
+                        onTap: () => _mentionReply(reply),
+                        borderRadius: BorderRadius.circular(20),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 5,
+                          ),
+                          child: Icon(
+                            Icons.reply_rounded,
+                            size: 19,
+                            color: colors.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    InkWell(
+                      onTap: pending ? null : () => _toggleLike(reply),
                       borderRadius: BorderRadius.circular(20),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 5,
                           vertical: 5,
                         ),
-                        child: Icon(
-                          Icons.reply_rounded,
-                          size: 19,
-                          color: colors.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  InkWell(
-                    onTap: pending ? null : () => _toggleLike(reply),
-                    borderRadius: BorderRadius.circular(20),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 5,
-                        vertical: 5,
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (pending)
-                            SizedBox(
-                              width: 17,
-                              height: 17,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (pending)
+                              SizedBox(
+                                width: 17,
+                                height: 17,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: reply.likedByMe
+                                      ? colors.primary
+                                      : colors.onSurfaceVariant,
+                                ),
+                              )
+                            else
+                              Icon(
+                                reply.likedByMe
+                                    ? Icons.favorite_rounded
+                                    : Icons.favorite_border_rounded,
+                                size: 19,
                                 color: reply.likedByMe
                                     ? colors.primary
                                     : colors.onSurfaceVariant,
                               ),
-                            )
-                          else
-                            Icon(
-                              reply.likedByMe
-                                  ? Icons.favorite_rounded
-                                  : Icons.favorite_border_rounded,
-                              size: 19,
-                              color: reply.likedByMe
-                                  ? colors.primary
-                                  : colors.onSurfaceVariant,
-                            ),
-                          const SizedBox(width: 5),
-                          Text('${reply.likes}'),
-                        ],
+                            const SizedBox(width: 5),
+                            Text('${reply.likes}'),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
           ],
         ),
       ),

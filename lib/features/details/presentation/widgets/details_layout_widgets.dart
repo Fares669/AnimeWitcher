@@ -1080,6 +1080,7 @@ class DetailsDesktopEpisodeColumn extends ConsumerWidget {
             valueListenable: episodeViewMode,
             builder: (context, mode, _) {
               if (mode == EpisodeViewMode.rail) {
+                const cardWidth = 300.0;
                 // One row to flick along. Lazy by construction, so the length
                 // of the series costs nothing here.
                 // A rail rather than a bare horizontal list: a mouse cannot
@@ -1087,15 +1088,15 @@ class DetailsDesktopEpisodeColumn extends ConsumerWidget {
                 // behind instead — so the row could be seen and not moved.
                 // This is the same rail the home screen rows use, drag and all.
                 return SizedBox(
-                  height: 268,
+                  height: EpisodeCard.railHeight(context, width: cardWidth),
                   child: PagedRail(
-                    itemExtent: 316,
+                    itemExtent: cardWidth + 16,
                     itemCount: displayedEpisodes.length,
                     padding: EdgeInsets.zero,
                     itemBuilder: (context, index) => Padding(
                       padding: const EdgeInsets.only(right: 16),
                       child: SizedBox(
-                        width: 300,
+                        width: cardWidth,
                         child: EpisodeCard(
                           key: ValueKey(displayedEpisodes[index].url),
                           episode: displayedEpisodes[index],

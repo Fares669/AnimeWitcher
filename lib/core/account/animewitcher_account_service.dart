@@ -13,6 +13,7 @@ import 'animewitcher_account_config.dart';
 import 'animewitcher_account_models.dart';
 import 'animewitcher_character_models.dart';
 import 'animewitcher_comment_models.dart';
+import 'animewitcher_notification_models.dart';
 import 'animewitcher_sync_conflict.dart';
 import 'animewitcher_sync_ids.dart';
 import 'firebase_auth_rest_client.dart';
@@ -745,6 +746,158 @@ class AnimeWitcherAccountService {
           return hit;
         })
         .toList(growable: false);
+  }
+
+  // Notification operations stay bound to the session that started them,
+  // including the token-refresh await inside _authenticated.
+  Future<T> _notificationRequest<T>(
+    Future<T> Function(AnimeWitcherProfile profile, String token) operation,
+  ) async {
+    final profile = _profile;
+    final generation = _sessionGeneration;
+    if (profile == null || _session == null) {
+      throw const AnimeWitcherAccountException(
+        'not-signed-in',
+        'Sign in to view notifications.',
+      );
+    }
+    void check() {
+      if (generation != _sessionGeneration || !_isCurrentProfile(profile)) {
+        throw const AnimeWitcherAccountException(
+          'session-changed',
+          'The active account changed.',
+        );
+      }
+    }
+
+    final result = await _authenticated((token) async {
+      check();
+      final result = await operation(profile, token);
+      check();
+      return result;
+    });
+    check();
+    return result;
+  }
+
+  void _checkNotificationPath(String path, AnimeWitcherProfile profile) {
+    if (!animeWitcherOwnsNotificationPath(path, profile.documentId)) {
+      throw const AnimeWitcherAccountException(
+        'invalid-notification',
+        'This notification does not belong to the active account.',
+      );
+    }
+  }
+
+  Future<AnimeWitcherNotificationPage> loadNotifications({
+    FirestoreDocument? cursor,
+  }) {
+    return _notificationRequest((profile, token) async {
+      final collection = 'users/${profile.documentId}/notifications';
+      _checkNotificationPath('$collection/_', profile);
+      if (cursor != null) _checkNotificationPath(cursor.path, profile);
+      final documents = await _firestore.queryOrderedDocumentsPage(
+        collection,
+        token,
+        startAfter: cursor,
+        limit: animeWitcherNotificationPageSize,
+      );
+      for (final document in documents) {
+        _checkNotificationPath(document.path, profile);
+      }
+      return AnimeWitcherNotificationPage(
+        items: documents
+            .map(AnimeWitcherNotification.fromDocument)
+            .toList(growable: false),
+        cursor: documents.isEmpty ? cursor : documents.last,
+        hasMore: documents.length == animeWitcherNotificationPageSize,
+      );
+    });
+  }
+
+  Future<int> loadNotificationCount() async {
+    if (!isSignedIn) return 0;
+    return _notificationRequest((profile, token) async {
+      _checkNotificationPath(
+        'users/${profile.documentId}/notifications/_',
+        profile,
+      );
+      final document = await _firestore.getDocument(
+        'users/${profile.documentId}',
+        token,
+      );
+      final statistics = document?.fields['statistics'];
+      final count = statistics is Map ? statistics['not_seen_notif'] : null;
+      return count is int && count > 0 ? count : 0;
+    });
+  }
+
+  Future<void> markNotificationsSeen(String profileId) {
+    return _notificationRequest((profile, token) {
+      _checkNotificationPath('users/$profileId/notifications/_', profile);
+      return _firestore.patchDocument(
+        'users/$profileId',
+        const {'statistics.not_seen_notif': 0},
+        token,
+        requireExisting: true,
+      );
+    });
+  }
+
+  Future<void> markNotificationClicked(String path) {
+    return _notificationRequest((profile, token) {
+      _checkNotificationPath(path, profile);
+      return _firestore.patchDocument(
+        path,
+        const {'clicked': true},
+        token,
+        requireExisting: true,
+      );
+    });
+  }
+
+  Future<void> deleteNotification(String path) {
+    return _notificationRequest((profile, token) {
+      _checkNotificationPath(path, profile);
+      return _firestore.deleteDocument(path, token);
+    });
+  }
+
+  Future<AnimeWitcherComment?> loadNotificationTarget(
+    AnimeWitcherNotification notification,
+  ) {
+    return _notificationRequest((profile, token) async {
+      _checkNotificationPath(notification.path, profile);
+      final target = animeWitcherNotificationTargetPath(notification.targetPath);
+      if (target == null) {
+        throw const AnimeWitcherAccountException(
+          'notification-target-reference',
+          'رابط الإشعار غير صالح أو غير مدعوم',
+        );
+      }
+      final document = await _firestore.getDocument(target, token);
+      if (document == null) return null;
+      if (document.path != target) {
+        throw const AnimeWitcherAccountException(
+          'notification-target-content',
+          'تعذر قراءة محتوى التعليق أو المراجعة',
+        );
+      }
+      if (document.fields['published'] == false) {
+        throw const AnimeWitcherAccountException(
+          'notification-target-hidden',
+          'هذا المحتوى غير متاح للعرض حالياً',
+        );
+      }
+      final comment = AnimeWitcherComment.fromDocument(document);
+      if (comment.text.isEmpty) {
+        throw const AnimeWitcherAccountException(
+          'notification-target-content',
+          'تعذر قراءة محتوى التعليق أو المراجعة',
+        );
+      }
+      return comment;
+    });
   }
 
   Future<AnimeWitcherCommentPage> loadComments(
