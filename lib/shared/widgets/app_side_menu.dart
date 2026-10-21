@@ -8,6 +8,7 @@ import '../../core/account/account_providers.dart';
 import '../../core/navigation/taskbar_destination.dart';
 import '../../l10n/generated/app_localizations.dart';
 import 'account_avatar_button.dart';
+import 'account_notifications_button.dart';
 
 /// A row of the side menu that is not a tab: one of the pages the More tab
 /// used to hold, opened over the app.
@@ -449,10 +450,21 @@ class AppSideMenuPanel extends ConsumerWidget {
                                 ColoredBox(
                                   color: Colors.black.withValues(alpha: 0.38),
                                 ),
+                              if (profile != null)
+                                Positioned(
+                                  top: 4,
+                                  right: 12,
+                                  child: AccountNotificationsButton(
+                                    beforeOpen: onClose,
+                                    foregroundColor: cover.isNotEmpty
+                                        ? Colors.white
+                                        : null,
+                                  ),
+                                ),
                               Padding(
-                                padding: const EdgeInsets.fromLTRB(
+                                padding: EdgeInsets.fromLTRB(
                                   56,
-                                  10,
+                                  profile == null ? 10 : 56,
                                   12,
                                   10,
                                 ),

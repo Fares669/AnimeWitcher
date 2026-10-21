@@ -10,6 +10,7 @@ import '../../../core/utils/localized_text.dart';
 import '../../../core/utils/artwork_quality.dart';
 import '../../../core/utils/layout_constants.dart';
 import '../../../shared/widgets/custom_widgets.dart';
+import '../../../shared/widgets/account_notifications_button.dart';
 import '../../../shared/widgets/glass_dialog.dart';
 import '../../comments/presentation/animewitcher_my_comments_screen.dart';
 import 'account_management_screens.dart';
@@ -68,6 +69,7 @@ class _AnimeWitcherAccountScreenState
           arabic: 'الحساب',
         ),
         canPop: canPop,
+        actions: [if (profile != null) const AccountNotificationsButton()],
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {

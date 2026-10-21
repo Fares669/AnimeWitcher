@@ -73,6 +73,9 @@ void main() {
 
         expect(find.text('الحساب'), findsOneWidget);
         expect(find.text('حساب AnimeWitcher'), findsNothing);
+        final bell = find.byKey(const ValueKey('account-notifications-button'));
+        expect(bell, findsOneWidget);
+        expect(tester.getCenter(bell).dx, greaterThan(width / 2));
 
         final title = find.text('تغيير البريد الإلكتروني');
         final card = find.ancestor(of: title, matching: find.byType(ListTile));

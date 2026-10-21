@@ -161,12 +161,29 @@ void main() {
     );
   });
 
+  testWidgets('notification entry closes the sidebar before opening inbox', (tester) async {
+    await _pump(tester, signedIn: true);
+    await tester.tap(find.byKey(const ValueKey('app-side-menu-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('account-notifications-button')));
+    await tester.pumpAndSettle();
+    expect(find.text('الإشعارات'), findsOneWidget);
+    tester.state<NavigatorState>(find.byType(Navigator)).pop();
+    await tester.pumpAndSettle();
+    expect(_menuShowing(tester), isFalse);
+  });
+
   testWidgets('signed-in menu uses banner, larger avatar, and no email', (
     tester,
   ) async {
     await _pump(tester, signedIn: true);
     await tester.tap(find.byKey(const ValueKey('app-side-menu-button')));
     await tester.pumpAndSettle();
+    final bell = find.byKey(const ValueKey('account-notifications-button'));
+    final avatar = find.byKey(const ValueKey('account-avatar-button'));
+    expect(bell, findsOneWidget);
+    expect(tester.getBottomLeft(bell).dy,
+        lessThanOrEqualTo(tester.getTopLeft(avatar).dy));
 
     expect(find.text('Viewer'), findsOneWidget);
     expect(find.text('viewer@example.test'), findsNothing);
