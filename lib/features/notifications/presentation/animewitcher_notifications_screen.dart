@@ -66,8 +66,9 @@ class _NotificationsState
   Future<void> _load({bool more = false}) async {
     if (!mounted ||
         _pending.isNotEmpty ||
-        (more && (_loading || _loadingMore || !_hasMore)))
+        (more && (_loading || _loadingMore || !_hasMore))) {
       return;
+    }
     final generation = more ? _generation.current : _generation.begin();
     final accountId = _accountId;
     setState(() {
@@ -105,8 +106,9 @@ class _NotificationsState
       if (!more) {
         // A successful fetch is not yet a displayed inbox.
         await WidgetsBinding.instance.endOfFrame;
-        if (_current(generation, accountId))
+        if (_current(generation, accountId)) {
           await _markSeen(generation, accountId);
+        }
       }
     } catch (error) {
       if (!_current(generation, accountId)) return;
@@ -120,15 +122,17 @@ class _NotificationsState
 
   Future<void> _markSeen(int generation, String accountId) async {
     if (!_current(generation, accountId)) return;
+    final messenger = ScaffoldMessenger.of(context);
     try {
       await ref
           .read(animeWitcherAccountServiceProvider)
           .markNotificationsSeen(accountId);
-      if (_current(generation, accountId))
+      if (_current(generation, accountId)) {
         ref.invalidate(accountNotificationCountProvider);
+      }
     } catch (_) {
       if (!_current(generation, accountId)) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(
           content: const Text('تعذر تحديث عداد الإشعارات'),
           action: SnackBarAction(
@@ -145,6 +149,7 @@ class _NotificationsState
     final generation = _generation.current;
     final accountId = _accountId;
     setState(() => _pending.add(item.path));
+    final navigator = Navigator.of(context);
     try {
       final service = ref.read(animeWitcherAccountServiceProvider);
       if (action == 'delete') {
@@ -176,7 +181,7 @@ class _NotificationsState
               .toList(),
         );
         if (target != null) {
-          await Navigator.of(context).push<void>(
+          await navigator.push<void>(
             MaterialPageRoute<void>(
               builder: (_) => AnimeWitcherRepliesScreen(
                 parentComment: target,
@@ -187,11 +192,13 @@ class _NotificationsState
         }
       }
     } catch (_) {
-      if (_current(generation, accountId))
+      if (_current(generation, accountId)) {
         _showError('تعذر تنفيذ العملية، حاول مرة أخرى');
+      }
     } finally {
-      if (_current(generation, accountId))
+      if (_current(generation, accountId)) {
         setState(() => _pending.remove(item.path));
+      }
     }
   }
 
@@ -249,14 +256,16 @@ class _NotificationsState
             itemCount: _items.length + 1,
             itemBuilder: (context, index) {
               if (index < _items.length) return _row(_items[index]);
-              if (account == null && !_loading)
+              if (account == null && !_loading) {
                 return _status('سجل الدخول لعرض الإشعارات');
-              if (_loading || _loadingMore)
+              }
+              if (_loading || _loadingMore) {
                 return const Padding(
                   padding: EdgeInsets.all(32),
                   child: Center(child: CircularProgressIndicator()),
                 );
-              if (_error != null)
+              }
+              if (_error != null) {
                 return Column(
                   children: [
                     _status('تعذر تحميل الإشعارات'),
@@ -266,12 +275,14 @@ class _NotificationsState
                     ),
                   ],
                 );
+              }
               if (_items.isEmpty) return _status('لا يوجد إشعارات');
-              if (_hasMore)
+              if (_hasMore) {
                 return TextButton(
                   onPressed: () => _load(more: true),
                   child: const Text('تحميل المزيد'),
                 );
+              }
               return const SizedBox(height: 24);
             },
           ),
@@ -306,6 +317,7 @@ class _NotificationsState
               CircleAvatar(
                 radius: 23,
                 backgroundColor: colors.surfaceContainerHighest,
+                foregroundColor: colors.onSurfaceVariant,
                 child: item.actorPhotoUrl == null
                     ? const Icon(Icons.person_outline_rounded)
                     : ClipOval(

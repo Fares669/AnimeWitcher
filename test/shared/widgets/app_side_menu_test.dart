@@ -1,11 +1,44 @@
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_account_models.dart';
+import 'package:animewitcher/core/account/animewitcher_account_service.dart';
+import 'package:animewitcher/core/account/animewitcher_notification_models.dart';
+import 'package:animewitcher/core/account/firestore_rest_client.dart';
+import 'package:animewitcher/core/storage/storage_service.dart';
+import 'package:animewitcher/core/storage/secure_token_storage.dart';
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/shared/widgets/app_side_menu.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+class _MenuAccountService extends AnimeWitcherAccountService {
+  _MenuAccountService()
+    : super(
+        storage: StorageService(),
+        secureStorage: SecureTokenStorage(StorageService()),
+      );
+  @override
+  AnimeWitcherAccountSnapshot get snapshot => const AnimeWitcherAccountSnapshot(
+    profile: AnimeWitcherProfile(
+      documentId: 'profile-1',
+      uid: 'user-1',
+      signInMethod: AnimeWitcherSignInMethod.email,
+    ),
+  );
+  @override
+  Future<int> loadNotificationCount() async => 0;
+  @override
+  Future<AnimeWitcherNotificationPage> loadNotifications({
+    FirestoreDocument? cursor,
+  }) async => const AnimeWitcherNotificationPage(
+    items: [],
+    cursor: null,
+    hasMore: false,
+  );
+  @override
+  Future<void> markNotificationsSeen(String id) async {}
+}
 
 final class _SignedOutAccount extends AnimeWitcherAccountController {
   @override
@@ -60,6 +93,9 @@ Future<_Harness> _pump(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
+        animeWitcherAccountServiceProvider.overrideWithValue(
+          _MenuAccountService(),
+        ),
         animeWitcherAccountControllerProvider.overrideWith(
           signedIn ? _SignedInAccount.new : _SignedOutAccount.new,
         ),
@@ -161,11 +197,15 @@ void main() {
     );
   });
 
-  testWidgets('notification entry closes the sidebar before opening inbox', (tester) async {
+  testWidgets('notification entry closes the sidebar before opening inbox', (
+    tester,
+  ) async {
     await _pump(tester, signedIn: true);
     await tester.tap(find.byKey(const ValueKey('app-side-menu-button')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('account-notifications-button')));
+    await tester.tap(
+      find.byKey(const ValueKey('account-notifications-button')),
+    );
     await tester.pumpAndSettle();
     expect(find.text('الإشعارات'), findsOneWidget);
     tester.state<NavigatorState>(find.byType(Navigator)).pop();
@@ -180,10 +220,12 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('app-side-menu-button')));
     await tester.pumpAndSettle();
     final bell = find.byKey(const ValueKey('account-notifications-button'));
-    final avatar = find.byKey(const ValueKey('account-avatar-button'));
+    final accountAvatar = find.byKey(const ValueKey('account-avatar-button'));
     expect(bell, findsOneWidget);
-    expect(tester.getBottomLeft(bell).dy,
-        lessThanOrEqualTo(tester.getTopLeft(avatar).dy));
+    expect(
+      tester.getBottomLeft(bell).dy,
+      lessThanOrEqualTo(tester.getTopLeft(accountAvatar).dy),
+    );
 
     expect(find.text('Viewer'), findsOneWidget);
     expect(find.text('viewer@example.test'), findsNothing);
@@ -213,7 +255,10 @@ void main() {
     final cover = tester.widget<Image>(
       find.byKey(const ValueKey<String>('app-side-menu-account-cover')),
     );
-    expect((cover.image as NetworkImage).url, 'https://example.test/banner.jpg');
+    expect(
+      (cover.image as NetworkImage).url,
+      'https://example.test/banner.jpg',
+    );
   });
 
   testWidgets('account banner scrolls with pages while close stays pinned', (
@@ -232,10 +277,7 @@ void main() {
       const ValueKey<String>('app-side-menu-account-banner'),
     );
     final close = find.byKey(const ValueKey<String>('app-side-menu-close'));
-    final list = find.descendant(
-      of: _menu,
-      matching: find.byType(ListView),
-    );
+    final list = find.descendant(of: _menu, matching: find.byType(ListView));
 
     final bannerBefore = tester.getTopLeft(banner).dy;
     final closeBefore = tester.getTopLeft(close).dy;

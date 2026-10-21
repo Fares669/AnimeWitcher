@@ -117,7 +117,9 @@ class AnimeWitcherNotification {
 
   factory AnimeWitcherNotification.fromDocument(FirestoreDocument document) {
     final fields = document.fields;
-    final actor = fields['user'] is Map ? fields['user'] as Map : const {};
+    final actor = fields['user'] is Map
+        ? fields['user'] as Map
+        : const <dynamic, dynamic>{};
     String? text(dynamic raw) =>
         raw is String && raw.trim().isNotEmpty ? raw.trim() : null;
     final photo = text(actor['pic']);
