@@ -1,4 +1,4 @@
-# AnimeWitcher 1.6.4
+# AnimeWitcher 1.6.5
 
 ## الإصلاحات والتحسينات
 
