@@ -87,11 +87,12 @@ class FirestoreValueCodec {
     }
     if (value.containsKey('referenceValue')) {
       final reference = value['referenceValue'].toString();
-      const marker = '/documents/';
-      final markerIndex = reference.indexOf(marker);
-      return markerIndex < 0
-          ? reference
-          : reference.substring(markerIndex + marker.length);
+      const prefix =
+          'projects/${AnimeWitcherAccountConfig.projectId}/databases/(default)/documents/';
+      // Keep foreign resource identity so consumers cannot read a local alias.
+      return reference.startsWith(prefix)
+          ? reference.substring(prefix.length)
+          : reference;
     }
     if (value.containsKey('arrayValue')) {
       final array = _map(value['arrayValue']);

@@ -6,6 +6,7 @@ import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/library/presentation/history_provider.dart';
 import 'package:animewitcher/features/library/presentation/library_screen.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+import 'package:animewitcher/shared/widgets/app_side_menu.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -93,6 +94,7 @@ Future<_LibraryStorage> _pump(
   String kind = 'manga',
   List<HistoryItem> history = const <HistoryItem>[],
   Map<String, String> strings = const <String, String>{},
+  bool? showPageMenuButtons,
 }) async {
   final storage =
       _LibraryStorage({
@@ -124,7 +126,13 @@ Future<_LibraryStorage> _pump(
         locale: const Locale('ar'),
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
-        home: const LibraryScreen(),
+        home: showPageMenuButtons == null
+            ? const LibraryScreen()
+            : AppSideMenuScope(
+                open: () {},
+                showPageButtons: showPageMenuButtons,
+                child: const LibraryScreen(),
+              ),
       ),
     ),
   );
@@ -134,6 +142,29 @@ Future<_LibraryStorage> _pump(
 }
 
 void main() {
+  testWidgets('PC: menu appears top left and hides with the top bar', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      size: const Size(1400, 900),
+      showPageMenuButtons: true,
+    );
+    final button = find.byKey(const ValueKey('app-side-menu-button'));
+    expect(button, findsOneWidget);
+    final rect = tester.getRect(button);
+    expect(rect.left, 12);
+    expect(rect.top, 8);
+
+    await _pump(
+      tester,
+      size: const Size(1400, 900),
+      showPageMenuButtons: false,
+    );
+    expect(button, findsNothing);
+    await tester.pump(const Duration(milliseconds: 100));
+  });
+
   testWidgets('phone: the selected library list is always a grid', (
     tester,
   ) async {
@@ -457,10 +488,36 @@ void main() {
     expect(storage.selectedCategory, isNot('watching'));
   });
 
-  testWidgets('PC: favourite characters sit under the anime lists', (
+  testWidgets('PC: favourite characters have their own section after manga', (
     tester,
   ) async {
     await _pump(tester, size: const Size(1400, 900), kind: 'anime');
+
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('library-side-characters')),
+      200,
+      scrollable: find.descendant(
+        of: find.byKey(const ValueKey('library-side-list')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    expect(find.text('الشخصيات'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('الشخصيات')).dy,
+      greaterThan(
+        tester
+            .getBottomLeft(
+              find.byKey(const ValueKey('library-side-manga-noWatching')),
+            )
+            .dy,
+      ),
+    );
+    expect(
+      tester
+          .getTopLeft(find.byKey(const ValueKey('library-side-characters')))
+          .dy,
+      greaterThan(tester.getBottomLeft(find.text('الشخصيات')).dy),
+    );
 
     await tester.tap(find.byKey(const ValueKey('library-side-characters')));
     await tester.pump();

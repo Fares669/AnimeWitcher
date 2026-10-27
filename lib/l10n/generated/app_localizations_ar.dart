@@ -1282,8 +1282,13 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String mangaChapterCount(int count) {
-    if (count == 1) return 'فصل';
-    if (count == 2) return 'فصلان';
-    return '$count فصول';
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count فصول',
+      two: 'فصلان',
+      one: 'فصل',
+    );
+    return '$_temp0';
   }
 }

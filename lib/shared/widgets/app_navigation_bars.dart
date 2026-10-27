@@ -56,13 +56,13 @@ class AppSideRail extends StatelessWidget {
       ),
       child: Column(
         children: [
-          const AppSideMenuButton(),
-          const SizedBox(height: 8),
           Expanded(
             child: SingleChildScrollView(
               child: Column(children: [..._destinationItems(l10n, accent)]),
             ),
           ),
+          const AppSideMenuButton(inNavigationBar: true),
+          const SizedBox(height: 8),
           _RailItem(
             icon: Icons.newspaper_rounded,
             label: 'الأخبار',
@@ -230,7 +230,10 @@ class AppTopBar extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                AppSideMenuButton(overArtwork: overArtwork),
+                AppSideMenuButton(
+                  overArtwork: overArtwork,
+                  inNavigationBar: true,
+                ),
                 const SizedBox(width: 8),
                 if (width >= 1000) ...[
                   Text(

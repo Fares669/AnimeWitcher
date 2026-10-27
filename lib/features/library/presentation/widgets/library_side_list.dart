@@ -4,8 +4,8 @@ import '../../../../core/storage/library_category.dart';
 import '../library_lists.dart';
 import '../library_media_kind.dart';
 
-/// Every list of the library in one column, anime and manga each under its
-/// own heading, for PC and tablet: nothing behind a menu. The watch history
+/// Every list of the library in one column, anime, manga and characters each
+/// under their own heading, for PC and tablet. The watch history
 /// heads the anime lists. Drawn like the More page's sidebar, so the two
 /// read as one app.
 class LibrarySideList extends StatelessWidget {
@@ -119,15 +119,16 @@ class LibrarySideList extends StatelessWidget {
                     !special && listKind == kind && listCategory == category,
                 onTap: () => onSelect(listKind, listCategory),
               ),
-          // The characters are anime's: last under its heading.
-          if (listKind == LibraryMediaKind.anime && onCharacters != null)
-            LibrarySideRow(
-              key: const ValueKey<String>('library-side-characters'),
-              icon: Icons.face_rounded,
-              label: libraryCharactersLabel(context),
-              selected: charactersSelected,
-              onTap: onCharacters!,
-            ),
+        ],
+        if (onCharacters != null) ...[
+          heading('الشخصيات'),
+          LibrarySideRow(
+            key: const ValueKey<String>('library-side-characters'),
+            icon: Icons.face_rounded,
+            label: libraryCharactersLabel(context),
+            selected: charactersSelected,
+            onTap: onCharacters!,
+          ),
         ],
       ],
     );

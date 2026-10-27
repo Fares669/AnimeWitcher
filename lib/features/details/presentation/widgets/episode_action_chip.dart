@@ -9,6 +9,8 @@ library;
 import 'package:flutter/material.dart';
 
 class EpisodeActionChip extends StatefulWidget {
+  static const double defaultSize = 34;
+
   const EpisodeActionChip({
     super.key,
     required this.tooltip,
@@ -16,7 +18,7 @@ class EpisodeActionChip extends StatefulWidget {
     this.icon,
     this.child,
     this.color,
-    this.size = 34,
+    this.size = defaultSize,
   }) : assert(
          icon != null || child != null,
          'a chip shows either a glyph or its own content',
