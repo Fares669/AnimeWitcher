@@ -1,4 +1,7 @@
 import 'dart:async';
+
+import '../../../../shared/widgets/confirm_dialog.dart';
+
 import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
@@ -627,29 +630,17 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
     final selected = List<DownloadItem>.of(items);
     final notifications = ref.read(notificationServiceProvider);
     try {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text(l10n.deleteAllEpisodes),
-          content: Text(
-            l10n.confirmDeleteAllEpisodes(items.length, items.first.item.title),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: Text(l10n.cancel),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: Text(
-                l10n.deleteAll,
-                style: const TextStyle(color: Colors.red),
-              ),
-            ),
-          ],
+      final confirmed = await showConfirmDialog(
+        context,
+        title: l10n.deleteAllEpisodes,
+        message: l10n.confirmDeleteAllEpisodes(
+          items.length,
+          items.first.item.title,
         ),
+        confirmLabel: l10n.deleteAll,
+        cancelLabel: l10n.cancel,
       );
-      if (confirmed != true || !context.mounted) return;
+      if (!confirmed || !context.mounted) return;
       final removed = await ref
           .read(downloadsProvider.notifier)
           .removeDownloads(selected);
@@ -948,14 +939,11 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
     setState(() => _controlInFlight = true);
     final notifications = ref.read(notificationServiceProvider);
     try {
-      final notifier = ref.read(downloadsProvider.notifier);
-      if (status == TaskStatus.failed || status == TaskStatus.notFound) {
-        await notifier.retryDownload(item.task.taskId);
-      } else if (status == TaskStatus.paused) {
-        await notifier.resumeDownload(item.task.taskId);
-      } else {
-        await notifier.pauseDownload(item.task.taskId);
-      }
+      await toggleDownloadPlayback(
+        ref.read(downloadsProvider.notifier),
+        item.task.taskId,
+        status,
+      );
     } catch (error) {
       showDownloadActionError(notifications, error);
     } finally {

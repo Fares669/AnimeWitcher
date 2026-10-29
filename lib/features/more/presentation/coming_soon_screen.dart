@@ -7,8 +7,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
-import '../../../core/extensions/extension_manager.dart';
+import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
+import '../../../core/utils/offset_pager.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/catalog_page.dart';
 import '../../../shared/widgets/multimedia_card.dart';
@@ -23,13 +24,10 @@ class ComingSoonScreen extends ConsumerStatefulWidget {
 
 class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
   final ScrollController _controller = ScrollController();
-  final List<MultimediaItem> _items = <MultimediaItem>[];
-  final Set<String> _seen = <String>{};
+  final OffsetPager<MultimediaItem> _pager = OffsetPager<MultimediaItem>(
+    keyOf: multimediaItemPageKey,
+  );
   AnimeWitcherNativeProvider? _provider;
-  bool _loading = false;
-  bool _hasMore = true;
-  Object? _error;
-  int _offset = 0;
 
   @override
   void initState() {
@@ -38,68 +36,37 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadNext());
   }
 
-  AnimeWitcherNativeProvider? _resolveProvider() {
-    final active = ref.read(activeProviderProvider);
-    if (active is AnimeWitcherNativeProvider) return active;
-    for (final provider in ref.read(extensionManagerProvider)) {
-      if (provider is AnimeWitcherNativeProvider) return provider;
-    }
-    return null;
-  }
-
   void _onScroll() {
-    if (!_controller.hasClients || _loading || !_hasMore) return;
-    if (_controller.position.pixels >=
-        _controller.position.maxScrollExtent - 500) {
-      _loadNext();
-    }
+    if (_pager.shouldLoadMore(_controller)) _loadNext();
   }
 
   Future<void> _loadNext() async {
-    if (_loading || !_hasMore) return;
-    final provider = _provider ??= _resolveProvider();
+    if (_pager.loading || !_pager.hasMore) return;
+    final provider = _provider ??= ref.nativeProvider;
     if (provider == null) {
       if (mounted) {
-        setState(() => _error = StateError('AnimeWitcher Native unavailable'));
+        setState(() => _pager.error = nativeProviderUnavailable());
       }
       return;
     }
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final page = await provider.getUpcomingPage(offset: _offset);
-      if (!mounted) return;
-      setState(() {
-        for (final item in page.items) {
-          final key = item.url.trim().isEmpty
-              ? '${item.id}|${item.title}'
-              : item.url;
-          if (_seen.add(key)) _items.add(item);
-        }
-        _offset = page.nextOffset;
-        _hasMore = page.hasMore;
-        _loading = false;
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _error = error;
-        _loading = false;
-      });
-    }
+    final future = _pager.loadNext(
+      (offset) => provider
+          .getUpcomingPage(offset: offset)
+          .then(
+            (page) => (
+              items: page.items,
+              nextOffset: page.nextOffset,
+              hasMore: page.hasMore,
+            ),
+          ),
+    );
+    setState(() {});
+    await future;
+    if (mounted) setState(() {});
   }
 
   Future<void> _refresh() async {
-    setState(() {
-      _items.clear();
-      _seen.clear();
-      _offset = 0;
-      _hasMore = true;
-      _error = null;
-      _loading = false;
-    });
+    setState(_pager.reset);
     await _loadNext();
   }
 
@@ -125,34 +92,32 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
       onBack: () => Navigator.of(context).pop(),
       builder: (context, topInset) => CatalogBody(
         topInset: topInset,
-        isLoading: _loading,
-        errorMessage: _items.isEmpty && _error != null
+        isLoading: _pager.loading,
+        errorMessage: _pager.items.isEmpty && _pager.error != null
             ? 'تعذر تحميل الأعمال القادمة'
             : null,
         onRetry: _refresh,
         emptyMessage: 'لا توجد أعمال قادمة حاليًا',
         onRefresh: _refresh,
         scrollController: _controller,
-        footer: _loading || (_error != null && _hasMore)
+        footer: _pager.loading || (_pager.error != null && _pager.hasMore)
             ? CatalogFooter.loading
             : CatalogFooter.none,
-        footerBuilder: (context, _) => _error != null
+        footerBuilder: (context, _) => _pager.error != null
             ? IconButton(
                 tooltip: 'إعادة المحاولة',
                 onPressed: _loadNext,
                 icon: const Icon(Icons.refresh_rounded),
               )
             : const AnimePosterShimmer(),
-        itemCount: _items.length,
+        itemCount: _pager.items.length,
         itemBuilder: (context, index) {
-          final item = _items[index];
+          final item = _pager.items[index];
           return MultimediaCard.fromItem(
             key: ValueKey('coming-${item.url}'),
             item: item,
-            heroTag: 'coming-${item.id}-$index',
-            onTap: () =>
-                DetailsRoute($extra: DetailsRouteExtra(item: item))
-                    .push<void>(context),
+            heroTag: heroTagWithId('coming', item, index, dashed: true),
+            onTap: () => item.openDetails(context),
           );
         },
       ),

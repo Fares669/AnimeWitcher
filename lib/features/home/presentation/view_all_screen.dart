@@ -326,8 +326,11 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
         itemCount: items.length,
         itemBuilder: (context, index) {
           final item = items[index];
-          final uniqueTag =
-              'view_all_${widget.category.name}_${item.id}_$index';
+          final uniqueTag = heroTagWithId(
+            'view_all_${widget.category.name}',
+            item,
+            index,
+          );
           return MultimediaCard.fromItem(
             key: ValueKey(_itemKey(item)),
             item: item,
@@ -337,8 +340,7 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
               if (widget.onTap != null) {
                 widget.onTap!(item);
               } else {
-                DetailsRoute($extra: DetailsRouteExtra(item: item))
-                    .push<void>(context);
+                item.openDetails(context);
               }
             },
           );

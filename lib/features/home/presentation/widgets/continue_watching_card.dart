@@ -228,10 +228,7 @@ class _ContinueWatchingCardState extends ConsumerState<ContinueWatchingCard> {
                     onTap: () {
                       Navigator.pop(sheetContext);
                       if (!origin.mounted) return;
-                      unawaited(
-                        DetailsRoute($extra: DetailsRouteExtra(item: item))
-                            .push<void>(origin),
-                      );
+                      unawaited(item.openDetails(origin));
                     },
                   ),
                   ListTile(

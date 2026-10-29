@@ -5,8 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/animewitcher_character_models.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
-import '../../../core/extensions/extension_manager.dart';
-import '../../../core/extensions/providers/animewitcher_native_provider.dart';
+import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../shared/widgets/catalog_page.dart';
 import 'character_card.dart';
 import 'character_details_screen.dart';
@@ -43,21 +42,12 @@ class _AnimeCharactersScreenState extends ConsumerState<AnimeCharactersScreen> {
     });
   }
 
-  AnimeWitcherNativeProvider? _resolveProvider() {
-    final active = ref.read(activeProviderProvider);
-    if (active is AnimeWitcherNativeProvider) return active;
-    for (final provider in ref.read(extensionManagerProvider)) {
-      if (provider is AnimeWitcherNativeProvider) return provider;
-    }
-    return null;
-  }
-
   Future<void> _load() async {
-    final provider = _resolveProvider();
+    final provider = ref.nativeProvider;
     if (provider == null) {
       if (mounted) {
         setState(() {
-          _error = StateError('AnimeWitcher Native unavailable');
+          _error = nativeProviderUnavailable();
           _loading = false;
         });
       }

@@ -231,8 +231,7 @@ class _MediaHorizontalListState extends State<MediaHorizontalList> {
                         if (widget.onTap != null) {
                           widget.onTap!(item);
                         } else {
-                          DetailsRoute($extra: DetailsRouteExtra(item: item))
-                              .push<void>(context);
+                          item.openDetails(context);
                         }
                       },
                     ),

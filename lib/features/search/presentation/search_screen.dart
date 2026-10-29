@@ -766,8 +766,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                   ? MangaDetailsRoute(
                       $extra: MangaDetailsRouteExtra(item: item),
                     ).push<void>(context)
-                  : DetailsRoute($extra: DetailsRouteExtra(item: item))
-                        .push<void>(context),
+                  : item.openDetails(context),
               onSeeAll: () => _submitSearch(_controller.text),
             ),
           ),
@@ -1148,8 +1147,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       onOpen: (item) => item.contentType == MultimediaContentType.manga
           ? MangaDetailsRoute($extra: MangaDetailsRouteExtra(item: item))
                 .push<void>(context)
-          : DetailsRoute($extra: DetailsRouteExtra(item: item))
-                .push<void>(context),
+          : item.openDetails(context),
       onSeeAll: () => _submitSearch(_controller.text),
       onClose: _closeResultsPanel,
     );

@@ -9,6 +9,7 @@ import '../../../../core/utils/localized_text.dart';
 import '../../../../core/utils/download_time_remaining.dart';
 import '../../../../core/utils/file_size_formatter.dart';
 import '../../../library/presentation/download_progress_v2_provider.dart';
+import '../../../library/presentation/download_delete_confirmation.dart';
 import '../../../library/presentation/downloads_provider.dart';
 
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
@@ -93,15 +94,11 @@ class _DownloadProgressDialogState
     if (_commandInFlight || _dismissRequested) return;
     setState(() => _commandInFlight = true);
     try {
-      final notifier = ref.read(downloadsProvider.notifier);
-      if (data.status == TaskStatus.failed ||
-          data.status == TaskStatus.notFound) {
-        await notifier.retryDownload(data.taskId);
-      } else if (data.status == TaskStatus.paused) {
-        await notifier.resumeDownload(data.taskId);
-      } else {
-        await notifier.pauseDownload(data.taskId);
-      }
+      await toggleDownloadPlayback(
+        ref.read(downloadsProvider.notifier),
+        data.taskId,
+        data.status,
+      );
     } catch (error) {
       if (mounted) _showCommandError(error);
     } finally {
@@ -110,13 +107,11 @@ class _DownloadProgressDialogState
   }
 
   void _showCommandError(Object error) {
-    var message = error.toString().trim();
-    const stateErrorPrefix = 'Bad state: ';
-    if (message.startsWith(stateErrorPrefix)) {
-      message = message.substring(stateErrorPrefix.length).trim();
-    }
-    if (message.isEmpty) message = 'تعذر التحكم في التنزيل';
-    ref.read(notificationServiceProvider).showError(message);
+    showDownloadActionError(
+      ref.read(notificationServiceProvider),
+      error,
+      fallbackMessage: 'تعذر التحكم في التنزيل',
+    );
   }
 
   @override

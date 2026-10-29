@@ -85,10 +85,8 @@ class _RecentWatchedBodyState extends ConsumerState<RecentWatchedBody> {
         return MultimediaCard.fromItem(
           key: ValueKey('recent-${item.url}'),
           item: item,
-          heroTag: 'recent-${item.id}-$index',
-          onTap: () =>
-              DetailsRoute($extra: DetailsRouteExtra(item: item))
-                  .push<void>(context),
+          heroTag: heroTagWithId('recent', item, index, dashed: true),
+          onTap: () => item.openDetails(context),
           onLongPress: () {
             HapticFeedback.mediumImpact();
             unawaited(

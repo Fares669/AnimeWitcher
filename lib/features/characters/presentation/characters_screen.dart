@@ -9,7 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/account/account_providers.dart';
 import '../../../core/account/animewitcher_character_models.dart';
 import '../../../core/account/firestore_rest_client.dart';
-import '../../../core/extensions/extension_manager.dart';
+import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/request_generation.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
@@ -101,15 +101,6 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
     super.dispose();
   }
 
-  AnimeWitcherNativeProvider? _resolveProvider() {
-    final active = ref.read(activeProviderProvider);
-    if (active is AnimeWitcherNativeProvider) return active;
-    for (final provider in ref.read(extensionManagerProvider)) {
-      if (provider is AnimeWitcherNativeProvider) return provider;
-    }
-    return null;
-  }
-
   void _onCatalogScroll() {
     if (!_catalogController.hasClients ||
         _catalogLoading ||
@@ -155,11 +146,11 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
   }
 
   Future<void> _search(String query) async {
-    final provider = _provider ??= _resolveProvider();
+    final provider = _provider ??= ref.nativeProvider;
     if (provider == null) {
       if (mounted) {
         setState(() {
-          _catalogError = StateError('AnimeWitcher Native unavailable');
+          _catalogError = nativeProviderUnavailable();
           _catalogLoading = false;
           _searching = false;
         });
@@ -200,12 +191,10 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
       await _search(_activeQuery);
       return;
     }
-    final provider = _provider ??= _resolveProvider();
+    final provider = _provider ??= ref.nativeProvider;
     if (provider == null) {
       if (mounted) {
-        setState(
-          () => _catalogError = StateError('AnimeWitcher Native unavailable'),
-        );
+        setState(() => _catalogError = nativeProviderUnavailable());
       }
       return;
     }

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../core/utils/offset_pager.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/app_page_header.dart';
@@ -39,12 +40,10 @@ class MangaViewAllScreen<T> extends StatefulWidget {
 
 class _MangaViewAllScreenState<T> extends State<MangaViewAllScreen<T>> {
   final ScrollController _scroll = ScrollController();
-  final List<T> _items = <T>[];
-  final Set<String> _seen = <String>{};
-  int _nextOffset = 0;
-  bool _hasMore = true;
-  bool _loading = false;
-  bool _failed = false;
+  late final OffsetPager<T> _pager = OffsetPager<T>(
+    keyOf: widget.itemKey,
+    stopOnEmptyPage: true,
+  );
 
   @override
   void initState() {
@@ -60,35 +59,16 @@ class _MangaViewAllScreenState<T> extends State<MangaViewAllScreen<T>> {
   }
 
   Future<void> _reload() async {
-    setState(() {
-      _items.clear();
-      _seen.clear();
-      _nextOffset = 0;
-      _hasMore = true;
-      _failed = false;
-    });
+    setState(_pager.reset);
     await _loadMore();
   }
 
   Future<void> _loadMore() async {
-    if (_loading || !_hasMore) return;
-    setState(() => _loading = true);
-    try {
-      final page = await widget.load(_nextOffset);
-      if (!mounted) return;
-      setState(() {
-        _items.addAll(
-          page.items.where((item) => _seen.add(widget.itemKey(item))),
-        );
-        _nextOffset = page.nextOffset;
-        _hasMore = page.hasMore && page.items.isNotEmpty;
-        _failed = false;
-      });
-    } catch (_) {
-      if (mounted) setState(() => _failed = true);
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
+    if (_pager.loading || !_pager.hasMore) return;
+    final future = _pager.loadNext((offset) => widget.load(offset));
+    setState(() {});
+    await future;
+    if (mounted) setState(() {});
     // A first page too short to scroll never asks for the next one.
     WidgetsBinding.instance.addPostFrameCallback((_) => _onScroll());
   }
@@ -125,7 +105,7 @@ class _MangaViewAllScreenState<T> extends State<MangaViewAllScreen<T>> {
                   padding,
                   24 + bottom,
                 ),
-                sliver: _failed && _items.isEmpty
+                sliver: _pager.error != null && _pager.items.isEmpty
                     ? SliverToBoxAdapter(
                         child: Center(
                           child: FilledButton.tonalIcon(
@@ -137,18 +117,22 @@ class _MangaViewAllScreenState<T> extends State<MangaViewAllScreen<T>> {
                       )
                     : SliverGrid(
                         gridDelegate: mangaPosterGridDelegate(context),
-                        delegate: SliverChildBuilderDelegate((context, index) {
-                          if (index >= _items.length) {
-                            return const AnimePosterShimmer();
-                          }
-                          return CatalogDirection(
-                            child: widget.itemBuilder(
-                              context,
-                              _items[index],
-                              index,
-                            ),
-                          );
-                        }, childCount: _items.length + (_loading ? 6 : 0)),
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            if (index >= _pager.items.length) {
+                              return const AnimePosterShimmer();
+                            }
+                            return CatalogDirection(
+                              child: widget.itemBuilder(
+                                context,
+                                _pager.items[index],
+                                index,
+                              ),
+                            );
+                          },
+                          childCount:
+                              _pager.items.length + (_pager.loading ? 6 : 0),
+                        ),
                       ),
               ),
             ],

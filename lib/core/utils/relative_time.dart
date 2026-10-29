@@ -12,6 +12,11 @@ String formatArabicRelativeTime(DateTime? date, {DateTime? now}) {
   if (safe.inDays < 1) {
     return _arabicUnits(safe.inHours, 'ساعة', 'ساعتين', 'ساعات');
   }
+  if (safe.inDays >= 30) {
+    final local = date.toLocal();
+    String two(int value) => value.toString().padLeft(2, '0');
+    return '${two(local.day)}/${two(local.month)}/${local.year}';
+  }
   return _arabicUnits(safe.inDays, 'يوم', 'يومين', 'أيام');
 }
 

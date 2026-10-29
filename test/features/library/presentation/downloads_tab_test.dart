@@ -309,7 +309,7 @@ void main() {
     final l10n = AppLocalizations.of(
       tester.element(find.byType(DownloadsTab)),
     )!;
-    await tester.tap(find.widgetWithText(TextButton, l10n.delete));
+    await tester.tap(find.widgetWithText(FilledButton, l10n.delete));
     await tester.pumpAndSettle();
     expect(notifier.removeCalls, 1);
     expect(tester.widget<IconButton>(deleteButton).onPressed, isNull);
@@ -360,7 +360,7 @@ void main() {
           await tester.pumpAndSettle();
           await tester.tap(
             find.widgetWithText(
-              TextButton,
+              FilledButton,
               completed ? l10n.deleteAll : l10n.delete,
             ),
           );

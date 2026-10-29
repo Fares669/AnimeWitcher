@@ -7,8 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
-import '../../../core/extensions/extension_manager.dart';
-import '../../../core/extensions/providers/animewitcher_native_provider.dart';
+import '../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/network/dio_client_provider.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../../core/utils/artwork_host_fallback.dart';
@@ -129,15 +128,6 @@ query ($page: Int, $perPage: Int, $sort: [MediaSort], $status: MediaStatus,
   );
 }
 
-AnimeWitcherNativeProvider? _catalogue(Ref ref) {
-  final active = ref.read(activeProviderProvider);
-  if (active is AnimeWitcherNativeProvider) return active;
-  for (final provider in ref.read(extensionManagerProvider)) {
-    if (provider is AnimeWitcherNativeProvider) return provider;
-  }
-  return null;
-}
-
 /// Page [offset] of [ranking] as the catalogue's own entries, for a
 /// "view all" page: MyAnimeList ranks [offset] onward, less the shows the
 /// catalogue does not carry.
@@ -146,7 +136,7 @@ Future<ProviderMediaPage> loadMalRankingPage(
   MalRanking ranking,
   int offset,
 ) async {
-  final catalogue = _catalogue(ref);
+  final catalogue = ref.nativeProvider;
   if (catalogue == null) {
     return const ProviderMediaPage(items: [], nextOffset: 0, hasMore: false);
   }

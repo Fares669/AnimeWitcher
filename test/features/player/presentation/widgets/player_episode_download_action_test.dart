@@ -276,7 +276,7 @@ void main() {
       final l10n = AppLocalizations.of(
         tester.element(find.byType(AlertDialog)),
       )!;
-      await tester.tap(find.widgetWithText(TextButton, l10n.delete));
+      await tester.tap(find.widgetWithText(FilledButton, l10n.delete));
       await tester.pumpAndSettle();
 
       expect(downloads.removed, [same(completed)]);
@@ -309,7 +309,7 @@ void main() {
       final l10n = AppLocalizations.of(
         tester.element(find.byType(AlertDialog)),
       )!;
-      await tester.tap(find.widgetWithText(TextButton, l10n.delete));
+      await tester.tap(find.widgetWithText(FilledButton, l10n.delete));
       await tester.pumpAndSettle();
 
       expect(find.byIcon(Icons.delete_outline_rounded), findsOneWidget);
@@ -341,7 +341,7 @@ void main() {
     await tester.tap(find.byIcon(Icons.delete_outline_rounded));
     await tester.pumpAndSettle();
     final l10n = AppLocalizations.of(tester.element(find.byType(AlertDialog)))!;
-    await tester.tap(find.widgetWithText(TextButton, l10n.delete));
+    await tester.tap(find.widgetWithText(FilledButton, l10n.delete));
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
@@ -370,7 +370,7 @@ void main() {
     await tester.tap(find.byIcon(Icons.delete_outline_rounded));
     await tester.pumpAndSettle();
     final l10n = AppLocalizations.of(tester.element(find.byType(AlertDialog)))!;
-    await tester.tap(find.widgetWithText(TextButton, l10n.delete));
+    await tester.tap(find.widgetWithText(FilledButton, l10n.delete));
     await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.delete_outline_rounded));
     await tester.pumpAndSettle();

@@ -1314,7 +1314,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
 
   void _openExtraAnime(MultimediaItem parent, MultimediaItem child) {
     final target = _inheritProvider(parent, child);
-    DetailsRoute($extra: DetailsRouteExtra(item: target)).push<void>(context);
+    target.openDetails(context);
   }
 
   void _openCharacter(Actor actor) {

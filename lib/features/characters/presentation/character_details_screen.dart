@@ -10,7 +10,7 @@ import '../../../core/account/account_providers.dart';
 import '../../../core/account/animewitcher_account_models.dart';
 import '../../../core/account/animewitcher_character_models.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
-import '../../../core/extensions/extension_manager.dart';
+import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/utils/artwork_quality.dart';
@@ -61,21 +61,12 @@ class _CharacterDetailsScreenState
     });
   }
 
-  AnimeWitcherNativeProvider? _resolveProvider() {
-    final active = ref.read(activeProviderProvider);
-    if (active is AnimeWitcherNativeProvider) return active;
-    for (final provider in ref.read(extensionManagerProvider)) {
-      if (provider is AnimeWitcherNativeProvider) return provider;
-    }
-    return null;
-  }
-
   Future<void> _load() async {
-    final provider = _resolveProvider();
+    final provider = ref.nativeProvider;
     if (provider == null) {
       if (mounted) {
         setState(() {
-          _error = StateError('AnimeWitcher Native unavailable');
+          _error = nativeProviderUnavailable();
           _loading = false;
         });
       }
@@ -261,7 +252,7 @@ class _CharacterDetailsScreenState
   }
 
   void _openAnime(MultimediaItem item) {
-    DetailsRoute($extra: DetailsRouteExtra(item: item)).push<void>(context);
+    item.openDetails(context);
   }
 
   @override
@@ -424,7 +415,7 @@ class _CharacterDetailsScreenState
                         FilledButton.tonalIcon(
                           onPressed: () {
                             final current = _document;
-                            final provider = _resolveProvider();
+                            final provider = ref.nativeProvider;
                             if (current == null || provider == null) {
                               unawaited(_load());
                               return;

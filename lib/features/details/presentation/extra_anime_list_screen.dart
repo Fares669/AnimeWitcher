@@ -175,7 +175,7 @@ class _ExtraAnimeListScreenState extends ConsumerState<ExtraAnimeListScreen> {
           return MultimediaCard.fromItem(
             key: ValueKey('${widget.keyPrefix}-$index'),
             item: item,
-            heroTag: '${widget.keyPrefix}_${item.url}_$index',
+            heroTag: heroTagWithUrl(widget.keyPrefix, item, index),
             showRelationBadge: widget.showRelationBadge,
             onTap: () {
               final target = _inheritProvider(item);

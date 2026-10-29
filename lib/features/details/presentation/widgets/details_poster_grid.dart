@@ -166,7 +166,7 @@ class DetailsPosterGrid extends StatelessWidget {
           return MultimediaCard.fromItem(
             key: ValueKey('$keyPrefix-$index'),
             item: item,
-            heroTag: '${keyPrefix}_${item.url}_$index',
+            heroTag: heroTagWithUrl(keyPrefix, item, index),
             showRelationBadge: showRelationBadge,
             onTap: () => onItemTap(item),
           );

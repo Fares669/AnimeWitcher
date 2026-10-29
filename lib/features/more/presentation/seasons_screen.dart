@@ -10,8 +10,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
-import '../../../core/extensions/extension_manager.dart';
+import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
+import '../../../core/utils/offset_pager.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/catalog_direction.dart';
@@ -59,17 +60,8 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
     }
   }
 
-  AnimeWitcherNativeProvider? _provider() {
-    final active = ref.read(activeProviderProvider);
-    if (active is AnimeWitcherNativeProvider) return active;
-    for (final provider in ref.read(extensionManagerProvider)) {
-      if (provider is AnimeWitcherNativeProvider) return provider;
-    }
-    return null;
-  }
-
   Future<_SeasonsBootstrap> _loadBootstrap() async {
-    final provider = _provider();
+    final provider = ref.nativeProvider;
     if (provider == null) {
       throw StateError('AnimeWitcher Native provider is unavailable');
     }
@@ -480,12 +472,9 @@ class _SeasonGridState extends State<_SeasonGrid>
   bool get wantKeepAlive => true;
 
   final ScrollController _controller = ScrollController();
-  final List<MultimediaItem> _items = <MultimediaItem>[];
-  final Set<String> _seen = <String>{};
-  bool _loading = false;
-  bool _hasMore = true;
-  Object? _error;
-  int _offset = 0;
+  final OffsetPager<MultimediaItem> _pager = OffsetPager<MultimediaItem>(
+    keyOf: multimediaItemPageKey,
+  );
 
   @override
   void initState() {
@@ -499,55 +488,33 @@ class _SeasonGridState extends State<_SeasonGrid>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.season != widget.season ||
         oldWidget.provider != widget.provider) {
-      _items.clear();
-      _seen.clear();
-      _offset = 0;
-      _hasMore = true;
-      _error = null;
-      _loading = false;
+      _pager.reset();
       _loadNext();
     }
   }
 
   void _onScroll() {
-    if (!_controller.hasClients || _loading || !_hasMore) return;
-    if (_controller.position.pixels >=
-        _controller.position.maxScrollExtent - 500) {
-      _loadNext();
-    }
+    if (_pager.shouldLoadMore(_controller)) _loadNext();
   }
 
   Future<void> _loadNext() async {
-    if (_loading || !_hasMore || widget.season.trim().isEmpty) return;
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final page = await widget.provider.getSeasonPage(
-        widget.season,
-        offset: _offset,
-        limit: 30,
-      );
-      if (!mounted) return;
-      setState(() {
-        for (final item in page.items) {
-          final key = item.url.trim().isEmpty
-              ? '${item.id}|${item.title}'
-              : item.url;
-          if (_seen.add(key)) _items.add(item);
-        }
-        _offset = page.nextOffset;
-        _hasMore = page.hasMore;
-        _loading = false;
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _error = error;
-        _loading = false;
-      });
+    if (_pager.loading || !_pager.hasMore || widget.season.trim().isEmpty) {
+      return;
     }
+    final future = _pager.loadNext(
+      (offset) => widget.provider
+          .getSeasonPage(widget.season, offset: offset, limit: 30)
+          .then(
+            (page) => (
+              items: page.items,
+              nextOffset: page.nextOffset,
+              hasMore: page.hasMore,
+            ),
+          ),
+    );
+    setState(() {});
+    await future;
+    if (mounted) setState(() {});
   }
 
   @override
@@ -562,8 +529,10 @@ class _SeasonGridState extends State<_SeasonGrid>
   Widget build(BuildContext context) {
     super.build(context);
     final isDesktop = context.isDesktop;
-    final initialLoading = _items.isEmpty && _loading;
-    final extra = _loading || (_error != null && _hasMore) ? 1 : 0;
+    final initialLoading = _pager.items.isEmpty && _pager.loading;
+    final extra = _pager.loading || (_pager.error != null && _pager.hasMore)
+        ? 1
+        : 0;
     return CatalogDirection(
       child: CustomScrollView(
         controller: _controller,
@@ -571,10 +540,10 @@ class _SeasonGridState extends State<_SeasonGrid>
         slivers: [
           if (widget.showSeasonTitle && widget.season.trim().isNotEmpty)
             SliverToBoxAdapter(child: SeasonListTitle(title: widget.season)),
-          if (_items.isEmpty && !initialLoading)
+          if (_pager.items.isEmpty && !initialLoading)
             SliverFillRemaining(
               hasScrollBody: false,
-              child: _error != null
+              child: _pager.error != null
                   ? _LoadError(message: widget.emptyLabel, onRetry: _loadNext)
                   : Center(child: Text(widget.emptyLabel)),
             )
@@ -608,8 +577,8 @@ class _SeasonGridState extends State<_SeasonGrid>
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
                     if (initialLoading) return const AnimePosterShimmer();
-                    if (index >= _items.length) {
-                      if (_error != null) {
+                    if (index >= _pager.items.length) {
+                      if (_pager.error != null) {
                         return IconButton(
                           tooltip: 'إعادة المحاولة',
                           onPressed: _loadNext,
@@ -618,19 +587,22 @@ class _SeasonGridState extends State<_SeasonGrid>
                       }
                       return const AnimePosterShimmer();
                     }
-                    final item = _items[index];
+                    final item = _pager.items[index];
                     return MultimediaCard.fromItem(
                       key: ValueKey('season-${widget.season}-${item.url}'),
                       item: item,
-                      heroTag: 'season-${widget.season}-${item.id}-$index',
-                      onTap: () =>
-                          DetailsRoute($extra: DetailsRouteExtra(item: item))
-                              .push<void>(context),
+                      heroTag: heroTagWithId(
+                        'season-${widget.season}',
+                        item,
+                        index,
+                        dashed: true,
+                      ),
+                      onTap: () => item.openDetails(context),
                     );
                   },
                   childCount: initialLoading
                       ? (isDesktop ? 18 : 12)
-                      : _items.length + extra,
+                      : _pager.items.length + extra,
                 ),
               ),
             ),
