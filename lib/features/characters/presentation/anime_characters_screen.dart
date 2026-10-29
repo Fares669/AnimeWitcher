@@ -111,7 +111,10 @@ class _AnimeCharactersScreenState extends ConsumerState<AnimeCharactersScreen> {
         onBack: () => Navigator.of(context).pop(),
       ),
       body: _loading
-          ? const AnimeCatalogShimmer(characterCaptionSpace: true)
+          ? Padding(
+              padding: EdgeInsets.only(top: headerTop),
+              child: const AnimeCatalogShimmer(characterCaptionSpace: true),
+            )
           : _error != null
           ? Padding(
               padding: EdgeInsets.only(top: headerTop),

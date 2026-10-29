@@ -136,7 +136,10 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
 
   Widget _buildBody(double headerTop) {
     if (_items.isEmpty && _loading) {
-      return const AnimeCatalogShimmer();
+      return Padding(
+        padding: EdgeInsets.only(top: headerTop),
+        child: const AnimeCatalogShimmer(),
+      );
     }
     if (_items.isEmpty && _error != null) {
       return Padding(
