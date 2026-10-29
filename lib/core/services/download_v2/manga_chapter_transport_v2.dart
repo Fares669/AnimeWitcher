@@ -594,6 +594,12 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
     _emit(_aggregate(status, progress: progress));
   }
 
+  /// How far apart republished chapter speeds land. Episode downloads
+  /// surface a new speed about once a second (the median gap between
+  /// episode snapshots in device logs is ~1.1 s); manga chapters match
+  /// that cadence instead of crawling with every page callback.
+  static const Duration _progressCoalesceWindow = Duration(seconds: 1);
+
   /// Page progress callbacks arrive in bursts — with every page in flight
   /// at once they can land dozens of times a second, and republishing the
   /// chapter aggregate for each one flooded the presentation with a new
@@ -601,8 +607,8 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
   /// summed speed that crawled on screen. Aggregates that change something
   /// material (status, pages done, connections, or a speed swing of a
   /// quarter or more) still go out immediately; speed-only ripples are
-  /// coalesced to at most twice a second, with a trailing emission so the
-  /// latest rate still lands.
+  /// coalesced to the episode cadence above, with a trailing emission so
+  /// the latest rate still lands.
   void _emitProgressAggregate() {
     final status = _paused && _allPagesPaused()
         ? DownloadTransportStatus.paused
@@ -611,8 +617,7 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
     final now = DateTime.now();
     final last = _lastProgressEmitAt;
     final windowElapsed =
-        last == null ||
-        now.difference(last) >= const Duration(milliseconds: 500);
+        last == null || now.difference(last) >= _progressCoalesceWindow;
     if (windowElapsed || _isMaterialProgressChange(next)) {
       _progressEmitTimer?.cancel();
       _progressEmitTimer = null;
@@ -621,7 +626,7 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
       return;
     }
     _progressEmitTimer ??= Timer(
-      const Duration(milliseconds: 500) - now.difference(last),
+      _progressCoalesceWindow - now.difference(last),
       () {
         _progressEmitTimer = null;
         if (_disposed || _current.isFinal) return;

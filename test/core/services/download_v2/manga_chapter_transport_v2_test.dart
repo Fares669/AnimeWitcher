@@ -61,12 +61,13 @@ void main() {
     final emitted = <DownloadTransportSnapshot>[];
     final sub = handle.snapshots.listen(emitted.add);
     addTearDown(sub.cancel);
-    // Let the page-start aggregates settle out of the sample.
-    await Future<void>.delayed(const Duration(milliseconds: 550));
+    // Let the page-start aggregates settle out of the sample (the
+    // coalescing window is a second, matching the episode cadence).
+    await Future<void>.delayed(const Duration(milliseconds: 1150));
     emitted.clear();
 
     Future<void> untilEmitted(int count) async {
-      for (var attempt = 0; attempt < 200 && emitted.length < count; attempt++) {
+      for (var attempt = 0; attempt < 300 && emitted.length < count; attempt++) {
         await Future<void>.delayed(const Duration(milliseconds: 10));
       }
       expect(emitted, hasLength(count));

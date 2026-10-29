@@ -349,6 +349,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     applePersistentGlassHeaderController.hide(this);
     WidgetsBinding.instance.removeObserver(this);
 
+    // The bars come back now, directly — the same call the manga reader
+    // makes on its way out, which works. This used to wait behind the
+    // orientation restore below, and on iOS the phone's clock and battery
+    // stayed hidden after leaving the player: whatever delayed or dropped
+    // that chained call left the whole app without a status bar. The
+    // chained call stays as a second word once orientation has settled.
+    if (Platform.isAndroid || Platform.isIOS) {
+      applyImmersiveFullScreen(false);
+    }
+
     // Direct route removals also restore orientation; normal Back awaits this
     // before popping. The controls share this service and cannot relock it.
     unawaited(
@@ -706,6 +716,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     }
 
     await orientationRestored;
+    // Back the bars come before the route even starts leaving; dispose
+    // repeats this, and once more after orientation settles.
+    if (Platform.isAndroid || Platform.isIOS) {
+      applyImmersiveFullScreen(false);
+    }
     if (mounted) context.pop();
   }
 
