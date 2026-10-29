@@ -254,6 +254,96 @@ void main() {
     expect(advanced, 1);
   });
 
+  testWidgets('continuous reader advances when scrolled to the divider', (
+    tester,
+  ) async {
+    var advanced = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaContinuousReader(
+          pages: _pages,
+          initialPage: 0,
+          scrollDirection: Axis.vertical,
+          reverse: false,
+          settings: const MangaReaderSettings(),
+          onPageChanged: (_) {},
+          pageBuilder: (_, page) =>
+              SizedBox(height: 500, child: Text('page-${page.index}')),
+          trailingPage: const Text('chapter-transition'),
+          onTrailingAdvance: () => advanced++,
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(advanced, 0);
+
+    await tester.drag(find.byType(SuperListView), const Offset(0, -1600));
+    await tester.pumpAndSettle();
+    expect(advanced, 1);
+  });
+
+  testWidgets('a dropped advance is retried on the next approach to the end', (
+    tester,
+  ) async {
+    var advanced = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaContinuousReader(
+          pages: _pages,
+          initialPage: 0,
+          scrollDirection: Axis.vertical,
+          reverse: false,
+          settings: const MangaReaderSettings(),
+          onPageChanged: (_) {},
+          pageBuilder: (_, page) =>
+              SizedBox(height: 500, child: Text('page-${page.index}')),
+          trailingPage: const Text('chapter-transition'),
+          onTrailingAdvance: () => advanced++,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.drag(find.byType(SuperListView), const Offset(0, -1600));
+    await tester.pumpAndSettle();
+    expect(advanced, 1);
+
+    // The first request went nowhere (say a navigation was already in
+    // flight). Scrolling away and back to the end must ask again — a
+    // latched one-shot guard would leave the reader stuck here forever.
+    await tester.drag(find.byType(SuperListView), const Offset(0, 1200));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(SuperListView), const Offset(0, -1600));
+    await tester.pumpAndSettle();
+    expect(advanced, 2);
+  });
+
+  testWidgets('webtoon reader advances when scrolled to the divider', (
+    tester,
+  ) async {
+    var advanced = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaWebtoonReader(
+          pages: _pages,
+          initialPage: 0,
+          settings: const MangaReaderSettings(),
+          onPageChanged: (_) {},
+          pageBuilder: (_, page) =>
+              SizedBox(height: 500, child: Text('page-${page.index}')),
+          trailingPage: const Text('chapter-transition'),
+          onTrailingAdvance: () => advanced++,
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(advanced, 0);
+
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -1600));
+    await tester.pumpAndSettle();
+    expect(advanced, 1);
+  });
+
   testWidgets('paged reader appends Mangayomi chapter transition page', (
     tester,
   ) async {

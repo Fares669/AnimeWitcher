@@ -10,11 +10,6 @@ bool mangaReaderShouldAdvancePastTransition({
   required double overscroll,
 }) => extentAfter <= 0.5 && overscroll > 0;
 
-/// How much of the trailing divider must be on screen before the scrolling
-/// readers move on by themselves: enough that reaching it means the chapter
-/// is finished, not merely that its edge peeked into the viewport.
-const double mangaReaderTrailingAdvanceVisibility = 0.6;
-
 /// The slim divider the scrolling readers leave between chapters instead of
 /// the full transition page: the finished chapter above, the next chapter
 /// below, and nothing to stop and tap — the readers advance on their own
