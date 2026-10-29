@@ -3,17 +3,14 @@ import 'more_sidebar_shell.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:animewitcher/shared/widgets/app_page_header.dart';
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
-import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
-import '../../../shared/widgets/catalog_direction.dart';
+import '../../../shared/widgets/catalog_page.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../../core/router/app_router.dart';
 
@@ -122,126 +119,42 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
     });
 
     final embedded = MorePaneScope.of(context);
-    final headerTop = appPageHeaderContentTopInset(context);
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppPageAppBar(
-        title: 'القادم قريبًا',
-        canPop: !embedded && Navigator.of(context).canPop(),
-        onBack: () => Navigator.of(context).pop(),
-      ),
-      body: _buildBody(headerTop),
-    );
-  }
-
-  Widget _buildBody(double headerTop) {
-    if (_items.isEmpty && _loading) {
-      return Padding(
-        padding: EdgeInsets.only(top: headerTop),
-        child: const AnimeCatalogShimmer(),
-      );
-    }
-    if (_items.isEmpty && _error != null) {
-      return Padding(
-        padding: EdgeInsets.only(top: headerTop),
-        child: _LoadError(
-          message: 'تعذر تحميل الأعمال القادمة',
-          onRetry: _refresh,
-        ),
-      );
-    }
-    if (_items.isEmpty) {
-      return Padding(
-        padding: EdgeInsets.only(top: headerTop),
-        child: Center(child: Text('لا توجد أعمال قادمة حاليًا')),
-      );
-    }
-
-    final isDesktop = context.isDesktop;
-    final extra = _loading || (_error != null && _hasMore) ? 1 : 0;
-    return MouseDragRefreshIndicator(
-      onRefresh: _refresh,
-      child: CatalogDirection(
-        child: GridView.builder(
-          controller: _controller,
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.fromLTRB(
-            MultimediaCardLayout.catalogGridHorizontalPadding(context),
-            headerTop + 16,
-            MultimediaCardLayout.catalogGridHorizontalPadding(context),
-            110,
-          ),
-          gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
-            context,
-            maxCrossAxisExtent: isDesktop ? 240 : 150,
-            childAspectRatio: MultimediaCardLayout.gridAspectRatio(
-              isPortrait: true,
-              isDesktop: isDesktop,
-            ),
-            crossAxisSpacing: MultimediaCardLayout.catalogGridCrossAxisSpacing(
-              context,
-            ),
-            mainAxisSpacing: MultimediaCardLayout.catalogGridMainAxisSpacing(
-              context,
-            ),
-            handsetPortraitCrossAxisCount:
-                MultimediaCardLayout.handsetPortraitGridColumns,
-            horizontalPadding:
-                MultimediaCardLayout.catalogGridHorizontalPadding(context),
-          ),
-          itemCount: _items.length + extra,
-          itemBuilder: (context, index) {
-            if (index >= _items.length) {
-              if (_error != null) {
-                return IconButton(
-                  tooltip: 'إعادة المحاولة',
-                  onPressed: _loadNext,
-                  icon: const Icon(Icons.refresh_rounded),
-                );
-              }
-              return const AnimePosterShimmer();
-            }
-            final item = _items[index];
-            return MultimediaCard.fromItem(
-              key: ValueKey('coming-${item.url}'),
-              item: item,
-              heroTag: 'coming-${item.id}-$index',
-              onTap: () =>
-                  DetailsRoute($extra: DetailsRouteExtra(item: item))
-                      .push<void>(context),
-            );
-          },
-        ),
-      ),
-    );
-  }
-}
-
-class _LoadError extends StatelessWidget {
-  const _LoadError({required this.message, required this.onRetry});
-
-  final String message;
-  final Future<void> Function() onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.cloud_off_rounded, size: 42),
-            const SizedBox(height: 12),
-            Text(message, textAlign: TextAlign.center),
-            const SizedBox(height: 12),
-            FilledButton.tonalIcon(
-              onPressed: () => onRetry(),
-              icon: const Icon(Icons.refresh_rounded),
-              label: const Text('إعادة المحاولة'),
-            ),
-          ],
-        ),
+    return CatalogPage(
+      title: 'القادم قريبًا',
+      canPop: !embedded && Navigator.of(context).canPop(),
+      onBack: () => Navigator.of(context).pop(),
+      builder: (context, topInset) => CatalogBody(
+        topInset: topInset,
+        isLoading: _loading,
+        errorMessage: _items.isEmpty && _error != null
+            ? 'تعذر تحميل الأعمال القادمة'
+            : null,
+        onRetry: _refresh,
+        emptyMessage: 'لا توجد أعمال قادمة حاليًا',
+        onRefresh: _refresh,
+        scrollController: _controller,
+        footer: _loading || (_error != null && _hasMore)
+            ? CatalogFooter.loading
+            : CatalogFooter.none,
+        footerBuilder: (context, _) => _error != null
+            ? IconButton(
+                tooltip: 'إعادة المحاولة',
+                onPressed: _loadNext,
+                icon: const Icon(Icons.refresh_rounded),
+              )
+            : const AnimePosterShimmer(),
+        itemCount: _items.length,
+        itemBuilder: (context, index) {
+          final item = _items[index];
+          return MultimediaCard.fromItem(
+            key: ValueKey('coming-${item.url}'),
+            item: item,
+            heroTag: 'coming-${item.id}-$index',
+            onTap: () =>
+                DetailsRoute($extra: DetailsRouteExtra(item: item))
+                    .push<void>(context),
+          );
+        },
       ),
     );
   }
