@@ -19,10 +19,20 @@ class _ContinuousPagePart {
 }
 
 class _ContinuousEntry {
-  const _ContinuousEntry(this.parts);
+  const _ContinuousEntry(this.parts) : divider = null, dividerPageIndex = null;
+
+  const _ContinuousEntry.dividerEntry(this.divider, this.dividerPageIndex)
+    : parts = const <_ContinuousPagePart>[];
 
   final List<_ContinuousPagePart> parts;
-  int get primaryIndex => parts.first.pageIndex;
+
+  /// A between-chapters divider shown in the stream instead of pages.
+  final Widget? divider;
+  final int? dividerPageIndex;
+
+  bool get isDivider => divider != null;
+  int get primaryIndex =>
+      parts.isNotEmpty ? parts.first.pageIndex : dividerPageIndex!;
 }
 
 List<MangaReaderPageSlice> mangaContinuousPageSlices({
@@ -62,6 +72,7 @@ class MangaContinuousReader extends StatefulWidget {
     this.trailingPage,
     this.onTrailingAdvance,
     this.onDoubleTap,
+    this.sectionDividers = const <int, Widget>{},
   });
 
   final List<MangaPage> pages;
@@ -76,6 +87,10 @@ class MangaContinuousReader extends StatefulWidget {
   final Widget? trailingPage;
   final VoidCallback? onTrailingAdvance;
   final VoidCallback? onDoubleTap;
+
+  /// Dividers inserted into the stream, keyed by the page index they
+  /// precede — the seams of a connected chapter stream.
+  final Map<int, Widget> sectionDividers;
 
   @override
   State<MangaContinuousReader> createState() => _MangaContinuousReaderState();
@@ -105,16 +120,26 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
         for (final spread in mangaReaderPageSpreads(
           pageCount: widget.pages.length,
           singleFirst: widget.settings.doublePageSingleFirstPage,
-        ))
+        )) ...<_ContinuousEntry>[
+          if (widget.sectionDividers.containsKey(spread.first))
+            _ContinuousEntry.dividerEntry(
+              widget.sectionDividers[spread.first],
+              spread.first,
+            ),
           _ContinuousEntry(<_ContinuousPagePart>[
             for (final index in spread)
               _ContinuousPagePart(index, MangaReaderPageSlice.full),
           ]),
+        ],
       ];
     }
 
     final entries = <_ContinuousEntry>[];
     for (var index = 0; index < widget.pages.length; index++) {
+      final divider = widget.sectionDividers[index];
+      if (divider != null) {
+        entries.add(_ContinuousEntry.dividerEntry(divider, index));
+      }
       final size = _imageSizes[index];
       final slices = mangaContinuousPageSlices(
         settings: widget.settings,
@@ -308,6 +333,7 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
   }
 
   Widget _spread(BuildContext context, _ContinuousEntry entry) {
+    if (entry.isDivider) return entry.divider!;
     final primaryIndex = entry.primaryIndex;
     Widget child = entry.parts.length == 1
         ? _pageContent(context, entry.parts.first)

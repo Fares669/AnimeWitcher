@@ -37,7 +37,8 @@ class MangaReaderController extends ChangeNotifier {
   final List<MangaChapter> chapters;
   final String? localChapterDirectory;
   final MangaChapter _initialLocalChapter;
-  final Future<String?> Function(MangaChapter chapter)? localChapterDirectoryFor;
+  final Future<String?> Function(MangaChapter chapter)?
+  localChapterDirectoryFor;
   final MangaReaderPageCache _pageCache;
 
   MangaChapter _chapter;
@@ -154,6 +155,66 @@ class MangaReaderController extends ChangeNotifier {
     }
   }
 
+  /// Resolves a chapter's pages without opening it: downloaded pages
+  /// first, then the preload this controller already fetched, then the
+  /// page-list cache, then the source. Used by the scrolling readers'
+  /// connected chapter stream, which shows neighbouring chapters in the
+  /// same scroll instead of navigating to them. Failures return an empty
+  /// list — a stream segment that cannot be resolved is simply skipped.
+  Future<List<MangaPage>> fetchChapterPages(MangaChapter chapter) async {
+    if (_disposed) return const <MangaPage>[];
+    try {
+      final local = await _loadLocalPages(chapter);
+      if (_disposed) return const <MangaPage>[];
+      if (local.isNotEmpty) return List<MangaPage>.unmodifiable(local);
+      final preloaded = _preloadedChapterPages.remove(chapter.id);
+      if (preloaded != null && preloaded.isNotEmpty) return preloaded;
+      final mangaId = _mangaIdFor(chapter);
+      final cached = await _trackCacheOperation(
+        _pageCache.get(mangaId, chapter),
+      );
+      if (_disposed) return const <MangaPage>[];
+      if (cached != null && cached.isNotEmpty) {
+        return List<MangaPage>.unmodifiable(cached);
+      }
+      final remote = await provider.getMangaChapterPages(manga.url, chapter);
+      if (_disposed) return const <MangaPage>[];
+      if (remote.isNotEmpty) {
+        await _trackCacheOperation(_pageCache.put(mangaId, chapter, remote));
+      }
+      return List<MangaPage>.unmodifiable(remote);
+    } catch (_) {
+      return const <MangaPage>[];
+    }
+  }
+
+  /// Moves the reading position into a chapter the stream already shows,
+  /// without loading anything: progress for the chapter being left is
+  /// flushed, and the current chapter, its pages and the page index now
+  /// describe the segment on screen, so the bars, the page pill and
+  /// progress saving keep following the reader across segment seams.
+  Future<void> adoptStreamChapter(
+    MangaChapter chapter,
+    List<MangaPage> pages,
+    int pageIndex, {
+    bool autoReadDuplicateChapters = false,
+  }) async {
+    if (_disposed || pages.isEmpty) return;
+    _autoReadDuplicateChapters = autoReadDuplicateChapters;
+    final sameChapter =
+        chapter.id == _chapter.id && chapter.url == _chapter.url;
+    if (!sameChapter) {
+      await flushProgress();
+      if (_disposed) return;
+      _chapter = chapter;
+    }
+    _pages = List<MangaPage>.unmodifiable(pages);
+    _pageIndex = pageIndex.clamp(0, pages.length - 1).toInt();
+    notifyListeners();
+    _scheduleProgressSave();
+    if (!sameChapter) unawaited(_preloadAdjacentChapters());
+  }
+
   Future<void> _preloadAdjacentChapters() async {
     if (_disposed) return;
     final index = currentChapterIndex;
@@ -184,13 +245,16 @@ class MangaReaderController extends ChangeNotifier {
           if (_disposed) return;
           final pages = local.isNotEmpty
               ? local
-              : cached ?? await provider.getMangaChapterPages(manga.url, chapter);
+              : cached ??
+                    await provider.getMangaChapterPages(manga.url, chapter);
           if (_disposed) return;
           // Local pages must be validated again when actually navigating.
           if (pages.isNotEmpty && local.isEmpty) {
             _preloadedChapterPages[id] = List<MangaPage>.unmodifiable(pages);
             if (local.isEmpty && cached == null) {
-              await _trackCacheOperation(_pageCache.put(mangaId, chapter, pages));
+              await _trackCacheOperation(
+                _pageCache.put(mangaId, chapter, pages),
+              );
             }
           }
         } catch (_) {
@@ -211,11 +275,14 @@ class MangaReaderController extends ChangeNotifier {
       // An unavailable downloads projection must not hide the initial directory.
     }
     if (_disposed) return const <MangaPage>[];
-    final initial = chapter.id == _initialLocalChapter.id &&
+    final initial =
+        chapter.id == _initialLocalChapter.id &&
         _mangaIdFor(chapter) == _mangaIdFor(_initialLocalChapter);
     final rawDirectory = (resolvedDirectory?.trim().isNotEmpty ?? false)
         ? resolvedDirectory!.trim()
-        : initial ? localChapterDirectory?.trim() ?? '' : '';
+        : initial
+        ? localChapterDirectory?.trim() ?? ''
+        : '';
     if (rawDirectory.isEmpty) return const <MangaPage>[];
 
     final directory = await resolveMangaChapterDirectoryV2(rawDirectory);

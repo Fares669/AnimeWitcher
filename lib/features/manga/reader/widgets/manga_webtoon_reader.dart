@@ -10,6 +10,18 @@ import 'manga_reader_load_scheduler.dart';
 import 'manga_reader_page_loading.dart';
 import 'manga_continuous_zoom_surface.dart';
 
+/// One row of the webtoon stream: a page spread, or a between-chapters
+/// divider at a seam of a connected chapter stream.
+class _WebtoonItem {
+  const _WebtoonItem.spread(this.indices) : divider = null;
+  const _WebtoonItem.dividerItem(this.divider) : indices = null;
+
+  final List<int>? indices;
+  final Widget? divider;
+
+  bool get isDivider => divider != null;
+}
+
 class MangaWebtoonReader extends StatefulWidget {
   const MangaWebtoonReader({
     super.key,
@@ -23,6 +35,7 @@ class MangaWebtoonReader extends StatefulWidget {
     this.trailingPage,
     this.onTrailingAdvance,
     this.onDoubleTap,
+    this.sectionDividers = const <int, Widget>{},
   });
 
   final List<MangaPage> pages;
@@ -35,6 +48,10 @@ class MangaWebtoonReader extends StatefulWidget {
   final Widget? trailingPage;
   final VoidCallback? onTrailingAdvance;
   final VoidCallback? onDoubleTap;
+
+  /// Dividers inserted into the stream, keyed by the page index they
+  /// precede — the seams of a connected chapter stream.
+  final Map<int, Widget> sectionDividers;
 
   @override
   State<MangaWebtoonReader> createState() => _MangaWebtoonReaderState();
@@ -63,18 +80,30 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
             <int>[index],
         ];
 
-  int get _startPage => widget.pages.isEmpty
-      ? 0
-      : _sessionInitialPage.clamp(0, widget.pages.length - 1).toInt();
+  /// Spreads with the section dividers woven in, in stream order.
+  List<_WebtoonItem> get _items {
+    final items = <_WebtoonItem>[];
+    for (final spread in _spreads) {
+      final divider = widget.sectionDividers[spread.first];
+      if (divider != null) items.add(_WebtoonItem.dividerItem(divider));
+      items.add(_WebtoonItem.spread(spread));
+    }
+    return items;
+  }
 
-  int get _startSpread {
+  /// The item the session starts on: the spread holding the start page.
+  int _startItemIndex(List<_WebtoonItem> items) {
     final page = _startPage;
-    final spreads = _spreads;
-    for (var index = 0; index < spreads.length; index++) {
-      if (spreads[index].contains(page)) return index;
+    for (var index = 0; index < items.length; index++) {
+      final indices = items[index].indices;
+      if (indices != null && indices.contains(page)) return index;
     }
     return 0;
   }
+
+  int get _startPage => widget.pages.isEmpty
+      ? 0
+      : _sessionInitialPage.clamp(0, widget.pages.length - 1).toInt();
 
   @override
   void initState() {
@@ -201,6 +230,11 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
     );
   }
 
+  Widget _item(BuildContext context, _WebtoonItem item) {
+    if (item.isDivider) return item.divider!;
+    return _spread(context, item.indices!);
+  }
+
   void _requestTrailingAdvance() {
     final callback = widget.onTrailingAdvance;
     if (_trailingAdvanceRequested ||
@@ -264,8 +298,8 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
   Widget build(BuildContext context) {
     if (widget.pages.isEmpty) return const SizedBox.shrink();
 
-    final spreads = _spreads;
-    final start = _startSpread;
+    final items = _items;
+    final start = _startItemIndex(items);
     final viewport = MediaQuery.sizeOf(context);
     final cacheExtent = mangaReaderPreloadCacheExtent(
       settings: widget.settings,
@@ -286,7 +320,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
           if (start > 0)
             SliverList(
               delegate: SliverChildBuilderDelegate(
-                (context, index) => _spread(context, spreads[index]),
+                (context, index) => _item(context, items[index]),
                 childCount: start,
                 addAutomaticKeepAlives: false,
                 addRepaintBoundaries: false,
@@ -298,9 +332,9 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
             delegate: SliverChildBuilderDelegate(
               (context, localIndex) {
                 final index = start + localIndex;
-                return _spread(context, spreads[index]);
+                return _item(context, items[index]);
               },
-              childCount: spreads.length - start,
+              childCount: items.length - start,
               addAutomaticKeepAlives: false,
               addRepaintBoundaries: false,
               addSemanticIndexes: false,

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
@@ -146,6 +147,67 @@ final class _PerMangaReaderSettingsNotifier
     personalReaderModes: <String, MangaReaderMode>{
       'm1': MangaReaderMode.webtoon,
     },
+  );
+}
+
+/// Serves real local image files as chapter pages, so the full screen
+/// can stream chapters whose images actually load.
+final class _LocalStreamProvider extends AnimeWitcherProvider {
+  _LocalStreamProvider(this.directory);
+
+  final Directory directory;
+  final List<String> requestedChapterIds = <String>[];
+
+  @override
+  String get packageName => 'test.reader.stream';
+  @override
+  String get name => 'Stream reader';
+  @override
+  String get mainUrl => 'https://example.test';
+  @override
+  String get version => '1';
+  @override
+  List<String> get languages => const <String>['en'];
+  @override
+  Set<ProviderType> get supportedTypes => const <ProviderType>{
+    ProviderType.manga,
+  };
+  @override
+  Future<List<MultimediaItem>> search(
+    String query, {
+    CancelToken? cancelToken,
+  }) async => const <MultimediaItem>[];
+  @override
+  Future<Map<String, List<MultimediaItem>>> getHome() async =>
+      const <String, List<MultimediaItem>>{};
+  @override
+  Future<MultimediaItem> getDetails(String url) => throw UnimplementedError();
+  @override
+  Future<List<StreamResult>> loadStreams(String url) =>
+      throw UnimplementedError();
+  @override
+  Future<List<MangaPage>> getMangaChapterPages(
+    String mangaUrl,
+    MangaChapter chapter,
+  ) async {
+    requestedChapterIds.add(chapter.id);
+    return <MangaPage>[
+      for (var i = 0; i < 3; i++)
+        MangaPage(
+          index: i,
+          imageUrl: File('${directory.path}/page-${i + 1}.bmp').uri.toString(),
+        ),
+    ];
+  }
+}
+
+final class _WebtoonStreamSettingsNotifier extends MangaReaderSettingsNotifier {
+  @override
+  MangaReaderSettings build() => const MangaReaderSettings(
+    defaultMode: MangaReaderMode.webtoon,
+    showReadingMode: false,
+    keepScreenOn: false,
+    fullScreen: false,
   );
 }
 
@@ -361,6 +423,230 @@ void main() {
       (await cache.get('m1', second))?.map((page) => page.imageUrl),
       pages.map((page) => page.imageUrl),
     );
+  });
+
+  test(
+    'stream fetch and adopt move between chapters without reopening',
+    () async {
+      final temp = await Directory.systemTemp.createTemp('aw_reader_stream_');
+      addTearDown(() => temp.delete(recursive: true));
+      final provider = _ReaderProvider();
+      final cache = _RecordingReaderPageCache(cacheDirectory: temp);
+      const first = MangaChapter(
+        id: 's1',
+        mangaId: 'm1',
+        url: 'https://example.test/chapter/s1',
+        name: 'Chapter 1',
+        number: 1,
+      );
+      const second = MangaChapter(
+        id: 's2',
+        mangaId: 'm1',
+        url: 'https://example.test/chapter/s2',
+        name: 'Chapter 2',
+        number: 2,
+      );
+      final manga = MultimediaItem(
+        title: 'Reader Manga',
+        url: 'https://animewitcher.com/manga/m1',
+        posterUrl: '',
+        contentType: MultimediaContentType.manga,
+        provider: provider.packageName,
+      );
+      final controller = MangaReaderController(
+        provider: provider,
+        progressRepository: _ReaderProgressRepository(),
+        manga: manga,
+        chapter: first,
+        chapters: const <MangaChapter>[first, second],
+        pageCache: cache,
+      );
+      addTearDown(controller.dispose);
+
+      await controller.load();
+      await cache.waitUntilWritten('s2');
+
+      // The stream resolves the next chapter's pages while the first
+      // chapter stays open.
+      final fetched = await controller.fetchChapterPages(second);
+      expect(
+        fetched.map((page) => page.imageUrl),
+        pages.map((p) => p.imageUrl),
+      );
+      expect(controller.currentChapter.id, 's1');
+
+      // Adopting the segment moves the reading position into it — chapter,
+      // pages and index — with no further source request for that chapter.
+      final requestsBefore = provider.requestedChapterIds.length;
+      await controller.adoptStreamChapter(second, fetched, 2);
+      expect(controller.currentChapter.id, 's2');
+      expect(controller.pageIndex, 2);
+      expect(
+        controller.pages.map((page) => page.imageUrl),
+        pages.map((p) => p.imageUrl),
+      );
+      expect(provider.requestedChapterIds.length, requestsBefore);
+    },
+  );
+
+  group('connected chapter stream (webtoon screen)', () {
+    Future<Directory> writeBmpPages(WidgetTester tester) async {
+      final directory = Directory.systemTemp.createTempSync(
+        'aw_reader_stream_',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      const width = 40;
+      const height = 40;
+      final data = Uint8List(54 + width * height * 4);
+      final header = ByteData.sublistView(data)
+        ..setUint8(0, 0x42)
+        ..setUint8(1, 0x4d)
+        ..setUint32(2, data.length, Endian.little)
+        ..setUint32(10, 54, Endian.little)
+        ..setUint32(14, 40, Endian.little)
+        ..setInt32(18, width, Endian.little)
+        ..setInt32(22, height, Endian.little)
+        ..setUint16(26, 1, Endian.little)
+        ..setUint16(28, 32, Endian.little)
+        ..setUint32(34, width * height * 4, Endian.little);
+      for (var offset = 54; offset < data.length; offset += 4) {
+        header.setUint32(offset, 0xff326496, Endian.little);
+      }
+      // Real file IO must run outside the fake-async test zone, or the
+      // writes never complete and the test hangs.
+      await tester.runAsync(() async {
+        for (var i = 0; i < 3; i++) {
+          File('${directory.path}/page-${i + 1}.bmp').writeAsBytesSync(data);
+        }
+      });
+      return directory;
+    }
+
+    const firstChapter = MangaChapter(
+      id: 'stream-c1',
+      mangaId: 'stream-m1',
+      url: 'https://example.test/chapter/1',
+      name: 'Chapter 1',
+      number: 1,
+    );
+    const secondChapter = MangaChapter(
+      id: 'stream-c2',
+      mangaId: 'stream-m1',
+      url: 'https://example.test/chapter/2',
+      name: 'Chapter 2',
+      number: 2,
+    );
+    const streamChapters = <MangaChapter>[firstChapter, secondChapter];
+
+    Future<void> pumpStreamScreen(
+      WidgetTester tester,
+      _LocalStreamProvider provider,
+      MangaChapter openChapter,
+    ) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            extensionManagerProvider.overrideWith(
+              () => _ReaderManager(provider),
+            ),
+            mangaReadingRepositoryProvider.overrideWithValue(
+              _ReaderProgressRepository(),
+            ),
+            mangaReaderSettingsProvider.overrideWith(
+              _WebtoonStreamSettingsNotifier.new,
+            ),
+          ],
+          child: MaterialApp(
+            locale: const Locale('ar'),
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: MangaReaderScreen(
+              manga: MultimediaItem(
+                title: 'Stream manga',
+                url: 'https://example.test/manga',
+                posterUrl: '',
+                provider: provider.packageName,
+                contentType: MultimediaContentType.manga,
+              ),
+              chapter: openChapter,
+              chapters: streamChapters,
+            ),
+          ),
+        ),
+      );
+    }
+
+    Future<MangaWebtoonReader> webtoonWhen(
+      WidgetTester tester,
+      bool Function(MangaWebtoonReader) condition,
+    ) async {
+      for (var i = 0; i < 80; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await tester.pump(const Duration(milliseconds: 20));
+        final found = find.byType(MangaWebtoonReader).evaluate();
+        if (found.isNotEmpty) {
+          final reader = tester.widget<MangaWebtoonReader>(
+            find.byType(MangaWebtoonReader),
+          );
+          if (condition(reader)) return reader;
+        }
+      }
+      fail('webtoon stream did not reach the expected state');
+    }
+
+    testWidgets('opening a chapter connects the previous one above it', (
+      tester,
+    ) async {
+      final directory = await writeBmpPages(tester);
+      final provider = _LocalStreamProvider(directory);
+      await pumpStreamScreen(tester, provider, secondChapter);
+
+      final reader = await webtoonWhen(
+        tester,
+        (reader) => reader.pages.length == 6,
+      );
+      // Chapter 2 opens at its own first page — flattened index 3, right
+      // after chapter 1's pages and the seam divider before them.
+      expect(reader.initialPage, 3);
+      expect(reader.sectionDividers.keys, <int>[3]);
+    });
+
+    testWidgets('the next chapter joins below without a chapter jump', (
+      tester,
+    ) async {
+      final directory = await writeBmpPages(tester);
+      final provider = _LocalStreamProvider(directory);
+      await pumpStreamScreen(tester, provider, firstChapter);
+
+      var reader = await webtoonWhen(
+        tester,
+        (reader) => reader.pages.length == 3,
+      );
+      final stateBefore = tester.state(find.byType(MangaWebtoonReader));
+
+      for (var i = 0; i < 40 && reader.pages.length < 6; i++) {
+        await tester.drag(
+          find.byType(CustomScrollView),
+          const Offset(0, -1200),
+        );
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+        reader = tester.widget<MangaWebtoonReader>(
+          find.byType(MangaWebtoonReader),
+        );
+      }
+
+      expect(reader.pages.length, 6);
+      expect(reader.sectionDividers.keys, <int>[3]);
+      // Same reader state, same starting point: the chapter was appended
+      // to the scroll, not navigated to.
+      expect(tester.state(find.byType(MangaWebtoonReader)), same(stateBefore));
+      expect(reader.initialPage, 0);
+    });
   });
 
   test('Mangayomi chapter read action toggles read and unread', () async {

@@ -46,6 +46,40 @@ void main() {
     expect(controller.canLoad(5), isTrue);
   });
 
+  test('preload batches reach back from a mid-list start, nearest first', () {
+    expect(
+      mangaReaderOrderedPreloadBatches(
+        pageCount: 10,
+        initialPage: 6,
+        batchSize: 3,
+      ),
+      <List<int>>[
+        <int>[6, 7, 8],
+        <int>[9],
+        <int>[3, 4, 5],
+        <int>[0, 1, 2],
+      ],
+    );
+
+    final controller = MangaReaderLoadBatchController(
+      pageCount: 10,
+      initialPage: 6,
+      batchSize: 3,
+    );
+    addTearDown(controller.dispose);
+
+    expect(controller.unlockedPages, <int>{6, 7, 8});
+    controller.markSettled(6);
+    controller.markSettled(7);
+    controller.markSettled(8);
+    expect(controller.canLoad(9), isTrue);
+    expect(controller.canLoad(5), isFalse);
+
+    controller.markSettled(9);
+    expect(controller.canLoad(5), isTrue);
+    expect(controller.canLoad(2), isFalse);
+  });
+
   setUpAll(() {
     VisibilityDetectorController.instance.updateInterval = Duration.zero;
   });
@@ -342,6 +376,62 @@ void main() {
     await tester.drag(find.byType(CustomScrollView), const Offset(0, -1600));
     await tester.pumpAndSettle();
     expect(advanced, 1);
+  });
+
+  testWidgets('continuous reader renders a section divider in the stream', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaContinuousReader(
+          pages: _pages,
+          initialPage: 0,
+          scrollDirection: Axis.vertical,
+          reverse: false,
+          settings: const MangaReaderSettings(),
+          onPageChanged: (_) {},
+          pageBuilder: (_, page) =>
+              SizedBox(height: 500, child: Text('page-${page.index}')),
+          sectionDividers: const <int, Widget>{2: Text('between-chapters')},
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.drag(find.byType(SuperListView), const Offset(0, -900));
+    await tester.pumpAndSettle();
+
+    expect(find.text('between-chapters'), findsOneWidget);
+    final dividerY = tester.getTopLeft(find.text('between-chapters')).dy;
+    expect(dividerY, greaterThan(tester.getTopLeft(find.text('page-1')).dy));
+    expect(dividerY, lessThan(tester.getTopLeft(find.text('page-2')).dy));
+  });
+
+  testWidgets('webtoon reader renders a section divider in the stream', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaWebtoonReader(
+          pages: _pages,
+          initialPage: 0,
+          settings: const MangaReaderSettings(),
+          onPageChanged: (_) {},
+          pageBuilder: (_, page) =>
+              SizedBox(height: 500, child: Text('page-${page.index}')),
+          sectionDividers: const <int, Widget>{2: Text('between-chapters')},
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -900));
+    await tester.pumpAndSettle();
+
+    expect(find.text('between-chapters'), findsOneWidget);
+    final dividerY = tester.getTopLeft(find.text('between-chapters')).dy;
+    expect(dividerY, greaterThan(tester.getTopLeft(find.text('page-1')).dy));
+    expect(dividerY, lessThan(tester.getTopLeft(find.text('page-2')).dy));
   });
 
   testWidgets('paged reader appends Mangayomi chapter transition page', (

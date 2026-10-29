@@ -9,8 +9,16 @@ List<List<int>> mangaReaderOrderedPreloadBatches({
   final safeStart = initialPage.clamp(0, pageCount - 1).toInt();
   final width = batchSize.clamp(1, 20).toInt();
   final batches = <List<int>>[];
+  // Forward from the page reading starts at: those pages matter first.
   for (var start = safeStart; start < pageCount; start += width) {
     final end = (start + width).clamp(0, pageCount).toInt();
+    batches.add(<int>[for (var index = start; index < end; index++) index]);
+  }
+  // Then the pages before it, nearest first. A resumed chapter — or the
+  // previous chapter of a connected chapter stream — is read by scrolling
+  // back, and those pages must be loadable too, not placeholder forever.
+  for (var end = safeStart; end > 0; end -= width) {
+    final start = (end - width).clamp(0, safeStart).toInt();
     batches.add(<int>[for (var index = start; index < end; index++) index]);
   }
   return batches;
