@@ -83,7 +83,10 @@ class _RecentWatchedBodyState extends ConsumerState<RecentWatchedBody> {
 
     Widget body;
     if (_initialSyncRunning && history.isEmpty) {
-      body = const AnimeCatalogShimmer();
+      body = Padding(
+        padding: EdgeInsets.only(top: widget.topPadding),
+        child: const AnimeCatalogShimmer(),
+      );
     } else if (history.isEmpty) {
       body = MouseDragRefreshIndicator(
         onRefresh: _refreshFromServer,

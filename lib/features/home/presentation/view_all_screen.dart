@@ -312,7 +312,7 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
                   physics: const AlwaysScrollableScrollPhysics(),
                   padding: EdgeInsets.fromLTRB(
                     gridHorizontalPadding,
-                    items.isEmpty && isLoading ? 16 : headerTop + 16,
+                    headerTop + 16,
                     gridHorizontalPadding,
                     16,
                   ),

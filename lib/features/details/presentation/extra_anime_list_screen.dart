@@ -167,7 +167,10 @@ class _ExtraAnimeListScreenState extends ConsumerState<ExtraAnimeListScreen> {
         onBack: () => Navigator.of(context).pop(),
       ),
       body: _loading
-          ? const AnimeCatalogShimmer()
+          ? Padding(
+              padding: EdgeInsets.only(top: headerTop),
+              child: const AnimeCatalogShimmer(),
+            )
           : _error != null
           ? Padding(
               padding: EdgeInsets.only(top: headerTop),
