@@ -70,6 +70,9 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
   Timer? _autoScrollTimer;
   Timer? _flashTimer;
   bool _controlsVisible = true;
+  bool _readerScrolling = false;
+  int _scrollStateGeneration = 0;
+  bool _tapBeganWhileScrolling = false;
   bool _forceDoublePage = false;
   bool _autoScrollRunning = false;
   bool _showNavigationOverlay = false;
@@ -473,6 +476,12 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
   }
 
   void _toggleControls() {
+    // A tap that begins while the page is still moving is usually the reader
+    // catching the page, not a request for the bars.
+    if (_tapBeganWhileScrolling) {
+      _tapBeganWhileScrolling = false;
+      return;
+    }
     setState(() {
       _controlsVisible = !_controlsVisible;
       // The panel belongs to the bars: it goes when they do.
@@ -553,6 +562,18 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     ScrollNotification notification,
     MangaReaderSettings settings,
   ) {
+    if (notification is ScrollStartNotification) {
+      _scrollStateGeneration++;
+      _readerScrolling = true;
+    } else if (notification is ScrollEndNotification) {
+      // Cleared next frame, not now: the tap that stops a moving page ends
+      // its scroll from inside its own pointer-down, and that tap must still
+      // count as landing on a moving page.
+      final generation = ++_scrollStateGeneration;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scrollStateGeneration == generation) _readerScrolling = false;
+      });
+    }
     if (notification is ScrollUpdateNotification &&
         _controlsVisible &&
         (notification.scrollDelta ?? 0).abs() >
@@ -1427,27 +1448,34 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
                   children: <Widget>[
                     ColoredBox(
                       color: background,
-                      child: GestureDetector(
-                        key: const ValueKey<String>(
-                          'manga-reader-image-actions-gesture',
-                        ),
-                        behavior: HitTestBehavior.translucent,
-                        onTapUp: (details) => _handleTapZone(
-                          details,
-                          Size(constraints.maxWidth, constraints.maxHeight),
-                          settings,
-                        ),
-                        // The page owns double-tap zoom. Absorb double taps
-                        // outside it (or with zoom disabled) and holds so they
-                        // cannot become single taps when released.
-                        onDoubleTap: () {},
-                        onLongPress: () {},
-                        onSecondaryTap: _showImageActions,
-                        child: MangaReaderFilterLayer(
-                          settings: settings,
-                          child: KeyedSubtree(
-                            key: _readerBodyKey,
-                            child: _readerBody(context, settings),
+                      child: Listener(
+                        onPointerDown: (_) {
+                          // Judged at pointer-down: touching a moving page
+                          // stops it, so by tap-up it is no longer moving.
+                          _tapBeganWhileScrolling = _readerScrolling;
+                        },
+                        child: GestureDetector(
+                          key: const ValueKey<String>(
+                            'manga-reader-image-actions-gesture',
+                          ),
+                          behavior: HitTestBehavior.translucent,
+                          onTapUp: (details) => _handleTapZone(
+                            details,
+                            Size(constraints.maxWidth, constraints.maxHeight),
+                            settings,
+                          ),
+                          // The page owns double-tap zoom. Absorb double taps
+                          // outside it (or with zoom disabled) and holds so they
+                          // cannot become single taps when released.
+                          onDoubleTap: () {},
+                          onLongPress: () {},
+                          onSecondaryTap: _showImageActions,
+                          child: MangaReaderFilterLayer(
+                            settings: settings,
+                            child: KeyedSubtree(
+                              key: _readerBodyKey,
+                              child: _readerBody(context, settings),
+                            ),
                           ),
                         ),
                       ),

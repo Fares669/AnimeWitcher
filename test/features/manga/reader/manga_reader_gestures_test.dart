@@ -264,6 +264,38 @@ void main() {
     );
 
     testWidgets(
+      '${mode.name}: tap while the page is moving does not show the bars',
+      (tester) async {
+        await _pumpReader(tester, mode);
+        final center = tester.getCenter(find.byType(MangaReaderScreen));
+        await tester.tapAt(center);
+        await _settleTap(tester);
+        _expectBars(tester, visible: false);
+        // Start the page moving, then tap to catch it mid-motion: that tap
+        // must not bring the bars back.
+        final direction = tester
+            .state<ScrollableState>(find.byType(Scrollable).first)
+            .position
+            .axisDirection;
+        final delta = switch (direction) {
+          AxisDirection.down => const Offset(0, -500),
+          AxisDirection.up => const Offset(0, 500),
+          AxisDirection.right => const Offset(-650, 0),
+          AxisDirection.left => const Offset(650, 0),
+        };
+        await tester.flingFrom(center, delta, 1000);
+        await tester.tapAt(center);
+        await _settleTap(tester);
+        _expectBars(tester, visible: false);
+        // Once the page has settled, a tap shows the bars again.
+        await tester.tapAt(center);
+        await _settleTap(tester);
+        _expectBars(tester, visible: true);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+
+    testWidgets(
       '${mode.name}: long press cannot open image actions with saved preference enabled',
       (tester) async {
         await _pumpReader(tester, mode);
