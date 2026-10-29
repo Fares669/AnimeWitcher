@@ -115,6 +115,24 @@ void main() {
     expect(modeCalls().length, after);
   });
 
+  testWidgets('asking for the bars back ends the hold for good', (
+    tester,
+  ) async {
+    holdImmersiveFullScreen(true);
+    await tester.pump();
+    // Leaving the player asks for the bars back through the plain apply.
+    applyImmersiveFullScreen(false);
+    await tester.pump();
+    final after = modeCalls().length;
+    expect(modeCalls().last.arguments, isNot(contains('immersiveSticky')));
+
+    // The system confirming the bars are visible must not be answered by
+    // hiding them again behind the leaver's back.
+    await reportOverlaysVisible();
+    await tester.pump(immersiveChangeFloor * 2);
+    expect(modeCalls().length, after);
+  });
+
   testWidgets('nothing is held off a phone', (tester) async {
     debugImmersivePlatformOverride = null;
     holdImmersiveFullScreen(true);

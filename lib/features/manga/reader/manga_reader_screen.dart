@@ -11,6 +11,7 @@ import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/storage/manga_reading_repository.dart';
+import '../../../core/utils/immersive_mode.dart';
 import '../../../core/utils/window_controls_inset.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
@@ -202,10 +203,10 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     _controller.removeListener(_handleControllerChanged);
     _controller.dispose();
     unawaited(WakelockPlus.disable().catchError((_) {}));
-    unawaited(
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge)
-          .catchError((_) {}),
-    );
+    // The phone's bars come back on the way out, whatever state reading
+    // left them in.
+    applyImmersiveFullScreen(false);
+    _fullScreenApplied = false;
     super.dispose();
   }
 
@@ -217,15 +218,16 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
             .catchError((_) {}),
       );
     }
-    if (_fullScreenApplied != settings.fullScreen) {
-      _fullScreenApplied = settings.fullScreen;
-      unawaited(
-        SystemChrome.setEnabledSystemUIMode(
-          settings.fullScreen
-              ? SystemUiMode.immersiveSticky
-              : SystemUiMode.edgeToEdge,
-        ).catchError((_) {}),
-      );
+    // The phone's own bars follow the reader's bars: with full screen on
+    // they are gone while reading and come back with the top and bottom
+    // bars, so the clock and battery are there when the reader's are.
+    // Through the shared helper — iOS answers only its manual plan, and
+    // asking it for Android's sticky mode or edge-to-edge did nothing,
+    // which left a hidden bar hidden after leaving the reader.
+    final barsHidden = settings.fullScreen && !_controlsVisible;
+    if (_fullScreenApplied != barsHidden) {
+      _fullScreenApplied = barsHidden;
+      applyImmersiveFullScreen(barsHidden);
     }
     if (_canRotate) {
       final wanted = mangaReaderOrientations(
@@ -487,6 +489,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
       // The panel belongs to the bars: it goes when they do.
       if (!_controlsVisible) _settingsPanelOpen = false;
     });
+    _syncDeviceState(ref.read(mangaReaderSettingsProvider));
   }
 
   void _handleTapZone(
@@ -582,6 +585,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         _controlsVisible = false;
         _settingsPanelOpen = false;
       });
+      _syncDeviceState(ref.read(mangaReaderSettingsProvider));
     }
     return true;
   }
