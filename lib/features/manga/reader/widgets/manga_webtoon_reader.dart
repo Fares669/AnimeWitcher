@@ -60,6 +60,8 @@ class MangaWebtoonReader extends StatefulWidget {
 class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
   final GlobalKey _centerKey = GlobalKey();
   final Map<int, double> _visibleFractions = <int, double>{};
+  final Map<int, int> _visibleRounds = <int, int>{};
+  int _visibilityRound = 0;
   bool _visibilityUpdateScheduled = false;
   late int _lastReported;
   late final int _sessionInitialPage;
@@ -160,11 +162,22 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
 
   void _visibilityChanged(int pageIndex, VisibilityInfo info) {
     _visibleFractions[pageIndex] = info.visibleFraction;
+    _visibleRounds[pageIndex] = _visibilityRound + 1;
     if (_visibilityUpdateScheduled) return;
     _visibilityUpdateScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _visibilityUpdateScheduled = false;
       if (!mounted || _visibleFractions.isEmpty) return;
+      _visibilityRound++;
+      // A page whose detector stopped reporting — scrolled away under
+      // keep-alive, recycled by the list — keeps its last fraction in
+      // the map. Trusted forever, that stale fraction outvotes every
+      // tall page that follows (none can ever be fully visible) and
+      // the reported page sticks on a chapter already finished.
+      // Entries not heard from in the last two rounds are dead.
+      _visibleFractions.removeWhere(
+        (index, _) => (_visibleRounds[index] ?? -1) < _visibilityRound - 1,
+      );
       var bestIndex = _lastReported;
       var bestFraction = -1.0;
       for (final entry in _visibleFractions.entries) {

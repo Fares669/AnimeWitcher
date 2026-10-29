@@ -17,6 +17,7 @@ import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings_provider.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_paged_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_reader_image_actions_sheet.dart';
+import 'package:animewitcher/features/manga/reader/widgets/manga_continuous_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_webtoon_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_reader_navigation_overlay.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_reader_page_indicator.dart';
@@ -26,6 +27,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:super_sliver_list/super_sliver_list.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
 const pages = <MangaPage>[
@@ -205,6 +207,17 @@ final class _WebtoonStreamSettingsNotifier extends MangaReaderSettingsNotifier {
   @override
   MangaReaderSettings build() => const MangaReaderSettings(
     defaultMode: MangaReaderMode.webtoon,
+    showReadingMode: false,
+    keepScreenOn: false,
+    fullScreen: false,
+  );
+}
+
+final class _ContinuousStreamSettingsNotifier
+    extends MangaReaderSettingsNotifier {
+  @override
+  MangaReaderSettings build() => const MangaReaderSettings(
+    defaultMode: MangaReaderMode.verticalContinuous,
     showReadingMode: false,
     keepScreenOn: false,
     fullScreen: false,
@@ -536,13 +549,27 @@ void main() {
       name: 'Chapter 2',
       number: 2,
     );
+    const thirdChapter = MangaChapter(
+      id: 'stream-c3',
+      mangaId: 'stream-m1',
+      url: 'https://example.test/chapter/3',
+      name: 'Chapter 3',
+      number: 3,
+    );
     const streamChapters = <MangaChapter>[firstChapter, secondChapter];
+    const streamChapters3 = <MangaChapter>[
+      firstChapter,
+      secondChapter,
+      thirdChapter,
+    ];
 
     Future<void> pumpStreamScreen(
       WidgetTester tester,
       _LocalStreamProvider provider,
-      MangaChapter openChapter,
-    ) async {
+      MangaChapter openChapter, {
+      List<MangaChapter> chapters = streamChapters,
+      bool continuous = false,
+    }) async {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
@@ -553,7 +580,9 @@ void main() {
               _ReaderProgressRepository(),
             ),
             mangaReaderSettingsProvider.overrideWith(
-              _WebtoonStreamSettingsNotifier.new,
+              continuous
+                  ? _ContinuousStreamSettingsNotifier.new
+                  : _WebtoonStreamSettingsNotifier.new,
             ),
           ],
           child: MaterialApp(
@@ -569,7 +598,7 @@ void main() {
                 contentType: MultimediaContentType.manga,
               ),
               chapter: openChapter,
-              chapters: streamChapters,
+              chapters: chapters,
             ),
           ),
         ),
@@ -596,21 +625,31 @@ void main() {
       fail('webtoon stream did not reach the expected state');
     }
 
-    testWidgets('opening a chapter connects the previous one above it', (
+    testWidgets('opening a chapter leaves the previous one out of the stream', (
       tester,
     ) async {
       final directory = await writeBmpPages(tester);
       final provider = _LocalStreamProvider(directory);
       await pumpStreamScreen(tester, provider, secondChapter);
 
-      final reader = await webtoonWhen(
+      var reader = await webtoonWhen(
         tester,
-        (reader) => reader.pages.length == 6,
+        (reader) => reader.pages.isNotEmpty,
       );
-      // Chapter 2 opens at its own first page — flattened index 3, right
-      // after chapter 1's pages and the seam divider before them.
-      expect(reader.initialPage, 3);
-      expect(reader.sectionDividers.keys, <int>[3]);
+      // Give a would-be prepend every chance to land, then check again:
+      // the stream grows forward only, so chapter 1 stays out of it.
+      for (var i = 0; i < 10; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      reader = tester.widget<MangaWebtoonReader>(
+        find.byType(MangaWebtoonReader),
+      );
+      expect(reader.pages.length, 3);
+      expect(reader.initialPage, 0);
+      expect(reader.sectionDividers, isEmpty);
     });
 
     testWidgets('the next chapter joins below without a chapter jump', (
@@ -646,6 +685,134 @@ void main() {
       // to the scroll, not navigated to.
       expect(tester.state(find.byType(MangaWebtoonReader)), same(stateBefore));
       expect(reader.initialPage, 0);
+    });
+
+    testWidgets('the chrome follows the stream into the appended chapter', (
+      tester,
+    ) async {
+      final directory = await writeBmpPages(tester);
+      final provider = _LocalStreamProvider(directory);
+      await pumpStreamScreen(tester, provider, firstChapter);
+
+      var reader = await webtoonWhen(
+        tester,
+        (reader) => reader.pages.length == 3,
+      );
+      // Scroll to the very bottom: chapter 2 joins below, then its pages
+      // take over the screen.
+      for (var i = 0; i < 60; i++) {
+        await tester.drag(
+          find.byType(CustomScrollView),
+          const Offset(0, -1200),
+        );
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+        reader = tester.widget<MangaWebtoonReader>(
+          find.byType(MangaWebtoonReader),
+        );
+        if (reader.pages.length == 6 &&
+            find.text('Chapter 2').evaluate().isNotEmpty) {
+          break;
+        }
+      }
+
+      expect(reader.pages.length, 6);
+      // The top bar names the chapter on screen, not the finished one.
+      expect(find.text('Chapter 2'), findsWidgets);
+    });
+
+    testWidgets('the chrome follows from a mid-list chapter into the next', (
+      tester,
+    ) async {
+      final directory = await writeBmpPages(tester);
+      final provider = _LocalStreamProvider(directory);
+      await pumpStreamScreen(
+        tester,
+        provider,
+        secondChapter,
+        chapters: streamChapters3,
+      );
+
+      var reader = await webtoonWhen(
+        tester,
+        (reader) => reader.pages.isNotEmpty,
+      );
+      // Scroll to the very bottom: chapter 3 joins below, then its pages
+      // take over the screen.
+      for (var i = 0; i < 80; i++) {
+        await tester.drag(
+          find.byType(CustomScrollView),
+          const Offset(0, -1200),
+        );
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+        reader = tester.widget<MangaWebtoonReader>(
+          find.byType(MangaWebtoonReader),
+        );
+        if (reader.pages.length == 6 &&
+            find.text('Chapter 3').evaluate().isNotEmpty) {
+          break;
+        }
+      }
+
+      expect(reader.pages.length, 6);
+      expect(find.text('Chapter 3'), findsWidgets);
+    });
+
+    testWidgets('the chrome follows the stream in vertical continuous mode', (
+      tester,
+    ) async {
+      final directory = await writeBmpPages(tester);
+      final provider = _LocalStreamProvider(directory);
+      await pumpStreamScreen(
+        tester,
+        provider,
+        secondChapter,
+        chapters: streamChapters3,
+        continuous: true,
+      );
+
+      Future<MangaContinuousReader?> continuousReader() async {
+        final found = find.byType(MangaContinuousReader).evaluate();
+        if (found.isEmpty) return null;
+        return tester.widget<MangaContinuousReader>(
+          find.byType(MangaContinuousReader),
+        );
+      }
+
+      MangaContinuousReader? reader;
+      for (var i = 0; i < 80 && reader == null; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await tester.pump(const Duration(milliseconds: 20));
+        reader = await continuousReader();
+      }
+      expect(reader, isNotNull);
+
+      for (var i = 0; i < 80; i++) {
+        await tester.drag(
+          find.byType(SuperListView),
+          const Offset(0, -1200),
+        );
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+        reader = await continuousReader();
+        if (reader != null &&
+            reader.pages.length == 6 &&
+            find.text('Chapter 3').evaluate().isNotEmpty) {
+          break;
+        }
+      }
+
+      expect(reader?.pages.length, 6);
+      expect(find.text('Chapter 3'), findsWidgets);
     });
   });
 

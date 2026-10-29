@@ -38,8 +38,8 @@ import 'widgets/manga_webtoon_reader.dart';
 import 'widgets/manga_zoomable_page.dart';
 
 /// One chapter inside the connected stream of the vertical scrolling
-/// readers: its pages follow the previous chapter's pages in the same
-/// scroll, so chapters read as one long chapter.
+/// readers: its pages follow the chapter before it in the same scroll,
+/// so chapters read as one long chapter.
 class _StreamSegment {
   const _StreamSegment(this.chapter, this.pages);
 
@@ -95,8 +95,8 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
   bool _chapterNavigationInProgress = false;
 
   /// The connected chapter stream (vertical continuous + webtoon modes):
-  /// the opened chapter with the previous chapter above it, and next
-  /// chapters appended below as reading reaches them — no chapter jumps.
+  /// the opened chapter, with next chapters appended below as reading
+  /// reaches them — no chapter jumps, and nothing connected above.
   List<_StreamSegment> _streamSegments = const <_StreamSegment>[];
   bool _streamReady = false;
   String? _streamAnchorChapterId;
@@ -220,22 +220,11 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     final generation = ++_streamGeneration;
     final anchor = _controller.currentChapter;
     final anchorPages = _controller.pages;
-    var segments = <_StreamSegment>[_StreamSegment(anchor, anchorPages)];
-    final index = _controller.currentChapterIndex;
-    if (index > 0) {
-      final previous = widget.chapters[index - 1];
-      final previousPages = await _controller.fetchChapterPages(previous);
-      if (!mounted || generation != _streamGeneration) return;
-      if (previousPages.isNotEmpty) {
-        segments = <_StreamSegment>[
-          _StreamSegment(previous, previousPages),
-          ...segments,
-        ];
-      }
-    }
     if (!mounted || generation != _streamGeneration) return;
+    // The stream starts at the opened chapter and grows forward only:
+    // the previous chapter is never connected above it.
     setState(() {
-      _streamSegments = segments;
+      _streamSegments = <_StreamSegment>[_StreamSegment(anchor, anchorPages)];
       _streamAnchorChapterId = anchor.id;
       _streamReady = true;
     });

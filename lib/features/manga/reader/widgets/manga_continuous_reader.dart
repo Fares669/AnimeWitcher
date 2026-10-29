@@ -102,6 +102,8 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
   late final bool _ownsController = widget.controller == null;
   final ListController _listController = ListController();
   final Map<int, double> _visibility = <int, double>{};
+  final Map<int, int> _visibilityRounds = <int, int>{};
+  int _visibilityRound = 0;
   final Map<int, Size> _imageSizes = <int, Size>{};
   final Set<int> _settledPages = <int>{};
   late final int _sessionInitialPage;
@@ -248,11 +250,22 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
 
   void _changed(int pageIndex, VisibilityInfo info) {
     _visibility[pageIndex] = info.visibleFraction;
+    _visibilityRounds[pageIndex] = _visibilityRound + 1;
     if (_scheduled) return;
     _scheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scheduled = false;
       if (!mounted || _visibility.isEmpty) return;
+      _visibilityRound++;
+      // A page whose detector stopped reporting — scrolled away under
+      // keep-alive, recycled by the list — keeps its last fraction in
+      // the map. Trusted forever, that stale fraction outvotes every
+      // tall page that follows (none can ever be fully visible) and
+      // the reported page sticks on a chapter already finished.
+      // Entries not heard from in the last two rounds are dead.
+      _visibility.removeWhere(
+        (index, _) => (_visibilityRounds[index] ?? -1) < _visibilityRound - 1,
+      );
       if (_initialJumpPending) {
         final targetPage = _sessionInitialPage
             .clamp(0, widget.pages.length - 1)

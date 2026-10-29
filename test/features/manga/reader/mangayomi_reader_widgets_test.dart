@@ -352,6 +352,39 @@ void main() {
     expect(advanced, 2);
   });
 
+  testWidgets('webtoon reports the page on screen for tall pages', (
+    tester,
+  ) async {
+    final reported = <int>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaWebtoonReader(
+          pages: _pages,
+          initialPage: 0,
+          settings: const MangaReaderSettings(),
+          onPageChanged: reported.add,
+          pageBuilder: (_, page) =>
+              SizedBox(height: 1400, child: Text('page-${page.index}')),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // Each page is more than twice the viewport tall, so no page can
+    // ever be more than ~43% visible. Reading the second page must
+    // still report it: the first page's last fraction cannot be allowed
+    // to win forever once it has scrolled away.
+    for (var i = 0; i < 10 && (reported.isEmpty || reported.last != 1); i++) {
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, -400));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 30)),
+      );
+      await tester.pump(const Duration(milliseconds: 60));
+    }
+    expect(reported, isNotEmpty);
+    expect(reported.last, 1);
+  });
+
   testWidgets('webtoon reader advances when scrolled to the divider', (
     tester,
   ) async {
