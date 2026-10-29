@@ -42,6 +42,60 @@ void main() {
     await _waitForStatus(handle, DownloadTransportStatus.complete);
   });
 
+  test('page progress ripples are coalesced while real changes land at once', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-manga-throttle-');
+    addTearDown(() => temp.delete(recursive: true));
+    final starter = _FakePageStarter();
+    final handle = await MangaChapterTransportV2(startPage: starter.start).start(
+      MangaChapterTransportSpecV2(
+        taskId: 'throttle', mangaId: 'm1', chapterId: 'c1',
+        destinationDirectory: temp.path, retries: 1,
+        pages: const [
+          MangaPage(index: 0, imageUrl: 'https://cdn.test/0.png'),
+          MangaPage(index: 1, imageUrl: 'https://cdn.test/1.png'),
+        ],
+      ),
+    );
+    addTearDown(handle.dispose);
+    await starter.waitUntilStarted(1);
+    final emitted = <DownloadTransportSnapshot>[];
+    final sub = handle.snapshots.listen(emitted.add);
+    addTearDown(sub.cancel);
+    // Let the page-start aggregates settle out of the sample.
+    await Future<void>.delayed(const Duration(milliseconds: 550));
+    emitted.clear();
+
+    final page = starter.handles[0]!;
+    page.setSpeed(1);
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(emitted, hasLength(1));
+    expect(emitted.single.networkSpeedMBps, closeTo(1, 0.001));
+
+    // A burst of callbacks nudging the rate by a tenth is a ripple: nothing
+    // is republished inside the coalescing window.
+    for (var i = 0; i < 20; i++) {
+      page.setSpeed(1.1);
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(emitted, hasLength(1));
+
+    // The trailing emission still lands with the latest rate.
+    await Future<void>.delayed(const Duration(milliseconds: 600));
+    expect(emitted.length, 2);
+    expect(emitted.last.networkSpeedMBps, closeTo(1.1, 0.001));
+
+    // A real swing in the rate is material and goes out immediately.
+    emitted.clear();
+    page.setSpeed(2);
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(emitted, hasLength(1));
+    expect(emitted.single.networkSpeedMBps, closeTo(2, 0.001));
+
+    await starter.complete(0);
+    await starter.complete(1);
+    await _waitForStatus(handle, DownloadTransportStatus.complete);
+  });
+
   test('manga progress counts validated whole pages and ignores child bytes', () async {
     final temp = await Directory.systemTemp.createTemp('aw-manga-page-progress-');
     addTearDown(() => temp.delete(recursive: true));
@@ -969,6 +1023,16 @@ final class _FakePageHandle implements DownloadTransportHandle {
     _current = DownloadTransportSnapshot(
       taskId: taskId, status: DownloadTransportStatus.running, progress: value,
       transferredBytes: (value * 1000).round(), totalBytes: 1000,
+    );
+    _controller.add(_current);
+  }
+
+  void setSpeed(double mbps) {
+    _current = DownloadTransportSnapshot(
+      taskId: taskId, status: DownloadTransportStatus.running,
+      progress: _current.progress, networkSpeedMBps: mbps,
+      transferredBytes: _current.transferredBytes,
+      totalBytes: _current.totalBytes,
     );
     _controller.add(_current);
   }

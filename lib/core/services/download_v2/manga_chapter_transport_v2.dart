@@ -244,6 +244,8 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
   bool _canceling = false;
   bool _scheduling = false;
   int _generation = 0;
+  DateTime? _lastProgressEmitAt;
+  Timer? _progressEmitTimer;
 
   int get _pageConnectionLimit =>
       _boundedPageConnections(spec.maxConcurrentPages);
@@ -505,11 +507,7 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
       return;
     }
 
-    _emitAggregate(
-      _paused && _allPagesPaused()
-          ? DownloadTransportStatus.paused
-          : DownloadTransportStatus.running,
-    );
+    _emitProgressAggregate();
   }
 
   Future<void> _fail({
@@ -586,7 +584,67 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
     DownloadTransportStatus status, {
     double? progress,
   }) {
+    if (status == DownloadTransportStatus.running ||
+        status == DownloadTransportStatus.paused) {
+      _lastProgressEmitAt = DateTime.now();
+    }
     _emit(_aggregate(status, progress: progress));
+  }
+
+  /// Page progress callbacks arrive in bursts — with every page in flight
+  /// at once they can land dozens of times a second, and republishing the
+  /// chapter aggregate for each one flooded the presentation with a new
+  /// snapshot every few milliseconds, each carrying a slightly different
+  /// summed speed that crawled on screen. Aggregates that change something
+  /// material (status, pages done, connections, or a speed swing of a
+  /// quarter or more) still go out immediately; speed-only ripples are
+  /// coalesced to at most twice a second, with a trailing emission so the
+  /// latest rate still lands.
+  void _emitProgressAggregate() {
+    final status = _paused && _allPagesPaused()
+        ? DownloadTransportStatus.paused
+        : DownloadTransportStatus.running;
+    final next = _aggregate(status);
+    final now = DateTime.now();
+    final last = _lastProgressEmitAt;
+    final windowElapsed =
+        last == null ||
+        now.difference(last) >= const Duration(milliseconds: 500);
+    if (windowElapsed || _isMaterialProgressChange(next)) {
+      _progressEmitTimer?.cancel();
+      _progressEmitTimer = null;
+      _lastProgressEmitAt = now;
+      _emit(next);
+      return;
+    }
+    _progressEmitTimer ??= Timer(
+      const Duration(milliseconds: 500) - now.difference(last),
+      () {
+        _progressEmitTimer = null;
+        if (_disposed || _current.isFinal) return;
+        _emitAggregate(
+          _paused && _allPagesPaused()
+              ? DownloadTransportStatus.paused
+              : DownloadTransportStatus.running,
+        );
+      },
+    );
+  }
+
+  bool _isMaterialProgressChange(DownloadTransportSnapshot next) {
+    final current = _current;
+    if (next.status != current.status ||
+        next.completedPages != current.completedPages ||
+        next.activeConnections != current.activeConnections ||
+        next.progress != current.progress) {
+      return true;
+    }
+    final before = current.networkSpeedMBps;
+    final after = next.networkSpeedMBps;
+    if ((before < 0) != (after < 0)) return true;
+    if (before < 0 || after < 0) return false;
+    final base = before.abs() < 0.05 ? 0.05 : before.abs();
+    return (after - before).abs() / base >= 0.25;
   }
 
   static int _boundedPageConnections(int value) =>
@@ -775,6 +833,8 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
   Future<void> _dispose() async {
     _disposed = true;
     _paused = true;
+    _progressEmitTimer?.cancel();
+    _progressEmitTimer = null;
     await _releasePageHandles();
     // Only an already-issued checkpoint can overwrite a replacement's state.
     await _manifestPublication?.catchError((Object _, StackTrace __) {});
