@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
@@ -184,7 +185,21 @@ final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
     maxConcurrentDownloads: () =>
         ref.read(settingsRepositoryProvider).getDownloadConcurrency(),
   );
+  // iOS suspends Dart shortly after backgrounding, and queue advancement is
+  // Dart-only: stage one extra queued download into the background
+  // URLSession while the process is still alive to do it.
+  final lifecycleListener = Platform.isIOS
+      ? AppLifecycleListener(
+          onStateChange: (state) {
+            if (state == AppLifecycleState.hidden ||
+                state == AppLifecycleState.paused) {
+              unawaited(manager.stageQueuedDownloadsForBackground());
+            }
+          },
+        )
+      : null;
   ref.onDispose(() {
+    lifecycleListener?.dispose();
     unawaited(networkSubscription.cancel());
     unawaited(manager.dispose());
   });

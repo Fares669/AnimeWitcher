@@ -145,6 +145,7 @@ final class DownloadManagerV2 {
   bool _admissionPromotionRequested = false;
   Timer? _admissionPromotionRetryTimer;
   int _admissionPromotionRetryAttempts = 0;
+  int _admissionBoost = 0;
   final Set<DownloadLogicalId> _admissionReservations = <DownloadLogicalId>{};
 
   /// Application-owned logical records for presentation. This never exposes
@@ -1499,7 +1500,8 @@ final class DownloadManagerV2 {
   }
 
   Future<bool> _hasAdmissionSlot({DownloadLogicalId? excluding}) async {
-    final limit = clampDownloadConcurrency(_maxConcurrentDownloads());
+    final limit =
+        clampDownloadConcurrency(_maxConcurrentDownloads()) + _admissionBoost;
     final occupied = _admissionReservations
         .where((id) => id != excluding)
         .toSet();
@@ -1584,6 +1586,22 @@ final class DownloadManagerV2 {
   Future<void> reconcileAdmission() async {
     await initialize();
     await _promoteAdmissions();
+  }
+
+  /// iOS background staging: when the app is leaving the foreground, start
+  /// one extra queued download so its transfer already belongs to the
+  /// background URLSession when Dart is suspended. Queue advancement is
+  /// Dart-only, so without this the next download cannot begin until the
+  /// user returns, even though the system could have transferred it.
+  /// A staged download is an ordinary started download in every other way.
+  Future<void> stageQueuedDownloadsForBackground() async {
+    await initialize();
+    _admissionBoost = 1;
+    try {
+      await _promoteAdmissions();
+    } finally {
+      _admissionBoost = 0;
+    }
   }
 
   Future<void> _promoteAdmissions() {

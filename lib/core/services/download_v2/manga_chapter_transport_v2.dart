@@ -91,11 +91,19 @@ final class MangaChapterTransportV2 {
   MangaChapterTransportV2({
     required this.startPage,
     MangaChapterDirectoryResolverV2? resolveDirectory,
+    this.startAllPagesImmediately = false,
   }) : resolveDirectory =
            resolveDirectory ?? resolveMangaChapterDirectoryV2;
 
   final MangaChapterPageStarterV2 startPage;
   final MangaChapterDirectoryResolverV2 resolveDirectory;
+
+  /// iOS: hand every page to the background URLSession up front. A page task
+  /// only exists for the system once it has been started, so gating starts
+  /// behind Dart completions stalls the chapter as soon as the app is
+  /// suspended. The OS caps per-host concurrency itself; the Dart slot limit
+  /// still applies on platforms whose transfers need the app alive.
+  final bool startAllPagesImmediately;
 
   Future<MangaChapterTransportHandleV2> start(
     MangaChapterTransportSpecV2 spec,
@@ -167,6 +175,7 @@ final class MangaChapterTransportV2 {
       directory: directory,
       manifest: manifest,
       startPage: startPage,
+      startAllPagesImmediately: startAllPagesImmediately,
     );
     unawaited(handle.start());
     return handle;
@@ -196,6 +205,7 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
     required this.directory,
     required MangaChapterManifestV2 manifest,
     required this.startPage,
+    this.startAllPagesImmediately = false,
   }) : _manifest = manifest,
        _current = DownloadTransportSnapshot(
          taskId: spec.taskId,
@@ -211,6 +221,7 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
 
   final MangaChapterTransportSpecV2 spec;
   final Directory directory;
+  final bool startAllPagesImmediately;
   final MangaChapterPageStarterV2 startPage;
   final StreamController<DownloadTransportSnapshot> _controller =
       StreamController<DownloadTransportSnapshot>.broadcast();
@@ -271,14 +282,16 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
   }
 
   void _fillAvailableSlots() {
+    final startLimit = startAllPagesImmediately
+        ? spec.pages.length
+        : _pageConnectionLimit;
     try {
       while (!_disposed &&
           !_paused &&
           !_canceled &&
           !_canceling &&
           !_current.isFinal &&
-          _pageHandles.length + _startingIndexes.length <
-              _pageConnectionLimit) {
+          _pageHandles.length + _startingIndexes.length < startLimit) {
         final index = _firstMissingIndex();
         if (index == null) break;
 

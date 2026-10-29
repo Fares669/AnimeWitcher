@@ -279,6 +279,31 @@ void main() {
       expect(resolver.calls, 1);
     },
   );
+
+  test(
+    'background staging starts one extra queued download, then the cap applies again',
+    () async {
+      final store = InMemoryLogicalDownloadStoreV2();
+      final gateway = _ConcurrencyGateway();
+      final manager = DownloadManagerV2(
+        store: store,
+        gateway: gateway,
+        sourceResolver: _Resolver(),
+        maxConcurrentDownloads: () => 1,
+      );
+      addTearDown(manager.dispose);
+      await manager.start(_request(episode: '1', chunks: 1));
+      await manager.start(_request(episode: '2', chunks: 1));
+      await manager.start(_request(episode: '3', chunks: 1));
+      await gateway.waitForStarts(1);
+      expect(gateway.startedSpecs, hasLength(1));
+      await manager.stageQueuedDownloadsForBackground();
+      await gateway.waitForStarts(2);
+      expect(gateway.startedSpecs, hasLength(2));
+      await manager.reconcileAdmission();
+      expect(gateway.startedSpecs, hasLength(2));
+    },
+  );
 }
 
 DownloadStartRequestV2 _request({

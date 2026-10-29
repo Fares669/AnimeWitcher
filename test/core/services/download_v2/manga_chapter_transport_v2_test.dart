@@ -13,6 +13,35 @@ import 'package:path/path.dart' as p;
 import '../../../support/manga_image_fixtures.dart';
 
 void main() {
+  test('startAllPagesImmediately hands every page over at once despite the slot limit', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-manga-start-all-');
+    addTearDown(() => temp.delete(recursive: true));
+    final starter = _FakePageStarter();
+    final handle = await MangaChapterTransportV2(
+      startPage: starter.start,
+      startAllPagesImmediately: true,
+    ).start(
+      MangaChapterTransportSpecV2(
+        taskId: 'start-all', mangaId: 'm1', chapterId: 'c1',
+        destinationDirectory: temp.path, retries: 1, maxConcurrentPages: 2,
+        pages: const [
+          MangaPage(index: 0, imageUrl: 'https://cdn.test/0.png'),
+          MangaPage(index: 1, imageUrl: 'https://cdn.test/1.png'),
+          MangaPage(index: 2, imageUrl: 'https://cdn.test/2.png'),
+          MangaPage(index: 3, imageUrl: 'https://cdn.test/3.png'),
+          MangaPage(index: 4, imageUrl: 'https://cdn.test/4.png'),
+        ],
+      ),
+    );
+    addTearDown(handle.dispose);
+    await starter.waitUntilStarted(4);
+    expect(starter.startedPageIndexes, <int>[0, 1, 2, 3, 4]);
+    for (var index = 0; index < 5; index++) {
+      await starter.complete(index);
+    }
+    await _waitForStatus(handle, DownloadTransportStatus.complete);
+  });
+
   test('manga progress counts validated whole pages and ignores child bytes', () async {
     final temp = await Directory.systemTemp.createTemp('aw-manga-page-progress-');
     addTearDown(() => temp.delete(recursive: true));
