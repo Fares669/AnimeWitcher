@@ -587,6 +587,9 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
     if (status == DownloadTransportStatus.running ||
         status == DownloadTransportStatus.paused) {
       _lastProgressEmitAt = DateTime.now();
+      // An immediate emission supersedes any coalesced trailing update.
+      _progressEmitTimer?.cancel();
+      _progressEmitTimer = null;
     }
     _emit(_aggregate(status, progress: progress));
   }

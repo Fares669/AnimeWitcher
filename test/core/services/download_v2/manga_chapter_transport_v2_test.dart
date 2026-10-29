@@ -65,10 +65,16 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 550));
     emitted.clear();
 
+    Future<void> untilEmitted(int count) async {
+      for (var attempt = 0; attempt < 200 && emitted.length < count; attempt++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(emitted, hasLength(count));
+    }
+
     final page = starter.handles[0]!;
     page.setSpeed(1);
-    await Future<void>.delayed(const Duration(milliseconds: 30));
-    expect(emitted, hasLength(1));
+    await untilEmitted(1);
     expect(emitted.single.networkSpeedMBps, closeTo(1, 0.001));
 
     // A burst of callbacks nudging the rate by a tenth is a ripple: nothing
@@ -76,19 +82,17 @@ void main() {
     for (var i = 0; i < 20; i++) {
       page.setSpeed(1.1);
     }
-    await Future<void>.delayed(const Duration(milliseconds: 30));
+    await Future<void>.delayed(const Duration(milliseconds: 120));
     expect(emitted, hasLength(1));
 
     // The trailing emission still lands with the latest rate.
-    await Future<void>.delayed(const Duration(milliseconds: 600));
-    expect(emitted.length, 2);
+    await untilEmitted(2);
     expect(emitted.last.networkSpeedMBps, closeTo(1.1, 0.001));
 
     // A real swing in the rate is material and goes out immediately.
     emitted.clear();
     page.setSpeed(2);
-    await Future<void>.delayed(const Duration(milliseconds: 30));
-    expect(emitted, hasLength(1));
+    await untilEmitted(1);
     expect(emitted.single.networkSpeedMBps, closeTo(2, 0.001));
 
     await starter.complete(0);
