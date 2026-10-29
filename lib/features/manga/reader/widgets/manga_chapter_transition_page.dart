@@ -10,6 +10,141 @@ bool mangaReaderShouldAdvancePastTransition({
   required double overscroll,
 }) => extentAfter <= 0.5 && overscroll > 0;
 
+/// How much of the trailing divider must be on screen before the scrolling
+/// readers move on by themselves: enough that reaching it means the chapter
+/// is finished, not merely that its edge peeked into the viewport.
+const double mangaReaderTrailingAdvanceVisibility = 0.6;
+
+/// The slim divider the scrolling readers leave between chapters instead of
+/// the full transition page: the finished chapter above, the next chapter
+/// below, and nothing to stop and tap — the readers advance on their own
+/// when this scrolls into view. Tapping the next chapter still works.
+class MangaReaderChapterDivider extends StatelessWidget {
+  const MangaReaderChapterDivider({
+    super.key,
+    required this.currentChapter,
+    required this.nextChapter,
+    required this.mangaName,
+    this.onContinue,
+  });
+
+  final MangaChapter currentChapter;
+  final MangaChapter? nextChapter;
+  final String mangaName;
+  final VoidCallback? onContinue;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return ColoredBox(
+      color: theme.scaffoldBackgroundColor,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    const Expanded(child: Divider()),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Text(
+                        'تم إكمال الفصل',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                    const Expanded(child: Divider()),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  currentChapter.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Icon(
+                  nextChapter == null
+                      ? Icons.check_circle_outline
+                      : Icons.keyboard_arrow_down,
+                  size: 20,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(height: 6),
+                if (nextChapter != null)
+                  _nextCard(context)
+                else
+                  Text(
+                    'لا يوجد فصل تالٍ — أنهيت قراءة $mangaName',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodyMedium,
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _nextCard(BuildContext context) {
+    final theme = Theme.of(context);
+    final card = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primaryContainer,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: theme.colorScheme.primary.withValues(alpha: 0.3),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Text(
+            'الفصل التالي',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onPrimaryContainer.withValues(
+                alpha: 0.7,
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            nextChapter!.name,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+    if (onContinue == null) return card;
+    return Semantics(
+      button: true,
+      label: 'متابعة إلى الفصل التالي',
+      child: GestureDetector(
+        key: const ValueKey<String>('manga-reader-next-chapter-transition'),
+        behavior: HitTestBehavior.opaque,
+        onTap: onContinue,
+        child: card,
+      ),
+    );
+  }
+}
+
 class MangaReaderChapterTransitionPage extends StatelessWidget {
   const MangaReaderChapterTransitionPage({
     super.key,

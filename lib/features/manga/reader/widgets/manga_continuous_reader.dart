@@ -267,18 +267,13 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
     if (size == null || size.width <= 0 || size.height <= 0) return null;
     final halfWidth = size.width / 2;
     return switch (part.slice) {
-      MangaReaderPageSlice.left => Rect.fromLTWH(
-          0,
-          0,
-          halfWidth,
-          size.height,
-        ),
+      MangaReaderPageSlice.left => Rect.fromLTWH(0, 0, halfWidth, size.height),
       MangaReaderPageSlice.right => Rect.fromLTWH(
-          halfWidth,
-          0,
-          halfWidth,
-          size.height,
-        ),
+        halfWidth,
+        0,
+        halfWidth,
+        size.height,
+      ),
       MangaReaderPageSlice.full => null,
     };
   }
@@ -346,26 +341,45 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
     );
   }
 
-  bool _handleOverscroll(OverscrollNotification notification) {
+  void _requestTrailingAdvance() {
     final callback = widget.onTrailingAdvance;
     if (_trailingAdvanceRequested ||
         widget.trailingPage == null ||
-        callback == null ||
-        !mangaReaderShouldAdvancePastTransition(
-          extentAfter: notification.metrics.extentAfter,
-          overscroll: notification.overscroll,
-        )) {
-      return false;
+        callback == null) {
+      return;
     }
     _trailingAdvanceRequested = true;
     callback();
+  }
+
+  bool _handleOverscroll(OverscrollNotification notification) {
+    if (!mangaReaderShouldAdvancePastTransition(
+      extentAfter: notification.metrics.extentAfter,
+      overscroll: notification.overscroll,
+    )) {
+      return false;
+    }
+    _requestTrailingAdvance();
     return true;
   }
+
+  /// The trailing divider is the end of the chapter: once most of it is on
+  /// screen the reader moves on by itself, no tap or extra fling needed.
+  Widget _trailingPage(BuildContext context) => VisibilityDetector(
+    key: const ValueKey<String>('manga-reader-trailing-advance'),
+    onVisibilityChanged: (info) {
+      if (info.visibleFraction >= mangaReaderTrailingAdvanceVisibility) {
+        _requestTrailingAdvance();
+      }
+    },
+    child: widget.trailingPage!,
+  );
 
   @override
   Widget build(BuildContext context) {
     if (widget.pages.isEmpty) return const SizedBox.shrink();
-    final side = MediaQuery.sizeOf(context).width *
+    final side =
+        MediaQuery.sizeOf(context).width *
         (widget.settings.webtoonSidePadding.clamp(0, 50) / 100);
     final entries = _entries;
     final viewport = MediaQuery.sizeOf(context);
@@ -390,7 +404,7 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
         addRepaintBoundaries: false,
         addSemanticIndexes: false,
         itemBuilder: (context, index) {
-          if (index >= entries.length) return widget.trailingPage!;
+          if (index >= entries.length) return _trailingPage(context);
           return _spread(context, entries[index]);
         },
       ),

@@ -184,6 +184,76 @@ void main() {
     expect(continued, 1);
   });
 
+  testWidgets('chapter divider shows the finished and next chapters', (
+    tester,
+  ) async {
+    var continued = 0;
+    const current = MangaChapter(
+      id: 'c1',
+      mangaId: 'm1',
+      url: 'https://example.test/c1',
+      name: 'Chapter 1',
+    );
+    const next = MangaChapter(
+      id: 'c2',
+      mangaId: 'm1',
+      url: 'https://example.test/c2',
+      name: 'Chapter 2',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        locale: const Locale('en'),
+        home: MangaReaderChapterDivider(
+          currentChapter: current,
+          nextChapter: next,
+          mangaName: 'Reader Manga',
+          onContinue: () => continued++,
+        ),
+      ),
+    );
+
+    expect(find.text('Chapter 1'), findsOneWidget);
+    expect(find.text('الفصل التالي'), findsOneWidget);
+    expect(find.text('Chapter 2'), findsOneWidget);
+    // The divider is a between-chapters strip, not a page of its own.
+    expect(find.text('نهاية الفصل'), findsNothing);
+
+    await tester.tap(
+      find.byKey(
+        const ValueKey<String>('manga-reader-next-chapter-transition'),
+      ),
+    );
+    await tester.pump();
+    expect(continued, 1);
+  });
+
+  testWidgets('continuous reader advances on its own at the chapter divider', (
+    tester,
+  ) async {
+    var advanced = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaContinuousReader(
+          pages: _pages,
+          initialPage: 0,
+          scrollDirection: Axis.vertical,
+          reverse: false,
+          settings: const MangaReaderSettings(),
+          onPageChanged: (_) {},
+          pageBuilder: (_, page) => Text('page-${page.index}'),
+          trailingPage: const Text('chapter-transition'),
+          onTrailingAdvance: () => advanced++,
+        ),
+      ),
+    );
+
+    // The whole short chapter and its divider fit on screen: reaching the
+    // divider is finishing the chapter, with no tap and no overscroll.
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(advanced, 1);
+  });
+
   testWidgets('paged reader appends Mangayomi chapter transition page', (
     tester,
   ) async {

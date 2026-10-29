@@ -859,13 +859,28 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     return widget.chapters[index + 1];
   }
 
-  Widget _chapterTransitionPage() => MangaReaderChapterTransitionPage(
-    currentChapter: _controller.currentChapter,
-    nextChapter: _nextChapter,
-    mangaName: widget.manga.title,
-    readerMode: _controller.mode,
-    onContinue: _controller.canNext ? _openNextChapter : null,
-  );
+  Widget _chapterTransitionPage() {
+    // The scrolling readers flow into the next chapter: a slim divider
+    // between chapters, and the readers advance on their own when it
+    // arrives — no page to stop at and tap. Paged modes keep the full
+    // transition page, where a page turn is the gesture.
+    if (_controller.mode == MangaReaderMode.verticalContinuous ||
+        _controller.mode == MangaReaderMode.webtoon) {
+      return MangaReaderChapterDivider(
+        currentChapter: _controller.currentChapter,
+        nextChapter: _nextChapter,
+        mangaName: widget.manga.title,
+        onContinue: _controller.canNext ? _openNextChapter : null,
+      );
+    }
+    return MangaReaderChapterTransitionPage(
+      currentChapter: _controller.currentChapter,
+      nextChapter: _nextChapter,
+      mangaName: widget.manga.title,
+      readerMode: _controller.mode,
+      onContinue: _controller.canNext ? _openNextChapter : null,
+    );
+  }
 
   Widget _readerBody(BuildContext context, MangaReaderSettings settings) {
     if (_controller.isLoading) {

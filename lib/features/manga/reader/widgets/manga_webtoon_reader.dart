@@ -197,21 +197,39 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
     );
   }
 
-  bool _handleOverscroll(OverscrollNotification notification) {
+  void _requestTrailingAdvance() {
     final callback = widget.onTrailingAdvance;
     if (_trailingAdvanceRequested ||
         widget.trailingPage == null ||
-        callback == null ||
-        !mangaReaderShouldAdvancePastTransition(
-          extentAfter: notification.metrics.extentAfter,
-          overscroll: notification.overscroll,
-        )) {
-      return false;
+        callback == null) {
+      return;
     }
     _trailingAdvanceRequested = true;
     callback();
+  }
+
+  bool _handleOverscroll(OverscrollNotification notification) {
+    if (!mangaReaderShouldAdvancePastTransition(
+      extentAfter: notification.metrics.extentAfter,
+      overscroll: notification.overscroll,
+    )) {
+      return false;
+    }
+    _requestTrailingAdvance();
     return true;
   }
+
+  /// The trailing divider is the end of the chapter: once most of it is on
+  /// screen the reader moves on by itself, no tap or extra fling needed.
+  Widget _trailingPage(BuildContext context) => VisibilityDetector(
+    key: const ValueKey<String>('manga-reader-trailing-advance'),
+    onVisibilityChanged: (info) {
+      if (info.visibleFraction >= mangaReaderTrailingAdvanceVisibility) {
+        _requestTrailingAdvance();
+      }
+    },
+    child: widget.trailingPage!,
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -225,7 +243,8 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
       viewport: viewport,
       axis: Axis.vertical,
     );
-    final side = viewport.width *
+    final side =
+        viewport.width *
         (widget.settings.webtoonSidePadding.clamp(0, 50) / 100);
     final scrollable = Padding(
       key: const ValueKey('manga-reader-webtoon-padding'),
@@ -259,7 +278,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
             ),
           ),
           if (widget.trailingPage != null)
-            SliverToBoxAdapter(child: widget.trailingPage),
+            SliverToBoxAdapter(child: _trailingPage(context)),
         ],
       ),
     );
