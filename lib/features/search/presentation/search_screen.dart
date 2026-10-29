@@ -724,13 +724,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           ],
         ),
       );
-      return child is AnimeCatalogShimmer
-          ? _withLoadingBehindHeader(
-              body,
-              topInset: topInset,
-              characterCaptionSpace: child.characterCaptionSpace,
-            )
-          : body;
+      return body;
     }
 
     // Typed but not searched — one letter, or anything on a phone, which
@@ -961,10 +955,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       ),
     );
     if (!hasAny && state.isLoading) {
-      return _withLoadingBehindHeader(
-        clearOfHeader(_buildLoadingIndicator(context)),
-        topInset: topInset,
-      );
+      return clearOfHeader(_buildLoadingIndicator(context));
     }
     if (!hasAny && state.errorMessage != null) {
       return clearOfHeader(
@@ -1090,33 +1081,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                   : 0),
         ),
       ),
-    );
-  }
-
-  Widget _withLoadingBehindHeader(
-    Widget body, {
-    required double topInset,
-    bool characterCaptionSpace = false,
-  }) {
-    if (topInset <= 0) return body;
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        body,
-        Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          height: topInset,
-          child: IgnorePointer(
-            child: AnimeCatalogShimmer(
-              padding: EdgeInsets.zero,
-              physics: const NeverScrollableScrollPhysics(),
-              characterCaptionSpace: characterCaptionSpace,
-            ),
-          ),
-        ),
-      ],
     );
   }
 
