@@ -10,6 +10,7 @@ import '../../../core/extensions/base_provider.dart';
 import '../../../core/services/download_v2/manga_chapter_manifest_v2.dart';
 import '../../../core/services/download_v2/manga_chapter_transport_v2.dart';
 import '../../../core/storage/manga_reading_repository.dart';
+import '../presentation/widgets/manga_chapter_browse.dart';
 import 'manga_reader_page_cache.dart';
 import 'manga_reader_settings.dart';
 
@@ -21,12 +22,13 @@ class MangaReaderController extends ChangeNotifier {
     required this.progressRepository,
     required this.manga,
     required MangaChapter chapter,
-    required this.chapters,
+    required List<MangaChapter> chapters,
     this.localChapterDirectory,
     this.localChapterDirectoryFor,
     MangaReaderPageCache? pageCache,
     MangaReaderMode? initialMode,
   }) : _chapter = chapter,
+       chapters = mangaChaptersInReadingOrder(chapters),
        _initialLocalChapter = chapter,
        _pageCache = pageCache ?? MangaReaderPageCache(),
        _mode = initialMode ?? preferredModeFor(manga);
@@ -34,6 +36,11 @@ class MangaReaderController extends ChangeNotifier {
   final AnimeWitcherProvider provider;
   final MangaReadingRepository progressRepository;
   final MultimediaItem manga;
+
+  /// The chapters in fixed reading order, lowest number first — whatever
+  /// display order the caller handed over (the downloads page passes its
+  /// descending sort), navigation and the chapter stream inside the
+  /// reader always move from a chapter to the one after it in the story.
   final List<MangaChapter> chapters;
   final String? localChapterDirectory;
   final MangaChapter _initialLocalChapter;

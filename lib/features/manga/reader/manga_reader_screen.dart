@@ -266,13 +266,14 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
   }
 
   MangaChapter? _chapterAfter(_StreamSegment segment) {
-    final index = widget.chapters.indexWhere(
+    final chapters = _controller.chapters;
+    final index = chapters.indexWhere(
       (value) =>
           value.id == segment.chapter.id ||
           (value.url.isNotEmpty && value.url == segment.chapter.url),
     );
-    if (index < 0 || index + 1 >= widget.chapters.length) return null;
-    return widget.chapters[index + 1];
+    if (index < 0 || index + 1 >= chapters.length) return null;
+    return chapters[index + 1];
   }
 
   bool get _streamCanAppend =>
@@ -854,9 +855,9 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
       showDragHandle: true,
       builder: (context) => SafeArea(
         child: ListView.builder(
-          itemCount: widget.chapters.length,
+          itemCount: _controller.chapters.length,
           itemBuilder: (context, index) {
-            final item = widget.chapters[index];
+            final item = _controller.chapters[index];
             final selected = item.id == _controller.currentChapter.id;
             return ListTile(
               selected: selected,
@@ -1050,8 +1051,8 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
 
   MangaChapter? get _nextChapter {
     final index = _controller.currentChapterIndex;
-    if (index < 0 || index + 1 >= widget.chapters.length) return null;
-    return widget.chapters[index + 1];
+    if (index < 0 || index + 1 >= _controller.chapters.length) return null;
+    return _controller.chapters[index + 1];
   }
 
   Widget _chapterTransitionPage() {

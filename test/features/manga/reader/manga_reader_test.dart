@@ -391,6 +391,57 @@ void main() {
     expect(await cache.get('expired-m1', chapter), isNull);
   });
 
+  test('a descending chapter list still navigates in reading order', () async {
+    final temp = await Directory.systemTemp.createTemp('aw_reader_order_');
+    addTearDown(() => temp.delete(recursive: true));
+    final provider = _ReaderProvider();
+    final cache = _RecordingReaderPageCache(cacheDirectory: temp);
+    const first = MangaChapter(
+      id: 'ord-c1',
+      mangaId: 'ord-m1',
+      url: 'https://example.test/chapter/ord-1',
+      name: 'Chapter 1',
+      number: 1,
+    );
+    const second = MangaChapter(
+      id: 'ord-c2',
+      mangaId: 'ord-m1',
+      url: 'https://example.test/chapter/ord-2',
+      name: 'Chapter 2',
+      number: 2,
+    );
+    final manga = MultimediaItem(
+      title: 'Reader Manga',
+      url: 'https://animewitcher.com/manga/ord-m1',
+      posterUrl: '',
+      contentType: MultimediaContentType.manga,
+      provider: provider.packageName,
+    );
+    // The downloads page hands the reader its display order — newest
+    // first when sorted descending. Inside the reader the order is
+    // always reading order: chapter 1 still has a next, chapter 2 a
+    // previous, regardless of how the list arrived.
+    final controller = MangaReaderController(
+      provider: provider,
+      progressRepository: _ReaderProgressRepository(),
+      manga: manga,
+      chapter: first,
+      chapters: const <MangaChapter>[second, first],
+      pageCache: cache,
+    );
+    addTearDown(controller.dispose);
+
+    expect(controller.chapters.map((c) => c.id), <String>['ord-c1', 'ord-c2']);
+    await controller.load();
+    expect(controller.canNext, isTrue);
+    expect(controller.canPrevious, isFalse);
+
+    await controller.nextChapter();
+    expect(controller.currentChapter.id, 'ord-c2');
+    expect(controller.canNext, isFalse);
+    expect(controller.canPrevious, isTrue);
+  });
+
   test('reader preloads the adjacent chapter after current chapter loads', () async {
     final temp = await Directory.systemTemp.createTemp('aw_reader_preload_');
     addTearDown(() => temp.delete(recursive: true));
