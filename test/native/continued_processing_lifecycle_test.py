@@ -198,7 +198,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
       await drainCallbacks()
       try check(first.completions.isEmpty && second.completions == [false],
                 "exactly one same-identifier lease can own the live umbrella session")
-      try check(first.progress.completedUnitCount == 60 && first.titles.last == "Downloading “New Episode”",
+      try check(first.progress.completedUnitCount == 60 && first.titles.last == "◉ Downloading “New Episode”",
                 "the owning lease must bind the current valid snapshot, never the canceled episode")
       try check(manager.update(taskId: "new-episode", progress: 0.70, totalBytes: 100),
                 "rejecting the additional lease cannot deactivate the current session")
