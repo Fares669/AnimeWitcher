@@ -183,6 +183,17 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
       expiration()
       await drainCallbacks()
       try check(task.completions == [false], "expiration racing explicit stop acknowledges the OS once")
+    case "presentation-rate-limit":
+      scheduler.deliver(task)
+      await drainCallbacks()
+      try check(task.progress.completedUnitCount == 14, "attach presents the checkpoint")
+      let titlesAfterAttach = task.titles.count
+      try check(manager.update(taskId: "episode", progress: 0.25, totalBytes: 100), "the first update is accepted")
+      try check(task.progress.completedUnitCount == 25, "the first update after attach presents immediately")
+      try check(manager.update(taskId: "episode", progress: 0.30, totalBytes: 100), "a rapid second update is still accepted")
+      try check(task.progress.completedUnitCount == 25, "a second presentation inside one second is gated, not applied")
+      try check(task.titles.count == titlesAfterAttach + 1, "exactly one progress presentation reached the task")
+      manager.stop(taskId: "session", endSession: true)
     case "background-dart-advances":
       // The snapshot from the preamble sits at 14/100 bytes for "episode".
       try check(!manager.acceptsDartUpdate(inForeground: false, completedPages: nil,
@@ -274,7 +285,7 @@ with tempfile.TemporaryDirectory(prefix="continued-processing-lifecycle-") as di
         "expiration-only", "expiration-and-stop", "stop-and-expiration",
         "restart-late-old-first", "restart-late-new-first",
         "old-expiration-after-restart", "queued-old-expiration-during-restart",
-        "background-dart-advances",
+        "background-dart-advances", "presentation-rate-limit",
     ):
         result = subprocess.run([str(executable), scenario], check=False)
         if result.returncode:

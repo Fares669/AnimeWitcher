@@ -162,6 +162,24 @@ void main() {
       expect(swift, contains('startPulse()'));
       expect(swift, contains('stopPulse()'));
     });
+    test('continued-processing presentation is rate-limited to once per second', () {
+      final swift = File('ios/Runner/DownloadContinuedProcessingManager.swift')
+          .readAsStringSync();
+      // Device logs (2026-10-30) showed the banner changing 3-5 times in a
+      // second when the native background feed burst. Every feeder — Dart
+      // updates, the native feed, the pulse — must funnel through the one
+      // presentation clock in the manager.
+      expect(swift, contains('private var lastPresentationAt'));
+      expect(swift, contains('private func presentIfDue('));
+      expect(
+        swift,
+        contains('now - lastPresentationAt >= DownloadPresentationPulse.interval'),
+      );
+      // update() and the pulse beat present only through the gate; only
+      // attach/start and session end may write outside it.
+      expect(swift, contains('presentIfDue(snapshot, to: task)'));
+      expect(swift, contains('pulseFilled.toggle()'));
+    });
     test(
       'continued-processing metric updates are coalesced to one per second',
       () {

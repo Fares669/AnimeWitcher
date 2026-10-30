@@ -114,6 +114,12 @@ final class DownloadContinuedProcessingManager {
   private var pulseTimer: Timer?
   private var pulseFilled = true
   private var lastNativeRejectionTaskId = ""
+  /// Stamp of the last presentation actually applied to the system task.
+  /// Every feeder (Dart updates, the native background feed, the pulse)
+  /// funnels through this one clock, so the banner changes at most once
+  /// per second no matter how the feeders interleave (device logs,
+  /// 2026-10-30: bursts of 3-5 native feeds inside one second).
+  private var lastPresentationAt: CFTimeInterval = 0
   // V2 ranged children report a subtotal of child bytes, not a whole-file
   // absolute byte count. Capture that subtotal at the foreground -> background
   // handoff and advance the system UI by its delta over the latest Dart parent
@@ -369,7 +375,7 @@ final class DownloadContinuedProcessingManager {
     self.snapshot = snapshot
 
     if let task = activeTask {
-      apply(snapshot, to: task)
+      presentIfDue(snapshot, to: task)
     }
     return activeTask != nil || identifier != nil
   }
@@ -548,6 +554,7 @@ final class DownloadContinuedProcessingManager {
     requestSubmittedAt = nil
     leaseStartedAt = nil
     currentEpisodeTaskId = ""
+    lastPresentationAt = 0
     resetNativeAggregateBaseline()
   }
 
@@ -605,6 +612,7 @@ final class DownloadContinuedProcessingManager {
         self.requestSubmittedAt = nil
         self.leaseStartedAt = nil
         self.currentEpisodeTaskId = ""
+        self.lastPresentationAt = 0
         self.stopPulse()
         self.resetNativeAggregateBaseline()
       }
@@ -612,6 +620,11 @@ final class DownloadContinuedProcessingManager {
 
     recordLifecycle("continued.attached")
 
+    // A fresh task starts a fresh presentation clock: attach presents the
+    // checkpoint immediately, and the first progress update after attach
+    // also presents immediately; the once-per-second gate applies from
+    // there on.
+    lastPresentationAt = 0
     if let snapshot {
       apply(snapshot, to: task)
     } else {
@@ -619,6 +632,22 @@ final class DownloadContinuedProcessingManager {
       task.progress.completedUnitCount = 0
     }
     startPulse()
+  }
+
+  /// Applies a progress presentation only when the shared clock says the
+  /// task is due for one — at most once per
+  /// `DownloadPresentationPulse.interval`. A skipped presentation is not
+  /// lost: the caller has already stored the snapshot, and the pulse tick
+  /// presents the latest stored snapshot on a later beat.
+  private func presentIfDue(
+    _ snapshot: Snapshot,
+    to task: BGContinuedProcessingTask
+  ) {
+    let now = Date().timeIntervalSinceReferenceDate
+    guard now - lastPresentationAt >= DownloadPresentationPulse.interval
+    else { return }
+    lastPresentationAt = now
+    apply(snapshot, to: task)
   }
 
   private func apply(
@@ -677,14 +706,16 @@ final class DownloadContinuedProcessingManager {
 
   /// One pulse beat: flip the banner dot and re-apply the whole task
   /// presentation, so the system receives a full update every second for
-  /// as long as the session task is attached.
+  /// as long as the session task is attached. The beat goes through the
+  /// same presentation clock as every other feeder, so the whole task
+  /// still changes at most once per second when feeders interleave.
   private func pulseTick() {
     guard let task = activeTask, let snapshot else {
       stopPulse()
       return
     }
     pulseFilled.toggle()
-    apply(snapshot, to: task)
+    presentIfDue(snapshot, to: task)
   }
 
   private func cancelPendingRequest() {
