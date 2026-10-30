@@ -142,6 +142,15 @@ void main() {
           .readAsStringSync();
       expect(swift, contains('speedBytesPerSecond >= 0'));
     });
+    test('background Dart updates are accepted only when they advance', () {
+      final swift = File('ios/Runner/DownloadContinuedProcessingManager.swift')
+          .readAsStringSync();
+      // A lease-kept Dart is an authoritative byte source; a briefly-woken
+      // stale one is not. The gate tells them apart by strict advancement.
+      expect(swift, contains('transferredBytes > snapshot.transferredBytes'));
+      expect(swift, contains('taskId != snapshot.currentTaskId'));
+      expect(swift, contains('continued.native.rejected'));
+    });
     test('continued-processing banner pulses a full update every second', () {
       final swift = File('ios/Runner/DownloadContinuedProcessingManager.swift')
           .readAsStringSync();

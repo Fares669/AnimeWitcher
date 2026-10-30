@@ -113,6 +113,7 @@ final class DownloadContinuedProcessingManager {
   private var leaseStartedAt: Date?
   private var pulseTimer: Timer?
   private var pulseFilled = true
+  private var lastNativeRejectionTaskId = ""
   // V2 ranged children report a subtotal of child bytes, not a whole-file
   // absolute byte count. Capture that subtotal at the foreground -> background
   // handoff and advance the system UI by its delta over the latest Dart parent
@@ -271,10 +272,35 @@ final class DownloadContinuedProcessingManager {
     return sessionId
   }
 
-  func acceptsDartUpdate(inForeground: Bool, completedPages: Int?) -> Bool {
-    DownloadPageProgress.acceptsDartUpdate(
+  func acceptsDartUpdate(
+    inForeground: Bool,
+    completedPages: Int?,
+    taskId: String = "",
+    progress: Double = -1,
+    transferredBytes: Int64 = -1
+  ) -> Bool {
+    if DownloadPageProgress.acceptsDartUpdate(
       inForeground: inForeground, incomingPages: completedPages, currentPages: snapshot?.completedPages
-    )
+    ) {
+      return true
+    }
+    // Background, non-page session: the pure gate gives native observation
+    // precedence because a briefly-woken Dart may hold a stale snapshot.
+    // But a Dart kept alive by the lease reports authoritative durable
+    // bytes, and a native feed that goes silent must not freeze the
+    // presentation until the system expires the task. Accept only what a
+    // stale snapshot cannot fake: a different episode Dart is driving, or
+    // values that strictly advance the current presentation.
+    guard let snapshot, completedPages == nil, snapshot.completedPages == nil
+    else { return false }
+    if !taskId.isEmpty, taskId != Self.sessionKey,
+       taskId != snapshot.currentTaskId {
+      return true
+    }
+    if transferredBytes >= 0 {
+      return transferredBytes > snapshot.transferredBytes
+    }
+    return progress > snapshot.progress
   }
 
   func update(
@@ -360,7 +386,16 @@ final class DownloadContinuedProcessingManager {
   ) -> Bool {
     guard taskId == currentEpisodeTaskId,
           let current = snapshot
-    else { return false }
+    else {
+      // A native observation for a task the session does not own is the
+      // signature of a silently broken background feed; make it visible in
+      // the diagnostic log instead of dropping it without a trace.
+      if snapshot != nil, taskId != lastNativeRejectionTaskId {
+        lastNativeRejectionTaskId = taskId
+        recordLifecycle("continued.native.rejected", fields: ["taskId": taskId])
+      }
+      return false
+    }
 
     guard current.completedPages == nil else { return false }
 

@@ -183,6 +183,25 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
       expiration()
       await drainCallbacks()
       try check(task.completions == [false], "expiration racing explicit stop acknowledges the OS once")
+    case "background-dart-advances":
+      // The snapshot from the preamble sits at 14/100 bytes for "episode".
+      try check(!manager.acceptsDartUpdate(inForeground: false, completedPages: nil,
+                                           taskId: "episode", progress: 0.14, transferredBytes: 14),
+                "a duplicate background Dart update must stay rejected")
+      try check(!manager.acceptsDartUpdate(inForeground: false, completedPages: nil,
+                                           taskId: "episode", progress: 0.10, transferredBytes: 10),
+                "a stale background Dart update must stay rejected")
+      try check(manager.acceptsDartUpdate(inForeground: false, completedPages: nil,
+                                          taskId: "episode", progress: 0.20, transferredBytes: 20),
+                "an advancing background Dart update must be accepted")
+      try check(manager.acceptsDartUpdate(inForeground: false, completedPages: nil,
+                                          taskId: "episode", progress: 0.30, transferredBytes: -1),
+                "a progress-only advancing background Dart update must be accepted")
+      try check(manager.acceptsDartUpdate(inForeground: false, completedPages: nil,
+                                          taskId: "other-episode", progress: 0, transferredBytes: 0),
+                "a background Dart episode switch must be accepted")
+      try check(manager.acceptsDartUpdate(inForeground: false, completedPages: 3),
+                "page checkpoints keep their background Dart precedence")
     case "restart-late-old-first", "restart-late-new-first":
       manager.stop(taskId: "session", endSession: true)
       let nextId = try manager.start(taskId: "new-episode", displayName: "New Episode", progress: 0.60,
@@ -255,6 +274,7 @@ with tempfile.TemporaryDirectory(prefix="continued-processing-lifecycle-") as di
         "expiration-only", "expiration-and-stop", "stop-and-expiration",
         "restart-late-old-first", "restart-late-new-first",
         "old-expiration-after-restart", "queued-old-expiration-during-restart",
+        "background-dart-advances",
     ):
         result = subprocess.run([str(executable), scenario], check=False)
         if result.returncode:
