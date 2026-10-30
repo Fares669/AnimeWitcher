@@ -116,6 +116,7 @@ final class LogicalDownloadRecordV2 {
     this.retries = 2,
     this.parallelChunks = 1,
     this.awaitingAdmission = false,
+    this.enqueuedAtMillis = 0,
   }) : assert(mediaId != ''),
        assert(unitKey != ''),
        assert(retries >= 0),
@@ -144,6 +145,18 @@ final class LogicalDownloadRecordV2 {
   /// persisted here.
   final bool awaitingAdmission;
   final int updatedAtMillis;
+
+  /// When this download generation entered the queue. Assigned once by the
+  /// manager when the record is created and preserved by every later write,
+  /// so admission order stays FIFO no matter how often the record is
+  /// rewritten (pause, resume, restart reconciliation). Zero for records
+  /// created before this field existed; [queueOrderMillis] falls back to
+  /// [updatedAtMillis] for those.
+  final int enqueuedAtMillis;
+
+  /// Stable admission (queue) order key.
+  int get queueOrderMillis =>
+      enqueuedAtMillis > 0 ? enqueuedAtMillis : updatedAtMillis;
 
   LogicalDownloadRecordV2 copyWith({
     int? schemaVersion,
@@ -196,6 +209,7 @@ final class LogicalDownloadRecordV2 {
       parallelChunks: parallelChunks ?? this.parallelChunks,
       awaitingAdmission: awaitingAdmission ?? this.awaitingAdmission,
       updatedAtMillis: updatedAtMillis ?? this.updatedAtMillis,
+      enqueuedAtMillis: enqueuedAtMillis,
     );
   }
 
@@ -220,6 +234,7 @@ final class LogicalDownloadRecordV2 {
     'parallelChunks': parallelChunks,
     'awaitingAdmission': awaitingAdmission,
     'updatedAtMillis': updatedAtMillis,
+    if (enqueuedAtMillis > 0) 'enqueuedAtMillis': enqueuedAtMillis,
   };
 
   static LogicalDownloadRecordV2? fromJson(Object? raw) {
@@ -288,6 +303,7 @@ final class LogicalDownloadRecordV2 {
           ? map['awaitingAdmission']! as bool
           : false,
       updatedAtMillis: updatedAtMillis,
+      enqueuedAtMillis: _asInt(map['enqueuedAtMillis']) ?? 0,
     );
   }
 }

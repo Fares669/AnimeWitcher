@@ -157,6 +157,7 @@ class _DownloadProgressDialogState
                       TaskStatus.paused => l10n.downloadPaused,
                       TaskStatus.complete => l10n.statusFinished,
                       TaskStatus.canceled => l10n.statusCanceled,
+                      TaskStatus.enqueued => l10n.statusQueued,
                       _ => l10n.downloading,
                     },
                     textDirection: Directionality.of(context),
@@ -167,13 +168,17 @@ class _DownloadProgressDialogState
                   ),
                 ),
                 const SizedBox(height: 8),
-                Text(
-                  widget.title,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
+                Align(
+                  alignment: AlignmentDirectional.centerEnd,
+                  child: Text(
+                    widget.title,
+                    textDirection: TextDirection.rtl,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 24),
                 Row(
@@ -226,26 +231,30 @@ class _DownloadProgressDialogState
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    _buildInfoItem(
-                      context,
-                      Icons.speed_rounded,
-                      l10n.speed,
-                      formatDownloadSpeed(data, l10n),
-                      valueTextDirection: TextDirection.ltr,
-                    ),
-                    _buildInfoItem(
-                      context,
-                      Icons.timer_outlined,
-                      l10n.remaining,
-                      formatDownloadTimeRemaining(data, l10n),
-                      valueTextDirection: TextDirection.rtl,
-                    ),
-                  ],
-                ),
+                // A queued download has no speed or remaining time yet;
+                // hide the row entirely instead of showing "calculating".
+                if (data.status != TaskStatus.enqueued) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _buildInfoItem(
+                        context,
+                        Icons.speed_rounded,
+                        l10n.speed,
+                        formatDownloadSpeed(data, l10n),
+                        valueTextDirection: TextDirection.ltr,
+                      ),
+                      _buildInfoItem(
+                        context,
+                        Icons.timer_outlined,
+                        l10n.remaining,
+                        formatDownloadTimeRemaining(data, l10n),
+                        valueTextDirection: TextDirection.rtl,
+                      ),
+                    ],
+                  ),
+                ],
                 const SizedBox(height: 24),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,

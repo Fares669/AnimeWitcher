@@ -103,6 +103,7 @@ DownloadItem _item({
   TaskStatus status = TaskStatus.complete,
   String metaData = 'https://animewitcher.test/black-torch/9',
   Episode? episode,
+  String? logicalId,
 }) {
   return DownloadItem(
     task: _task(taskId: taskId, filename: filename, metaData: metaData),
@@ -111,6 +112,7 @@ DownloadItem _item({
     item: _blackTorch(),
     episode: episode ?? _episode9(),
     timestamp: timestamp,
+    logicalId: logicalId,
   );
 }
 
@@ -183,6 +185,7 @@ Widget _downloadsApp(
   Object? retryError,
   NotificationService? notificationService,
   _StubDownloadsNotifier? notifier,
+  Map<String, DownloadProgressData>? progressData,
 }) {
   Widget home = const Scaffold(
     body: RepaintBoundary(
@@ -204,6 +207,8 @@ Widget _downloadsApp(
               retryError: retryError,
             ),
       ),
+      if (progressData != null)
+        downloadProgressProvider.overrideWith((ref) => progressData),
       if (notificationService != null)
         notificationServiceProvider.overrideWithValue(notificationService),
       episodeSortAscendingProvider.overrideWith(
@@ -1334,5 +1339,75 @@ void main() {
       File('${artifacts.path}/downloads_paused_not_running.png')
           .writeAsBytesSync(bytes!.buffer.asUint8List());
     });
+  });
+
+  testWidgets(
+    'queued download shows an hourglass and no calculating placeholders',
+    (tester) async {
+      await _prepareArtworkStorage(tester);
+      const logicalId = 'queued-logical-id';
+      final queued = _item(
+        taskId: 'queued-task',
+        timestamp: 5,
+        status: TaskStatus.enqueued,
+        logicalId: logicalId,
+      );
+      await tester.pumpWidget(
+        _downloadsApp(
+          [queued],
+          progressData: const <String, DownloadProgressData>{
+            logicalId: DownloadProgressData(
+              taskId: 'queued-task',
+              progress: 0,
+              networkSpeed: -1,
+              timeRemaining: Duration.zero,
+              status: TaskStatus.enqueued,
+            ),
+          },
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.text('في الانتظار...'), findsOneWidget);
+      expect(find.byIcon(Icons.hourglass_top_rounded), findsOneWidget);
+      expect(find.byIcon(Icons.download_rounded), findsNothing);
+      // While queued there is no speed and no remaining time yet; the
+      // "calculating" placeholder row must be hidden entirely.
+      expect(find.text('جارٍ الحساب…'), findsNothing);
+    },
+  );
+
+  testWidgets('running download keeps its speed and remaining row', (
+    tester,
+  ) async {
+    await _prepareArtworkStorage(tester);
+    const logicalId = 'running-logical-id';
+    final running = _item(
+      taskId: 'running-task',
+      timestamp: 5,
+      status: TaskStatus.running,
+      logicalId: logicalId,
+    );
+    await tester.pumpWidget(
+      _downloadsApp(
+        [running],
+        progressData: const <String, DownloadProgressData>{
+          logicalId: DownloadProgressData(
+            taskId: 'running-task',
+            progress: 0.4,
+            networkSpeed: 0.5,
+            timeRemaining: Duration(minutes: 2),
+            status: TaskStatus.running,
+          ),
+        },
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.byIcon(Icons.download_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.hourglass_top_rounded), findsNothing);
+    expect(find.text('500.00 KB/s'), findsOneWidget);
   });
 }

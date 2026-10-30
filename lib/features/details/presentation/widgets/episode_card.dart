@@ -45,7 +45,8 @@ String _downloadDialogTitle(MultimediaItem parentItem, Episode episode) {
     isFinal: episode.isFinal,
     serverName: episode.serverName,
   );
-  return label.isEmpty ? parentItem.title : '${parentItem.title} - $label';
+  // The dialog names the episode only ("الحلقة X"), like manga chapters.
+  return label.isEmpty ? parentItem.title : label;
 }
 
 class EpisodeCard extends HookConsumerWidget {

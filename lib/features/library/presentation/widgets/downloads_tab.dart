@@ -691,6 +691,7 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
     )[item.task.taskId];
     final parallelParts = downloadTaskPartCount(item.task);
     final isDone = status == TaskStatus.complete;
+    final isQueued = status == TaskStatus.enqueued;
     final isWorking =
         status == TaskStatus.running ||
         status == TaskStatus.enqueued ||
@@ -768,6 +769,8 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
                   Icon(
                     isDone
                         ? Icons.check_circle_rounded
+                        : isQueued
+                        ? Icons.hourglass_top_rounded
                         : Icons.download_rounded,
                     size: 14,
                     color: isDone
@@ -830,7 +833,9 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
                   borderRadius: BorderRadius.circular(LayoutConstants.radiusSm),
                 ),
                 const SizedBox(height: 4),
-                if (progressData != null && isWorking)
+                // A queued download has no speed or remaining time yet;
+                // hide the row entirely instead of showing "calculating".
+                if (progressData != null && isWorking && !isQueued)
                   Row(
                     children: [
                       Expanded(

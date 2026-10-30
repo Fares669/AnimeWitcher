@@ -63,7 +63,8 @@ String _playerEpisodeDownloadTitle(MultimediaItem item, Episode episode) {
     isFinal: episode.isFinal,
     serverName: episode.serverName,
   );
-  return label.isEmpty ? item.title : '${item.title} - $label';
+  // The dialog names the episode only ("الحلقة X"), like manga chapters.
+  return label.isEmpty ? item.title : label;
 }
 
 /// A reusable right-anchored drawer shell for the player.

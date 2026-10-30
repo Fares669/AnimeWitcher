@@ -186,8 +186,8 @@ final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
         ref.read(settingsRepositoryProvider).getDownloadConcurrency(),
   );
   // iOS suspends Dart shortly after backgrounding, and queue advancement is
-  // Dart-only: stage one extra queued download into the background
-  // URLSession while the process is still alive to do it.
+  // Dart-only: run a final admission pass (within the configured
+  // concurrency cap) while the process is still alive to do it.
   final lifecycleListener = Platform.isIOS
       ? AppLifecycleListener(
           onStateChange: (state) {

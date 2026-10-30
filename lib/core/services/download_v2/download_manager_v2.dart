@@ -145,8 +145,17 @@ final class DownloadManagerV2 {
   bool _admissionPromotionRequested = false;
   Timer? _admissionPromotionRetryTimer;
   int _admissionPromotionRetryAttempts = 0;
-  int _admissionBoost = 0;
+  int _lastEnqueuedAtMillis = 0;
   final Set<DownloadLogicalId> _admissionReservations = <DownloadLogicalId>{};
+
+  /// Strictly increasing enqueue stamp for new download generations, so two
+  /// downloads queued within the same millisecond still order FIFO.
+  int _nextEnqueuedAtMillis() {
+    final now = _nowMillis();
+    final next = now > _lastEnqueuedAtMillis ? now : _lastEnqueuedAtMillis + 1;
+    _lastEnqueuedAtMillis = next;
+    return next;
+  }
 
   /// Application-owned logical records for presentation. This never exposes
   /// package child transfers, URLs, headers or FileDownloader database rows.
@@ -1477,6 +1486,7 @@ final class DownloadManagerV2 {
       parallelChunks: parallelChunks,
       awaitingAdmission: true,
       updatedAtMillis: _nowMillis(),
+      enqueuedAtMillis: _nextEnqueuedAtMillis(),
     );
     await _store.put(queuedRecord);
     _rememberRecord(queuedRecord);
@@ -1500,8 +1510,7 @@ final class DownloadManagerV2 {
   }
 
   Future<bool> _hasAdmissionSlot({DownloadLogicalId? excluding}) async {
-    final limit =
-        clampDownloadConcurrency(_maxConcurrentDownloads()) + _admissionBoost;
+    final limit = clampDownloadConcurrency(_maxConcurrentDownloads());
     final occupied = _admissionReservations
         .where((id) => id != excluding)
         .toSet();
@@ -1588,20 +1597,14 @@ final class DownloadManagerV2 {
     await _promoteAdmissions();
   }
 
-  /// iOS background staging: when the app is leaving the foreground, start
-  /// one extra queued download so its transfer already belongs to the
-  /// background URLSession when Dart is suspended. Queue advancement is
-  /// Dart-only, so without this the next download cannot begin until the
-  /// user returns, even though the system could have transferred it.
-  /// A staged download is an ordinary started download in every other way.
+  /// iOS background staging: when the app is leaving the foreground, run one
+  /// last admission pass so a queued download whose slot is already free
+  /// starts while Dart is still alive to start it. The configured
+  /// concurrency cap always applies — staging never runs an extra download
+  /// beyond it.
   Future<void> stageQueuedDownloadsForBackground() async {
     await initialize();
-    _admissionBoost = 1;
-    try {
-      await _promoteAdmissions();
-    } finally {
-      _admissionBoost = 0;
-    }
+    await _promoteAdmissions();
   }
 
   Future<void> _promoteAdmissions() {
@@ -1623,27 +1626,45 @@ final class DownloadManagerV2 {
     } while (_admissionPromotionRequested);
   }
 
+  /// Waiting downloads in admission order: FIFO by enqueue stamp, never by
+  /// last-write time — record rewrites (pause/resume, restart
+  /// reconciliation) must not reshuffle the queue. Logical id breaks legacy
+  /// ties so the order is total and deterministic.
+  List<LogicalDownloadRecordV2> _queueOrder(
+    Iterable<LogicalDownloadRecordV2> records,
+  ) {
+    return records
+        .where(
+          (record) =>
+              record.intent == DownloadUserIntent.active &&
+              record.awaitingAdmission,
+        )
+        .toList()
+      ..sort((a, b) {
+        final byEnqueue = a.queueOrderMillis.compareTo(b.queueOrderMillis);
+        return byEnqueue != 0
+            ? byEnqueue
+            : a.logicalId.value.compareTo(b.logicalId.value);
+      });
+  }
+
   Future<void> _promoteAdmissionsPass() async {
+    // Candidates whose destination is owned by another download stay
+    // skipped for the rest of this pass only, so one stuck destination
+    // cannot block the whole queue.
+    final skipped = <DownloadLogicalId>{};
     while (true) {
-      final waiting =
-          (await _store.all())
-              .where(
-                (record) =>
-                    record.intent == DownloadUserIntent.active &&
-                    record.awaitingAdmission,
-              )
-              .toList()
-            ..sort((a, b) => a.updatedAtMillis.compareTo(b.updatedAtMillis));
+      final waiting = _queueOrder(await _store.all());
       if (waiting.isEmpty) return;
 
       var promoted = false;
       for (final candidate in waiting) {
-        final didPromote = await _commands.run(candidate.logicalId, () async {
+        final attempt = await _commands.run(candidate.logicalId, () async {
           final current = await _store.get(candidate.logicalId);
           if (current == null ||
               current.intent != DownloadUserIntent.active ||
               !current.awaitingAdmission) {
-            return false;
+            return _AdmissionAttempt.skip;
           }
           final destinationKey = await _canonicalDestinationPath(
             current.destinationPath,
@@ -1653,23 +1674,43 @@ final class DownloadManagerV2 {
             if (latest == null ||
                 latest.intent != DownloadUserIntent.active ||
                 !latest.awaitingAdmission) {
-              return false;
+              return _AdmissionAttempt.skip;
             }
 
             final conflict = await _findDestinationConflict(
               destinationKey,
               latest.logicalId,
             );
-            if (conflict != null) return false;
-            if (!await _reserveAdmission(latest.logicalId)) return false;
+            if (conflict != null) {
+              skipped.add(latest.logicalId);
+              return _AdmissionAttempt.skip;
+            }
+            // Re-validate headship against CURRENT state before taking a
+            // slot: this pass's candidate list is a snapshot, and the head
+            // may have changed while the attempt was in flight (a queued
+            // download paused and resumed, a new one enqueued). Promoting
+            // past the true head is what started queued chapters out of
+            // order on device.
+            final head = _queueOrder(
+              await _store.all(),
+            ).where((record) => !skipped.contains(record.logicalId));
+            if (head.isNotEmpty && head.first.logicalId != latest.logicalId) {
+              return _AdmissionAttempt.superseded;
+            }
+            // No free slot: stop the pass instead of letting a later
+            // candidate overtake the head when its attempt lands after a
+            // finishing download's cleanup.
+            if (!await _reserveAdmission(latest.logicalId)) {
+              return _AdmissionAttempt.noSlot;
+            }
             try {
               await _promoteQueuedAdmissionUnsafe(latest);
-              return true;
+              return _AdmissionAttempt.promoted;
             } catch (_) {
               final current = await _store.get(latest.logicalId);
               if (current == null ||
                   current.intent == DownloadUserIntent.failed)
-                return true;
+                return _AdmissionAttempt.promoted;
               final failedRecord = current.copyWith(
                 intent: DownloadUserIntent.failed,
                 awaitingAdmission: false,
@@ -1693,14 +1734,18 @@ final class DownloadManagerV2 {
               _snapshots[failedRecord.logicalId] = failed;
               _recordDiagnostic(failedRecord.logicalId, failed);
               await _publishRecords();
-              return true;
+              return _AdmissionAttempt.promoted;
             } finally {
               _admissionReservations.remove(latest.logicalId);
               _scheduleAdmissionPromotion();
             }
           });
         });
-        if (didPromote) {
+        if (attempt == _AdmissionAttempt.noSlot ||
+            attempt == _AdmissionAttempt.superseded) {
+          return;
+        }
+        if (attempt == _AdmissionAttempt.promoted) {
           promoted = true;
           break;
         }
@@ -2069,6 +2114,7 @@ final class DownloadManagerV2 {
       retries: request.retries,
       parallelChunks: parallelChunks,
       updatedAtMillis: updatedAtMillis,
+      enqueuedAtMillis: _nextEnqueuedAtMillis(),
     );
 
     await _store.put(nextRecord);
@@ -3417,6 +3463,13 @@ final class DownloadManagerV2 {
 
 bool _isControlTimeout(Object error) =>
     error is _DownloadControlTimeout || error is TimeoutException;
+
+/// Outcome of one admission attempt inside a promotion pass. [noSlot] (the
+/// shared concurrency budget is full) and [superseded] (an earlier queued
+/// download is the true head now) both stop the pass, so a later candidate
+/// can never overtake an earlier one; [skip] is candidate-local (record
+/// changed, destination conflict) and lets the pass move on.
+enum _AdmissionAttempt { promoted, skip, noSlot, superseded }
 
 final class _DownloadControlTimeout extends StateError {
   _DownloadControlTimeout(String action)
