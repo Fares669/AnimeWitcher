@@ -53,6 +53,27 @@ private enum DownloadPageProgress {
   }
 }
 
+/// The 1-second presentation pulse for the continued-processing banner.
+///
+/// While a session task is attached, the banner title alternates between a
+/// filled and a hollow dot every second, and every toggle re-applies the
+/// full task presentation (progress + title + subtitle). A task whose
+/// presentation keeps updating reads to the system as actively
+/// progressing; a static banner is the one that gets expired. Purely
+/// presentational: the pulse never touches download state.
+enum DownloadPresentationPulse {
+  static let interval: TimeInterval = 1.0
+
+  static func title(displayName: String, filled: Bool) -> String {
+    let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let dot = filled ? "◉" : "○"
+    if name.isEmpty {
+      return "\(dot) Downloading"
+    }
+    return "\(dot) Downloading “\(name)”"
+  }
+}
+
 /// Owns the **one** iOS 26 BGContinuedProcessingTask for an active download
 /// session (the whole queue), not one task per episode.
 ///
@@ -90,6 +111,8 @@ final class DownloadContinuedProcessingManager {
   private var currentEpisodeTaskId = ""
   private var requestSubmittedAt: Date?
   private var leaseStartedAt: Date?
+  private var pulseTimer: Timer?
+  private var pulseFilled = true
   // V2 ranged children report a subtotal of child bytes, not a whole-file
   // absolute byte count. Capture that subtotal at the foreground -> background
   // handoff and advance the system UI by its delta over the latest Dart parent
@@ -425,6 +448,7 @@ final class DownloadContinuedProcessingManager {
   }
 
   private func completeSession(success: Bool, status: String) {
+    stopPulse()
     cancelPendingRequest()
 
     // Flutter can decide that the session has no *running* entries after an
@@ -546,6 +570,7 @@ final class DownloadContinuedProcessingManager {
         self.requestSubmittedAt = nil
         self.leaseStartedAt = nil
         self.currentEpisodeTaskId = ""
+        self.stopPulse()
         self.resetNativeAggregateBaseline()
       }
     }
@@ -558,6 +583,7 @@ final class DownloadContinuedProcessingManager {
       task.progress.totalUnitCount = 1000
       task.progress.completedUnitCount = 0
     }
+    startPulse()
   }
 
   private func apply(
@@ -597,6 +623,35 @@ final class DownloadContinuedProcessingManager {
     )
   }
 
+  private func startPulse() {
+    guard pulseTimer == nil else { return }
+    let timer = Timer(
+      timeInterval: DownloadPresentationPulse.interval, repeats: true
+    ) { [weak self] _ in
+      Task { @MainActor in self?.pulseTick() }
+    }
+    RunLoop.main.add(timer, forMode: .common)
+    pulseTimer = timer
+  }
+
+  private func stopPulse() {
+    pulseTimer?.invalidate()
+    pulseTimer = nil
+    pulseFilled = true
+  }
+
+  /// One pulse beat: flip the banner dot and re-apply the whole task
+  /// presentation, so the system receives a full update every second for
+  /// as long as the session task is attached.
+  private func pulseTick() {
+    guard let task = activeTask, let snapshot else {
+      stopPulse()
+      return
+    }
+    pulseFilled.toggle()
+    apply(snapshot, to: task)
+  }
+
   private func cancelPendingRequest() {
     guard let identifier else { return }
     scheduler.cancel(taskRequestWithIdentifier: identifier)
@@ -624,11 +679,9 @@ final class DownloadContinuedProcessingManager {
   }
 
   private func title(for snapshot: Snapshot) -> String {
-    let name = snapshot.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-    if name.isEmpty {
-      return "Downloading"
-    }
-    return "Downloading “\(name)”"
+    DownloadPresentationPulse.title(
+      displayName: snapshot.displayName, filled: pulseFilled
+    )
   }
 
   private func currentIndex(for snapshot: Snapshot) -> Int {

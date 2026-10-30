@@ -142,6 +142,17 @@ void main() {
           .readAsStringSync();
       expect(swift, contains('speedBytesPerSecond >= 0'));
     });
+    test('continued-processing banner pulses a full update every second', () {
+      final swift = File('ios/Runner/DownloadContinuedProcessingManager.swift')
+          .readAsStringSync();
+      // The pulse is what keeps the system task treated as progressing:
+      // a toggling title dot plus a full presentation re-apply per beat,
+      // started on attach and stopped on every session end.
+      expect(swift, contains('enum DownloadPresentationPulse'));
+      expect(swift, contains('pulseFilled.toggle()'));
+      expect(swift, contains('startPulse()'));
+      expect(swift, contains('stopPulse()'));
+    });
     test(
       'continued-processing metric updates are coalesced to one per second',
       () {
