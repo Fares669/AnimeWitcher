@@ -35,8 +35,6 @@ class DownloadItem {
   final int? totalBytes;
   final int? completedPages;
   final int? totalPages;
-  final double networkSpeedMBps;
-  final Duration timeRemaining;
 
   DownloadItem({
     required this.task,
@@ -56,8 +54,6 @@ class DownloadItem {
     this.totalBytes,
     this.completedPages,
     this.totalPages,
-    this.networkSpeedMBps = -1,
-    this.timeRemaining = Duration.zero,
   }) : trackingUrl = trackingUrl ?? task.metaData,
        destinationPath = destinationPath ?? '',
        parallelChunks =
@@ -438,8 +434,6 @@ class DownloadsNotifier extends _$DownloadsNotifier {
         totalBytes: snapshot?.totalBytes ?? record.expectedBytes,
         completedPages: snapshot?.completedPages,
         totalPages: snapshot?.totalPages,
-        networkSpeedMBps: snapshot?.networkSpeedMBps ?? -1,
-        timeRemaining: snapshot?.timeRemaining ?? Duration.zero,
       );
       items.add(projected);
       if (projected.status == TaskStatus.complete &&

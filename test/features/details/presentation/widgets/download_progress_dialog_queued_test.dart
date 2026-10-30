@@ -1,4 +1,4 @@
-import 'package:animewitcher/core/utils/download_time_remaining.dart';
+import 'package:animewitcher/core/utils/download_progress_data.dart';
 import 'package:animewitcher/features/details/presentation/widgets/download_progress_dialog.dart';
 import 'package:animewitcher/features/library/presentation/download_progress_v2_provider.dart';
 import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
@@ -44,8 +44,6 @@ void main() {
           const DownloadProgressData(
             taskId: 'task-1',
             progress: 0,
-            networkSpeed: -1,
-            timeRemaining: Duration.zero,
             status: TaskStatus.enqueued,
           ),
         ),
@@ -63,7 +61,7 @@ void main() {
     },
   );
 
-  testWidgets('running download keeps its speed and remaining rows', (
+  testWidgets('running download shows no speed or remaining rows', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -71,8 +69,6 @@ void main() {
         const DownloadProgressData(
           taskId: 'task-1',
           progress: 0.4,
-          networkSpeed: 0.5,
-          timeRemaining: Duration(minutes: 2),
           totalSize: 1000,
           status: TaskStatus.running,
         ),
@@ -80,8 +76,10 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('500.00 KB/s'), findsOneWidget);
-    expect(find.text('دقيقتان'), findsOneWidget);
+    // Per-download speed/ETA were removed from the dialog entirely.
+    expect(find.textContaining('KB/s'), findsNothing);
+    expect(find.text('السرعة'), findsNothing);
+    expect(find.text('المتبقي'), findsNothing);
     expect(find.text('جارٍ التنزيل'), findsOneWidget);
   });
 }

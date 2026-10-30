@@ -6,7 +6,7 @@ import '../../../../core/domain/entity/manga.dart';
 import '../../../../core/providers/episode_sort_provider.dart';
 import '../../../../core/services/download_v2/download_v2_identity.dart';
 import '../../../../core/storage/manga_reading_repository.dart';
-import '../../../../core/utils/download_time_remaining.dart';
+import '../../../../core/utils/download_progress_data.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../../../shared/widgets/apple_liquid_glass.dart';
 import '../../../details/presentation/widgets/details_hero_actions.dart';

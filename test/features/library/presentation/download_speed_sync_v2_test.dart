@@ -9,7 +9,6 @@ import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_provider.dart';
 import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
-import 'package:animewitcher/features/library/presentation/download_progress_v2_provider.dart';
 import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,7 +19,7 @@ import '../../../support/memory_storage_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  test('app and iOS receive the same speed sample without another timer', () async {
+  test('app strip and iOS receive the same total speed sample without another timer', () async {
     const channel = MethodChannel(
       'com.animewitcher.app/download_continued_processing',
     );
@@ -90,23 +89,15 @@ void main() {
         );
         final speedMBps = bytesPerSecond / 1000000;
         expect(manager.snapshotFor(id)!.networkSpeedMBps, speedMBps);
-        expect(
-          container
-              .read(downloadsProvider)
-              .requireValue
-              .single
-              .networkSpeedMBps,
-          speedMBps,
-          reason:
-              'the in-app card must publish the accepted sample immediately',
-        );
         // Drain platform calls, including zero-speed and recovery transitions.
         for (var i = 0; i < 20; i++) {
           await Future<void>.delayed(Duration.zero);
         }
         expect(
-          container.read(downloadProgressProvider)[id.value]!.networkSpeed,
-          speedMBps,
+          downloadSessionSummaryNotifier.value.totalSpeedBytesPerSecond,
+          bytesPerSecond,
+          reason:
+              'the in-app strip must publish the same session total immediately',
         );
         expect(
           calls

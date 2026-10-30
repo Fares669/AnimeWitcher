@@ -5,7 +5,8 @@ import 'dart:ui' as ui;
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 import 'package:animewitcher/core/services/download_concurrency.dart';
-import 'package:animewitcher/core/utils/download_time_remaining.dart';
+import 'package:animewitcher/core/services/download_v2/download_continued_processing_v2.dart';
+import 'package:animewitcher/core/utils/download_progress_data.dart';
 import 'package:animewitcher/features/library/presentation/download_progress_v2_provider.dart';
 import 'package:animewitcher/core/services/notification_service.dart';
 import 'package:animewitcher/core/utils/download_cleanup.dart';
@@ -726,16 +727,12 @@ void main() {
             running.task.metaData: DownloadProgressData(
               taskId: 'ep3',
               progress: 0.18,
-              networkSpeed: 0.127,
-              timeRemaining: const Duration(minutes: 39, seconds: 44),
               status: TaskStatus.running,
               totalSize: 365400000,
             ),
             waiting.task.metaData: DownloadProgressData(
               taskId: 'ep4',
               progress: 0,
-              networkSpeed: 0,
-              timeRemaining: Duration.zero,
               status: TaskStatus.enqueued,
               totalSize: 462200000,
             ),
@@ -1359,8 +1356,6 @@ void main() {
             logicalId: DownloadProgressData(
               taskId: 'queued-task',
               progress: 0,
-              networkSpeed: -1,
-              timeRemaining: Duration.zero,
               status: TaskStatus.enqueued,
             ),
           },
@@ -1372,13 +1367,12 @@ void main() {
       expect(find.text('في الانتظار...'), findsOneWidget);
       expect(find.byIcon(Icons.hourglass_top_rounded), findsOneWidget);
       expect(find.byIcon(Icons.download_rounded), findsNothing);
-      // While queued there is no speed and no remaining time yet; the
-      // "calculating" placeholder row must be hidden entirely.
+      // Cards never show a per-download speed or remaining time.
       expect(find.text('جارٍ الحساب…'), findsNothing);
     },
   );
 
-  testWidgets('running download keeps its speed and remaining row', (
+  testWidgets('running download card shows no speed or remaining time', (
     tester,
   ) async {
     await _prepareArtworkStorage(tester);
@@ -1396,8 +1390,6 @@ void main() {
           logicalId: DownloadProgressData(
             taskId: 'running-task',
             progress: 0.4,
-            networkSpeed: 0.5,
-            timeRemaining: Duration(minutes: 2),
             status: TaskStatus.running,
           ),
         },
@@ -1408,6 +1400,49 @@ void main() {
 
     expect(find.byIcon(Icons.download_rounded), findsOneWidget);
     expect(find.byIcon(Icons.hourglass_top_rounded), findsNothing);
-    expect(find.text('500.00 KB/s'), findsOneWidget);
+    // Per-download speed/ETA were removed from the card entirely; the only
+    // speed in the app is the session total in the strip above the list.
+    expect(find.textContaining('KB/s'), findsNothing);
+    expect(find.textContaining('MB/s'), findsNothing);
+  });
+
+  testWidgets('session strip shows the batch position and total speed', (
+    tester,
+  ) async {
+    await _prepareArtworkStorage(tester);
+    addTearDown(
+      () => downloadSessionSummaryNotifier.value =
+          const DownloadSessionSummaryV2.inactive(),
+    );
+    const logicalId = 'strip-logical-id';
+    final running = _item(
+      taskId: 'strip-task',
+      timestamp: 5,
+      status: TaskStatus.running,
+      logicalId: logicalId,
+    );
+    await tester.pumpWidget(
+      _downloadsApp(
+        [running],
+        progressData: const <String, DownloadProgressData>{},
+      ),
+    );
+    await tester.pump();
+    expect(find.textContaining('يتم تنزيل'), findsNothing);
+
+    downloadSessionSummaryNotifier.value = const DownloadSessionSummaryV2(
+      currentIndex: 1,
+      batchTotal: 2,
+      totalSpeedBytesPerSecond: 274000,
+    );
+    await tester.pump();
+    expect(find.text('يتم تنزيل 1 من 2'), findsOneWidget);
+    expect(find.text('274KB/s'), findsOneWidget);
+
+    downloadSessionSummaryNotifier.value =
+        const DownloadSessionSummaryV2.inactive();
+    await tester.pump();
+    expect(find.textContaining('يتم تنزيل'), findsNothing);
+    expect(find.text('274KB/s'), findsNothing);
   });
 }

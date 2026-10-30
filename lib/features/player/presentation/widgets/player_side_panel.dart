@@ -17,7 +17,7 @@ import '../../../../core/storage/history_repository.dart';
 import '../../../../core/storage/episode_watch_repository.dart';
 import '../../../../core/account/account_providers.dart';
 import '../../../../core/services/notification_service.dart';
-import '../../../../core/utils/download_time_remaining.dart'
+import '../../../../core/utils/download_progress_data.dart'
     show DownloadProgressData;
 import '../../../library/presentation/download_delete_confirmation.dart';
 import '../../../library/presentation/download_progress_v2_provider.dart';

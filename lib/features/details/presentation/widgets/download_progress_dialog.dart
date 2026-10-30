@@ -6,7 +6,7 @@ import '../../../../core/services/download_v2/download_v2_identity.dart';
 import '../../../../core/services/download_v2/download_v2_provider.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../../../core/utils/localized_text.dart';
-import '../../../../core/utils/download_time_remaining.dart';
+import '../../../../core/utils/download_progress_data.dart';
 import '../../../../core/utils/file_size_formatter.dart';
 import '../../../library/presentation/download_progress_v2_provider.dart';
 import '../../../library/presentation/download_delete_confirmation.dart';
@@ -231,30 +231,6 @@ class _DownloadProgressDialogState
                     ),
                   ],
                 ),
-                // A queued download has no speed or remaining time yet;
-                // hide the row entirely instead of showing "calculating".
-                if (data.status != TaskStatus.enqueued) ...[
-                  const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      _buildInfoItem(
-                        context,
-                        Icons.speed_rounded,
-                        l10n.speed,
-                        formatDownloadSpeed(data, l10n),
-                        valueTextDirection: TextDirection.ltr,
-                      ),
-                      _buildInfoItem(
-                        context,
-                        Icons.timer_outlined,
-                        l10n.remaining,
-                        formatDownloadTimeRemaining(data, l10n),
-                        valueTextDirection: TextDirection.rtl,
-                      ),
-                    ],
-                  ),
-                ],
                 const SizedBox(height: 24),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -298,37 +274,4 @@ class _DownloadProgressDialogState
     );
   }
 
-  Widget _buildInfoItem(
-    BuildContext context,
-    IconData icon,
-    String label,
-    String value, {
-    TextDirection? valueTextDirection,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Icon(icon, size: 16, color: Theme.of(context).colorScheme.primary),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              textDirection: TextDirection.rtl,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          textDirection: valueTextDirection ?? TextDirection.ltr,
-          style: Theme.of(context).textTheme.bodyLarge
-              ?.copyWith(fontWeight: FontWeight.w600),
-        ),
-      ],
-    );
-  }
 }

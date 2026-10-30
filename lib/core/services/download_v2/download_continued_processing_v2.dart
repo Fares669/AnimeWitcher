@@ -8,6 +8,47 @@ import '../download_continued_processing_service.dart';
 import 'download_v2_models.dart';
 import 'download_v2_diagnostics.dart';
 
+/// Session-level presentation summary: the batch position and ONE total
+/// throughput for all active downloads combined. Per-download speed is never
+/// displayed anywhere; this total is what the downloads-tab strip and the
+/// iOS continued-processing task both show.
+final class DownloadSessionSummaryV2 {
+  const DownloadSessionSummaryV2({
+    required this.currentIndex,
+    required this.batchTotal,
+    required this.totalSpeedBytesPerSecond,
+  });
+
+  const DownloadSessionSummaryV2.inactive()
+    : currentIndex = 0,
+      batchTotal = 0,
+      totalSpeedBytesPerSecond = 0;
+
+  final int currentIndex;
+  final int batchTotal;
+  final double totalSpeedBytesPerSecond;
+
+  bool get isActive => batchTotal > 0;
+
+  @override
+  bool operator ==(Object other) =>
+      other is DownloadSessionSummaryV2 &&
+      other.currentIndex == currentIndex &&
+      other.batchTotal == batchTotal &&
+      other.totalSpeedBytesPerSecond == totalSpeedBytesPerSecond;
+
+  @override
+  int get hashCode =>
+      Object.hash(currentIndex, batchTotal, totalSpeedBytesPerSecond);
+}
+
+/// Latest session summary published by the continued-processing observer.
+/// Presentation-only: the downloads tab renders it as the session strip.
+final downloadSessionSummaryNotifier =
+    ValueNotifier<DownloadSessionSummaryV2>(
+      const DownloadSessionSummaryV2.inactive(),
+    );
+
 /// Presentation-only observer for V2 transport snapshots.
 ///
 /// Implementations may mirror package state into platform UI, but must never
@@ -427,6 +468,13 @@ final class IosDownloadContinuedProcessingObserverV2
     final presentableActive = _outstanding.values
         .where(_isPackageOwnedActive)
         .toList(growable: false);
+    // One total for the whole session: the strip and the iOS task show the
+    // bandwidth all active downloads are pulling together, never a
+    // per-download speed.
+    var totalSpeedBytesPerSecond = 0.0;
+    for (final active in presentableActive) {
+      totalSpeedBytesPerSecond += _speedBytesPerSecond(active.snapshot);
+    }
 
     if (snapshot.status == DownloadTransportStatus.complete &&
         (_sessionActive || _sessionMembers.contains(logicalId))) {
@@ -450,7 +498,7 @@ final class IosDownloadContinuedProcessingObserverV2
           _sessionMembers.length,
         ),
         batchTotal: _sessionMembers.isEmpty ? 1 : _sessionMembers.length,
-        speedBytesPerSecond: _speedBytesPerSecond(snapshot),
+        speedBytesPerSecond: totalSpeedBytesPerSecond,
         currentIndex: _sessionMembers.isEmpty
             ? 1
             : _completedMembers.length.clamp(1, _sessionMembers.length),
@@ -474,12 +522,21 @@ final class IosDownloadContinuedProcessingObserverV2
               ? (totalBytes * currentSnapshot.progress).round()
               : 0);
 
+      _publishSessionSummary(
+        DownloadSessionSummaryV2(
+          currentIndex: currentIndex,
+          batchTotal: batchTotal,
+          totalSpeedBytesPerSecond: totalSpeedBytesPerSecond,
+        ),
+      );
+
       await _checkpointNativeQueue(
         activeEntries: presentableActive,
         current: current,
         batchTotal: batchTotal,
         completedCount: completedCount,
         currentIndex: currentIndex,
+        totalSpeedBytesPerSecond: totalSpeedBytesPerSecond,
       );
 
       if (!_sessionActive) {
@@ -496,7 +553,7 @@ final class IosDownloadContinuedProcessingObserverV2
           transferredBytes: transferredBytes,
           completedCount: completedCount,
           batchTotal: batchTotal,
-          speedBytesPerSecond: _speedBytesPerSecond(currentSnapshot),
+          speedBytesPerSecond: totalSpeedBytesPerSecond,
           currentIndex: currentIndex,
         );
       } else {
@@ -511,7 +568,7 @@ final class IosDownloadContinuedProcessingObserverV2
           transferredBytes: transferredBytes,
           completedCount: completedCount,
           batchTotal: batchTotal,
-          speedBytesPerSecond: _speedBytesPerSecond(currentSnapshot),
+          speedBytesPerSecond: totalSpeedBytesPerSecond,
           currentIndex: currentIndex,
         );
       }
@@ -533,6 +590,7 @@ final class IosDownloadContinuedProcessingObserverV2
       currentIndex: _sessionMembers.isEmpty
           ? 1
           : _completedMembers.length.clamp(1, _sessionMembers.length),
+      totalSpeedBytesPerSecond: totalSpeedBytesPerSecond,
       paused: snapshot.status == DownloadTransportStatus.paused,
     );
 
@@ -558,6 +616,7 @@ final class IosDownloadContinuedProcessingObserverV2
     required int batchTotal,
     required int completedCount,
     required int currentIndex,
+    required double totalSpeedBytesPerSecond,
     bool paused = false,
   }) async {
     final planProvider = _nativeBackgroundPlans;
@@ -609,7 +668,7 @@ final class IosDownloadContinuedProcessingObserverV2
         sessionTransferredBytes: transferredBytes,
         sessionCompletedPages: record.mediaKind == DownloadMediaKind.mangaChapter ? snapshot.completedPages ?? 0 : null,
         sessionTotalPages: record.mediaKind == DownloadMediaKind.mangaChapter ? snapshot.totalPages ?? -1 : null,
-        sessionSpeedBytesPerSecond: _speedBytesPerSecond(snapshot),
+        sessionSpeedBytesPerSecond: totalSpeedBytesPerSecond,
         sessionCurrentIndex: currentIndex,
         multipartPlans: plans,
       );
@@ -707,7 +766,13 @@ final class IosDownloadContinuedProcessingObserverV2
   double _speedBytesPerSecond(DownloadTransportSnapshot snapshot) =>
       snapshot.networkSpeedMBps > 0 ? snapshot.networkSpeedMBps * 1000000 : 0;
 
+  void _publishSessionSummary(DownloadSessionSummaryV2 summary) {
+    if (downloadSessionSummaryNotifier.value == summary) return;
+    downloadSessionSummaryNotifier.value = summary;
+  }
+
   void _resetSession() {
+    _publishSessionSummary(const DownloadSessionSummaryV2.inactive());
     _deferSystemRequestUntilForeground = false;
     _sessionActive = false;
     _nativeQueueSignature = null;
