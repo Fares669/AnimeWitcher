@@ -287,8 +287,15 @@ final class IosDownloadContinuedProcessingObserverV2
     if (_disposed || !_sessionActive) return;
     _sessionActive = false;
     final lifecycle = WidgetsBinding.instance.lifecycleState;
+    // `inactive` is still a foreground state (Control Center, app-switcher
+    // peek, call UI): a fresh submission is accepted there, and deferring
+    // it to the next full resume left downloads without a lease after a
+    // session ended mid-transition (device logs, 2026-10-29). Only real
+    // background states (hidden/paused/detached) defer.
     _deferSystemRequestUntilForeground =
-        lifecycle != null && lifecycle != AppLifecycleState.resumed;
+        lifecycle != null &&
+        lifecycle != AppLifecycleState.resumed &&
+        lifecycle != AppLifecycleState.inactive;
     _diagnostics.recordTransport('background.leaseLost', {
       'status': lifecycle?.name ?? 'unknown',
       'count': _outstanding.length,

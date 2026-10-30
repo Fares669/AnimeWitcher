@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../../domain/entity/manga.dart';
 import '../download_concurrency.dart';
 import '../download_parallel.dart';
 import '../../utils/download_cleanup.dart';
@@ -132,6 +133,16 @@ final class DownloadManagerV2 {
       <DownloadLogicalId, int>{};
   final Map<DownloadLogicalId, Set<int>> _mangaSourceRefreshVerifiedPages =
       <DownloadLogicalId, Set<int>>{};
+
+  /// Page lists resolved at enqueue time, keyed by logical id. A chapter's
+  /// provider resolution is a serial network chain (Firestore + mirror
+  /// hosts + chapter page); running it at promotion time made every queued
+  /// chapter wait ~10s for its slot to actually start, and serialized the
+  /// starts of chapters behind it. Promotion reuses a fresh prefetch and
+  /// only pays the chain when none exists or it went stale.
+  final Map<DownloadLogicalId, ({Future<List<MangaPage>> pages, int startedAtMillis})>
+      _mangaPagePrefetches =
+      <DownloadLogicalId, ({Future<List<MangaPage>> pages, int startedAtMillis})>{};
   final Map<DownloadLogicalId, DownloadTransportSnapshot>
       _firstRenewedPositiveSample = <DownloadLogicalId, DownloadTransportSnapshot>{};
   final StreamController<List<LogicalDownloadRecordV2>> _recordChanges =
@@ -1505,8 +1516,47 @@ final class DownloadManagerV2 {
     );
     _snapshots[request.logicalId] = queued;
     _recordDiagnostic(request.logicalId, queued);
+    if (isManga) _prefetchMangaPages(request);
     _scheduleAdmissionPromotion();
     return queued;
+  }
+
+  /// How long an enqueue-time page resolution stays reusable at promotion.
+  /// Past this, page URLs may be expired CDN links, so promotion resolves
+  /// fresh — the reason resolution was promotion-time-only before.
+  static const int _mangaPagePrefetchFreshMillis = 5 * 60 * 1000;
+
+  void _prefetchMangaPages(DownloadStartRequestV2 request) {
+    final resolver = _mangaChapterPageResolver;
+    if (resolver == null) return;
+    final pages = resolver.resolve(
+      Map<String, Object?>.from(request.sourceDescriptor),
+    );
+    // The stored future is awaited at promotion; attach a swallowing
+    // listener now so a failed prefetch is never an unhandled error. The
+    // failure itself is retried fresh at promotion (see _resolveMangaPages).
+    unawaited(pages.then((_) {}, onError: (Object _, StackTrace __) {}));
+    _mangaPagePrefetches[request.logicalId] = (
+      pages: pages,
+      startedAtMillis: _nowMillis(),
+    );
+  }
+
+  Future<List<MangaPage>> _resolveMangaPages(
+    DownloadStartRequestV2 request,
+  ) async {
+    final resolver = _mangaChapterPageResolver!;
+    final prefetched = _mangaPagePrefetches.remove(request.logicalId);
+    if (prefetched != null &&
+        _nowMillis() - prefetched.startedAtMillis <=
+            _mangaPagePrefetchFreshMillis) {
+      try {
+        return await prefetched.pages;
+      } catch (_) {
+        // A failed prefetch must not fail the chapter: resolve fresh below.
+      }
+    }
+    return resolver.resolve(request.sourceDescriptor);
   }
 
   Future<bool> _hasAdmissionSlot({DownloadLogicalId? excluding}) async {
@@ -1963,7 +2013,7 @@ final class DownloadManagerV2 {
           throw StateError('Manga chapter transport is unavailable.');
         }
         final mangaGateway = gateway as MangaChapterGatewayV2;
-        final pages = await resolver.resolve(request.sourceDescriptor);
+        final pages = await _resolveMangaPages(request);
         return await mangaGateway.startMangaChapter(
           MangaChapterTransportSpecV2(
             taskId: taskId,

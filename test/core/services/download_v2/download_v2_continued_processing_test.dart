@@ -1181,6 +1181,102 @@ void main() {
       }
     },
   );
+
+  testWidgets('session lost during inactive is resubmitted immediately', (
+    tester,
+  ) async {
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return true;
+        });
+    final service = DownloadContinuedProcessingService(
+      onSystemCancel: (_) async {},
+      forceAvailableForTesting: true,
+    );
+    final observer = IosDownloadContinuedProcessingObserverV2(service: service);
+    final record = _terminalProgressRecord();
+    try {
+      await observer.observe(
+        record,
+        DownloadTransportSnapshot(
+          taskId: record.taskId,
+          status: DownloadTransportStatus.running,
+          progress: .25,
+          transferredBytes: 250,
+          totalBytes: 1000,
+        ),
+      );
+      expect(calls.where((call) => call.method == 'start'), hasLength(1));
+
+      // The lease ended while the app sat in the transient inactive state
+      // (still foreground). Recovery must not wait for a full resume, or
+      // the download can idle in the background once in-flight work drains.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      service.onSessionLost!();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(calls.where((call) => call.method == 'start'), hasLength(2));
+    } finally {
+      tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      );
+      await observer.dispose();
+    }
+  });
+
+  testWidgets('session lost while paused still waits for the foreground', (
+    tester,
+  ) async {
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return true;
+        });
+    final service = DownloadContinuedProcessingService(
+      onSystemCancel: (_) async {},
+      forceAvailableForTesting: true,
+    );
+    final observer = IosDownloadContinuedProcessingObserverV2(service: service);
+    final record = _terminalProgressRecord();
+    try {
+      await observer.observe(
+        record,
+        DownloadTransportSnapshot(
+          taskId: record.taskId,
+          status: DownloadTransportStatus.running,
+          progress: .25,
+          transferredBytes: 250,
+          totalBytes: 1000,
+        ),
+      );
+      expect(calls.where((call) => call.method == 'start'), hasLength(1));
+
+      // From a real background state the system does not accept a new
+      // continued-processing submission, so recovery stays deferred...
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      service.onSessionLost!();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(calls.where((call) => call.method == 'start'), hasLength(1));
+
+      // ...and returning to the foreground performs it.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(calls.where((call) => call.method == 'start'), hasLength(2));
+    } finally {
+      await observer.dispose();
+    }
+  });
 }
 LogicalDownloadRecordV2 _terminalProgressRecord() => const LogicalDownloadRecordV2(
   schemaVersion: kLogicalDownloadSchemaVersionV2, logicalId: DownloadLogicalId('terminal-progress'),

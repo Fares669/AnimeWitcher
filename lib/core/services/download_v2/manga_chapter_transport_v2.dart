@@ -284,7 +284,18 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
   }
 
   void _fillAvailableSlots() {
-    final startLimit = startAllPagesImmediately
+    // Handing every page to the background session at once keeps transfers
+    // daemon-resident, but only when the configured connection limit does
+    // not bind: with a limit below the page count, start-all silently
+    // ignored the user's per-manga limit on iOS (dozens of pages of one
+    // chapter transferring simultaneously at a limit of 1, device logs
+    // 2026-10-30). The plugin's native holding queue cannot enforce the
+    // limit instead — its per-group cap also binds the plugin-internal
+    // 'chunk' group and would throttle episode downloads. So a binding
+    // limit runs the slot loop; advancement then rides background-event
+    // wakes like every other Dart-advanced queue in this stack.
+    final startLimit =
+        startAllPagesImmediately && _pageConnectionLimit >= spec.pages.length
         ? spec.pages.length
         : _pageConnectionLimit;
     try {

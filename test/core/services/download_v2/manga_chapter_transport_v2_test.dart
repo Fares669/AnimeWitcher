@@ -13,7 +13,7 @@ import 'package:path/path.dart' as p;
 import '../../../support/manga_image_fixtures.dart';
 
 void main() {
-  test('startAllPagesImmediately hands every page over at once despite the slot limit', () async {
+  test('startAllPagesImmediately still honors a page limit below the page count', () async {
     final temp = await Directory.systemTemp.createTemp('aw-manga-start-all-');
     addTearDown(() => temp.delete(recursive: true));
     final starter = _FakePageStarter();
@@ -24,6 +24,47 @@ void main() {
       MangaChapterTransportSpecV2(
         taskId: 'start-all', mangaId: 'm1', chapterId: 'c1',
         destinationDirectory: temp.path, retries: 1, maxConcurrentPages: 2,
+        pages: const [
+          MangaPage(index: 0, imageUrl: 'https://cdn.test/0.png'),
+          MangaPage(index: 1, imageUrl: 'https://cdn.test/1.png'),
+          MangaPage(index: 2, imageUrl: 'https://cdn.test/2.png'),
+          MangaPage(index: 3, imageUrl: 'https://cdn.test/3.png'),
+          MangaPage(index: 4, imageUrl: 'https://cdn.test/4.png'),
+        ],
+      ),
+    );
+    addTearDown(handle.dispose);
+    // The configured limit is 2: handing all five pages to the session at
+    // once is what silently ignored the user's per-manga connection limit
+    // on device. Only the limit's worth of pages may be in flight.
+    await starter.waitUntilStarted(1);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(starter.startedPageIndexes, <int>[0, 1]);
+    await starter.complete(0);
+    await starter.waitUntilStarted(2);
+    expect(starter.startedPageIndexes, <int>[0, 1, 2]);
+    await starter.complete(1);
+    await starter.waitUntilStarted(3);
+    await starter.complete(2);
+    await starter.waitUntilStarted(4);
+    await starter.complete(3);
+    await starter.complete(4);
+    await _waitForStatus(handle, DownloadTransportStatus.complete);
+    expect(starter.startedPageIndexes, <int>[0, 1, 2, 3, 4]);
+    expect(starter.maxActive, 2);
+  });
+
+  test('startAllPagesImmediately hands every page over at once when the limit covers them', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-manga-start-all-');
+    addTearDown(() => temp.delete(recursive: true));
+    final starter = _FakePageStarter();
+    final handle = await MangaChapterTransportV2(
+      startPage: starter.start,
+      startAllPagesImmediately: true,
+    ).start(
+      MangaChapterTransportSpecV2(
+        taskId: 'start-all', mangaId: 'm1', chapterId: 'c1',
+        destinationDirectory: temp.path, retries: 1, maxConcurrentPages: 16,
         pages: const [
           MangaPage(index: 0, imageUrl: 'https://cdn.test/0.png'),
           MangaPage(index: 1, imageUrl: 'https://cdn.test/1.png'),
