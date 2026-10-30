@@ -108,3 +108,41 @@ The tests use real loopback HTTP and a fake clock for productive body progress,
 idle-body timeout, and the independent deadline. They also exercise publication
 held behind a gate with Pause queued concurrently. These tests do not establish
 physical-device throughput, native scheduling behavior, or full video playback.
+
+### iOS 26 continued-processing progress
+
+The continued-processing lease covers the whole queue. Its system progress uses
+fine-grained, monotonic queue progress rather than resetting to each episode's
+percentage. Manga native `_pNNNN` callbacks are routed only to their exact current
+chapter/generation. Movement since each page's first observed fraction (including
+its final `1`) advances network-work presentation before a full page is validated.
+A fixed handoff baseline prevents later durable checkpoints from counting that
+movement twice. First observations may undercount work already received; they
+never invent a page completion. Dart remains the authority for validated page
+counts, files and successful session completion.
+
+The activity dot animates only with fresh positive throughput: a finite positive
+speed sample or increasing native page fractions. Zero, stale, repeated or
+regressing observations do not manufacture work. Title updates alone cannot keep
+a BGContinuedProcessingTask alive. There is no app-owned 30-second no-progress
+failure timer for this lease, and iOS provides no API to replace its expiration
+policy with a speed threshold. OS expiration still releases the lease once and
+leaves independent URLSession transport ownership intact.
+
+The supplied October 30 device logs contain six reasonless `continued.expired`
+callbacks (lease ages approximately 49–179 seconds), 1,948 rejected native page
+observations, and one expiration reporting completedUnits == totalUnits despite
+an unfinished queue. These observations motivate the page routing and queue
+progress fixes; they do not establish Apple's expiration reason. Real-device
+background/lock-screen testing on iOS 26 remains necessary.
+
+Validation for this change: 21 production-manager lifecycle scenarios (platform
+scheduler/timer fakes), seven diagnostic wiring/privacy checks, range handoff and
+main-actor completion checks, retry metadata checks, and Swift iOS-target syntax
+parsing passed. The regression scenarios fail against the previous PR head.
+Flutter tests cannot initialize because the environment denies the Dart SDK
+request to storage.googleapis.com (HTTP 403). The existing native diagnostic
+logger executable test does not compile on this Linux host because its extracted
+Apple URLSession APIs lack Linux FoundationNetworking support; native
+CryptoKit/Security checks skip outside macOS. These limits do not establish an
+iOS build or real-device background result.

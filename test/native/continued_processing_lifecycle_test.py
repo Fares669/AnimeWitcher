@@ -18,7 +18,18 @@ SOURCE = SOURCE.removeprefix("#if os(iOS)\n").rstrip().removesuffix("#endif")
 SOURCE = SOURCE.replace("import BackgroundTasks\n", "").replace("import UIKit\n", "")
 SOURCE = SOURCE.replace("Bundle.main", "TestBundle.main")
 
+# Drive timer delivery explicitly; Linux MainActor has no UIKit main runloop.
+SOURCE = SOURCE.replace("RunLoop.main.add(timer, forMode: .common)", "TestTimers.current = timer")
 FAKES = r'''
+final class Timer {
+  let block: (Timer) -> Void
+  var valid = true
+  init(timeInterval: TimeInterval, repeats: Bool, block: @escaping (Timer) -> Void) { self.block = block }
+  func invalidate() { valid = false }
+  func fire() { if valid { block(self) } }
+}
+enum TestTimers { static var current: Timer? }
+
 struct TestBundle {
   static let main = TestBundle()
   var bundleIdentifier: String? { "com.animewitcher.test" }
@@ -36,7 +47,8 @@ class BGTask {
 final class BGContinuedProcessingTask: BGTask {
   let progress = Progress(totalUnitCount: 0)
   var titles: [String] = []
-  func updateTitle(_ title: String, subtitle: String) { titles.append(title) }
+  var subtitles: [String] = []
+  func updateTitle(_ title: String, subtitle: String) { titles.append(title); subtitles.append(subtitle) }
 }
 final class BGContinuedProcessingTaskRequest {
   enum Strategy { case queue }
@@ -183,6 +195,88 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
       expiration()
       await drainCallbacks()
       try check(task.completions == [false], "expiration racing explicit stop acknowledges the OS once")
+    case "manga-network-activity":
+      manager.stop(taskId: "session", endSession: true)
+      let mangaId = try manager.start(taskId: "aw_v2_manga_test_g1", displayName: "Chapter",
+        progress: 0, totalBytes: -1, completedCount: 0, batchTotal: 2,
+        completedPages: 0, totalPages: 10)!
+      let mangaTask = BGContinuedProcessingTask(identifier: mangaId)
+      scheduler.deliver(mangaTask)
+      await drainCallbacks()
+      _ = manager.updateFromNativeIfCurrent(taskId: "aw_v2_manga_test_g1_p0001", progress: 0)
+      let before = mangaTask.progress.completedUnitCount
+      try check(manager.updateFromNativeIfCurrent(taskId: "aw_v2_manga_test_g1_p0001", progress: 0.001),
+                "partial page transfer must reach its owning chapter before any page completes")
+      try await Task.sleep(nanoseconds: 1_100_000_000)
+      _ = manager.updateFromNativeIfCurrent(taskId: "aw_v2_manga_test_g1_p0001", progress: 0.002)
+      try check(mangaTask.progress.completedUnitCount > before, "sub-page network activity advances real system progress")
+      try check(mangaTask.titles.count > 0, "chapter stays attached")
+      try check(!manager.updateFromNativeIfCurrent(taskId: "aw_v2_manga_other_g1_p0001", progress: 0.9),
+                "unrelated chapter activity cannot advance this session")
+      let partialUnits = mangaTask.progress.completedUnitCount
+      _ = manager.updateFromNativeIfCurrent(taskId: "aw_v2_manga_test_g1_p0001", progress: 1)
+      try await Task.sleep(nanoseconds: 1_100_000_000)
+      TestTimers.current?.fire()
+      await drainCallbacks()
+      try check(mangaTask.progress.completedUnitCount > partialUnits, "a fully received page still contributes network work before validation")
+      let completedUnits = mangaTask.progress.completedUnitCount
+      _ = manager.updateFromNativeIfCurrent(taskId: "aw_v2_manga_test_g1_p0001", progress: 0.5)
+      try await Task.sleep(nanoseconds: 1_100_000_000)
+      TestTimers.current?.fire()
+      await drainCallbacks()
+      try check(mangaTask.progress.completedUnitCount == completedUnits, "duplicate or regressing callbacks cannot invent more work")
+      try check(mangaTask.completions.isEmpty, "partial network progress must not finish a chapter")
+      try check(mangaTask.subtitles.last?.contains("0/10 pages") == true,
+                "native network completion must not increment validated page counts")
+      try check(!manager.updateFromNativeIfCurrent(taskId: "aw_v2_manga_test_g1_p0001_p0002", progress: 1),
+                "malformed child identities must be rejected")
+      mangaTask.expirationHandler!()
+      await drainCallbacks()
+      let nextId = try manager.start(taskId: "aw_v2_manga_new_g2", displayName: "New chapter",
+        progress: 0, totalBytes: -1, completedCount: 0, batchTotal: 2,
+        completedPages: 0, totalPages: 10)!
+      let nextTask = BGContinuedProcessingTask(identifier: nextId)
+      scheduler.deliver(nextTask)
+      await drainCallbacks()
+      _ = manager.updateFromNativeIfCurrent(taskId: "aw_v2_manga_new_g2_p0001", progress: 0)
+      _ = manager.updateFromNativeIfCurrent(taskId: "aw_v2_manga_new_g2_p0001", progress: 0.1)
+      try await Task.sleep(nanoseconds: 1_100_000_000)
+      TestTimers.current?.fire()
+      await drainCallbacks()
+      try check(abs(nextTask.progress.fractionCompleted - 0.005) < 0.000001,
+                "expired chapter fractions must not leak into the next lease")
+      manager.stop(taskId: "session", endSession: true)
+    case "batch-progress-does-not-reset":
+      manager.stop(taskId: "session", endSession: true)
+      let batchId = try manager.start(taskId: "first", displayName: "First", progress: 0.9,
+        totalBytes: 100, transferredBytes: 90, completedCount: 0, batchTotal: 2)!
+      let batchTask = BGContinuedProcessingTask(identifier: batchId)
+      scheduler.deliver(batchTask)
+      await drainCallbacks()
+      let before = batchTask.progress.fractionCompleted
+      _ = manager.update(taskId: "second", progress: 0, totalBytes: 100,
+                         transferredBytes: 0, completedCount: 1, batchTotal: 2)
+      try check(batchTask.progress.fractionCompleted >= before,
+                "moving to the next episode must not reset the session progress")
+      try check(batchTask.progress.completedUnitCount < batchTask.progress.totalUnitCount,
+                "an unfinished queue must not report completed system progress")
+      manager.stop(taskId: "session", endSession: true)
+    case "zero-speed-is-not-activity", "positive-speed-is-activity", "stale-speed-is-not-activity":
+      _ = manager.update(taskId: "episode", progress: 0.14, totalBytes: 100,
+                         speedBytesPerSecond: scenario == "zero-speed-is-not-activity" ? 0 : 1)
+      scheduler.deliver(task)
+      await drainCallbacks()
+      try await Task.sleep(nanoseconds: scenario == "stale-speed-is-not-activity" ? 3_100_000_000 : 1_100_000_000)
+      TestTimers.current?.fire()
+      await drainCallbacks()
+      try await Task.sleep(nanoseconds: 1_100_000_000)
+      TestTimers.current?.fire()
+      await drainCallbacks()
+      let active = scenario == "positive-speed-is-activity"
+      try check(task.titles.last?.hasPrefix(active ? "◉" : "○") == true,
+                "indicator must reflect fresh positive speed, including tiny nonzero speeds")
+      try check(task.progress.completedUnitCount == 14, "a timer or cached speed must never fabricate transferred work")
+      manager.stop(taskId: "session", endSession: true)
     case "presentation-rate-limit":
       scheduler.deliver(task)
       await drainCallbacks()
@@ -275,7 +369,7 @@ if os.environ.get("SWIFT_MODULE_CACHE"):
 
 with tempfile.TemporaryDirectory(prefix="continued-processing-lifecycle-") as directory:
     main = Path(directory) / "lifecycle.swift"
-    main.write_text("import Foundation\n" + FAKES + SOURCE + CHECKS)
+    main.write_text("import Foundation\nimport CoreFoundation\n" + FAKES + SOURCE + CHECKS)
     executable = Path(directory) / "checks"
     subprocess.run([swiftc, *flags, "-parse-as-library", str(main), "-o", str(executable)], check=True)
     failures = []
@@ -286,6 +380,8 @@ with tempfile.TemporaryDirectory(prefix="continued-processing-lifecycle-") as di
         "restart-late-old-first", "restart-late-new-first",
         "old-expiration-after-restart", "queued-old-expiration-during-restart",
         "background-dart-advances", "presentation-rate-limit",
+        "manga-network-activity", "batch-progress-does-not-reset",
+        "zero-speed-is-not-activity", "positive-speed-is-activity", "stale-speed-is-not-activity",
     ):
         result = subprocess.run([str(executable), scenario], check=False)
         if result.returncode:

@@ -53,14 +53,8 @@ private enum DownloadPageProgress {
   }
 }
 
-/// The 1-second presentation pulse for the continued-processing banner.
-///
-/// While a session task is attached, the banner title alternates between a
-/// filled and a hollow dot every second, and every toggle re-applies the
-/// full task presentation (progress + title + subtitle). A task whose
-/// presentation keeps updating reads to the system as actively
-/// progressing; a static banner is the one that gets expired. Purely
-/// presentational: the pulse never touches download state.
+/// Rate-limited presentation of measured download activity. Updating a title
+/// cannot extend an OS lease or substitute for real Progress advancement.
 enum DownloadPresentationPulse {
   static let interval: TimeInterval = 1.0
 
@@ -113,6 +107,10 @@ final class DownloadContinuedProcessingManager {
   private var leaseStartedAt: Date?
   private var pulseTimer: Timer?
   private var pulseFilled = true
+  private var lastSpeedSampleAt: TimeInterval = 0
+  private var lastNativePageActivityAt: TimeInterval = 0
+  private var nativePageFractions: [String: (initial: Double, latest: Double)] = [:]
+  private var nativePageBaseline: Double?
   private var lastNativeRejectionTaskId = ""
   /// Stamp of the last presentation actually applied to the system task.
   /// Every feeder (Dart updates, the native background feed, the pulse)
@@ -208,6 +206,12 @@ final class DownloadContinuedProcessingManager {
         ? currentIndex
         : (self.snapshot?.currentIndex ?? 0)
     )
+    if switched || self.snapshot == nil {
+      nativePageFractions.removeAll()
+      nativePageBaseline = nil
+      lastNativePageActivityAt = 0
+    }
+    if speedBytesPerSecond >= 0 { lastSpeedSampleAt = Date().timeIntervalSinceReferenceDate }
     self.snapshot = snapshot
 
     if let active = activeTask {
@@ -336,6 +340,12 @@ final class DownloadContinuedProcessingManager {
       && taskId != Self.sessionKey
       && taskId != previousEpisodeTaskId
 
+    if switched {
+      nativePageFractions.removeAll()
+      nativePageBaseline = nil
+      lastNativePageActivityAt = 0
+    }
+    if speedBytesPerSecond >= 0 { lastSpeedSampleAt = Date().timeIntervalSinceReferenceDate }
     snapshot.progress = min(max(progress, 0.0), 1.0)
     snapshot.completedPages = completedPages
     snapshot.totalPages = totalPages
@@ -390,6 +400,34 @@ final class DownloadContinuedProcessingManager {
     transferredBytes: Int64 = -1,
     speedBytesPerSecond: Double = -1
   ) -> Bool {
+    // Manga page tasks have no Range metadata. Route only an exact page child
+    // of the current generation; a child fraction is activity, not a validated
+    // completed page. Dart alone owns the page count and chapter completion.
+    if let current = snapshot, current.completedPages != nil,
+       let total = current.totalPages, total > 0,
+       taskId.hasPrefix(currentEpisodeTaskId + "_p"),
+       taskId.dropFirst(currentEpisodeTaskId.count + 2).count >= 4,
+       taskId.dropFirst(currentEpisodeTaskId.count + 2).allSatisfy({ $0.isASCII && $0.isNumber }),
+       let progress, progress.isFinite, progress >= 0 {
+      let fraction = min(progress, 1)
+      let sample = nativePageFractions[taskId] ?? (initial: fraction, latest: fraction)
+      nativePageFractions[taskId] = (sample.initial, max(sample.latest, fraction))
+      if fraction > sample.latest {
+        // A positive native fraction delta proves nonzero throughput even
+        // when this callback does not expose a byte/s value to Dart.
+        lastNativePageActivityAt = Date().timeIntervalSinceReferenceDate
+      }
+      if nativePageBaseline == nil { nativePageBaseline = current.progress }
+      // Count only movement since first observation, including final progress
+      // 1. A delayed first callback must not credit bytes already checkpointed
+      // by Dart. Keep this baseline fixed as later Dart page counts catch up.
+      let movement = nativePageFractions.values.reduce(0.0) { $0 + $1.latest - $1.initial }
+      var next = current
+      next.progress = max(current.progress, min((nativePageBaseline ?? 0) + movement / Double(total), 0.999))
+      snapshot = next
+      if let task = activeTask { presentIfDue(next, to: task) }
+      return true
+    }
     guard taskId == currentEpisodeTaskId,
           let current = snapshot
     else {
@@ -555,6 +593,10 @@ final class DownloadContinuedProcessingManager {
     leaseStartedAt = nil
     currentEpisodeTaskId = ""
     lastPresentationAt = 0
+    nativePageFractions.removeAll()
+    nativePageBaseline = nil
+    lastNativePageActivityAt = 0
+    lastSpeedSampleAt = 0
     resetNativeAggregateBaseline()
   }
 
@@ -613,6 +655,10 @@ final class DownloadContinuedProcessingManager {
         self.leaseStartedAt = nil
         self.currentEpisodeTaskId = ""
         self.lastPresentationAt = 0
+        self.nativePageFractions.removeAll()
+        self.nativePageBaseline = nil
+        self.lastNativePageActivityAt = 0
+        self.lastSpeedSampleAt = 0
         self.stopPulse()
         self.resetNativeAggregateBaseline()
       }
@@ -656,29 +702,31 @@ final class DownloadContinuedProcessingManager {
   ) {
     let normalized = min(max(snapshot.progress, 0.0), 1.0)
 
+    // The system task represents the whole queue. Resetting it to each
+    // episode's percentage can leave iOS seeing no forward work even while
+    // the next episode downloads. Sub-page precision also avoids waiting for
+    // a complete page (or a rounded MB) to demonstrate real network progress.
+    let fraction: Double
     if let completed = snapshot.completedPages {
-      let progress = DownloadPageProgress.fraction(
+      let durable = DownloadPageProgress.fraction(
         completed: completed, total: snapshot.totalPages ?? -1, progress: normalized
       )
-      task.progress.totalUnitCount = 1000
-      task.progress.completedUnitCount = Int64((progress * 1000).rounded(.down))
+      fraction = max(durable, min(normalized, 0.999))
+    } else {
+      fraction = normalized
+    }
+    if snapshot.batchTotal > 1 || snapshot.completedPages != nil {
+      let batch = Double(max(snapshot.batchTotal, 1))
+      let sessionFraction = min((Double(snapshot.completedCount) + fraction) / batch, 0.999_999_999)
+      let monotonic = max(task.progress.fractionCompleted, sessionFraction)
+      task.progress.totalUnitCount = 1_000_000_000_000
+      task.progress.completedUnitCount = Int64((monotonic * 1_000_000_000_000).rounded(.down))
     } else if snapshot.totalBytes > 0 {
       task.progress.totalUnitCount = snapshot.totalBytes
-      let completed = snapshot.transferredBytes >= 0
-        ? snapshot.transferredBytes
-        : overlayTransferredBytes(
-          progress: normalized,
-          totalBytes: snapshot.totalBytes
-        )
-      task.progress.completedUnitCount = min(
-        max(completed, 0),
-        snapshot.totalBytes
-      )
+      task.progress.completedUnitCount = min(max(snapshot.transferredBytes, 0), snapshot.totalBytes)
     } else {
-      task.progress.totalUnitCount = 1000
-      task.progress.completedUnitCount = Int64(
-        (normalized * 1000.0).rounded(.down)
-      )
+      task.progress.totalUnitCount = 1_000_000_000_000
+      task.progress.completedUnitCount = Int64((fraction * 1_000_000_000_000).rounded(.down))
     }
 
     task.updateTitle(
@@ -704,17 +752,21 @@ final class DownloadContinuedProcessingManager {
     pulseFilled = true
   }
 
-  /// One pulse beat: flip the banner dot and re-apply the whole task
-  /// presentation, so the system receives a full update every second for
-  /// as long as the session task is attached. The beat goes through the
-  /// same presentation clock as every other feeder, so the whole task
-  /// still changes at most once per second when feeders interleave.
+  /// Speed controls the activity indicator, not completion or lease ownership.
+  /// An old nonzero sample must not keep claiming activity on a stalled socket.
   private func pulseTick() {
     guard let task = activeTask, let snapshot else {
       stopPulse()
       return
     }
-    pulseFilled.toggle()
+    let now = Date().timeIntervalSinceReferenceDate
+    let hasMeasuredSpeed = snapshot.speedBytesPerSecond.isFinite
+      && snapshot.speedBytesPerSecond > 0 && now - lastSpeedSampleAt < 3
+    if hasMeasuredSpeed || now - lastNativePageActivityAt < 3 {
+      pulseFilled.toggle()
+    } else {
+      pulseFilled = false
+    }
     presentIfDue(snapshot, to: task)
   }
 

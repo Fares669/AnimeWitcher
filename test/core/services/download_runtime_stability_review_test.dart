@@ -154,9 +154,9 @@ void main() {
     test('continued-processing banner pulses a full update every second', () {
       final swift = File('ios/Runner/DownloadContinuedProcessingManager.swift')
           .readAsStringSync();
-      // The pulse is what keeps the system task treated as progressing:
-      // a toggling title dot plus a full presentation re-apply per beat,
-      // started on attach and stopped on every session end.
+      // Presentation is refreshed per beat, started on attach and stopped
+      // on session end. The dot reflects fresh throughput; title changes
+      // do not extend the OS lease or substitute for real Progress updates.
       expect(swift, contains('enum DownloadPresentationPulse'));
       expect(swift, contains('pulseFilled.toggle()'));
       expect(swift, contains('startPulse()'));
