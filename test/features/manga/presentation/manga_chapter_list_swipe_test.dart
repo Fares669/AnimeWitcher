@@ -7,6 +7,7 @@ import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
+import 'package:animewitcher/core/services/notification_service.dart';
 import 'package:animewitcher/core/storage/manga_reading_repository.dart';
 import 'package:animewitcher/core/utils/download_progress_data.dart';
 import 'package:animewitcher/features/details/presentation/widgets/download_progress_dialog.dart';
@@ -208,6 +209,265 @@ void main() {
     expect(repository.get('m1', 'c1')?.isRead, isTrue);
     expect(repository.get('m1', 'c2')?.isRead, isTrue);
     expect(find.textContaining('تم تحديد'), findsNothing);
+  });
+
+  testWidgets('batch download skips chapters already queued or completed', (
+    tester,
+  ) async {
+    const chapters = <MangaChapter>[
+      chapter,
+      MangaChapter(
+        id: 'c2',
+        mangaId: 'm1',
+        url: 'https://example.test/c2',
+        name: 'Chapter 2',
+        number: 2,
+      ),
+    ];
+    final existingId = logicalDownloadIdForMangaChapter(
+      mangaId: chapter.mangaId,
+      chapterId: chapter.id,
+    ).value;
+    final existing = DownloadItem(
+      task: DownloadTask(
+        taskId: 'queued-c1',
+        url: chapter.url,
+        filename: 'chapter-c1',
+      ),
+      status: TaskStatus.running,
+      progress: 0.2,
+      item: MultimediaItem(
+        title: 'Manga',
+        url: 'manga://m1',
+        posterUrl: '',
+        contentType: MultimediaContentType.manga,
+      ),
+      mediaKind: DownloadMediaKind.mangaChapter,
+      logicalId: existingId,
+      chapter: chapter,
+      timestamp: 1,
+    );
+    List<MangaChapter>? submitted;
+    final notifications = NotificationService();
+    addTearDown(notifications.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          storageServiceProvider.overrideWithValue(_MemoryStorage()),
+          notificationServiceProvider.overrideWithValue(notifications),
+          mangaReadingRepositoryProvider.overrideWithValue(
+            MangaReadingRepository(_MemoryStorage()),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            () => _SwipeSettings(const MangaReaderSettings()),
+          ),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: MangaChapterList(
+              chapters: chapters,
+              downloads: <DownloadItem>[existing],
+              onDownloadSelected: (selected) async {
+                submitted = selected;
+                return 0;
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.longPress(find.text('Chapter 1'));
+    await tester.pump();
+    await tester.tap(find.text('Chapter 2'));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('batch-download-chapters')));
+    await tester.pumpAndSettle();
+
+    expect(submitted?.map((chapter) => chapter.id), ['c2']);
+    expect(notifications.toasts, hasLength(1));
+    expect(notifications.toasts.single.message, contains('تمت إضافة 1'));
+    expect(notifications.toasts.single.message, contains('تم تجاوز 1'));
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('batch download sorts decimal and special chapters ascending', (
+    tester,
+  ) async {
+    const chapters = <MangaChapter>[
+      MangaChapter(
+        id: 'special',
+        mangaId: 'm1',
+        url: 'https://example.test/special',
+        name: 'Special',
+      ),
+      MangaChapter(
+        id: 'c25',
+        mangaId: 'm1',
+        url: 'https://example.test/c25',
+        name: 'Chapter 2.5',
+        number: 2.5,
+      ),
+      MangaChapter(
+        id: 'c1',
+        mangaId: 'm1',
+        url: 'https://example.test/c1',
+        name: 'Chapter 1',
+        number: 1,
+      ),
+    ];
+    List<MangaChapter>? submitted;
+    final notifications = NotificationService();
+    addTearDown(notifications.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          storageServiceProvider.overrideWithValue(_MemoryStorage()),
+          notificationServiceProvider.overrideWithValue(notifications),
+          mangaReadingRepositoryProvider.overrideWithValue(
+            MangaReadingRepository(_MemoryStorage()),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            () => _SwipeSettings(const MangaReaderSettings()),
+          ),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: MangaChapterList(
+              chapters: chapters,
+              onDownloadSelected: (selected) async {
+                submitted = selected;
+                return 0;
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.longPress(find.text('Special'));
+    await tester.pump();
+    await tester.tap(find.text('Chapter 2.5'));
+    await tester.pump();
+    await tester.tap(find.text('Chapter 1'));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('batch-download-chapters')));
+    await tester.pumpAndSettle();
+
+    expect(submitted?.map((chapter) => chapter.id), ['c1', 'c25', 'special']);
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('batch download always places special chapters after numbered', (
+    tester,
+  ) async {
+    const chapters = <MangaChapter>[
+      MangaChapter(
+        id: 'special',
+        mangaId: 'm1',
+        url: 'https://example.test/special',
+        name: 'A Special',
+      ),
+      MangaChapter(
+        id: 'c2',
+        mangaId: 'm1',
+        url: 'https://example.test/c2',
+        name: 'Chapter 2',
+        number: 2,
+      ),
+      MangaChapter(
+        id: 'c1',
+        mangaId: 'm1',
+        url: 'https://example.test/c1',
+        name: 'Chapter 1',
+        number: 1,
+      ),
+    ];
+    List<MangaChapter>? submitted;
+    final notifications = NotificationService();
+    addTearDown(notifications.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          storageServiceProvider.overrideWithValue(_MemoryStorage()),
+          notificationServiceProvider.overrideWithValue(notifications),
+          mangaReadingRepositoryProvider.overrideWithValue(
+            MangaReadingRepository(_MemoryStorage()),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            () => _SwipeSettings(const MangaReaderSettings()),
+          ),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: MangaChapterList(
+              chapters: chapters,
+              onDownloadSelected: (selected) async {
+                submitted = selected;
+                return 0;
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.longPress(find.text('A Special'));
+    await tester.pump();
+    await tester.tap(find.text('Chapter 2'));
+    await tester.pump();
+    await tester.tap(find.text('Chapter 1'));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('batch-download-chapters')));
+    await tester.pumpAndSettle();
+
+    expect(submitted?.map((chapter) => chapter.id), ['c1', 'c2', 'special']);
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('disposing during batch download does not touch widget ref', (
+    tester,
+  ) async {
+    final batch = Completer<int>();
+    final notifications = NotificationService();
+    addTearDown(notifications.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          storageServiceProvider.overrideWithValue(_MemoryStorage()),
+          notificationServiceProvider.overrideWithValue(notifications),
+          mangaReadingRepositoryProvider.overrideWithValue(
+            MangaReadingRepository(_MemoryStorage()),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            () => _SwipeSettings(const MangaReaderSettings()),
+          ),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: MangaChapterList(
+              chapters: const <MangaChapter>[chapter],
+              onDownloadSelected: (_) => batch.future,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.longPress(find.text(chapter.displayName));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('batch-download-chapters')));
+    await tester.pump();
+
+    await tester.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
+    batch.complete(0);
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('idle chapter uses the same download icon as anime episodes', (

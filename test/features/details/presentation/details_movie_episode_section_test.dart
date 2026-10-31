@@ -5,6 +5,7 @@ import 'package:animewitcher/core/services/download_v2/logical_download_store_v2
 import 'package:animewitcher/core/storage/library_category.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/details/presentation/details_controller.dart';
+import 'package:animewitcher/features/details/presentation/download_launcher.dart';
 import 'package:animewitcher/features/details/presentation/details_screen.dart';
 import 'package:animewitcher/features/details/presentation/widgets/anime_information_section.dart';
 import 'package:animewitcher/features/details/presentation/widgets/details_hero_actions.dart';
@@ -73,6 +74,21 @@ final class _EmptyDownloads extends DownloadsNotifier {
   Future<List<DownloadItem>> build() async => const <DownloadItem>[];
 }
 
+final class _BatchLauncher extends DownloadLauncher {
+  _BatchLauncher(super.ref);
+
+  final batches = <List<Episode>>[];
+
+  @override
+  Future<void> launchBatch(
+    BuildContext context,
+    MultimediaItem item,
+    List<Episode> selectedEpisodes,
+  ) async {
+    batches.add(List<Episode>.of(selectedEpisodes));
+  }
+}
+
 final class _RouteObserver extends NavigatorObserver {
   Route<dynamic>? pushed;
 
@@ -115,6 +131,70 @@ final class _ReadyDetailsController extends DetailsController {
 }
 
 void main() {
+  testWidgets('episode selection bar downloads the selected episodes as a batch', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final item = MultimediaItem(
+      title: 'Anime',
+      url: 'https://example.test/',
+      posterUrl: '',
+      contentType: MultimediaContentType.anime,
+      episodes: <Episode>[
+        Episode(name: 'Episode 1', url: 'episode://1', episode: 1),
+        Episode(name: 'Episode 2', url: 'episode://2', episode: 2),
+      ],
+    );
+    late _BatchLauncher launcher;
+    final container = ProviderContainer(
+      overrides: [
+        storageServiceProvider.overrideWithValue(_Storage()),
+        downloadsProvider.overrideWith(_EmptyDownloads.new),
+        logicalDownloadStoreV2Provider.overrideWithValue(
+          InMemoryLogicalDownloadStoreV2(),
+        ),
+        libraryProvider.overrideWith(_EmptyLibrary.new),
+        detailsControllerProvider(item.url)
+            .overrideWith(() => _ReadyDetailsController(item)),
+        downloadLauncherProvider.overrideWith((ref) {
+          launcher = _BatchLauncher(ref);
+          return launcher;
+        }),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          locale: const Locale('ar'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          theme: ThemeData.dark(),
+          home: DetailsScreen(item: item),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final controller = container.read(
+      detailsControllerProvider(item.url).notifier,
+    );
+    controller.toggleEpisodeSelection(item.episodes!.last);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('batch-download-episodes')), findsOneWidget);
+    expect(find.text('تنزيل 1 حلقة'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('batch-download-episodes')));
+    await tester.pumpAndSettle();
+
+    expect(launcher.batches, hasLength(1));
+    expect(launcher.batches.single.map((episode) => episode.url), ['episode://2']);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('episode rail fits comment actions at fractional scale and focus', (
     tester,
   ) async {

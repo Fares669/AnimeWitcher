@@ -117,6 +117,23 @@ DownloadItem _item({
   );
 }
 
+DownloadItem _itemTen({
+  required String taskId,
+  required int timestamp,
+  required TaskStatus status,
+}) => _item(
+  taskId: taskId,
+  timestamp: timestamp,
+  status: status,
+  metaData: 'https://animewitcher.test/black-torch/10',
+  episode: Episode(
+    name: 'الحلقة 10',
+    url: 'https://animewitcher.test/black-torch/10',
+    episode: 10,
+    serverName: 'الحلقة 10',
+  ),
+);
+
 class _StubDownloadsNotifier extends DownloadsNotifier {
   _StubDownloadsNotifier(
     this._items, {
@@ -124,6 +141,8 @@ class _StubDownloadsNotifier extends DownloadsNotifier {
     this.retryError,
     this.pauseAction,
     this.removeAction,
+    this.removeResult = true,
+    this.remainingIdsAfterRemove,
   });
 
   final List<DownloadItem> _items;
@@ -131,15 +150,24 @@ class _StubDownloadsNotifier extends DownloadsNotifier {
   final Object? retryError;
   final Future<void> Function()? pauseAction;
   final Future<void> Function()? removeAction;
+  final bool removeResult;
+  final Set<String>? remainingIdsAfterRemove;
   int pauseCalls = 0;
   int removeCalls = 0;
+  final List<String> pausedIds = [];
+  final List<String> resumedIds = [];
+  final List<String> retriedIds = [];
+  final List<List<String>> removedBatches = [];
 
   @override
   Future<List<DownloadItem>> build() async => _items;
 
+  void publish(List<DownloadItem> items) => state = AsyncData(items);
+
   @override
   Future<void> pauseDownload(String taskId) async {
     pauseCalls++;
+    pausedIds.add(taskId);
     await pauseAction?.call();
   }
 
@@ -152,18 +180,27 @@ class _StubDownloadsNotifier extends DownloadsNotifier {
   @override
   Future<bool> removeDownloads(List<DownloadItem> items) async {
     removeCalls++;
+    removedBatches.add(items.map((item) => item.id).toList());
     await removeAction?.call();
-    return true;
+    final remainingIds = remainingIdsAfterRemove;
+    if (remainingIds != null) {
+      state = AsyncData(
+        _items.where((item) => remainingIds.contains(item.id)).toList(),
+      );
+    }
+    return removeResult;
   }
 
   @override
   Future<void> retryDownload(String taskId) async {
+    retriedIds.add(taskId);
     final error = retryError;
     if (error != null) throw error;
   }
 
   @override
   Future<void> resumeDownload(String taskId) async {
+    resumedIds.add(taskId);
     final error = resumeError;
     if (error != null) throw error;
   }
@@ -244,6 +281,419 @@ void main() {
   });
   tearDownAll(() => _artworkFixtureRoot.delete(recursive: true));
 
+  testWidgets('global pause controls all active rows in queue order', (
+    tester,
+  ) async {
+    final notifier = _StubDownloadsNotifier([
+      _item(taskId: 'first', timestamp: 1, status: TaskStatus.running),
+      _itemTen(taskId: 'second', timestamp: 2, status: TaskStatus.enqueued),
+    ]);
+    await tester.pumpWidget(_downloadsApp([], notifier: notifier));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('downloads-pause-resume-all')));
+    await tester.pumpAndSettle();
+    expect(notifier.pausedIds, ['first', 'second']);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('global resume is shown when every active download is paused', (
+    tester,
+  ) async {
+    final notifier = _StubDownloadsNotifier([
+      _item(taskId: 'a', timestamp: 1, status: TaskStatus.paused),
+      _itemTen(taskId: 'b', timestamp: 2, status: TaskStatus.paused),
+    ]);
+    await tester.pumpWidget(_downloadsApp([], notifier: notifier));
+    await tester.pumpAndSettle();
+
+    expect(find.text('إكمال الكل'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('downloads-pause-resume-all')));
+    await tester.pumpAndSettle();
+    expect(notifier.resumedIds, ['a', 'b']);
+  });
+
+  testWidgets('global resume ignores failed rows when paused rows remain', (
+    tester,
+  ) async {
+    final notifier = _StubDownloadsNotifier([
+      _item(taskId: 'paused', timestamp: 1, status: TaskStatus.paused),
+      _itemTen(taskId: 'failed', timestamp: 2, status: TaskStatus.failed),
+    ]);
+    await tester.pumpWidget(_downloadsApp([], notifier: notifier));
+    await tester.pumpAndSettle();
+
+    expect(find.text('إكمال الكل'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('downloads-pause-resume-all')));
+    await tester.pumpAndSettle();
+
+    expect(notifier.resumedIds, ['paused']);
+    expect(notifier.retriedIds, isEmpty);
+  });
+
+  testWidgets(
+    'long press selects active rows and bulk delete targets only those rows',
+    (tester) async {
+      final notifier = _StubDownloadsNotifier([
+        _item(taskId: 'a', timestamp: 1, status: TaskStatus.running),
+        _itemTen(taskId: 'b', timestamp: 2, status: TaskStatus.running),
+      ]);
+      await tester.pumpWidget(_downloadsApp([], notifier: notifier));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('الحلقة 9').first);
+      await tester.pumpAndSettle();
+      expect(find.text('1 محدد'), findsOneWidget);
+      expect(find.byType(Checkbox), findsNWidgets(2));
+      await tester.tap(find.widgetWithText(FilledButton, 'حذف'));
+      await tester.pumpAndSettle();
+      final l10n = AppLocalizations.of(
+        tester.element(find.byType(DownloadsTab)),
+      )!;
+      await tester.tap(find.widgetWithText(FilledButton, l10n.delete).last);
+      await tester.pumpAndSettle();
+      expect(notifier.removedBatches, [
+        <String>['a'],
+      ]);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('partial bulk delete drops selection for rows already deleted', (
+    tester,
+  ) async {
+    final first = _item(
+      taskId: 'deleted',
+      timestamp: 1,
+      status: TaskStatus.running,
+    );
+    final second = _itemTen(
+      taskId: 'failed-delete',
+      timestamp: 2,
+      status: TaskStatus.running,
+    );
+    final notifier = _StubDownloadsNotifier(
+      [first, second],
+      removeResult: false,
+      remainingIdsAfterRemove: {'failed-delete'},
+    );
+    await tester.pumpWidget(_downloadsApp([], notifier: notifier));
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.text('الحلقة 9').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('الحلقة 10'));
+    await tester.pumpAndSettle();
+    expect(find.text('2 محدد'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'حذف'));
+    await tester.pumpAndSettle();
+    final l10n = AppLocalizations.of(
+      tester.element(find.byType(DownloadsTab)),
+    )!;
+    await tester.tap(find.widgetWithText(FilledButton, l10n.delete).last);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('deleted')), findsNothing);
+    expect(find.byKey(const ValueKey('failed-delete')), findsOneWidget);
+    expect(find.text('1 محدد'), findsOneWidget);
+    expect(
+      tester
+          .widget<Checkbox>(
+            find.descendant(
+              of: find.byKey(const ValueKey('failed-delete')),
+              matching: find.byType(Checkbox),
+            ),
+          )
+          .value,
+      isTrue,
+    );
+    await tester.tap(find.byKey(const ValueKey('failed-delete')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('downloads-selection-bar')), findsNothing);
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('selection bar can select every row in the active tab', (
+    tester,
+  ) async {
+    final notifier = _StubDownloadsNotifier([
+      _item(taskId: 'a', timestamp: 1, status: TaskStatus.running),
+      _itemTen(taskId: 'b', timestamp: 2, status: TaskStatus.paused),
+      _item(taskId: 'done', timestamp: 3, status: TaskStatus.complete),
+    ]);
+    await tester.pumpWidget(_downloadsApp([], notifier: notifier));
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.text('الحلقة 9').first);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('downloads-selection-bar')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('downloads-select-all')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('2 محدد'), findsOneWidget);
+    expect(
+      tester
+          .widgetList<Checkbox>(find.byType(Checkbox))
+          .where((box) => box.value == true),
+      hasLength(2),
+    );
+  });
+
+  testWidgets('selection ends when the selected row leaves the current tab', (
+    tester,
+  ) async {
+    final notifier = _StubDownloadsNotifier([
+      _item(taskId: 'moving', timestamp: 1, status: TaskStatus.running),
+      _itemTen(taskId: 'remaining', timestamp: 2, status: TaskStatus.running),
+    ]);
+    await tester.pumpWidget(_downloadsApp([], notifier: notifier));
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.byKey(const ValueKey('moving')));
+    await tester.pumpAndSettle();
+    expect(find.text('1 محدد'), findsOneWidget);
+
+    notifier.publish([
+      _item(taskId: 'moving', timestamp: 1, status: TaskStatus.complete),
+      _itemTen(taskId: 'remaining', timestamp: 2, status: TaskStatus.running),
+    ]);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('downloads-selection-bar')), findsNothing);
+    expect(find.byKey(const ValueKey('remaining')), findsOneWidget);
+    expect(find.byType(Checkbox), findsNothing);
+    expect(find.byKey(const ValueKey('downloads-delete-all')), findsOneWidget);
+  });
+
+  testWidgets('mixed selection pauses running and resumes paused only', (
+    tester,
+  ) async {
+    final notifier = _StubDownloadsNotifier([
+      _item(taskId: 'running', timestamp: 1, status: TaskStatus.running),
+      _itemTen(taskId: 'paused', timestamp: 2, status: TaskStatus.paused),
+      _item(
+        taskId: 'failed',
+        timestamp: 3,
+        status: TaskStatus.failed,
+        metaData: 'https://animewitcher.test/black-torch/11',
+        episode: Episode(
+          name: 'الحلقة 11',
+          url: 'https://animewitcher.test/black-torch/11',
+          episode: 11,
+          serverName: 'الحلقة 11',
+        ),
+      ),
+    ]);
+    await tester.pumpWidget(_downloadsApp([], notifier: notifier));
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.text('الحلقة 9').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('الحلقة 10'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('الحلقة 11'));
+    await tester.pumpAndSettle();
+    expect(find.text('3 محدد'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'إكمال'));
+    await tester.pumpAndSettle();
+    expect(notifier.resumedIds, ['paused']);
+    expect(notifier.retriedIds, isEmpty);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'إيقاف'));
+    await tester.pumpAndSettle();
+    expect(notifier.pausedIds, ['running']);
+  });
+
+  testWidgets('completed group allows selecting one episode only', (
+    tester,
+  ) async {
+    await _prepareArtworkStorage(tester);
+    final notifier = _StubDownloadsNotifier([
+      _item(taskId: 'ep9', timestamp: 1, status: TaskStatus.complete),
+      _itemTen(taskId: 'ep10', timestamp: 2, status: TaskStatus.complete),
+    ]);
+    await tester.pumpWidget(_downloadsApp([], notifier: notifier));
+    await tester.pumpAndSettle();
+    final l10n = AppLocalizations.of(
+      tester.element(find.byType(DownloadsTab)),
+    )!;
+    await tester.tap(find.text(l10n.downloadsTabCompleted));
+    await tester.pumpAndSettle();
+    await _awaitArtworkLookups(tester);
+    await tester.tap(find.text('Black Torch'));
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.text('الحلقة 9'));
+    await tester.pumpAndSettle();
+    expect(find.text('1 محدد'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'حذف'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, l10n.delete).last);
+    await tester.pumpAndSettle();
+    expect(notifier.removedBatches, [
+      <String>['ep9'],
+    ]);
+  });
+
+  testWidgets('completed selection bar is bottom aligned and delete only', (
+    tester,
+  ) async {
+    await _prepareArtworkStorage(tester);
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final notifier = _StubDownloadsNotifier([
+      _item(taskId: 'a', timestamp: 1, status: TaskStatus.complete),
+      _itemTen(taskId: 'b', timestamp: 2, status: TaskStatus.complete),
+    ]);
+    await tester.pumpWidget(_downloadsApp([], notifier: notifier));
+    await tester.pumpAndSettle();
+    final l10n = AppLocalizations.of(
+      tester.element(find.byType(DownloadsTab)),
+    )!;
+    await tester.tap(find.text(l10n.downloadsTabCompleted));
+    await tester.pumpAndSettle();
+    await _awaitArtworkLookups(tester);
+
+    await tester.longPress(find.text('Black Torch'));
+    await tester.pumpAndSettle();
+    final bar = find.byKey(const ValueKey('downloads-selection-bar'));
+    expect(bar, findsOneWidget);
+    expect(tester.getBottomRight(bar).dy, greaterThan(760));
+    expect(
+      find.descendant(of: bar, matching: find.byIcon(Icons.pause_rounded)),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: bar, matching: find.byIcon(Icons.play_arrow_rounded)),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: bar,
+        matching: find.byKey(const ValueKey('downloads-select-all')),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: bar,
+        matching: find.byIcon(Icons.delete_outline_rounded),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('wrapped selection bar never covers the final active row', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(360, 640));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    DownloadItem activeItem(
+      String id,
+      int episodeNumber, {
+      TaskStatus status = TaskStatus.running,
+    }) => _item(
+      taskId: id,
+      timestamp: episodeNumber,
+      status: status,
+      metaData: 'https://animewitcher.test/black-torch/$episodeNumber',
+      episode: Episode(
+        name: 'الحلقة $episodeNumber',
+        url: 'https://animewitcher.test/black-torch/$episodeNumber',
+        episode: episodeNumber,
+        serverName: 'الحلقة $episodeNumber',
+      ),
+    );
+    final notifier = _StubDownloadsNotifier([
+      activeItem('first', 1),
+      activeItem('paused', 2, status: TaskStatus.paused),
+      activeItem('three', 3),
+      activeItem('four', 4),
+      activeItem('five', 5),
+      activeItem('last', 6),
+    ]);
+    await tester.pumpWidget(_downloadsApp([], notifier: notifier));
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.byKey(const ValueKey('first')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('downloads-select-all')));
+    await tester.pumpAndSettle();
+
+    final bar = find.byKey(const ValueKey('downloads-selection-bar'));
+    expect(bar, findsOneWidget);
+    expect(
+      find.descendant(of: bar, matching: find.byIcon(Icons.pause_rounded)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: bar, matching: find.byIcon(Icons.play_arrow_rounded)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: bar,
+        matching: find.byIcon(Icons.delete_outline_rounded),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.drag(find.byType(ListView).first, const Offset(0, -2000));
+    await tester.pumpAndSettle();
+
+    final last = find.byKey(const ValueKey('last'));
+    expect(last, findsOneWidget);
+    expect(
+      tester.getBottomRight(last).dy,
+      lessThanOrEqualTo(tester.getTopLeft(bar).dy),
+    );
+  });
+
+  testWidgets('delete all only targets the active tab', (tester) async {
+    final notifier = _StubDownloadsNotifier([
+      _item(taskId: 'a', timestamp: 1, status: TaskStatus.running),
+      _itemTen(taskId: 'b', timestamp: 2, status: TaskStatus.complete),
+    ]);
+    await tester.pumpWidget(_downloadsApp([], notifier: notifier));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('downloads-delete-all')));
+    await tester.pumpAndSettle();
+    final l10n = AppLocalizations.of(
+      tester.element(find.byType(DownloadsTab)),
+    )!;
+    await tester.tap(find.widgetWithText(FilledButton, l10n.delete));
+    await tester.pumpAndSettle();
+    expect(notifier.removedBatches.single, ['a']);
+  });
+
+  testWidgets('delete all only targets the completed tab', (tester) async {
+    await _prepareArtworkStorage(tester);
+    final notifier = _StubDownloadsNotifier([
+      _item(taskId: 'a', timestamp: 1, status: TaskStatus.running),
+      _itemTen(taskId: 'b', timestamp: 2, status: TaskStatus.complete),
+    ]);
+    await tester.pumpWidget(_downloadsApp([], notifier: notifier));
+    await tester.pumpAndSettle();
+    final l10n = AppLocalizations.of(
+      tester.element(find.byType(DownloadsTab)),
+    )!;
+
+    await tester.tap(find.text(l10n.downloadsTabCompleted));
+    await tester.pumpAndSettle();
+    await _awaitArtworkLookups(tester);
+    await tester.tap(find.byKey(const ValueKey('downloads-delete-all')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, l10n.delete));
+    await tester.pumpAndSettle();
+    expect(notifier.removedBatches.single, ['b']);
+  });
+
   testWidgets('pause failure is shown and the button is usable again', (
     tester,
   ) async {
@@ -259,7 +709,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.pause_rounded));
+    await tester.tap(find.widgetWithIcon(IconButton, Icons.pause_rounded));
     await tester.pump();
 
     expect(tester.takeException(), isNull);
@@ -275,7 +725,7 @@ void main() {
           .onPressed,
       isNotNull,
     );
-    await tester.tap(find.byIcon(Icons.pause_rounded));
+    await tester.tap(find.widgetWithIcon(IconButton, Icons.pause_rounded));
     await tester.pump();
     expect(notifier.pauseCalls, 2);
     notifications.clearToasts();
@@ -293,7 +743,7 @@ void main() {
     );
     await tester.pumpWidget(_downloadsApp([], notifier: notifier));
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.pause_rounded));
+    await tester.tap(find.widgetWithIcon(IconButton, Icons.pause_rounded));
     await tester.pump();
     expect(notifier.pauseCalls, 1);
     expect(
@@ -362,7 +812,9 @@ void main() {
           await _awaitArtworkLookups(tester);
         }
         for (var attempt = 0; attempt < 2; attempt++) {
-          await tester.tap(find.byIcon(Icons.delete_outline_rounded));
+          await tester.tap(
+            find.widgetWithIcon(IconButton, Icons.delete_outline_rounded),
+          );
           await tester.pumpAndSettle();
           await tester.tap(
             find.widgetWithText(
@@ -405,7 +857,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.play_arrow_rounded));
+    await tester.tap(find.widgetWithIcon(IconButton, Icons.play_arrow_rounded));
     await tester.pump();
 
     expect(tester.takeException(), isNull);
@@ -442,7 +894,10 @@ void main() {
 
     expect(find.text('فشل التنزيل'), findsOneWidget);
     expect(find.text('متوقف مؤقتاً'), findsNothing);
-    expect(find.byIcon(Icons.play_arrow_rounded), findsNothing);
+    expect(
+      find.widgetWithIcon(IconButton, Icons.play_arrow_rounded),
+      findsNothing,
+    );
     await tester.tap(find.byTooltip('إعادة المحاولة'));
     await tester.pump();
 
@@ -619,7 +1074,13 @@ void main() {
 
       expect(find.text('الحلقة 9'), findsOneWidget);
       expect(find.byIcon(Icons.play_circle_fill_rounded), findsNothing);
-      expect(find.byIcon(Icons.delete_outline_rounded), findsNWidgets(2));
+      expect(
+        find.descendant(
+          of: find.byType(ExpansionTile),
+          matching: find.byIcon(Icons.delete_outline_rounded),
+        ),
+        findsNWidgets(2),
+      );
       expect(find.byIcon(Icons.drag_handle_rounded), findsNothing);
     },
   );
@@ -770,8 +1231,14 @@ void main() {
     expect(find.text('في الانتظار...'), findsOneWidget);
     expect(find.text('قيد الانتظار'), findsNothing);
     expect(find.text('متوقف مؤقتاً'), findsNothing);
-    expect(find.byIcon(Icons.pause_rounded), findsNWidgets(2));
-    expect(find.byIcon(Icons.play_arrow_rounded), findsNothing);
+    expect(
+      find.widgetWithIcon(IconButton, Icons.pause_rounded),
+      findsNWidgets(2),
+    );
+    expect(
+      find.widgetWithIcon(IconButton, Icons.play_arrow_rounded),
+      findsNothing,
+    );
     expect(find.byIcon(Icons.drag_handle_rounded), findsNothing);
     expect(find.byType(ExpansionTile), findsNothing);
     expect(find.byType(ReorderableListView), findsNothing);
@@ -1225,7 +1692,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('الحلقة 9'), findsOneWidget);
     expect(find.byIcon(Icons.play_circle_fill_rounded), findsNothing);
-    expect(find.byIcon(Icons.delete_outline_rounded), findsNWidgets(3));
+    expect(
+      find.descendant(
+        of: find.byType(ExpansionTile),
+        matching: find.byIcon(Icons.delete_outline_rounded),
+      ),
+      findsNWidgets(3),
+    );
 
     final artifacts = debugShotDirectory();
     if (artifacts != null) {
@@ -1321,8 +1794,11 @@ void main() {
 
     expect(find.text('متوقف مؤقتاً'), findsNWidgets(3));
     expect(find.text('جارٍ التنزيل...'), findsNothing);
-    expect(find.byIcon(Icons.play_arrow_rounded), findsNWidgets(3));
-    expect(find.byIcon(Icons.pause_rounded), findsNothing);
+    expect(
+      find.widgetWithIcon(IconButton, Icons.play_arrow_rounded),
+      findsNWidgets(3),
+    );
+    expect(find.widgetWithIcon(IconButton, Icons.pause_rounded), findsNothing);
     expect(find.byIcon(Icons.drag_handle_rounded), findsNothing);
 
     final artifacts = debugShotDirectory();
@@ -1422,10 +1898,9 @@ void main() {
       logicalId: logicalId,
     );
     await tester.pumpWidget(
-      _downloadsApp(
-        [running],
-        progressData: const <String, DownloadProgressData>{},
-      ),
+      _downloadsApp([
+        running,
+      ], progressData: const <String, DownloadProgressData>{}),
     );
     await tester.pump();
     expect(find.textContaining('يتم تنزيل'), findsNothing);

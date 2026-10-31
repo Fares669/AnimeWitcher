@@ -66,8 +66,9 @@ MultimediaItem _savedPlaybackItem(
     }
   }
   final current = selected.episode;
-  if (current != null && current.url.trim().isNotEmpty)
+  if (current != null && current.url.trim().isNotEmpty) {
     episodes[current.url.trim()] = current;
+  }
   return episodes.isEmpty
       ? selected.item
       : selected.item.copyWith(
@@ -112,6 +113,84 @@ class DownloadsTab extends ConsumerStatefulWidget {
 class _DownloadsTabState extends ConsumerState<DownloadsTab>
     with AutomaticKeepAliveClientMixin, TickerProviderStateMixin {
   late final TabController _tabs;
+  final Set<String> _selectedIds = <String>{};
+  bool _bulkInFlight = false;
+  int _tabIndex = 0;
+
+  void _toggleSelected(DownloadItem item) {
+    setState(() {
+      if (!_selectedIds.add(item.id)) {
+        _selectedIds.remove(item.id);
+      }
+    });
+  }
+
+  void _toggleGroupSelection(List<DownloadItem> items) {
+    setState(() {
+      if (items.every((item) => _selectedIds.contains(item.id))) {
+        _selectedIds.removeAll(items.map((item) => item.id));
+      } else {
+        _selectedIds.addAll(items.map((item) => item.id));
+      }
+    });
+  }
+
+  Future<void> _bulkAction(List<DownloadItem> items, String action) async {
+    if (_bulkInFlight || items.isEmpty) return;
+    final l10n = AppLocalizations.of(context)!;
+    if (action == 'delete') {
+      final confirmed = await showConfirmDialog(
+        context,
+        title: l10n.deleteDownload,
+        message:
+            '${items.length} ${appText(context, english: 'downloads will be deleted.', arabic: 'تنزيل سيتم حذفه.')} ',
+        confirmLabel: l10n.delete,
+        cancelLabel: l10n.cancel,
+      );
+      if (!confirmed || !mounted) return;
+    }
+    setState(() => _bulkInFlight = true);
+    var failed = 0;
+    final notifier = ref.read(downloadsProvider.notifier);
+    final notifications = ref.read(notificationServiceProvider);
+    try {
+      if (action == 'delete') {
+        if (!await notifier.removeDownloads(items)) failed++;
+        if (mounted) {
+          final latest = ref.read(downloadsProvider);
+          if (latest.hasValue) {
+            final remainingIds = (latest.value ?? const <DownloadItem>[])
+                .map((item) => item.id)
+                .toSet();
+            setState(() => _selectedIds.retainAll(remainingIds));
+          }
+        }
+      } else {
+        for (final item in items) {
+          try {
+            if (action == 'pause' &&
+                (item.status == TaskStatus.running ||
+                    item.status == TaskStatus.enqueued ||
+                    item.status == TaskStatus.waitingToRetry)) {
+              await notifier.pauseDownload(item.id);
+            } else if (action == 'resume' && item.status == TaskStatus.paused) {
+              await notifier.resumeDownload(item.id);
+            }
+          } catch (error) {
+            failed++;
+            showDownloadActionError(notifications, error);
+          }
+        }
+      }
+      if (failed > 0) {
+        notifications.showError('تعذر تنفيذ العملية على $failed تنزيل');
+      }
+    } catch (error) {
+      showDownloadActionError(notifications, error);
+    } finally {
+      if (mounted) setState(() => _bulkInFlight = false);
+    }
+  }
 
   @override
   bool get wantKeepAlive => true;
@@ -120,10 +199,107 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
   void initState() {
     super.initState();
     _tabs = TabController(length: 2, vsync: this);
+    _tabs.addListener(_handleTabChanged);
+  }
+
+  void _handleTabChanged() {
+    if (!mounted || _tabs.index == _tabIndex) return;
+    setState(() {
+      _tabIndex = _tabs.index;
+      _selectedIds.clear();
+    });
+  }
+
+  Widget _buildSelectionBar({
+    required List<DownloadItem> selected,
+    required List<DownloadItem> currentDownloads,
+    required bool canPause,
+    required bool canResume,
+    required AppLocalizations l10n,
+  }) {
+    final colors = Theme.of(context).colorScheme;
+    return SafeArea(
+      key: const ValueKey('downloads-selection-bar'),
+      top: false,
+      child: Material(
+        elevation: 10,
+        color: colors.surfaceContainerHigh,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(
+            color: colors.outlineVariant.withValues(alpha: 0.45),
+          ),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          child: Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 6,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(
+                '${selected.length} ${appText(context, english: 'selected', arabic: 'محدد')}',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              IconButton(
+                key: const ValueKey('downloads-clear-selection'),
+                tooltip: appText(
+                  context,
+                  english: 'Clear selection',
+                  arabic: 'إلغاء التحديد',
+                ),
+                onPressed: () => setState(_selectedIds.clear),
+                icon: const Icon(Icons.close_rounded),
+              ),
+              IconButton.filledTonal(
+                key: const ValueKey('downloads-select-all'),
+                tooltip: appText(
+                  context,
+                  english: 'Select all',
+                  arabic: 'تحديد الكل',
+                ),
+                onPressed: () => _toggleGroupSelection(currentDownloads),
+                icon: const Icon(Icons.select_all_rounded),
+              ),
+              if (_tabIndex == 0) ...[
+                FilledButton.tonalIcon(
+                  onPressed: _bulkInFlight || !canPause
+                      ? null
+                      : () => _bulkAction(selected, 'pause'),
+                  icon: const Icon(Icons.pause_rounded),
+                  label: Text(
+                    appText(context, english: 'Pause', arabic: 'إيقاف'),
+                  ),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: _bulkInFlight || !canResume
+                      ? null
+                      : () => _bulkAction(selected, 'resume'),
+                  icon: const Icon(Icons.play_arrow_rounded),
+                  label: Text(
+                    appText(context, english: 'Resume', arabic: 'إكمال'),
+                  ),
+                ),
+              ],
+              FilledButton.icon(
+                onPressed: _bulkInFlight
+                    ? null
+                    : () => _bulkAction(selected, 'delete'),
+                icon: const Icon(Icons.delete_outline_rounded),
+                label: Text(l10n.delete),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
   void dispose() {
+    _tabs.removeListener(_handleTabChanged);
     _tabs.dispose();
     super.dispose();
   }
@@ -144,7 +320,33 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
     final completed = visibleDownloads
         .where((item) => !isActiveDownloadStatus(item.status))
         .toList();
-
+    final active = visibleDownloads
+        .where((item) => isActiveDownloadStatus(item.status))
+        .toList();
+    final currentDownloads = _tabIndex == 0 ? active : completed;
+    final selected = currentDownloads
+        .where((item) => _selectedIds.contains(item.id))
+        .toList();
+    final currentSelectedIds = selected.map((item) => item.id).toSet();
+    final canPause = selected.any(
+      (item) =>
+          item.status == TaskStatus.running ||
+          item.status == TaskStatus.enqueued ||
+          item.status == TaskStatus.waitingToRetry,
+    );
+    final canResume = selected.any((item) => item.status == TaskStatus.paused);
+    final controllableActive = active
+        .where(
+          (item) =>
+              item.status == TaskStatus.running ||
+              item.status == TaskStatus.enqueued ||
+              item.status == TaskStatus.waitingToRetry ||
+              item.status == TaskStatus.paused,
+        )
+        .toList();
+    final allPaused =
+        controllableActive.isNotEmpty &&
+        controllableActive.every((item) => item.status == TaskStatus.paused);
     // RTL only for the tab strip + pager swipe (like المواسم). Each
     // pane is LTR so cards stay poster-left — do not mirror the page.
     return Column(
@@ -175,6 +377,55 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
           ),
         ),
         const _DownloadSessionStrip(),
+        if (currentDownloads.isNotEmpty && currentSelectedIds.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                OutlinedButton.icon(
+                  key: const ValueKey('downloads-delete-all'),
+                  onPressed: _bulkInFlight
+                      ? null
+                      : () => _bulkAction(currentDownloads, 'delete'),
+                  icon: const Icon(Icons.delete_outline_rounded),
+                  label: Text(
+                    appText(context, english: 'Delete all', arabic: 'حذف الكل'),
+                  ),
+                ),
+                if (_tabIndex == 0 && controllableActive.isNotEmpty)
+                  FilledButton.tonalIcon(
+                    key: const ValueKey('downloads-pause-resume-all'),
+                    onPressed: _bulkInFlight
+                        ? null
+                        : () => _bulkAction(
+                            controllableActive,
+                            allPaused ? 'resume' : 'pause',
+                          ),
+                    icon: Icon(
+                      allPaused
+                          ? Icons.play_arrow_rounded
+                          : Icons.pause_rounded,
+                    ),
+                    label: Text(
+                      allPaused
+                          ? appText(
+                              context,
+                              english: 'Resume all',
+                              arabic: 'إكمال الكل',
+                            )
+                          : appText(
+                              context,
+                              english: 'Pause all',
+                              arabic: 'إيقاف الكل',
+                            ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
         Expanded(
           child: Directionality(
             textDirection: TextDirection.rtl,
@@ -187,11 +438,11 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
                     skipLoadingOnRefresh: false,
                     skipLoadingOnReload: false,
                     data: (_) => _ActiveDownloadsList(
-                      items: visibleDownloads
-                          .where((item) => isActiveDownloadStatus(item.status))
-                          .toList(),
+                      items: active,
                       activeProgress: activeProgress,
                       emptyMessage: l10n.noDownloadsYet,
+                      selectedIds: currentSelectedIds,
+                      onToggleSelection: _toggleSelected,
                     ),
                     loading: () => const Center(child: AppLoadingIndicator()),
                     error: (err, stack) =>
@@ -203,11 +454,31 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
                   child: _CompletedDownloadsList(
                     items: completed,
                     emptyMessage: l10n.noCompletedDownloadsYet,
+                    selectedIds: currentSelectedIds,
+                    onToggleSelection: _toggleSelected,
+                    onToggleGroupSelection: _toggleGroupSelection,
                   ),
                 ),
               ],
             ),
           ),
+        ),
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 180),
+          child: currentSelectedIds.isEmpty
+              ? const SizedBox.shrink(
+                  key: ValueKey('downloads-selection-empty'),
+                )
+              : Padding(
+                  padding: const EdgeInsetsDirectional.fromSTEB(12, 0, 12, 8),
+                  child: _buildSelectionBar(
+                    selected: selected,
+                    currentDownloads: currentDownloads,
+                    canPause: canPause,
+                    canResume: canResume,
+                    l10n: l10n,
+                  ),
+                ),
         ),
       ],
     );
@@ -226,9 +497,8 @@ class _DownloadSessionStrip extends StatelessWidget {
       valueListenable: downloadSessionSummaryNotifier,
       builder: (context, summary, _) {
         if (!summary.isActive) return const SizedBox.shrink();
-        final style = Theme.of(
-          context,
-        ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600);
+        final style = Theme.of(context).textTheme.bodyMedium
+            ?.copyWith(fontWeight: FontWeight.w600);
         return Padding(
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
           child: Directionality(
@@ -301,11 +571,15 @@ class _ActiveDownloadsList extends StatelessWidget {
     required this.items,
     required this.activeProgress,
     required this.emptyMessage,
+    required this.selectedIds,
+    required this.onToggleSelection,
   });
 
   final List<DownloadItem> items;
   final Map<String, DownloadProgressData> activeProgress;
   final String emptyMessage;
+  final Set<String> selectedIds;
+  final ValueChanged<DownloadItem> onToggleSelection;
 
   @override
   Widget build(BuildContext context) {
@@ -339,6 +613,9 @@ class _ActiveDownloadsList extends StatelessWidget {
             progress: displayProgress,
             status: displayStatus,
             progressData: progressData,
+            selecting: selectedIds.isNotEmpty,
+            selected: selectedIds.contains(download.id),
+            onToggleSelection: () => onToggleSelection(download),
           );
         },
       ),
@@ -350,10 +627,16 @@ class _CompletedDownloadsList extends StatelessWidget {
   const _CompletedDownloadsList({
     required this.items,
     required this.emptyMessage,
+    required this.selectedIds,
+    required this.onToggleSelection,
+    required this.onToggleGroupSelection,
   });
 
   final List<DownloadItem> items;
   final String emptyMessage;
+  final Set<String> selectedIds;
+  final ValueChanged<DownloadItem> onToggleSelection;
+  final ValueChanged<List<DownloadItem>> onToggleGroupSelection;
 
   @override
   Widget build(BuildContext context) {
@@ -385,7 +668,13 @@ class _CompletedDownloadsList extends StatelessWidget {
         separatorBuilder: (context, index) => const SizedBox(height: 16),
         itemBuilder: (context, index) {
           final key = keys[index];
-          return _GroupedDownloadTile(key: ValueKey(key), items: grouped[key]!);
+          return _GroupedDownloadTile(
+            key: ValueKey(key),
+            items: grouped[key]!,
+            selectedIds: selectedIds,
+            onToggleSelection: onToggleSelection,
+            onToggleGroupSelection: onToggleGroupSelection,
+          );
         },
       ),
     );
@@ -394,8 +683,17 @@ class _CompletedDownloadsList extends StatelessWidget {
 
 class _GroupedDownloadTile extends ConsumerStatefulWidget {
   final List<DownloadItem> items;
+  final Set<String> selectedIds;
+  final ValueChanged<DownloadItem> onToggleSelection;
+  final ValueChanged<List<DownloadItem>> onToggleGroupSelection;
 
-  const _GroupedDownloadTile({super.key, required this.items});
+  const _GroupedDownloadTile({
+    super.key,
+    required this.items,
+    required this.selectedIds,
+    required this.onToggleSelection,
+    required this.onToggleGroupSelection,
+  });
 
   @override
   ConsumerState<_GroupedDownloadTile> createState() =>
@@ -428,8 +726,9 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
   @override
   void didUpdateWidget(covariant _GroupedDownloadTile oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (_posterKey(oldWidget.items) != _posterKey(items))
+    if (_posterKey(oldWidget.items) != _posterKey(items)) {
       _poster = _loadPoster();
+    }
   }
 
   Future<File?> _loadPoster() async {
@@ -503,98 +802,119 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
           horizontal: LayoutConstants.spacingMd,
           vertical: LayoutConstants.spacingXs,
         ),
-        title: Row(
-          textDirection: TextDirection.ltr,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(LayoutConstants.radiusMd),
-              child: ArtworkDecode(
-                paintedWidth: 80,
-                builder: (BuildContext context, int? decodeWidth) =>
-                    FutureBuilder<File?>(
-                      future: _poster,
-                      builder: (context, snapshot) {
-                        final saved = snapshot.data;
-                        if (saved != null) {
-                          return Image.file(
-                            saved,
+        title: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onLongPress: () => widget.onToggleGroupSelection(items),
+          child: Row(
+            textDirection: TextDirection.ltr,
+            children: [
+              if (widget.selectedIds.isNotEmpty)
+                Checkbox(
+                  tristate: true,
+                  value:
+                      items.every(
+                        (item) => widget.selectedIds.contains(item.id),
+                      )
+                      ? true
+                      : items.any(
+                          (item) => widget.selectedIds.contains(item.id),
+                        )
+                      ? null
+                      : false,
+                  onChanged: (_) => widget.onToggleGroupSelection(items),
+                ),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(LayoutConstants.radiusMd),
+                child: ArtworkDecode(
+                  paintedWidth: 80,
+                  builder: (BuildContext context, int? decodeWidth) =>
+                      FutureBuilder<File?>(
+                        future: _poster,
+                        builder: (context, snapshot) {
+                          final saved = snapshot.data;
+                          if (saved != null) {
+                            return Image.file(
+                              saved,
+                              width: 80,
+                              height: 120,
+                              fit: BoxFit.cover,
+                              cacheWidth: decodeWidth,
+                              filterQuality: FilterQuality.medium,
+                              errorBuilder: (_, _, _) =>
+                                  _posterPlaceholder(theme),
+                            );
+                          }
+                          return CachedNetworkImage(
+                            imageUrl:
+                                AppImageFallbacks.poster(
+                                  firstItem.item.posterUrl,
+                                ) ??
+                                '',
                             width: 80,
                             height: 120,
                             fit: BoxFit.cover,
-                            cacheWidth: decodeWidth,
+                            memCacheWidth: decodeWidth,
                             filterQuality: FilterQuality.medium,
-                            errorBuilder: (_, _, _) =>
-                                _posterPlaceholder(theme),
+                            errorWidget: (_, _, _) => _posterPlaceholder(theme),
                           );
-                        }
-                        return CachedNetworkImage(
-                          imageUrl:
-                              AppImageFallbacks.poster(
-                                firstItem.item.posterUrl,
-                              ) ??
-                              '',
-                          width: 80,
-                          height: 120,
-                          fit: BoxFit.cover,
-                          memCacheWidth: decodeWidth,
-                          filterQuality: FilterQuality.medium,
-                          errorWidget: (_, _, _) => _posterPlaceholder(theme),
-                        );
-                      },
-                    ),
-              ),
-            ),
-            const SizedBox(width: LayoutConstants.spacingMd),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    firstItem.item.title,
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: theme.colorScheme.primary,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.library_books_rounded,
-                        size: 14,
-                        color: theme.colorScheme.onSurfaceVariant,
+                        },
                       ),
-                      const SizedBox(width: 4),
-                      Text(
-                        completedDownloadUnitCountLabel(
-                          kind: firstItem.mediaKind,
-                          count: items.length,
-                        ),
-                        // The card stays poster-left, but an Arabic count
-                        // needs its own RTL paragraph for number/noun order.
-                        textDirection: TextDirection.rtl,
-                        textAlign: TextAlign.left,
-                        style: theme.textTheme.bodySmall?.copyWith(
+                ),
+              ),
+              const SizedBox(width: LayoutConstants.spacingMd),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      firstItem.item.title,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: theme.colorScheme.primary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.library_books_rounded,
+                          size: 14,
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
-                      ),
-                    ],
-                  ),
-                ],
+                        const SizedBox(width: 4),
+                        Text(
+                          completedDownloadUnitCountLabel(
+                            kind: firstItem.mediaKind,
+                            count: items.length,
+                          ),
+                          // The card stays poster-left, but an Arabic count
+                          // needs its own RTL paragraph for number/noun order.
+                          textDirection: TextDirection.rtl,
+                          textAlign: TextAlign.left,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(width: LayoutConstants.spacingSm),
-            IconButton(
-              icon: const Icon(Icons.delete_outline_rounded),
-              onPressed: _deleteInFlight
-                  ? null
-                  : () => _confirmDeleteAll(context, ref),
-              color: theme.colorScheme.error.withValues(alpha: 0.8),
-              visualDensity: VisualDensity.compact,
-            ),
-          ],
+              const SizedBox(width: LayoutConstants.spacingSm),
+              IconButton(
+                icon: const Icon(Icons.delete_outline_rounded),
+                onPressed: widget.selectedIds.isNotEmpty
+                    ? () => widget.onToggleGroupSelection(items)
+                    : _deleteInFlight
+                    ? null
+                    : () => _confirmDeleteAll(context, ref),
+                color: theme.colorScheme.error.withValues(alpha: 0.8),
+                visualDensity: VisualDensity.compact,
+              ),
+            ],
+          ),
         ),
         children: orderedItems.asMap().entries.map((entry) {
           final download = entry.value;
@@ -612,25 +932,63 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
                   horizontal: LayoutConstants.spacingMd,
                   vertical: LayoutConstants.spacingSm,
                 ),
-                child: isManga
-                    ? CompletedDownloadChapterCard(
-                        key: ValueKey(download.id),
-                        item: download,
-                        onOpen: () =>
-                            _openMangaChapter(context, download, orderedItems),
-                        onDelete: () => unawaited(
-                          confirmAndRemoveDownload(context, ref, download),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onLongPress: () => widget.onToggleSelection(download),
+                  child: Row(
+                    children: [
+                      if (widget.selectedIds.isNotEmpty)
+                        Checkbox(
+                          value: widget.selectedIds.contains(download.id),
+                          onChanged: (_) => widget.onToggleSelection(download),
                         ),
-                      )
-                    : CompletedDownloadEpisodeCard(
-                        key: ValueKey(download.id),
-                        item: download,
-                        onPlay: () =>
-                            _playLocalFile(context, ref, download, l10n),
-                        onDelete: () => unawaited(
-                          confirmAndRemoveDownload(context, ref, download),
-                        ),
+                      Expanded(
+                        child: isManga
+                            ? CompletedDownloadChapterCard(
+                                key: ValueKey(download.id),
+                                item: download,
+                                onOpen: () => widget.selectedIds.isNotEmpty
+                                    ? widget.onToggleSelection(download)
+                                    : _openMangaChapter(
+                                        context,
+                                        download,
+                                        orderedItems,
+                                      ),
+                                onDelete: () => widget.selectedIds.isNotEmpty
+                                    ? widget.onToggleSelection(download)
+                                    : unawaited(
+                                        confirmAndRemoveDownload(
+                                          context,
+                                          ref,
+                                          download,
+                                        ),
+                                      ),
+                              )
+                            : CompletedDownloadEpisodeCard(
+                                key: ValueKey(download.id),
+                                item: download,
+                                onPlay: () => widget.selectedIds.isNotEmpty
+                                    ? widget.onToggleSelection(download)
+                                    : _playLocalFile(
+                                        context,
+                                        ref,
+                                        download,
+                                        l10n,
+                                      ),
+                                onDelete: () => widget.selectedIds.isNotEmpty
+                                    ? widget.onToggleSelection(download)
+                                    : unawaited(
+                                        confirmAndRemoveDownload(
+                                          context,
+                                          ref,
+                                          download,
+                                        ),
+                                      ),
+                              ),
                       ),
+                    ],
+                  ),
+                ),
               ),
               if (!isLast)
                 Divider(
@@ -720,6 +1078,9 @@ class _DownloadItemTile extends ConsumerStatefulWidget {
   final double progress;
   final TaskStatus status;
   final DownloadProgressData? progressData;
+  final bool selecting;
+  final bool selected;
+  final VoidCallback onToggleSelection;
 
   const _DownloadItemTile({
     super.key,
@@ -727,6 +1088,9 @@ class _DownloadItemTile extends ConsumerStatefulWidget {
     required this.progress,
     required this.status,
     this.progressData,
+    required this.selecting,
+    required this.selected,
+    required this.onToggleSelection,
   });
 
   @override
@@ -797,6 +1161,11 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
       textDirection: TextDirection.ltr,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (widget.selecting)
+          Checkbox(
+            value: widget.selected,
+            onChanged: (_) => widget.onToggleSelection(),
+          ),
         poster,
         const SizedBox(width: LayoutConstants.spacingMd),
         Expanded(
@@ -838,14 +1207,18 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
                         : theme.colorScheme.onSurfaceVariant,
                   ),
                   const SizedBox(width: 4),
-                  Text(
-                    isDone
-                        ? l10n.completed
-                        : _getStatusText(context, status, l10n),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: isDone
-                          ? Colors.green
-                          : theme.colorScheme.onSurfaceVariant,
+                  Flexible(
+                    child: Text(
+                      isDone
+                          ? l10n.completed
+                          : _getStatusText(context, status, l10n),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: isDone
+                            ? Colors.green
+                            : theme.colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
                 ],
@@ -893,53 +1266,54 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
                   borderRadius: BorderRadius.circular(LayoutConstants.radiusSm),
                 ),
               ],
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  if (isWorking)
+              if (!widget.selecting)
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    if (isWorking)
+                      IconButton(
+                        icon: const Icon(Icons.pause_rounded),
+                        onPressed: _controlInFlight || _deleteInFlight
+                            ? null
+                            : _controlDownload,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    if (isPaused || isFailed)
+                      IconButton(
+                        tooltip: isFailed
+                            ? appText(
+                                context,
+                                english: 'Retry',
+                                arabic: 'إعادة المحاولة',
+                              )
+                            : l10n.statusPaused,
+                        icon: Icon(
+                          isFailed
+                              ? Icons.refresh_rounded
+                              : Icons.play_arrow_rounded,
+                        ),
+                        onPressed: _controlInFlight || _deleteInFlight
+                            ? null
+                            : _controlDownload,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    if (isDone)
+                      IconButton(
+                        icon: const Icon(
+                          Icons.play_circle_fill_rounded,
+                          color: Colors.green,
+                        ),
+                        onPressed: () => _playLocalFile(context, ref, l10n),
+                        iconSize: 28,
+                      ),
                     IconButton(
-                      icon: const Icon(Icons.pause_rounded),
-                      onPressed: _controlInFlight || _deleteInFlight
-                          ? null
-                          : _controlDownload,
+                      icon: const Icon(Icons.delete_outline_rounded),
+                      onPressed: _deleteInFlight ? null : _confirmDelete,
+                      color: theme.colorScheme.error.withValues(alpha: 0.8),
                       visualDensity: VisualDensity.compact,
                     ),
-                  if (isPaused || isFailed)
-                    IconButton(
-                      tooltip: isFailed
-                          ? appText(
-                              context,
-                              english: 'Retry',
-                              arabic: 'إعادة المحاولة',
-                            )
-                          : l10n.statusPaused,
-                      icon: Icon(
-                        isFailed
-                            ? Icons.refresh_rounded
-                            : Icons.play_arrow_rounded,
-                      ),
-                      onPressed: _controlInFlight || _deleteInFlight
-                          ? null
-                          : _controlDownload,
-                      visualDensity: VisualDensity.compact,
-                    ),
-                  if (isDone)
-                    IconButton(
-                      icon: const Icon(
-                        Icons.play_circle_fill_rounded,
-                        color: Colors.green,
-                      ),
-                      onPressed: () => _playLocalFile(context, ref, l10n),
-                      iconSize: 28,
-                    ),
-                  IconButton(
-                    icon: const Icon(Icons.delete_outline_rounded),
-                    onPressed: _deleteInFlight ? null : _confirmDelete,
-                    color: theme.colorScheme.error.withValues(alpha: 0.8),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ],
-              ),
+                  ],
+                ),
             ],
           ),
         ),
@@ -947,7 +1321,12 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
     );
 
     final tile = InkWell(
-      onTap: isDone ? () => _playLocalFile(context, ref, l10n) : null,
+      onLongPress: widget.onToggleSelection,
+      onTap: widget.selecting
+          ? widget.onToggleSelection
+          : isDone
+          ? () => _playLocalFile(context, ref, l10n)
+          : null,
       borderRadius: BorderRadius.circular(LayoutConstants.radiusLg),
       child: content,
     );
