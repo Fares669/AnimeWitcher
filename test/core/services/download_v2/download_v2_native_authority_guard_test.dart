@@ -65,7 +65,7 @@ void main() {
     );
     expect(compactCompatibility, contains('private(set) var rangePromotionAvailable = false'));
     expect(compactCompatibility, contains('rangePromotionAvailable = true'));
-    expect(compactCompatibility, contains('["9.6.1", "9.6.2", "9.6.4"].contains(version ?? "")'));
+    expect(compactCompatibility, contains('["9.6.1", "9.6.2", "9.6.4", "9.6.5"].contains(version ?? "")'));
     expect(compactQueue, contains('let installed = installation.rangePromotionAvailable'));
     expect(compactQueue, contains('private static let legacyTransportOwnershipEnabled = false'));
     expect(compactQueue, contains('guard legacyTransportOwnershipEnabled else { return false }'));

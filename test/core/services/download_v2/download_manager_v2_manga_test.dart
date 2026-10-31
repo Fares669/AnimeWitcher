@@ -15,26 +15,46 @@ import '../../../support/manga_image_fixtures.dart';
 
 void main() {
   test('simultaneous chapters with the same readable path retain one canonical writer', () async {
-    final temp = await Directory.systemTemp.createTemp('aw-manga-clean-collision-');
+    final temp = await Directory.systemTemp.createTemp(
+      'aw-manga-clean-collision-',
+    );
     addTearDown(() => temp.delete(recursive: true));
     final gateway = _Gateway();
     final store = InMemoryLogicalDownloadStoreV2();
-    final manager = DownloadManagerV2(store: store, gateway: gateway, sourceResolver: _VideoResolver(),
-      mangaChapterPageResolver: _MangaResolver());
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: _VideoResolver(),
+      mangaChapterPageResolver: _MangaResolver(),
+    );
     addTearDown(manager.dispose);
     final results = await Future.wait([
       for (final chapter in ['first', 'second'])
         () async {
           try {
-            await manager.start(DownloadStartRequestV2(
-              logicalId: logicalDownloadIdForMangaChapter(mangaId: 'm1', chapterId: chapter),
-              mediaKind: DownloadMediaKind.mangaChapter, mediaId: 'm1', unitKey: chapter, variantKey: 'pages',
-              destinationPath: '${temp.path}/الفصل 357', sourceDescriptor: const {},
-              allowPause: true, retries: 1, parallelChunks: 1,
-            ));
+            await manager.start(
+              DownloadStartRequestV2(
+                logicalId: logicalDownloadIdForMangaChapter(
+                  mangaId: 'm1',
+                  chapterId: chapter,
+                ),
+                mediaKind: DownloadMediaKind.mangaChapter,
+                mediaId: 'm1',
+                unitKey: chapter,
+                variantKey: 'pages',
+                destinationPath: '${temp.path}/الفصل 357',
+                sourceDescriptor: const {},
+                allowPause: true,
+                retries: 1,
+                parallelChunks: 1,
+              ),
+            );
             return true;
           } on StateError catch (error) {
-            expect(error.message, contains('Canonical destination is already owned'));
+            expect(
+              error.message,
+              contains('Canonical destination is already owned'),
+            );
             return false;
           }
         }(),
@@ -42,7 +62,10 @@ void main() {
     expect(results.where((started) => started), hasLength(1));
     expect(gateway.mangaSpecs, hasLength(1));
     expect(await store.all(), hasLength(1));
-    expect(gateway.mangaSpecs.single.destinationDirectory, '${temp.path}/الفصل 357');
+    expect(
+      gateway.mangaSpecs.single.destinationDirectory,
+      '${temp.path}/الفصل 357',
+    );
   });
 
   test('startup orphan chapters respect admission without changing generation or pages', () async {
@@ -97,7 +120,10 @@ void main() {
     );
     expect(waiting.generation, 3);
     expect(waiting.taskId, taskIdForGeneration(waiting.logicalId, 3));
-    expect(await File('${waiting.destinationPath}/0001.webp').readAsBytes(), tinyMangaPng);
+    expect(
+      await File('${waiting.destinationPath}/0001.webp').readAsBytes(),
+      tinyMangaPng,
+    );
     expect(
       (await manager.resume(waiting.logicalId)).status,
       DownloadTransportStatus.queued,
@@ -110,7 +136,10 @@ void main() {
     expect(gateway.mangaSpecs, hasLength(2));
     expect(gateway.mangaSpecs.last.taskId, waiting.taskId);
     expect((await store.get(waiting.logicalId))?.generation, 3);
-    expect(await File('${waiting.destinationPath}/0001.webp').readAsBytes(), tinyMangaPng);
+    expect(
+      await File('${waiting.destinationPath}/0001.webp').readAsBytes(),
+      tinyMangaPng,
+    );
   });
 
   test('manga start resolves pages and never uses video parallelism', () async {
@@ -358,6 +387,65 @@ void main() {
     expect(gateway.videoSpecs.single.parallelChunks, 8);
     expect(gateway.mangaSpecs, isEmpty);
   });
+
+  test(
+    'queued chapters are promoted in enqueue order after a pause and resume',
+    () async {
+      final temp = await Directory.systemTemp.createTemp('aw-manga-fifo-');
+      addTearDown(() => temp.delete(recursive: true));
+      final gateway = _Gateway();
+      final store = InMemoryLogicalDownloadStoreV2();
+      final manager = DownloadManagerV2(
+        store: store,
+        gateway: gateway,
+        sourceResolver: _VideoResolver(),
+        mangaChapterPageResolver: _MangaResolver(),
+        maxConcurrentDownloads: () => 1,
+      );
+      addTearDown(manager.dispose);
+
+      DownloadStartRequestV2 chapter(String id) => DownloadStartRequestV2(
+        logicalId: logicalDownloadIdForMangaChapter(
+          mangaId: 'm1',
+          chapterId: id,
+        ),
+        mediaKind: DownloadMediaKind.mangaChapter,
+        mediaId: 'm1',
+        unitKey: id,
+        variantKey: 'pages',
+        destinationPath: '${temp.path}/chapter-$id',
+        sourceDescriptor: const <String, Object?>{},
+        allowPause: true,
+        retries: 1,
+        parallelChunks: 1,
+      );
+
+      final first = chapter('1');
+      final second = chapter('2');
+      final third = chapter('3');
+      await manager.start(first);
+      await manager.start(second);
+      await manager.start(third);
+      expect(gateway.mangaSpecs, hasLength(1));
+
+      await manager.pause(second.logicalId);
+      final resumed = await manager.resume(second.logicalId);
+      expect(resumed.status, DownloadTransportStatus.queued);
+
+      await manager.cancel(first.logicalId);
+      final deadline = DateTime.now().add(const Duration(seconds: 2));
+      while (gateway.mangaSpecs.length < 2 &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      expect(gateway.mangaSpecs, hasLength(2));
+      expect(
+        gateway.mangaSpecs.last.taskId,
+        (await store.get(second.logicalId))!.taskId,
+      );
+      expect((await store.get(third.logicalId))!.awaitingAdmission, isTrue);
+    },
+  );
 }
 
 final class _MangaResolver implements MangaChapterPageResolverV2 {
@@ -403,8 +491,9 @@ final class _Gateway
 
   @override
   Future<MangaChapterTransportHandleV2?> attachMangaChapterOwnershipV2(
-    String parentTaskId, {required int configuredConnections}
-  ) async => null;
+    String parentTaskId, {
+    required int configuredConnections,
+  }) async => null;
 
   @override
   Future<DownloadTransportHandle> startMangaChapter(

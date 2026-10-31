@@ -337,8 +337,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
             limit: provider.viewAllPageSize,
           ),
           onTap: (item) {
-            DetailsRoute($extra: DetailsRouteExtra(item: item))
-                .push<void>(context);
+            item.openDetails(context);
           },
           heroTagPrefix: 'home',
           forcePortrait: isLatestAddedSectionTitle(entry.key),
@@ -399,8 +398,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           initialViewAllHasMore: page.hasMore,
           showWhenEmpty: page.hasMore,
           onTap: (item) {
-            DetailsRoute($extra: DetailsRouteExtra(item: item))
-                .push<void>(context);
+            item.openDetails(context);
           },
           heroTagPrefix: 'home_mal_${ranking.name}',
           forcePortrait: true,
@@ -480,8 +478,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                       movies: homeHeroMovies(data)!,
                       scrollController: _scrollController,
                       onTap: (item) {
-                        DetailsRoute($extra: DetailsRouteExtra(item: item))
-                            .push<void>(context);
+                        item.openDetails(context);
                       },
                     ),
                   )

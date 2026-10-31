@@ -10,7 +10,7 @@ import 'package:animewitcher/core/services/download_v2/download_v2_provider.dart
 import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
 import 'download_v2_test_support.dart';
 import 'package:animewitcher/core/services/notification_service.dart';
-import 'package:animewitcher/core/utils/download_time_remaining.dart';
+import 'package:animewitcher/core/utils/download_progress_data.dart';
 import 'package:animewitcher/features/details/presentation/widgets/download_progress_dialog.dart';
 import 'package:animewitcher/features/library/presentation/download_progress_v2_provider.dart';
 import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
@@ -77,8 +77,7 @@ Future<void> _openDialog(
 
 DownloadProgressData _progress(TaskStatus status, double progress) =>
     DownloadProgressData(
-      taskId: 'selected-task', progress: progress, networkSpeed: -1,
-      timeRemaining: Duration.zero, status: status,
+      taskId: 'selected-task', progress: progress, status: status,
     );
 
 void main() {
@@ -95,16 +94,16 @@ void main() {
     expect(tester.getRect(find.text('جارٍ التنزيل')).right,
       closeTo(tester.getRect(find.byType(LinearProgressIndicator)).right + 16 +
         tester.getSize(find.text('40%')).width, 1));
-    expect(tester.getTopLeft(find.text('السرعة')).dx,
-      lessThan(tester.getTopLeft(find.text('المتبقي')).dx));
+    // The dialog no longer shows per-download speed or remaining time.
+    expect(find.text('السرعة'), findsNothing);
+    expect(find.text('المتبقي'), findsNothing);
   });
 
   testWidgets('manga unknown total preserves downloaded pages without inventing a percentage', (tester) async {
     final notifications = NotificationService();
     addTearDown(notifications.dispose);
     await _openDialog(tester, const DownloadProgressData(
-      taskId: 'selected-task', progress: 0, completedPages: 5,
-      networkSpeed: -1, timeRemaining: Duration.zero, status: TaskStatus.running,
+      taskId: 'selected-task', progress: 0, completedPages: 5, status: TaskStatus.running,
     ), _Commands(), notifications);
 
     expect(find.text('5/? صفحة'), findsOneWidget);
@@ -118,8 +117,7 @@ void main() {
     addTearDown(notifications.dispose);
     await _openDialog(tester, const DownloadProgressData(
       taskId: 'selected-task', progress: 12 / 23,
-      completedPages: 12, totalPages: 23, totalSize: 1000000,
-      networkSpeed: -1, timeRemaining: Duration.zero, status: TaskStatus.running,
+      completedPages: 12, totalPages: 23, totalSize: 1000000, status: TaskStatus.running,
     ), _Commands(), notifications);
     expect(find.text('12/23 صفحة'), findsOneWidget);
     expect(find.textContaining(' MB'), findsNothing);
@@ -217,17 +215,6 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       await pumpUntilFuture(tester, manager.dispose(), 'cancel manager disposal');
     }
-  });
-
-  testWidgets('failed at full byte progress is never formatted Finished', (tester) async {
-    final commands = _Commands();
-    final notifications = NotificationService();
-    addTearDown(notifications.dispose);
-    await _openDialog(tester, _progress(TaskStatus.failed, 1), commands, notifications);
-    final context = tester.element(find.byType(DownloadProgressDialog));
-    final l10n = AppLocalizations.of(context)!;
-    expect(formatDownloadSpeed(_progress(TaskStatus.failed, 1), l10n), isNot(l10n.statusFinished));
-    expect(formatDownloadTimeRemaining(_progress(TaskStatus.failed, 1), l10n), isNot(l10n.statusFinished));
   });
 
   testWidgets('complete status has only Close even before final progress repaint', (tester) async {

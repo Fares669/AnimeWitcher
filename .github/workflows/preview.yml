@@ -110,7 +110,7 @@ jobs:
 
   ios:
     name: iOS Build (Unsigned)
-    if: ${{ github.event.inputs.build_ios == 'true' }}
+    if: ${{ github.event_name == 'push' || github.event.inputs.build_ios == 'true' }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5

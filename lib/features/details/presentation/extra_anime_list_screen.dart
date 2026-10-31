@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/animewitcher_character_models.dart';
@@ -9,8 +8,7 @@ import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/router/app_router.dart';
-import '../../../shared/widgets/anime_catalog_shimmer.dart';
-import '../../../shared/widgets/app_page_header.dart';
+import '../../../shared/widgets/catalog_page.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import 'widgets/details_poster_grid.dart';
 
@@ -159,56 +157,35 @@ class _ExtraAnimeListScreenState extends ConsumerState<ExtraAnimeListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final headerTop = appPageHeaderContentTopInset(context);
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppPageAppBar(
-        title: widget.title,
-        onBack: () => Navigator.of(context).pop(),
+    return CatalogPage(
+      title: widget.title,
+      onBack: () => Navigator.of(context).pop(),
+      builder: (context, topInset) => CatalogBody(
+        topInset: topInset,
+        isLoading: _loading,
+        errorMessage: _error != null ? 'تعذر تحميل النتائج' : null,
+        onRetry: _load,
+        emptyMessage: widget.emptyMessage,
+        onRefresh: _load,
+        crossAxisSpacingFallback: detailsExtraTabCrossAxisSpacing,
+        mainAxisSpacingFallback: detailsExtraTabMainAxisSpacing,
+        itemCount: _items.length,
+        itemBuilder: (context, index) {
+          final item = _items[index];
+          return MultimediaCard.fromItem(
+            key: ValueKey('${widget.keyPrefix}-$index'),
+            item: item,
+            heroTag: heroTagWithUrl(widget.keyPrefix, item, index),
+            showRelationBadge: widget.showRelationBadge,
+            onTap: () {
+              final target = _inheritProvider(item);
+              DetailsRoute(
+                $extra: DetailsRouteExtra(item: target),
+              ).push<void>(context);
+            },
+          );
+        },
       ),
-      body: _loading
-          ? const AnimeCatalogShimmer()
-          : _error != null
-          ? Padding(
-              padding: EdgeInsets.only(top: headerTop),
-              child: Center(
-                child: FilledButton.tonalIcon(
-                onPressed: _load,
-                icon: const Icon(Icons.refresh_rounded),
-                label: const Text('إعادة المحاولة'),
-                ),
-              ),
-            )
-          : _items.isEmpty
-          ? Padding(
-              padding: EdgeInsets.only(top: headerTop),
-              child: Center(child: Text(widget.emptyMessage)),
-            )
-          : MouseDragRefreshIndicator(
-              onRefresh: _load,
-              child: ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: EdgeInsets.fromLTRB(
-                  MultimediaCardLayout.catalogGridHorizontalPadding(context),
-                  headerTop + 16,
-                  MultimediaCardLayout.catalogGridHorizontalPadding(context),
-                  110,
-                ),
-                children: [
-                  DetailsPosterGrid(
-                    keyPrefix: widget.keyPrefix,
-                    items: _items,
-                    showRelationBadge: widget.showRelationBadge,
-                    onItemTap: (item) {
-                      final target = _inheritProvider(item);
-                      DetailsRoute(
-                        $extra: DetailsRouteExtra(item: target),
-                      ).push<void>(context);
-                    },
-                  ),
-                ],
-              ),
-            ),
     );
   }
 }

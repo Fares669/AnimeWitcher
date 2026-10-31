@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
-import 'package:animewitcher/shared/widgets/app_page_header.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
@@ -10,9 +9,8 @@ import 'package:animewitcher/core/router/app_router.dart';
 import '../../../core/utils/image_utils.dart';
 import '../../../core/utils/localized_text.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
-import '../../../shared/widgets/catalog_direction.dart';
+import '../../../shared/widgets/catalog_page.dart';
 import '../../../shared/widgets/multimedia_card.dart';
-import '../../../shared/widgets/anime_catalog_shimmer.dart';
 
 enum ViewAllCategory {
   popularMovies,
@@ -271,15 +269,10 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
       isPortrait: _isPortrait,
       isDesktop: isDesktop,
     );
-    final headerTop = appPageHeaderContentTopInset(context);
-
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppPageAppBar(
-        title: widget.title,
-        onBack: () => Navigator.of(context).maybePop(),
-      ),
-      body: Container(
+    return CatalogPage(
+      title: widget.title,
+      onBack: () => Navigator.of(context).maybePop(),
+      background: DecoratedBox(
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
@@ -291,79 +284,67 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
             stops: const [0, 0.3],
           ),
         ),
-        child: hasProviderLoadError && items.isEmpty
-            ? MouseDragRefreshIndicator(
-                onRefresh: _retryProviderPage,
-                child: ListView(
-                  padding: EdgeInsets.only(top: headerTop),
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  children: [
-                    SizedBox(height: MediaQuery.sizeOf(context).height * 0.2),
-                    _ProviderPageLoadError(
-                      isEmptyCatalog: true,
-                      onRetry: _retryProviderPage,
-                    ),
-                  ],
-                ),
-              )
-            : CatalogDirection(
-                child: GridView.builder(
-                  controller: _scrollController,
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  padding: EdgeInsets.fromLTRB(
-                    gridHorizontalPadding,
-                    items.isEmpty && isLoading ? 16 : headerTop + 16,
-                    gridHorizontalPadding,
-                    16,
-                  ),
-                  gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
-                    context,
-                    maxCrossAxisExtent: maxExtent,
-                    childAspectRatio: childAspectRatio,
-                    crossAxisSpacing: gridCrossAxisSpacing,
-                    mainAxisSpacing: gridMainAxisSpacing,
-                    handsetPortraitCrossAxisCount: _isPortrait
-                        ? MultimediaCardLayout.handsetPortraitGridColumns
-                        : null,
-                    horizontalPadding: gridHorizontalPadding,
-                  ),
-                  itemCount:
-                      items.length +
-                      (isLoading
-                          ? crossAxisCount
-                          : (hasProviderLoadError ? 1 : 0)),
-                  itemBuilder: (context, index) {
-                    if (index >= items.length) {
-                      if (hasProviderLoadError) {
-                        return _ProviderPageLoadError(
-                          compact: true,
-                          onRetry: _retryProviderPage,
-                        );
-                      }
-                      return AnimePosterShimmer(isPortrait: _isPortrait);
-                    }
-
-                    final item = items[index];
-                    final uniqueTag =
-                        'view_all_${widget.category.name}_${item.id}_$index';
-
-                    return MultimediaCard.fromItem(
-                      key: ValueKey(_itemKey(item)),
-                      item: item,
-                      heroTag: uniqueTag,
-                      isPortrait: _isPortrait,
-                      onTap: () {
-                        if (widget.onTap != null) {
-                          widget.onTap!(item);
-                        } else {
-                          DetailsRoute($extra: DetailsRouteExtra(item: item))
-                              .push<void>(context);
-                        }
-                      },
-                    );
-                  },
-                ),
+        child: const SizedBox.expand(),
+      ),
+      builder: (context, topInset) => CatalogBody(
+        topInset: topInset,
+        errorMessage: hasProviderLoadError && items.isEmpty ? '' : null,
+        errorWidget: MouseDragRefreshIndicator(
+          onRefresh: _retryProviderPage,
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            children: [
+              SizedBox(height: MediaQuery.sizeOf(context).height * 0.2),
+              _ProviderPageLoadError(
+                isEmptyCatalog: true,
+                onRetry: _retryProviderPage,
               ),
+            ],
+          ),
+        ),
+        scrollController: _scrollController,
+        footer: isLoading || hasProviderLoadError
+            ? CatalogFooter.loading
+            : CatalogFooter.none,
+        footerCount: isLoading ? crossAxisCount : 1,
+        footerBuilder: hasProviderLoadError
+            ? (context, _) => _ProviderPageLoadError(
+                compact: true,
+                onRetry: _retryProviderPage,
+              )
+            : null,
+        isPortrait: _isPortrait,
+        maxCrossAxisExtent: maxExtent,
+        childAspectRatio: childAspectRatio,
+        horizontalPadding: gridHorizontalPadding,
+        crossAxisSpacing: gridCrossAxisSpacing,
+        mainAxisSpacing: gridMainAxisSpacing,
+        handsetPortraitColumns: _isPortrait
+            ? MultimediaCardLayout.handsetPortraitGridColumns
+            : null,
+        bottomPadding: 16,
+        itemCount: items.length,
+        itemBuilder: (context, index) {
+          final item = items[index];
+          final uniqueTag = heroTagWithId(
+            'view_all_${widget.category.name}',
+            item,
+            index,
+          );
+          return MultimediaCard.fromItem(
+            key: ValueKey(_itemKey(item)),
+            item: item,
+            heroTag: uniqueTag,
+            isPortrait: _isPortrait,
+            onTap: () {
+              if (widget.onTap != null) {
+                widget.onTap!(item);
+              } else {
+                item.openDetails(context);
+              }
+            },
+          );
+        },
       ),
     );
   }

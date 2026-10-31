@@ -28,6 +28,9 @@ class MangaChapterRow extends StatelessWidget {
     if (state == null || state.pageCount <= 0 || state.pagesRead <= 0) {
       return null;
     }
+    // A finished chapter is told by its dimmed colour alone; the count
+    // is only news while there is still something left to read.
+    if (state.isRead || state.pagesRead >= state.pageCount) return null;
     return '${state.pagesRead}/${state.pageCount}';
   }
 

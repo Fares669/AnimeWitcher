@@ -91,11 +91,19 @@ final class MangaChapterTransportV2 {
   MangaChapterTransportV2({
     required this.startPage,
     MangaChapterDirectoryResolverV2? resolveDirectory,
+    this.startAllPagesImmediately = false,
   }) : resolveDirectory =
            resolveDirectory ?? resolveMangaChapterDirectoryV2;
 
   final MangaChapterPageStarterV2 startPage;
   final MangaChapterDirectoryResolverV2 resolveDirectory;
+
+  /// iOS: hand every page to the background URLSession up front. A page task
+  /// only exists for the system once it has been started, so gating starts
+  /// behind Dart completions stalls the chapter as soon as the app is
+  /// suspended. The OS caps per-host concurrency itself; the Dart slot limit
+  /// still applies on platforms whose transfers need the app alive.
+  final bool startAllPagesImmediately;
 
   Future<MangaChapterTransportHandleV2> start(
     MangaChapterTransportSpecV2 spec,
@@ -167,6 +175,7 @@ final class MangaChapterTransportV2 {
       directory: directory,
       manifest: manifest,
       startPage: startPage,
+      startAllPagesImmediately: startAllPagesImmediately,
     );
     unawaited(handle.start());
     return handle;
@@ -196,6 +205,7 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
     required this.directory,
     required MangaChapterManifestV2 manifest,
     required this.startPage,
+    this.startAllPagesImmediately = false,
   }) : _manifest = manifest,
        _current = DownloadTransportSnapshot(
          taskId: spec.taskId,
@@ -211,6 +221,7 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
 
   final MangaChapterTransportSpecV2 spec;
   final Directory directory;
+  final bool startAllPagesImmediately;
   final MangaChapterPageStarterV2 startPage;
   final StreamController<DownloadTransportSnapshot> _controller =
       StreamController<DownloadTransportSnapshot>.broadcast();
@@ -220,6 +231,9 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
   _pageSubscriptions = <int, StreamSubscription<DownloadTransportSnapshot>>{};
   final Set<int> _startingIndexes = <int>{};
   final Map<int, Future<void>> _startingPages = <int, Future<void>>{};
+  // One cumulative byte counter for the chapter, not per-image speed samples.
+  final Map<int, int> _observedPageBytes = <int, int>{};
+  int _receivedBytes = 0;
 
   MangaChapterManifestV2 _manifest;
   DownloadTransportSnapshot _current;
@@ -233,6 +247,8 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
   bool _canceling = false;
   bool _scheduling = false;
   int _generation = 0;
+  DateTime? _lastProgressEmitAt;
+  Timer? _progressEmitTimer;
 
   int get _pageConnectionLimit =>
       _boundedPageConnections(spec.maxConcurrentPages);
@@ -271,14 +287,27 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
   }
 
   void _fillAvailableSlots() {
+    // Handing every page to the background session at once keeps transfers
+    // daemon-resident, but only when the configured connection limit does
+    // not bind: with a limit below the page count, start-all silently
+    // ignored the user's per-manga limit on iOS (dozens of pages of one
+    // chapter transferring simultaneously at a limit of 1, device logs
+    // 2026-10-30). The plugin's native holding queue cannot enforce the
+    // limit instead — its per-group cap also binds the plugin-internal
+    // 'chunk' group and would throttle episode downloads. So a binding
+    // limit runs the slot loop; advancement then rides background-event
+    // wakes like every other Dart-advanced queue in this stack.
+    final startLimit =
+        startAllPagesImmediately && _pageConnectionLimit >= spec.pages.length
+        ? spec.pages.length
+        : _pageConnectionLimit;
     try {
       while (!_disposed &&
           !_paused &&
           !_canceled &&
           !_canceling &&
           !_current.isFinal &&
-          _pageHandles.length + _startingIndexes.length <
-              _pageConnectionLimit) {
+          _pageHandles.length + _startingIndexes.length < startLimit) {
         final index = _firstMissingIndex();
         if (index == null) break;
 
@@ -350,6 +379,7 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
                 : DownloadTransportStatus.running,
       );
       final currentPage = handle.current;
+      _recordPageBytes(index, currentPage);
       if (currentPage.isFinal ||
           currentPage.status == DownloadTransportStatus.missing) {
         unawaited(
@@ -376,7 +406,8 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
     int generation,
     DownloadTransportSnapshot snapshot,
   ) {
-    if (_disposed) return;
+    if (_disposed || _canceled || generation != _generation) return;
+    _recordPageBytes(index, snapshot);
     if (snapshot.status != DownloadTransportStatus.complete) {
       unawaited(_onPageSnapshot(index, generation, snapshot));
       return;
@@ -433,6 +464,7 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
         );
         return;
       }
+      _recordPageByteCount(index, await file.length());
       final digest = await MangaChapterManifestV2.pageDigest(file);
       if (_disposed || _canceled || _failing || generation != _generation || _current.isFinal) return;
 
@@ -492,11 +524,7 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
       return;
     }
 
-    _emitAggregate(
-      _paused && _allPagesPaused()
-          ? DownloadTransportStatus.paused
-          : DownloadTransportStatus.running,
-    );
+    _emitProgressAggregate();
   }
 
   Future<void> _fail({
@@ -534,23 +562,33 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
     }
   }
 
+  void _recordPageBytes(int index, DownloadTransportSnapshot snapshot) {
+    final bytes = snapshot.transferredBytes ??
+        (snapshot.totalBytes != null && snapshot.totalBytes! > 0
+            ? (snapshot.totalBytes! * snapshot.progress).round()
+            : 0);
+    _recordPageByteCount(index, bytes);
+  }
+
+  void _recordPageByteCount(int index, int bytes) {
+    if (bytes <= 0) return;
+    final previous = _observedPageBytes[index] ?? 0;
+    if (bytes <= previous) return;
+    _observedPageBytes[index] = bytes;
+    _receivedBytes += bytes - previous;
+  }
+
   DownloadTransportSnapshot _aggregate(
     DownloadTransportStatus status, {
     double? progress,
   }) {
     final pageCount = spec.pages.length;
     var activeConnections = _startingIndexes.length;
-    var networkSpeed = 0.0;
-    var hasNetworkSpeed = false;
     Duration? timeRemaining;
 
     for (final handle in _pageHandles.values) {
       final page = handle.current;
       if (page.status == DownloadTransportStatus.running) activeConnections++;
-      if (page.networkSpeedMBps >= 0) {
-        networkSpeed += page.networkSpeedMBps;
-        hasNetworkSpeed = true;
-      }
       if (page.timeRemaining > (timeRemaining ?? Duration.zero)) {
         timeRemaining = page.timeRemaining;
       }
@@ -562,7 +600,10 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
       progress: progress ?? 0,
       completedPages: _manifest.completedIndexes.length,
       totalPages: pageCount,
-      networkSpeedMBps: hasNetworkSpeed ? networkSpeed : -1,
+      transferredBytes: _receivedBytes,
+      // The strip samples total received bytes once per second. Per-image
+      // Transfer.networkSpeed is noisy and often zero for short page tasks.
+      networkSpeedMBps: activeConnections == 0 ? 0 : -1,
       timeRemaining: timeRemaining ?? Duration.zero,
       configuredConnections: _pageConnectionLimit,
       activeConnections: activeConnections,
@@ -573,7 +614,72 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
     DownloadTransportStatus status, {
     double? progress,
   }) {
+    if (status == DownloadTransportStatus.running ||
+        status == DownloadTransportStatus.paused) {
+      _lastProgressEmitAt = DateTime.now();
+      // An immediate emission supersedes any coalesced trailing update.
+      _progressEmitTimer?.cancel();
+      _progressEmitTimer = null;
+    }
     _emit(_aggregate(status, progress: progress));
+  }
+
+  /// How far apart republished chapter speeds land. Episode downloads
+  /// surface a new speed about once a second (the median gap between
+  /// episode snapshots in device logs is ~1.1 s); manga chapters match
+  /// that cadence instead of crawling with every page callback.
+  static const Duration _progressCoalesceWindow = Duration(seconds: 1);
+
+  /// Page progress callbacks arrive in bursts — with every page in flight
+  /// at once they can land dozens of times a second, and republishing the
+  /// chapter aggregate for each one flooded the presentation with a new
+  /// snapshot every few milliseconds, each carrying a slightly different
+  /// summed speed that crawled on screen. Aggregates that change something
+  /// material (status, pages done, connections, or a speed swing of a
+  /// quarter or more) still go out immediately; speed-only ripples are
+  /// coalesced to the episode cadence above, with a trailing emission so
+  /// the latest rate still lands.
+  void _emitProgressAggregate() {
+    final status = _paused && _allPagesPaused()
+        ? DownloadTransportStatus.paused
+        : DownloadTransportStatus.running;
+    final next = _aggregate(status);
+    final now = DateTime.now();
+    final last = _lastProgressEmitAt;
+    final windowElapsed =
+        last == null || now.difference(last) >= _progressCoalesceWindow;
+    if (windowElapsed || _isMaterialProgressChange(next)) {
+      _progressEmitTimer?.cancel();
+      _progressEmitTimer = null;
+      _lastProgressEmitAt = now;
+      _emit(next);
+      return;
+    }
+    _progressEmitTimer ??= Timer(
+      _progressCoalesceWindow - now.difference(last),
+      () {
+        _progressEmitTimer = null;
+        if (_disposed || _current.isFinal) return;
+        _emitAggregate(
+          _paused && _allPagesPaused()
+              ? DownloadTransportStatus.paused
+              : DownloadTransportStatus.running,
+        );
+      },
+    );
+  }
+
+  bool _isMaterialProgressChange(DownloadTransportSnapshot next) {
+    final current = _current;
+    if (next.status != current.status ||
+        next.completedPages != current.completedPages ||
+        next.activeConnections != current.activeConnections ||
+        next.progress != current.progress) {
+      return true;
+    }
+    // Image-specific throughput changes never refresh the parent. The
+    // session-wide byte sampler publishes one stable speed each second.
+    return false;
   }
 
   static int _boundedPageConnections(int value) =>
@@ -762,6 +868,8 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
   Future<void> _dispose() async {
     _disposed = true;
     _paused = true;
+    _progressEmitTimer?.cancel();
+    _progressEmitTimer = null;
     await _releasePageHandles();
     // Only an already-issued checkpoint can overwrite a replacement's state.
     await _manifestPublication?.catchError((Object _, StackTrace __) {});

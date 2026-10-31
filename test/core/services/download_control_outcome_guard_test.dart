@@ -16,8 +16,15 @@ void main() {
     expect(provider, contains('.resume(DownloadLogicalId(logical))'));
     expect(dialog, contains('downloadManagerV2Provider'));
     expect(dialog, contains('.cancel(DownloadLogicalId(logical))'));
-    expect(dialog, contains('resumeDownload(data.taskId)'));
-    expect(dialog, contains('pauseDownload(data.taskId)'));
+    // The pause/resume/retry dispatch itself lives in the one shared
+    // helper both the dialog and the downloads tab call.
+    expect(dialog, contains('toggleDownloadPlayback('));
+    final toggle = File(
+      'lib/features/library/presentation/download_delete_confirmation.dart',
+    ).readAsStringSync();
+    expect(toggle, contains('notifier.resumeDownload(taskId)'));
+    expect(toggle, contains('notifier.pauseDownload(taskId)'));
+    expect(toggle, contains('notifier.retryDownload(taskId)'));
     expect(dialog, isNot(contains('downloadServiceProvider')));
   });
 

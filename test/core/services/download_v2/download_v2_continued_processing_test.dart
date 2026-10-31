@@ -1181,6 +1181,189 @@ void main() {
       }
     },
   );
+
+  testWidgets('iOS session speed is the total of all active downloads, and the summary notifier mirrors it', (tester) async {
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return true;
+        });
+    final observer = IosDownloadContinuedProcessingObserverV2(
+      forceAvailableForTesting: true,
+    );
+    LogicalDownloadRecordV2 recordFor(String id, String taskId) =>
+        LogicalDownloadRecordV2(
+          schemaVersion: kLogicalDownloadSchemaVersionV2,
+          logicalId: DownloadLogicalId(id),
+          mediaId: 'anime-1',
+          unitKey: id,
+          variantKey: 'sub',
+          generation: 1,
+          taskId: taskId,
+          intent: DownloadUserIntent.active,
+          destinationPath: 'downloads/$id.mp4',
+          sourceDescriptor: const <String, Object?>{'providerId': 'provider'},
+          expectedBytes: 1000,
+          updatedAtMillis: 1,
+        );
+    final recordA = recordFor('total-a', 'aw_v2_total_a_g1');
+    final recordB = recordFor('total-b', 'aw_v2_total_b_g1');
+    DownloadTransportSnapshot running(String taskId, double mbps) =>
+        DownloadTransportSnapshot(
+          taskId: taskId,
+          status: DownloadTransportStatus.running,
+          progress: 0.5,
+          transferredBytes: 500,
+          totalBytes: 1000,
+          networkSpeedMBps: mbps,
+        );
+    try {
+      await observer.observe(recordA, running(recordA.taskId, 2));
+      await observer.observe(recordB, running(recordB.taskId, 3));
+      // Metric updates coalesce into the service's one-second sample window.
+      await tester.pump(const Duration(seconds: 1));
+
+      final update = calls.lastWhere((call) => call.method == 'update');
+      final args = Map<String, Object?>.from(update.arguments as Map);
+      expect(
+        args['speedBytesPerSecond'],
+        5000000.0,
+        reason: 'the iOS task shows the combined pull of every active download',
+      );
+      final summary = downloadSessionSummaryNotifier.value;
+      expect(summary.isActive, isTrue);
+      expect(summary.batchTotal, 2);
+      expect(summary.currentIndex, 1);
+      expect(summary.totalSpeedBytesPerSecond, 5000000.0);
+
+      await observer.observe(
+        recordA,
+        const DownloadTransportSnapshot(
+          taskId: 'aw_v2_total_a_g1',
+          status: DownloadTransportStatus.complete,
+          progress: 1,
+          transferredBytes: 1000,
+          totalBytes: 1000,
+        ),
+      );
+      await observer.observe(
+        recordB,
+        const DownloadTransportSnapshot(
+          taskId: 'aw_v2_total_b_g1',
+          status: DownloadTransportStatus.complete,
+          progress: 1,
+          transferredBytes: 1000,
+          totalBytes: 1000,
+        ),
+      );
+      expect(
+        downloadSessionSummaryNotifier.value.isActive,
+        isFalse,
+        reason: 'the strip disappears when every download finishes',
+      );
+    } finally {
+      await observer.dispose();
+      downloadSessionSummaryNotifier.value =
+          const DownloadSessionSummaryV2.inactive();
+    }
+  });
+
+  testWidgets('session lost during inactive is resubmitted immediately', (
+    tester,
+  ) async {
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return true;
+        });
+    final service = DownloadContinuedProcessingService(
+      onSystemCancel: (_) async {},
+      forceAvailableForTesting: true,
+    );
+    final observer = IosDownloadContinuedProcessingObserverV2(service: service);
+    final record = _terminalProgressRecord();
+    try {
+      await observer.observe(
+        record,
+        DownloadTransportSnapshot(
+          taskId: record.taskId,
+          status: DownloadTransportStatus.running,
+          progress: .25,
+          transferredBytes: 250,
+          totalBytes: 1000,
+        ),
+      );
+      expect(calls.where((call) => call.method == 'start'), hasLength(1));
+
+      // The lease ended while the app sat in the transient inactive state
+      // (still foreground). Recovery must not wait for a full resume, or
+      // the download can idle in the background once in-flight work drains.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      service.onSessionLost!();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(calls.where((call) => call.method == 'start'), hasLength(2));
+    } finally {
+      tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      );
+      await observer.dispose();
+    }
+  });
+
+  testWidgets('session lost while paused still waits for the foreground', (
+    tester,
+  ) async {
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return true;
+        });
+    final service = DownloadContinuedProcessingService(
+      onSystemCancel: (_) async {},
+      forceAvailableForTesting: true,
+    );
+    final observer = IosDownloadContinuedProcessingObserverV2(service: service);
+    final record = _terminalProgressRecord();
+    try {
+      await observer.observe(
+        record,
+        DownloadTransportSnapshot(
+          taskId: record.taskId,
+          status: DownloadTransportStatus.running,
+          progress: .25,
+          transferredBytes: 250,
+          totalBytes: 1000,
+        ),
+      );
+      expect(calls.where((call) => call.method == 'start'), hasLength(1));
+
+      // From a real background state the system does not accept a new
+      // continued-processing submission, so recovery stays deferred...
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      service.onSessionLost!();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(calls.where((call) => call.method == 'start'), hasLength(1));
+
+      // ...and returning to the foreground performs it.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(calls.where((call) => call.method == 'start'), hasLength(2));
+    } finally {
+      await observer.dispose();
+    }
+  });
 }
 LogicalDownloadRecordV2 _terminalProgressRecord() => const LogicalDownloadRecordV2(
   schemaVersion: kLogicalDownloadSchemaVersionV2, logicalId: DownloadLogicalId('terminal-progress'),

@@ -142,6 +142,44 @@ void main() {
           .readAsStringSync();
       expect(swift, contains('speedBytesPerSecond >= 0'));
     });
+    test('background Dart updates are accepted only when they advance', () {
+      final swift = File('ios/Runner/DownloadContinuedProcessingManager.swift')
+          .readAsStringSync();
+      // A lease-kept Dart is an authoritative byte source; a briefly-woken
+      // stale one is not. The gate tells them apart by strict advancement.
+      expect(swift, contains('transferredBytes > snapshot.transferredBytes'));
+      expect(swift, contains('taskId != snapshot.currentTaskId'));
+      expect(swift, contains('continued.native.rejected'));
+    });
+    test('continued-processing banner pulses a full update every second', () {
+      final swift = File('ios/Runner/DownloadContinuedProcessingManager.swift')
+          .readAsStringSync();
+      // Presentation is refreshed per beat, started on attach and stopped
+      // on session end. The dot reflects fresh throughput; title changes
+      // do not extend the OS lease or substitute for real Progress updates.
+      expect(swift, contains('enum DownloadPresentationPulse'));
+      expect(swift, contains('pulseFilled.toggle()'));
+      expect(swift, contains('startPulse()'));
+      expect(swift, contains('stopPulse()'));
+    });
+    test('continued-processing presentation is rate-limited to once per second', () {
+      final swift = File('ios/Runner/DownloadContinuedProcessingManager.swift')
+          .readAsStringSync();
+      // Device logs (2026-10-30) showed the banner changing 3-5 times in a
+      // second when the native background feed burst. Every feeder — Dart
+      // updates, the native feed, the pulse — must funnel through the one
+      // presentation clock in the manager.
+      expect(swift, contains('private var lastPresentationAt'));
+      expect(swift, contains('private func presentIfDue('));
+      expect(
+        swift,
+        contains('now - lastPresentationAt >= DownloadPresentationPulse.interval'),
+      );
+      // update() and the pulse beat present only through the gate; only
+      // attach/start and session end may write outside it.
+      expect(swift, contains('presentIfDue(snapshot, to: task)'));
+      expect(swift, contains('pulseFilled.toggle()'));
+    });
     test(
       'continued-processing metric updates are coalesced to one per second',
       () {

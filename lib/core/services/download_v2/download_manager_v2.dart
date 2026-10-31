@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../../domain/entity/manga.dart';
 import '../download_concurrency.dart';
 import '../download_parallel.dart';
 import '../../utils/download_cleanup.dart';
@@ -132,6 +133,16 @@ final class DownloadManagerV2 {
       <DownloadLogicalId, int>{};
   final Map<DownloadLogicalId, Set<int>> _mangaSourceRefreshVerifiedPages =
       <DownloadLogicalId, Set<int>>{};
+
+  /// Page lists resolved at enqueue time, keyed by logical id. A chapter's
+  /// provider resolution is a serial network chain (Firestore + mirror
+  /// hosts + chapter page); running it at promotion time made every queued
+  /// chapter wait ~10s for its slot to actually start, and serialized the
+  /// starts of chapters behind it. Promotion reuses a fresh prefetch and
+  /// only pays the chain when none exists or it went stale.
+  final Map<DownloadLogicalId, ({Future<List<MangaPage>> pages, int startedAtMillis})>
+      _mangaPagePrefetches =
+      <DownloadLogicalId, ({Future<List<MangaPage>> pages, int startedAtMillis})>{};
   final Map<DownloadLogicalId, DownloadTransportSnapshot>
       _firstRenewedPositiveSample = <DownloadLogicalId, DownloadTransportSnapshot>{};
   final StreamController<List<LogicalDownloadRecordV2>> _recordChanges =
@@ -145,7 +156,17 @@ final class DownloadManagerV2 {
   bool _admissionPromotionRequested = false;
   Timer? _admissionPromotionRetryTimer;
   int _admissionPromotionRetryAttempts = 0;
+  int _lastEnqueuedAtMillis = 0;
   final Set<DownloadLogicalId> _admissionReservations = <DownloadLogicalId>{};
+
+  /// Strictly increasing enqueue stamp for new download generations, so two
+  /// downloads queued within the same millisecond still order FIFO.
+  int _nextEnqueuedAtMillis() {
+    final now = _nowMillis();
+    final next = now > _lastEnqueuedAtMillis ? now : _lastEnqueuedAtMillis + 1;
+    _lastEnqueuedAtMillis = next;
+    return next;
+  }
 
   /// Application-owned logical records for presentation. This never exposes
   /// package child transfers, URLs, headers or FileDownloader database rows.
@@ -1476,6 +1497,7 @@ final class DownloadManagerV2 {
       parallelChunks: parallelChunks,
       awaitingAdmission: true,
       updatedAtMillis: _nowMillis(),
+      enqueuedAtMillis: _nextEnqueuedAtMillis(),
     );
     await _store.put(queuedRecord);
     _rememberRecord(queuedRecord);
@@ -1494,8 +1516,53 @@ final class DownloadManagerV2 {
     );
     _snapshots[request.logicalId] = queued;
     _recordDiagnostic(request.logicalId, queued);
+    if (isManga) {
+      _mangaPagePrefetches.remove(request.logicalId);
+      _prefetchMangaPages(request);
+    }
     _scheduleAdmissionPromotion();
     return queued;
+  }
+
+  /// How long an enqueue-time page resolution stays reusable at promotion.
+  /// Past this, page URLs may be expired CDN links, so promotion resolves
+  /// fresh — the reason resolution was promotion-time-only before.
+  static const int _mangaPagePrefetchFreshMillis = 5 * 60 * 1000;
+
+  void _prefetchMangaPages(DownloadStartRequestV2 request) {
+    final resolver = _mangaChapterPageResolver;
+    // Keep only near-term provider resolutions in flight. Deep queues may
+    // contain hundreds of chapters; they resolve fresh at promotion.
+    final limit = clampDownloadConcurrency(_maxConcurrentDownloads()).clamp(1, 4);
+    if (resolver == null || _mangaPagePrefetches.length >= limit) return;
+    final pages = resolver.resolve(
+      Map<String, Object?>.from(request.sourceDescriptor),
+    );
+    // The stored future is awaited at promotion; attach a swallowing
+    // listener now so a failed prefetch is never an unhandled error. The
+    // failure itself is retried fresh at promotion (see _resolveMangaPages).
+    unawaited(pages.then((_) {}, onError: (Object _, StackTrace __) {}));
+    _mangaPagePrefetches[request.logicalId] = (
+      pages: pages,
+      startedAtMillis: _nowMillis(),
+    );
+  }
+
+  Future<List<MangaPage>> _resolveMangaPages(
+    DownloadStartRequestV2 request,
+  ) async {
+    final resolver = _mangaChapterPageResolver!;
+    final prefetched = _mangaPagePrefetches.remove(request.logicalId);
+    if (prefetched != null &&
+        _nowMillis() - prefetched.startedAtMillis <=
+            _mangaPagePrefetchFreshMillis) {
+      try {
+        return await prefetched.pages;
+      } catch (_) {
+        // A failed prefetch must not fail the chapter: resolve fresh below.
+      }
+    }
+    return resolver.resolve(request.sourceDescriptor);
   }
 
   Future<bool> _hasAdmissionSlot({DownloadLogicalId? excluding}) async {
@@ -1586,6 +1653,16 @@ final class DownloadManagerV2 {
     await _promoteAdmissions();
   }
 
+  /// iOS background staging: when the app is leaving the foreground, run one
+  /// last admission pass so a queued download whose slot is already free
+  /// starts while Dart is still alive to start it. The configured
+  /// concurrency cap always applies — staging never runs an extra download
+  /// beyond it.
+  Future<void> stageQueuedDownloadsForBackground() async {
+    await initialize();
+    await _promoteAdmissions();
+  }
+
   Future<void> _promoteAdmissions() {
     _admissionPromotionRequested = true;
     final existing = _admissionPromotion;
@@ -1605,27 +1682,45 @@ final class DownloadManagerV2 {
     } while (_admissionPromotionRequested);
   }
 
+  /// Waiting downloads in admission order: FIFO by enqueue stamp, never by
+  /// last-write time — record rewrites (pause/resume, restart
+  /// reconciliation) must not reshuffle the queue. Logical id breaks legacy
+  /// ties so the order is total and deterministic.
+  List<LogicalDownloadRecordV2> _queueOrder(
+    Iterable<LogicalDownloadRecordV2> records,
+  ) {
+    return records
+        .where(
+          (record) =>
+              record.intent == DownloadUserIntent.active &&
+              record.awaitingAdmission,
+        )
+        .toList()
+      ..sort((a, b) {
+        final byEnqueue = a.queueOrderMillis.compareTo(b.queueOrderMillis);
+        return byEnqueue != 0
+            ? byEnqueue
+            : a.logicalId.value.compareTo(b.logicalId.value);
+      });
+  }
+
   Future<void> _promoteAdmissionsPass() async {
+    // Candidates whose destination is owned by another download stay
+    // skipped for the rest of this pass only, so one stuck destination
+    // cannot block the whole queue.
+    final skipped = <DownloadLogicalId>{};
     while (true) {
-      final waiting =
-          (await _store.all())
-              .where(
-                (record) =>
-                    record.intent == DownloadUserIntent.active &&
-                    record.awaitingAdmission,
-              )
-              .toList()
-            ..sort((a, b) => a.updatedAtMillis.compareTo(b.updatedAtMillis));
+      final waiting = _queueOrder(await _store.all());
       if (waiting.isEmpty) return;
 
       var promoted = false;
       for (final candidate in waiting) {
-        final didPromote = await _commands.run(candidate.logicalId, () async {
+        final attempt = await _commands.run(candidate.logicalId, () async {
           final current = await _store.get(candidate.logicalId);
           if (current == null ||
               current.intent != DownloadUserIntent.active ||
               !current.awaitingAdmission) {
-            return false;
+            return _AdmissionAttempt.skip;
           }
           final destinationKey = await _canonicalDestinationPath(
             current.destinationPath,
@@ -1635,23 +1730,43 @@ final class DownloadManagerV2 {
             if (latest == null ||
                 latest.intent != DownloadUserIntent.active ||
                 !latest.awaitingAdmission) {
-              return false;
+              return _AdmissionAttempt.skip;
             }
 
             final conflict = await _findDestinationConflict(
               destinationKey,
               latest.logicalId,
             );
-            if (conflict != null) return false;
-            if (!await _reserveAdmission(latest.logicalId)) return false;
+            if (conflict != null) {
+              skipped.add(latest.logicalId);
+              return _AdmissionAttempt.skip;
+            }
+            // Re-validate headship against CURRENT state before taking a
+            // slot: this pass's candidate list is a snapshot, and the head
+            // may have changed while the attempt was in flight (a queued
+            // download paused and resumed, a new one enqueued). Promoting
+            // past the true head is what started queued chapters out of
+            // order on device.
+            final head = _queueOrder(
+              await _store.all(),
+            ).where((record) => !skipped.contains(record.logicalId));
+            if (head.isNotEmpty && head.first.logicalId != latest.logicalId) {
+              return _AdmissionAttempt.superseded;
+            }
+            // No free slot: stop the pass instead of letting a later
+            // candidate overtake the head when its attempt lands after a
+            // finishing download's cleanup.
+            if (!await _reserveAdmission(latest.logicalId)) {
+              return _AdmissionAttempt.noSlot;
+            }
             try {
               await _promoteQueuedAdmissionUnsafe(latest);
-              return true;
+              return _AdmissionAttempt.promoted;
             } catch (_) {
               final current = await _store.get(latest.logicalId);
               if (current == null ||
                   current.intent == DownloadUserIntent.failed)
-                return true;
+                return _AdmissionAttempt.promoted;
               final failedRecord = current.copyWith(
                 intent: DownloadUserIntent.failed,
                 awaitingAdmission: false,
@@ -1675,14 +1790,18 @@ final class DownloadManagerV2 {
               _snapshots[failedRecord.logicalId] = failed;
               _recordDiagnostic(failedRecord.logicalId, failed);
               await _publishRecords();
-              return true;
+              return _AdmissionAttempt.promoted;
             } finally {
               _admissionReservations.remove(latest.logicalId);
               _scheduleAdmissionPromotion();
             }
           });
         });
-        if (didPromote) {
+        if (attempt == _AdmissionAttempt.noSlot ||
+            attempt == _AdmissionAttempt.superseded) {
+          return;
+        }
+        if (attempt == _AdmissionAttempt.promoted) {
           promoted = true;
           break;
         }
@@ -1900,7 +2019,7 @@ final class DownloadManagerV2 {
           throw StateError('Manga chapter transport is unavailable.');
         }
         final mangaGateway = gateway as MangaChapterGatewayV2;
-        final pages = await resolver.resolve(request.sourceDescriptor);
+        final pages = await _resolveMangaPages(request);
         return await mangaGateway.startMangaChapter(
           MangaChapterTransportSpecV2(
             taskId: taskId,
@@ -2051,6 +2170,7 @@ final class DownloadManagerV2 {
       retries: request.retries,
       parallelChunks: parallelChunks,
       updatedAtMillis: updatedAtMillis,
+      enqueuedAtMillis: _nextEnqueuedAtMillis(),
     );
 
     await _store.put(nextRecord);
@@ -2706,6 +2826,9 @@ final class DownloadManagerV2 {
   }
 
   void _rememberRecord(LogicalDownloadRecordV2 record) {
+    if (record.intent != DownloadUserIntent.active) {
+      _mangaPagePrefetches.remove(record.logicalId);
+    }
     _recordsByLogicalId[record.logicalId] = record;
     _currentTaskIds[record.logicalId] = record.taskId;
     _currentGenerations[record.logicalId] = record.generation;
@@ -3399,6 +3522,13 @@ final class DownloadManagerV2 {
 
 bool _isControlTimeout(Object error) =>
     error is _DownloadControlTimeout || error is TimeoutException;
+
+/// Outcome of one admission attempt inside a promotion pass. [noSlot] (the
+/// shared concurrency budget is full) and [superseded] (an earlier queued
+/// download is the true head now) both stop the pass, so a later candidate
+/// can never overtake an earlier one; [skip] is candidate-local (record
+/// changed, destination conflict) and lets the pass move on.
+enum _AdmissionAttempt { promoted, skip, noSlot, superseded }
 
 final class _DownloadControlTimeout extends StateError {
   _DownloadControlTimeout(String action)

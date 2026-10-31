@@ -772,7 +772,7 @@ class RecommendationsCarousel extends StatelessWidget {
                 return MultimediaCard.fromItem(
                   key: ValueKey('${title ?? 'more-like-this'}-rail-$index'),
                   item: item,
-                  heroTag: 'related_${item.url}_$index',
+                  heroTag: heroTagWithUrl('related', item, index),
                   showRelationBadge: showRelationBadge,
                   onTap: () => onItemTap(item),
                 );

@@ -4,6 +4,25 @@ import XCTest
 @testable import Runner
 
 class RunnerTests: XCTestCase {
+  func testPresentationPulseTitleAlternatesTheDot() {
+    XCTAssertEqual(
+      DownloadPresentationPulse.title(displayName: "Ep 1", filled: true),
+      "◉ Downloading “Ep 1”"
+    )
+    XCTAssertEqual(
+      DownloadPresentationPulse.title(displayName: "Ep 1", filled: false),
+      "○ Downloading “Ep 1”"
+    )
+    XCTAssertEqual(
+      DownloadPresentationPulse.title(displayName: "  ", filled: true),
+      "◉ Downloading"
+    )
+    XCTAssertEqual(
+      DownloadPresentationPulse.title(displayName: " Ep 2 ", filled: false),
+      "○ Downloading “Ep 2”"
+    )
+  }
+
   func testMangaPageCheckpointSurvivesReloadAndClearsForVideo() throws {
     DownloadNativeWaitingQueue.resetForTests()
     DownloadNativeWaitingQueue.persist(from: [

@@ -5,7 +5,8 @@ import 'dart:ui' as ui;
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 import 'package:animewitcher/core/services/download_concurrency.dart';
-import 'package:animewitcher/core/utils/download_time_remaining.dart';
+import 'package:animewitcher/core/services/download_v2/download_continued_processing_v2.dart';
+import 'package:animewitcher/core/utils/download_progress_data.dart';
 import 'package:animewitcher/features/library/presentation/download_progress_v2_provider.dart';
 import 'package:animewitcher/core/services/notification_service.dart';
 import 'package:animewitcher/core/utils/download_cleanup.dart';
@@ -103,6 +104,7 @@ DownloadItem _item({
   TaskStatus status = TaskStatus.complete,
   String metaData = 'https://animewitcher.test/black-torch/9',
   Episode? episode,
+  String? logicalId,
 }) {
   return DownloadItem(
     task: _task(taskId: taskId, filename: filename, metaData: metaData),
@@ -111,6 +113,7 @@ DownloadItem _item({
     item: _blackTorch(),
     episode: episode ?? _episode9(),
     timestamp: timestamp,
+    logicalId: logicalId,
   );
 }
 
@@ -183,6 +186,7 @@ Widget _downloadsApp(
   Object? retryError,
   NotificationService? notificationService,
   _StubDownloadsNotifier? notifier,
+  Map<String, DownloadProgressData>? progressData,
 }) {
   Widget home = const Scaffold(
     body: RepaintBoundary(
@@ -204,6 +208,8 @@ Widget _downloadsApp(
               retryError: retryError,
             ),
       ),
+      if (progressData != null)
+        downloadProgressProvider.overrideWith((ref) => progressData),
       if (notificationService != null)
         notificationServiceProvider.overrideWithValue(notificationService),
       episodeSortAscendingProvider.overrideWith(
@@ -309,7 +315,7 @@ void main() {
     final l10n = AppLocalizations.of(
       tester.element(find.byType(DownloadsTab)),
     )!;
-    await tester.tap(find.widgetWithText(TextButton, l10n.delete));
+    await tester.tap(find.widgetWithText(FilledButton, l10n.delete));
     await tester.pumpAndSettle();
     expect(notifier.removeCalls, 1);
     expect(tester.widget<IconButton>(deleteButton).onPressed, isNull);
@@ -360,7 +366,7 @@ void main() {
           await tester.pumpAndSettle();
           await tester.tap(
             find.widgetWithText(
-              TextButton,
+              FilledButton,
               completed ? l10n.deleteAll : l10n.delete,
             ),
           );
@@ -721,16 +727,12 @@ void main() {
             running.task.metaData: DownloadProgressData(
               taskId: 'ep3',
               progress: 0.18,
-              networkSpeed: 0.127,
-              timeRemaining: const Duration(minutes: 39, seconds: 44),
               status: TaskStatus.running,
               totalSize: 365400000,
             ),
             waiting.task.metaData: DownloadProgressData(
               taskId: 'ep4',
               progress: 0,
-              networkSpeed: 0,
-              timeRemaining: Duration.zero,
               status: TaskStatus.enqueued,
               totalSize: 462200000,
             ),
@@ -1334,5 +1336,113 @@ void main() {
       File('${artifacts.path}/downloads_paused_not_running.png')
           .writeAsBytesSync(bytes!.buffer.asUint8List());
     });
+  });
+
+  testWidgets(
+    'queued download shows an hourglass and no calculating placeholders',
+    (tester) async {
+      await _prepareArtworkStorage(tester);
+      const logicalId = 'queued-logical-id';
+      final queued = _item(
+        taskId: 'queued-task',
+        timestamp: 5,
+        status: TaskStatus.enqueued,
+        logicalId: logicalId,
+      );
+      await tester.pumpWidget(
+        _downloadsApp(
+          [queued],
+          progressData: const <String, DownloadProgressData>{
+            logicalId: DownloadProgressData(
+              taskId: 'queued-task',
+              progress: 0,
+              status: TaskStatus.enqueued,
+            ),
+          },
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.text('في الانتظار...'), findsOneWidget);
+      expect(find.byIcon(Icons.hourglass_top_rounded), findsOneWidget);
+      expect(find.byIcon(Icons.download_rounded), findsNothing);
+      // Cards never show a per-download speed or remaining time.
+      expect(find.text('جارٍ الحساب…'), findsNothing);
+    },
+  );
+
+  testWidgets('running download card shows no speed or remaining time', (
+    tester,
+  ) async {
+    await _prepareArtworkStorage(tester);
+    const logicalId = 'running-logical-id';
+    final running = _item(
+      taskId: 'running-task',
+      timestamp: 5,
+      status: TaskStatus.running,
+      logicalId: logicalId,
+    );
+    await tester.pumpWidget(
+      _downloadsApp(
+        [running],
+        progressData: const <String, DownloadProgressData>{
+          logicalId: DownloadProgressData(
+            taskId: 'running-task',
+            progress: 0.4,
+            status: TaskStatus.running,
+          ),
+        },
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.byIcon(Icons.download_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.hourglass_top_rounded), findsNothing);
+    // Per-download speed/ETA were removed from the card entirely; the only
+    // speed in the app is the session total in the strip above the list.
+    expect(find.textContaining('KB/s'), findsNothing);
+    expect(find.textContaining('MB/s'), findsNothing);
+  });
+
+  testWidgets('session strip shows the batch position and total speed', (
+    tester,
+  ) async {
+    await _prepareArtworkStorage(tester);
+    addTearDown(
+      () => downloadSessionSummaryNotifier.value =
+          const DownloadSessionSummaryV2.inactive(),
+    );
+    const logicalId = 'strip-logical-id';
+    final running = _item(
+      taskId: 'strip-task',
+      timestamp: 5,
+      status: TaskStatus.running,
+      logicalId: logicalId,
+    );
+    await tester.pumpWidget(
+      _downloadsApp(
+        [running],
+        progressData: const <String, DownloadProgressData>{},
+      ),
+    );
+    await tester.pump();
+    expect(find.textContaining('يتم تنزيل'), findsNothing);
+
+    downloadSessionSummaryNotifier.value = const DownloadSessionSummaryV2(
+      currentIndex: 1,
+      batchTotal: 2,
+      totalSpeedBytesPerSecond: 274000,
+    );
+    await tester.pump();
+    expect(find.text('يتم تنزيل 1 من 2'), findsOneWidget);
+    expect(find.text('274KB/s'), findsOneWidget);
+
+    downloadSessionSummaryNotifier.value =
+        const DownloadSessionSummaryV2.inactive();
+    await tester.pump();
+    expect(find.textContaining('يتم تنزيل'), findsNothing);
+    expect(find.text('274KB/s'), findsNothing);
   });
 }

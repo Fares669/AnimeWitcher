@@ -194,6 +194,13 @@ class MangaDetailsRouteExtra {
   final MultimediaItem item;
 }
 
+/// Opening a title's details page — the one way every card, rail and
+/// list does it, so the route's construction lives in a single place.
+extension OpenDetailsRoute on MultimediaItem {
+  Future<void> openDetails(BuildContext context) =>
+      DetailsRoute($extra: DetailsRouteExtra(item: this)).push<void>(context);
+}
+
 class MangaReaderRouteExtra {
   const MangaReaderRouteExtra({
     required this.manga,

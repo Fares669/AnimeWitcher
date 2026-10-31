@@ -2,7 +2,7 @@ import Foundation
 import CoreFoundation
 import Darwin
 
-/// Validated 9.6.1/9.6.2/9.6.4 emit supported status inside the delegate invocation.
+/// Validated 9.6.1/9.6.2/9.6.4/9.6.5 emit supported status inside the delegate invocation.
 /// Task.taskId is NOT an execution ID; no observation survives that invocation.
 final class DownloadTerminalObservation {
   private final class Frame {
@@ -146,7 +146,7 @@ final class DownloadHookInstallation {
     // observation-vs-ownership result; never turn an installed observer into
     // transport ownership on the second call.
     if isInstalled { return transportOwnershipEnabled }
-    guard ["9.6.1", "9.6.2", "9.6.4"].contains(version ?? ""), available.count == 3,
+    guard ["9.6.1", "9.6.2", "9.6.4", "9.6.5"].contains(version ?? ""), available.count == 3,
           available.allSatisfy({ $0 }) else { return false }
     apply()
     isInstalled = true

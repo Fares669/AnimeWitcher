@@ -1,4 +1,5 @@
 import 'dart:io';
+import '../../../../shared/widgets/confirm_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
@@ -124,38 +125,15 @@ class DownloadManagementDialog extends HookConsumerWidget {
     List<DownloadItem> matchingItems,
   ) async {
     final l10n = AppLocalizations.of(context)!;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        surfaceTintColor: Colors.transparent,
-        title: Text(l10n.deleteDownloadPrompt),
-        content: Text(l10n.deleteDownloadConfirmation),
-        actions: [
-          CustomButton(
-            isPrimary: false,
-            onPressed: () => Navigator.pop(context, false),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Text(l10n.no),
-            ),
-          ),
-          CustomButton(
-            isPrimary: true,
-            backgroundColor: Colors.red,
-            onPressed: () => Navigator.pop(context, true),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Text(
-                l10n.yesDelete,
-                style: const TextStyle(color: Colors.white),
-              ),
-            ),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: l10n.deleteDownloadPrompt,
+      message: l10n.deleteDownloadConfirmation,
+      confirmLabel: l10n.yesDelete,
+      cancelLabel: l10n.no,
     );
 
-    if (confirmed == true) {
+    if (confirmed) {
       final deleted = matchingItems.isNotEmpty
           ? await ref.read(downloadsProvider.notifier).removeDownloads(matchingItems)
           : await ref.read(downloadManagerV2Provider).deleteLegacyDownloadedVideo(file);

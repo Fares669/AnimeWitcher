@@ -9,7 +9,7 @@ import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
 import 'package:animewitcher/core/storage/history_repository.dart';
-import 'package:animewitcher/core/utils/download_time_remaining.dart';
+import 'package:animewitcher/core/utils/download_progress_data.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/features/library/presentation/widgets/segmented_download_progress.dart';
 import 'package:animewitcher/features/details/presentation/details_controller.dart';
@@ -213,8 +213,7 @@ void main() {
         downloadsProvider.overrideWith(() => _Rows([row])),
         downloadProgressProvider.overrideWithValue({
           'progress-tile': DownloadProgressData(
-            taskId: row.id, progress: progress, networkSpeed: -1,
-            timeRemaining: Duration.zero, status: TaskStatus.running, totalSize: 1000000,
+            taskId: row.id, progress: progress, status: TaskStatus.running, totalSize: 1000000,
             completedPages: manga ? 12 : null, totalPages: manga ? 23 : null,
           ),
         }),
@@ -237,8 +236,7 @@ void main() {
         final rows = _Rows([selected, _row('other', status: otherStatus)]);
         final map = <String, DownloadProgressData>{
           for (final row in rows.items) row.logicalId!: DownloadProgressData(
-            taskId: row.id, progress: row.progress, networkSpeed: -1,
-            timeRemaining: Duration.zero, status: row.status,
+            taskId: row.id, progress: row.progress, status: row.status,
           ),
         };
         final container = ProviderContainer(overrides: [

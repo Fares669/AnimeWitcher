@@ -13,6 +13,188 @@ import 'package:path/path.dart' as p;
 import '../../../support/manga_image_fixtures.dart';
 
 void main() {
+  test('startAllPagesImmediately still honors a page limit below the page count', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-manga-start-all-');
+    addTearDown(() => temp.delete(recursive: true));
+    final starter = _FakePageStarter();
+    final handle = await MangaChapterTransportV2(
+      startPage: starter.start,
+      startAllPagesImmediately: true,
+    ).start(
+      MangaChapterTransportSpecV2(
+        taskId: 'start-all', mangaId: 'm1', chapterId: 'c1',
+        destinationDirectory: temp.path, retries: 1, maxConcurrentPages: 2,
+        pages: const [
+          MangaPage(index: 0, imageUrl: 'https://cdn.test/0.png'),
+          MangaPage(index: 1, imageUrl: 'https://cdn.test/1.png'),
+          MangaPage(index: 2, imageUrl: 'https://cdn.test/2.png'),
+          MangaPage(index: 3, imageUrl: 'https://cdn.test/3.png'),
+          MangaPage(index: 4, imageUrl: 'https://cdn.test/4.png'),
+        ],
+      ),
+    );
+    addTearDown(handle.dispose);
+    // The configured limit is 2: handing all five pages to the session at
+    // once is what silently ignored the user's per-manga connection limit
+    // on device. Only the limit's worth of pages may be in flight.
+    await starter.waitUntilStarted(1);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(starter.startedPageIndexes, <int>[0, 1]);
+    await starter.complete(0);
+    await starter.waitUntilStarted(2);
+    expect(starter.startedPageIndexes, <int>[0, 1, 2]);
+    await starter.complete(1);
+    await starter.waitUntilStarted(3);
+    await starter.complete(2);
+    await starter.waitUntilStarted(4);
+    await starter.complete(3);
+    await starter.complete(4);
+    await _waitForStatus(handle, DownloadTransportStatus.complete);
+    expect(starter.startedPageIndexes, <int>[0, 1, 2, 3, 4]);
+    expect(starter.maxActive, 2);
+  });
+
+  test('startAllPagesImmediately hands every page over at once when the limit covers them', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-manga-start-all-');
+    addTearDown(() => temp.delete(recursive: true));
+    final starter = _FakePageStarter();
+    final handle = await MangaChapterTransportV2(
+      startPage: starter.start,
+      startAllPagesImmediately: true,
+    ).start(
+      MangaChapterTransportSpecV2(
+        taskId: 'start-all', mangaId: 'm1', chapterId: 'c1',
+        destinationDirectory: temp.path, retries: 1, maxConcurrentPages: 16,
+        pages: const [
+          MangaPage(index: 0, imageUrl: 'https://cdn.test/0.png'),
+          MangaPage(index: 1, imageUrl: 'https://cdn.test/1.png'),
+          MangaPage(index: 2, imageUrl: 'https://cdn.test/2.png'),
+          MangaPage(index: 3, imageUrl: 'https://cdn.test/3.png'),
+          MangaPage(index: 4, imageUrl: 'https://cdn.test/4.png'),
+        ],
+      ),
+    );
+    addTearDown(handle.dispose);
+    await starter.waitUntilStarted(4);
+    expect(starter.startedPageIndexes, <int>[0, 1, 2, 3, 4]);
+    for (var index = 0; index < 5; index++) {
+      await starter.complete(index);
+    }
+    await _waitForStatus(handle, DownloadTransportStatus.complete);
+  });
+
+  test('page progress ripples are coalesced while real changes land at once', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-manga-throttle-');
+    addTearDown(() => temp.delete(recursive: true));
+    final starter = _FakePageStarter();
+    final handle = await MangaChapterTransportV2(startPage: starter.start).start(
+      MangaChapterTransportSpecV2(
+        taskId: 'throttle', mangaId: 'm1', chapterId: 'c1',
+        destinationDirectory: temp.path, retries: 1,
+        pages: const [
+          MangaPage(index: 0, imageUrl: 'https://cdn.test/0.png'),
+          MangaPage(index: 1, imageUrl: 'https://cdn.test/1.png'),
+        ],
+      ),
+    );
+    addTearDown(handle.dispose);
+    await starter.waitUntilStarted(1);
+    final emitted = <DownloadTransportSnapshot>[];
+    final sub = handle.snapshots.listen(emitted.add);
+    addTearDown(sub.cancel);
+    // Let the page-start aggregates settle out of the sample (the
+    // coalescing window is a second, matching the episode cadence).
+    await Future<void>.delayed(const Duration(milliseconds: 1150));
+    emitted.clear();
+
+    Future<void> untilEmitted(int count) async {
+      for (var attempt = 0; attempt < 300 && emitted.length < count; attempt++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(emitted, hasLength(count));
+    }
+
+    final page = starter.handles[0]!;
+    page.setSpeed(1);
+    await untilEmitted(1);
+    expect(emitted.single.networkSpeedMBps, -1);
+
+    // A burst of callbacks nudging the rate by a tenth is a ripple: nothing
+    // is republished inside the coalescing window.
+    for (var i = 0; i < 20; i++) {
+      page.setSpeed(1.1);
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    expect(emitted, hasLength(1));
+
+    // The trailing emission is a chapter checkpoint, not another image speed.
+    await untilEmitted(2);
+    expect(emitted.last.networkSpeedMBps, -1);
+
+    // Even large single-image speed changes must not redraw the whole list.
+    emitted.clear();
+    page.setSpeed(2);
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    expect(emitted, isEmpty);
+    await untilEmitted(1);
+    expect(emitted.single.networkSpeedMBps, -1);
+
+    await starter.complete(0);
+    await starter.complete(1);
+    await _waitForStatus(handle, DownloadTransportStatus.complete);
+  });
+
+  test('held manga pages show zero speed when every network connection has stopped', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-manga-no-stale-speed-');
+    addTearDown(() => temp.delete(recursive: true));
+    final starter = _FakePageStarter();
+    final handle = await MangaChapterTransportV2(startPage: starter.start).start(
+      MangaChapterTransportSpecV2(
+        taskId: 'interrupted', mangaId: 'm1', chapterId: 'c1',
+        destinationDirectory: temp.path, retries: 1, maxConcurrentPages: 1,
+        pages: const [MangaPage(index: 0, imageUrl: 'https://cdn.test/0.png')],
+      ),
+    );
+    addTearDown(handle.dispose);
+    await starter.waitUntilStarted(0);
+    starter.handles[0]!.setSpeed(1.1);
+    await Future<void>.delayed(Duration.zero);
+    expect(handle.current.networkSpeedMBps, -1,
+        reason: 'the parent exposes bytes, not speed of an individual image');
+    starter.handles[0]!.setHeldSpeed(1.1);
+    await Future<void>.delayed(Duration.zero);
+    expect(handle.current.activeConnections, 0);
+    expect(handle.current.networkSpeedMBps, 0);
+  });
+
+  test('chapter exposes cumulative received image bytes for global speed sampling', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-manga-bandwidth-');
+    addTearDown(() => temp.delete(recursive: true));
+    final starter = _FakePageStarter();
+    final handle = await MangaChapterTransportV2(startPage: starter.start).start(
+      MangaChapterTransportSpecV2(
+        taskId: 'bandwidth', mangaId: 'm1', chapterId: 'c1',
+        destinationDirectory: temp.path, retries: 1, maxConcurrentPages: 1,
+        pages: const [
+          MangaPage(index: 0, imageUrl: 'https://cdn.test/0.png'),
+          MangaPage(index: 1, imageUrl: 'https://cdn.test/1.png'),
+        ],
+      ),
+    );
+    addTearDown(handle.dispose);
+    await starter.waitUntilStarted(0);
+    expect(handle.current.transferredBytes, 0);
+    starter.handles[0]!.setProgress(0.2);
+    // Ordinary page progress is intentionally coalesced into a 1s aggregate.
+    await Future<void>.delayed(const Duration(milliseconds: 1100));
+    expect(handle.current.transferredBytes, greaterThan(0));
+    final before = handle.current.transferredBytes!;
+    await starter.complete(0);
+    await starter.waitUntilStarted(1);
+    expect(handle.current.transferredBytes, greaterThanOrEqualTo(before),
+        reason: 'completing a page must not reset session received bytes');
+  });
+
   test('manga progress counts validated whole pages and ignores child bytes', () async {
     final temp = await Directory.systemTemp.createTemp('aw-manga-page-progress-');
     addTearDown(() => temp.delete(recursive: true));
@@ -940,6 +1122,24 @@ final class _FakePageHandle implements DownloadTransportHandle {
     _current = DownloadTransportSnapshot(
       taskId: taskId, status: DownloadTransportStatus.running, progress: value,
       transferredBytes: (value * 1000).round(), totalBytes: 1000,
+    );
+    _controller.add(_current);
+  }
+
+  void setSpeed(double mbps) {
+    _current = DownloadTransportSnapshot(
+      taskId: taskId, status: DownloadTransportStatus.running,
+      progress: _current.progress, networkSpeedMBps: mbps,
+      transferredBytes: _current.transferredBytes,
+      totalBytes: _current.totalBytes,
+    );
+    _controller.add(_current);
+  }
+
+  void setHeldSpeed(double mbps) {
+    _current = DownloadTransportSnapshot(
+      taskId: taskId, status: DownloadTransportStatus.held,
+      progress: _current.progress, networkSpeedMBps: mbps,
     );
     _controller.add(_current);
   }

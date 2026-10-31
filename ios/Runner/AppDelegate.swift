@@ -355,22 +355,27 @@ import UserNotifications
             }
 
           case "update":
+            let progress =
+              (arguments["progress"] as? NSNumber)?.doubleValue ?? 0.0
+            let transferredBytes =
+              (arguments["transferredBytes"] as? NSNumber)?.int64Value ?? -1
             if !manager.acceptsDartUpdate(
               inForeground: DownloadNativeWaitingQueue.acceptsDartOverlayUpdates(),
-              completedPages: (arguments["completedPages"] as? NSNumber)?.intValue
+              completedPages: (arguments["completedPages"] as? NSNumber)?.intValue,
+              taskId: taskId,
+              progress: progress,
+              transferredBytes: transferredBytes
             ) {
               result(true)
               return
             }
-            let progress =
-              (arguments["progress"] as? NSNumber)?.doubleValue ?? 0.0
             let totalBytes =
               (arguments["totalBytes"] as? NSNumber)?.int64Value ?? -1
             let active = manager.update(
               taskId: taskId,
               progress: progress,
               totalBytes: totalBytes,
-              transferredBytes: (arguments["transferredBytes"] as? NSNumber)?.int64Value ?? -1,
+              transferredBytes: transferredBytes,
               completedCount: (arguments["completedCount"] as? NSNumber)?.intValue ?? -1,
               batchTotal: (arguments["batchTotal"] as? NSNumber)?.intValue ?? -1,
               speedBytesPerSecond: (arguments["speedBytesPerSecond"] as? NSNumber)?.doubleValue ?? -1,

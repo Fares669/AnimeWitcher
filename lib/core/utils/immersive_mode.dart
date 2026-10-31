@@ -112,9 +112,16 @@ List<ImmersiveStep> immersivePlan(bool enabled, ImmersivePlatform platform) {
 }
 
 /// Applies [enabled] now.
+///
+/// Asking for the bars back is a final word: it also drops any hold in
+/// progress. A hold defends the bars being hidden, so left running it
+/// answers the restore by hiding them again — which is how leaving the
+/// player through a path that only called this left the whole app
+/// without a status bar.
 void applyImmersiveFullScreen(bool enabled) {
   final platform = _platform;
   if (platform == null) return;
+  if (!enabled) _currentHold?.stop();
   unawaited(_apply(enabled, platform));
 }
 

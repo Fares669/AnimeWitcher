@@ -279,6 +279,72 @@ void main() {
       expect(resolver.calls, 1);
     },
   );
+
+  test(
+    'background staging never exceeds the configured concurrency cap',
+    () async {
+      final store = InMemoryLogicalDownloadStoreV2();
+      final gateway = _ConcurrencyGateway();
+      final manager = DownloadManagerV2(
+        store: store,
+        gateway: gateway,
+        sourceResolver: _Resolver(),
+        maxConcurrentDownloads: () => 1,
+      );
+      addTearDown(manager.dispose);
+      await manager.start(_request(episode: '1', chunks: 1));
+      await manager.start(_request(episode: '2', chunks: 1));
+      await manager.start(_request(episode: '3', chunks: 1));
+      await gateway.waitForStarts(1);
+      expect(gateway.startedSpecs, hasLength(1));
+      // Staging may only fill a free slot; with the cap reached it must not
+      // start another download (the user-visible bug: cap 2 showed 3 running
+      // after the app had been backgrounded).
+      await manager.stageQueuedDownloadsForBackground();
+      await Future<void>.delayed(Duration.zero);
+      expect(gateway.startedSpecs, hasLength(1));
+      await manager.reconcileAdmission();
+      expect(gateway.startedSpecs, hasLength(1));
+    },
+  );
+
+  test('promotion follows enqueue order after a queued download is paused and resumed', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    final gateway = _ConcurrencyGateway();
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: _Resolver(),
+      maxConcurrentDownloads: () => 1,
+    );
+    addTearDown(manager.dispose);
+
+    final first = _request(episode: '1', chunks: 1);
+    final second = _request(episode: '2', chunks: 1);
+    final third = _request(episode: '3', chunks: 1);
+    await manager.start(first);
+    await manager.start(second);
+    await manager.start(third);
+    await gateway.waitForStarts(1);
+
+    // Pausing and resuming a queued download rewrites its record; that must
+    // not cost it its place in the queue (device bug: a later chapter
+    // started before an earlier one).
+    await manager.pause(second.logicalId);
+    final resumed = await manager.resume(second.logicalId);
+    expect(resumed.status, DownloadTransportStatus.queued);
+
+    gateway.emit(
+      gateway.startedSpecs.single.taskId,
+      DownloadTransportStatus.failed,
+    );
+    await gateway.waitForStarts(2);
+    expect(
+      gateway.startedSpecs.last.taskId,
+      (await store.get(second.logicalId))!.taskId,
+    );
+    expect((await store.get(third.logicalId))!.awaitingAdmission, isTrue);
+  });
 }
 
 DownloadStartRequestV2 _request({

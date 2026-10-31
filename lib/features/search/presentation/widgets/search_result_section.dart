@@ -43,7 +43,7 @@ class _SearchResultSectionState extends ConsumerState<SearchResultSection> {
     return MultimediaCard.fromItem(
       key: ValueKey(item.url),
       item: item,
-      heroTag: 'search_${widget.providerId}_${item.url}_$rIndex',
+      heroTag: heroTagWithUrl('search_${widget.providerId}', item, rIndex),
       compact: compact,
       focusNode: rIndex == 0 ? widget.firstCardFocusNode : null,
       onTap: () {

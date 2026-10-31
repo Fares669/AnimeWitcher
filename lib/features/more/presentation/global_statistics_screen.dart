@@ -11,7 +11,7 @@ import 'package:animewitcher/shared/widgets/underline_segment_tabs.dart';
 import '../../../core/account/account_providers.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
-import '../../../core/extensions/extension_manager.dart';
+import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
@@ -52,21 +52,12 @@ class _GlobalStatisticsScreenState extends ConsumerState<GlobalStatisticsScreen>
     super.dispose();
   }
 
-  AnimeWitcherNativeProvider? _provider() {
-    final active = ref.read(activeProviderProvider);
-    if (active is AnimeWitcherNativeProvider) return active;
-    for (final provider in ref.read(extensionManagerProvider)) {
-      if (provider is AnimeWitcherNativeProvider) return provider;
-    }
-    return null;
-  }
-
   Future<ProviderMediaPage> _loadPage(
     AnimeWitcherGlobalRanking ranking, {
     required int offset,
     required int limit,
   }) {
-    final provider = _provider();
+    final provider = ref.nativeProvider;
     if (provider == null) {
       return Future<ProviderMediaPage>.error(
         StateError('AnimeWitcher Native provider is unavailable'),
@@ -405,10 +396,13 @@ class _RankingGrid extends StatelessWidget {
             return MultimediaCard.fromItem(
               key: ValueKey('${ranking.queryType}-${item.url}'),
               item: item,
-              heroTag: 'global-ranking-${ranking.queryType}-${item.id}-$index',
-              onTap: () =>
-                  DetailsRoute($extra: DetailsRouteExtra(item: item))
-                      .push<void>(context),
+              heroTag: heroTagWithId(
+                'global-ranking-${ranking.queryType}',
+                item,
+                index,
+                dashed: true,
+              ),
+              onTap: () => item.openDetails(context),
             );
           },
         ),

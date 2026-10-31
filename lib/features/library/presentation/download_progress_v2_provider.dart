@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/services/download_v2/download_v2_identity.dart';
 import '../../../core/services/download_v2/download_v2_models.dart';
 import '../../../core/services/download_v2/download_v2_provider.dart';
-import '../../../core/utils/download_time_remaining.dart' show DownloadProgressData;
+import '../../../core/utils/download_progress_data.dart' show DownloadProgressData;
 import 'downloads_provider.dart';
 
 final downloadProgressProvider = Provider<Map<String, DownloadProgressData>>((
@@ -31,8 +31,6 @@ final downloadProgressProvider = Provider<Map<String, DownloadProgressData>>((
     result[key] = DownloadProgressData(
       taskId: item.id,
       progress: progress.toDouble(),
-      networkSpeed: snapshot?.networkSpeedMBps ?? item.networkSpeedMBps,
-      timeRemaining: snapshot?.timeRemaining ?? item.timeRemaining,
       totalSize: snapshot?.totalBytes ?? item.totalBytes ?? -1,
       completedPages: item.mediaKind == DownloadMediaKind.mangaChapter
           ? (snapshot?.completedPages ?? item.completedPages ?? 0) : null,

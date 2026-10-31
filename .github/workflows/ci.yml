@@ -173,6 +173,13 @@ jobs:
           swiftc ios/Runner/DownloadCallbackCompatibility.swift test/native/dm26_compatibility_test.swift -o /tmp/dm26-compatibility-test
           /tmp/dm26-compatibility-test
 
+      - name: Exercise continued-processing manga transport integration
+        run: |
+          mkdir -p "$RUNNER_TEMP/background_downloader"
+          curl --fail --silent --show-error --location https://pub.dev/api/archives/background_downloader-9.6.5.tar.gz |
+            tar -xz -C "$RUNNER_TEMP/background_downloader"
+          BACKGROUND_DOWNLOADER_PLUGIN_ROOT="$RUNNER_TEMP/background_downloader" python3 test/native/continued_download_session_test.py
+
   cleanup-obsolete-workflows:
     name: Clean obsolete workflow history
     if: >-
