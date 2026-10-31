@@ -16,6 +16,10 @@ Future<void> retireConfiguredResumeCheckpointV2(String taskId) async {
   await _configuredPersistentStorage.removePausedTask(taskId);
 }
 
+/// Fence late native checkpoint callbacks after confirmed cancellation.
+Future<void> discardConfiguredResumeCheckpointV2(String taskId) =>
+    _configuredPersistentStorage.discardTask(taskId);
+
 /// Keeps the package's Localstore v1 layout while sharing the download worker.
 ///
 /// Data reads and writes await initialization. File operations and JSON encoding
@@ -28,6 +32,15 @@ final class DownloadPersistentStorageV2 implements PersistentStorage {
   static const resumeDataPath = LocalStorePersistentStorage.resumeDataPath;
   static const pausedTasksPath = LocalStorePersistentStorage.pausedTasksPath;
   static final _illegalPathCharacters = RegExp(r'[\\/:*?"<>|]');
+
+  final _discardedTasks = <String>{};
+
+  Future<void> discardTask(String taskId) async {
+    _discardedTasks.add(taskId);
+    await removeResumeData(taskId);
+    await removePausedTask(taskId);
+    await removeTaskRecord(taskId);
+  }
 
   Future<DownloadPersistenceWorker>? _worker;
   Future<void>? _initialization;
@@ -71,6 +84,7 @@ final class DownloadPersistentStorageV2 implements PersistentStorage {
     String taskId,
     Map<String, dynamic> json,
   ) async {
+    if (_discardedTasks.contains(taskId)) return;
     await _run('local.put', [collection, _safeId(taskId), json]);
   }
 

@@ -56,3 +56,10 @@ This supersedes the server-only picker and automatic quality choice described ab
 - [x] Check selected/unselected marker positions against the original action and preserve the book position.
 
 This supersedes the earlier book-replacement selection icon.
+
+## PD and cancellation follow-up from iOS diagnostics
+
+- [x] Move bulk buttons and download-session summary into the active TabBarView page so they travel with that page throughout swipes.
+- [x] Logs show successful 206 transfers beside 403 failures on parallel PD ranges (16 configured connections). Limit PD source descriptors to one transport connection, including queue promotion/restarts. This is a compatibility mitigation; an actual device download is still needed to confirm the server behavior.
+- [x] Final cancellation awaits pending native ACKs and verifies native writers stopped, then fences late checkpoint writes instead of waiting forever for missing resume data. Keep the existing checkpoint fence for ordinary pause/resume and range recovery.
+- [x] Add regressions for unavailable checkpoints during delete, late persistent writes, PD connection width, and bulk controls inside the active pager.

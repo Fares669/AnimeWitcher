@@ -58,6 +58,18 @@ void main() {
     await root.delete(recursive: true);
   });
 
+  test('discarded task rejects late native resume and paused writes', () async {
+    final task = DownloadTask(taskId: 'discarded', url: 'https://example.test/video');
+    await storage.storeResumeData(ResumeData(task, 'before'));
+    await storage.discardTask(task.taskId);
+    await storage.storeResumeData(ResumeData(task, 'late'));
+    await storage.storePausedTask(task);
+    await storage.storeTaskRecord(TaskRecord(task, TaskStatus.paused, 0, 1));
+    expect(await storage.retrieveResumeData(task.taskId), isNull);
+    expect(await storage.retrievePausedTask(task.taskId), isNull);
+    expect(await storage.retrieveTaskRecord(task.taskId), isNull);
+  });
+
   Future<void> reopen() async {
     await worker.close();
     worker = DownloadPersistenceWorker.forDirectory(

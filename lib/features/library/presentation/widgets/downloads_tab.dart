@@ -468,72 +468,6 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
               ),
             ),
           ),
-          const _DownloadSessionStrip(),
-          if (_tabIndex == 0 &&
-              currentDownloads.isNotEmpty &&
-              currentSelectedIds.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-              child: Directionality(
-                textDirection: TextDirection.rtl,
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: FilledButton.icon(
-                        key: const ValueKey('downloads-delete-all'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: Colors.red.shade700,
-                          foregroundColor: Colors.white,
-                          disabledBackgroundColor: Colors.red.shade700,
-                          disabledForegroundColor: Colors.white70,
-                        ),
-                        onPressed: _bulkInFlight
-                            ? null
-                            : () => _bulkAction(currentDownloads, 'delete'),
-                        icon: const Icon(Icons.delete_outline_rounded),
-                        label: Text(
-                          appText(
-                            context,
-                            english: 'Delete all',
-                            arabic: 'حذف الكل',
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: FilledButton.tonalIcon(
-                        key: const ValueKey('downloads-pause-resume-all'),
-                        onPressed: _bulkInFlight || controllableActive.isEmpty
-                            ? null
-                            : () => _bulkAction(
-                                controllableActive,
-                                allPaused ? 'resume' : 'pause',
-                              ),
-                        icon: Icon(
-                          allPaused
-                              ? Icons.play_arrow_rounded
-                              : Icons.pause_rounded,
-                        ),
-                        label: Text(
-                          allPaused
-                              ? appText(
-                                  context,
-                                  english: 'Resume all',
-                                  arabic: 'إكمال الكل',
-                                )
-                              : appText(
-                                  context,
-                                  english: 'Pause all',
-                                  arabic: 'إيقاف الكل',
-                                ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
           Expanded(
             child: Directionality(
               textDirection: TextDirection.rtl,
@@ -542,19 +476,103 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
                 children: [
                   Directionality(
                     textDirection: TextDirection.ltr,
-                    child: downloadsAsync.when(
-                      skipLoadingOnRefresh: false,
-                      skipLoadingOnReload: false,
-                      data: (_) => _ActiveDownloadsList(
-                        items: active,
-                        activeProgress: activeProgress,
-                        emptyMessage: l10n.noDownloadsYet,
-                        selectedIds: currentSelectedIds,
-                        onToggleSelection: _toggleSelected,
-                      ),
-                      loading: () => const Center(child: AppLoadingIndicator()),
-                      error: (err, stack) =>
-                          Center(child: Text(l10n.errorPrefix(err.toString()))),
+                    child: Column(
+                      children: [
+                        const _DownloadSessionStrip(),
+                        if (active.isNotEmpty && currentSelectedIds.isEmpty)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 6,
+                            ),
+                            child: Directionality(
+                              textDirection: TextDirection.rtl,
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: FilledButton.icon(
+                                      key: const ValueKey(
+                                        'downloads-delete-all',
+                                      ),
+                                      style: FilledButton.styleFrom(
+                                        backgroundColor: Colors.red.shade700,
+                                        foregroundColor: Colors.white,
+                                        disabledBackgroundColor:
+                                            Colors.red.shade700,
+                                        disabledForegroundColor: Colors.white70,
+                                      ),
+                                      onPressed: _bulkInFlight
+                                          ? null
+                                          : () => _bulkAction(active, 'delete'),
+                                      icon: const Icon(
+                                        Icons.delete_outline_rounded,
+                                      ),
+                                      label: Text(
+                                        appText(
+                                          context,
+                                          english: 'Delete all',
+                                          arabic: 'حذف الكل',
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: FilledButton.tonalIcon(
+                                      key: const ValueKey(
+                                        'downloads-pause-resume-all',
+                                      ),
+                                      onPressed:
+                                          _bulkInFlight ||
+                                              controllableActive.isEmpty
+                                          ? null
+                                          : () => _bulkAction(
+                                              controllableActive,
+                                              allPaused ? 'resume' : 'pause',
+                                            ),
+                                      icon: Icon(
+                                        allPaused
+                                            ? Icons.play_arrow_rounded
+                                            : Icons.pause_rounded,
+                                      ),
+                                      label: Text(
+                                        allPaused
+                                            ? appText(
+                                                context,
+                                                english: 'Resume all',
+                                                arabic: 'إكمال الكل',
+                                              )
+                                            : appText(
+                                                context,
+                                                english: 'Pause all',
+                                                arabic: 'إيقاف الكل',
+                                              ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        Expanded(
+                          child: downloadsAsync.when(
+                            skipLoadingOnRefresh: false,
+                            skipLoadingOnReload: false,
+                            data: (_) => _ActiveDownloadsList(
+                              items: active,
+                              activeProgress: activeProgress,
+                              emptyMessage: l10n.noDownloadsYet,
+                              selectedIds: currentSelectedIds,
+                              onToggleSelection: _toggleSelected,
+                            ),
+                            loading: () =>
+                                const Center(child: AppLoadingIndicator()),
+                            error: (err, stack) => Center(
+                              child: Text(l10n.errorPrefix(err.toString())),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   Directionality(

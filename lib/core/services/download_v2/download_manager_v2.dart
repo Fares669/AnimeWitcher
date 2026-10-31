@@ -1478,7 +1478,7 @@ final class DownloadManagerV2 {
     final isManga = request.mediaKind == DownloadMediaKind.mangaChapter;
     final parallelChunks = isManga
         ? mangaChapterPageConnectionsFromPreference(request.parallelChunks)
-        : effectivePackageParallelChunksV2(request.parallelChunks);
+        : effectivePackageParallelChunksV2(request.parallelChunks, sourceName: request.sourceDescriptor['source']?.toString());
     final queuedRecord = LogicalDownloadRecordV2(
       schemaVersion: kLogicalDownloadSchemaVersionV2,
       logicalId: request.logicalId,
@@ -1902,7 +1902,7 @@ final class DownloadManagerV2 {
       awaitingAdmission: false,
       parallelChunks: isManga
           ? mangaChapterPageConnectionsFromPreference(request.parallelChunks)
-          : effectivePackageParallelChunksV2(record.parallelChunks),
+          : effectivePackageParallelChunksV2(record.parallelChunks, sourceName: record.sourceDescriptor['source']?.toString()),
       expectedBytes: source?.expectedBytes ?? record.expectedBytes,
       clearFailure: true,
       updatedAtMillis: _nowMillis(),
@@ -2151,7 +2151,7 @@ final class DownloadManagerV2 {
     final expectedBytes = source?.expectedBytes ?? request.expectedBytes;
     final parallelChunks = isManga
         ? mangaChapterPageConnectionsFromPreference(request.parallelChunks)
-        : effectivePackageParallelChunksV2(request.parallelChunks);
+        : effectivePackageParallelChunksV2(request.parallelChunks, sourceName: request.sourceDescriptor['source']?.toString());
 
     final nextRecord = LogicalDownloadRecordV2(
       schemaVersion: kLogicalDownloadSchemaVersionV2,

@@ -908,6 +908,10 @@ void main() {
     ]);
     await tester.pumpWidget(_downloadsApp([], notifier: notifier));
     await tester.pumpAndSettle();
+    for (final key in ['downloads-delete-all', 'downloads-pause-resume-all']) {
+      expect(find.ancestor(of: find.byKey(ValueKey(key)),
+          matching: find.byType(TabBarView)), findsOneWidget);
+    }
     await tester.tap(find.byKey(const ValueKey('downloads-delete-all')));
     await tester.pumpAndSettle();
     final l10n = AppLocalizations.of(

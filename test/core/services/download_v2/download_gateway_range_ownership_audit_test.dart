@@ -469,6 +469,17 @@ void main() {
     expect(await f.part.readAsBytes(), [1, 2, 3, 4]);
   });
 
+  test('delete can discard an unavailable pause checkpoint after writers stop', () async {
+    final f = await _Fixture.create(discard: true);
+    addTearDown(f.dispose);
+    f.downloader.keepResumeData = false;
+    await expectLater(f.handle.pause(), throwsA(isA<TimeoutException>()));
+    expect(await f.handle.cancel(), isTrue);
+    await f.gateway.removeTracking(f.handle.taskId);
+    expect(await f.manifest.exists(), isFalse);
+    expect(f.downloader.native, isEmpty);
+  });
+
   test('checkpoint timeout keeps resume and delete fenced until pending writes settle', () async {
     final f = await _Fixture.create();
     addTearDown(f.dispose);
@@ -912,8 +923,9 @@ void main() {
   });
 }
 
-PackageBackgroundDownloaderGateway _gateway(_Downloader downloader, {bool ios = true}) =>
+PackageBackgroundDownloaderGateway _gateway(_Downloader downloader, {bool ios = true, Future<void> Function(String)? discard}) =>
     PackageBackgroundDownloaderGateway(
+      discardDurableResumeCheckpoint: discard,
       downloader: downloader, initializePackage: () async {}, isIOS: () => ios,
       notificationPreferences: () => DownloadNotificationPrefs.disabled,
     );
@@ -933,7 +945,7 @@ final class _Fixture {
   final File manifest;
   final DownloadTransportHandle handle;
   final PackageBackgroundDownloaderGateway gateway;
-  static Future<_Fixture> create({bool completedSibling = false}) async {
+  static Future<_Fixture> create({bool completedSibling = false, bool discard = false}) async {
     final root = await Directory.systemTemp.createTemp('aw-gateway-owned-range-');
     final parent = _parent(root);
     final parts = await Directory('${await parent.filePath()}.parts').create();
@@ -964,7 +976,10 @@ final class _Fixture {
     }));
     final downloader = _Downloader()..native.add(children.first);
     await downloader.database.updateRecord(TaskRecord(parent, TaskStatus.paused, .25, 8));
-    final gateway = _gateway(downloader);
+    final gateway = _gateway(downloader, discard: discard ? (id) async {
+      await downloader.testStorage.removeResumeData(id);
+      await downloader.testStorage.removePausedTask(id);
+    } : null);
     final handle = (await gateway.attach(parent.taskId))!;
     final checkpoint = await privateParallelManifestFileV2(parent);
     return _Fixture(root, downloader, children.first, part, checkpoint, handle, gateway);
