@@ -34,13 +34,20 @@ class MangaReaderLoadBatchController extends ChangeNotifier {
          initialPage: initialPage,
          batchSize: batchSize,
        ) {
-    if (_batches.isNotEmpty) _unlocked.addAll(_batches.first);
+    if (_batches.isEmpty) return;
+    _unlocked.addAll(_batches.first);
+    final start = initialPage.clamp(0, pageCount - 1).toInt();
+    _backwardStart = _batches.indexWhere((batch) => batch.last < start);
+    _backwardIndex = _backwardStart;
+    if (_backwardIndex >= 0) _unlocked.addAll(_batches[_backwardIndex]);
   }
 
   final List<List<int>> _batches;
   final Set<int> _unlocked = <int>{};
   final Set<int> _settled = <int>{};
-  int _batchIndex = 0;
+  int _forwardIndex = 0;
+  int _backwardStart = -1;
+  int _backwardIndex = -1;
 
   bool canLoad(int pageIndex) => _unlocked.contains(pageIndex);
 
@@ -48,15 +55,30 @@ class MangaReaderLoadBatchController extends ChangeNotifier {
   Set<int> get unlockedPages => Set<int>.unmodifiable(_unlocked);
 
   void markSettled(int pageIndex) {
-    if (_batches.isEmpty || _batchIndex >= _batches.length) return;
-    final current = _batches[_batchIndex];
-    if (!current.contains(pageIndex)) return;
-    _settled.add(pageIndex);
-    if (!current.every(_settled.contains)) return;
+    if (_batches.isEmpty || !_settled.add(pageIndex)) return;
+    final previousCount = _unlocked.length;
+    _advanceBackward();
+    _advanceForward();
+    if (_unlocked.length != previousCount) notifyListeners();
+  }
 
-    _batchIndex++;
-    if (_batchIndex >= _batches.length) return;
-    _unlocked.addAll(_batches[_batchIndex]);
-    notifyListeners();
+  void _advanceForward() {
+    final end = _backwardStart < 0 ? _batches.length : _backwardStart;
+    while (_forwardIndex < end &&
+        _batches[_forwardIndex].every(_settled.contains)) {
+      _forwardIndex++;
+      if (_forwardIndex < end) _unlocked.addAll(_batches[_forwardIndex]);
+    }
+  }
+
+  void _advanceBackward() {
+    while (_backwardIndex >= 0 &&
+        _backwardIndex < _batches.length &&
+        _batches[_backwardIndex].every(_settled.contains)) {
+      _backwardIndex++;
+      if (_backwardIndex < _batches.length) {
+        _unlocked.addAll(_batches[_backwardIndex]);
+      }
+    }
   }
 }
