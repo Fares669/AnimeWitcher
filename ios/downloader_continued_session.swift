@@ -38,6 +38,9 @@ public enum AnimeWitcherDownloadSessions {
     config.timeoutIntervalForResource = original.timeoutIntervalForResource
     config.connectionProxyDictionary = original.connectionProxyDictionary
     config.httpMaximumConnectionsPerHost = original.httpMaximumConnectionsPerHost
+    config.allowsCellularAccess = original.allowsCellularAccess
+    config.allowsExpensiveNetworkAccess = original.allowsExpensiveNetworkAccess
+    config.allowsConstrainedNetworkAccess = original.allowsConstrainedNetworkAccess
     config.waitsForConnectivity = true
     let session = URLSession(configuration: config,
       delegate: UrlSessionDelegate.instance, delegateQueue: background.delegateQueue)
