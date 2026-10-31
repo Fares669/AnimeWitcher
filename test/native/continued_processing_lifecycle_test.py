@@ -271,6 +271,23 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
       try check(batchTask.progress.completedUnitCount < batchTask.progress.totalUnitCount,
                 "an unfinished queue must not report completed system progress")
       manager.stop(taskId: "session", endSession: true)
+    case "queued-growth-preserves-forward-progress":
+      manager.stop(taskId: "session", endSession: true)
+      let batchId = try manager.start(taskId: "first", displayName: "First", progress: 0.90,
+        totalBytes: 100, transferredBytes: 90, completedCount: 0, batchTotal: 2)!
+      let batchTask = BGContinuedProcessingTask(identifier: batchId)
+      scheduler.deliver(batchTask)
+      await drainCallbacks()
+      let before = batchTask.progress.fractionCompleted
+      _ = try manager.start(taskId: "first", displayName: "First", progress: 0.91,
+        totalBytes: 100, transferredBytes: 91, completedCount: 0, batchTotal: 3)
+      let rebase = batchTask.progress.fractionCompleted
+      try check(rebase >= before, "adding queued work must never regress system progress")
+      _ = try manager.start(taskId: "first", displayName: "First", progress: 0.92,
+        totalBytes: 100, transferredBytes: 92, completedCount: 0, batchTotal: 3)
+      try check(batchTask.progress.fractionCompleted > rebase,
+        "progress must still advance after the queue denominator increases")
+      manager.stop(taskId: "session", endSession: true)
     case "zero-speed-is-not-activity", "positive-speed-is-activity", "stale-speed-is-not-activity":
       _ = manager.update(taskId: "episode", progress: 0.14, totalBytes: 100,
                          speedBytesPerSecond: scenario == "zero-speed-is-not-activity" ? 0 : 1)
@@ -392,6 +409,7 @@ with tempfile.TemporaryDirectory(prefix="continued-processing-lifecycle-") as di
         "old-expiration-after-restart", "queued-old-expiration-during-restart",
         "background-dart-advances", "presentation-rate-limit",
         "manga-network-activity", "batch-progress-does-not-reset",
+        "queued-growth-preserves-forward-progress",
         "zero-speed-is-not-activity", "positive-speed-is-activity", "stale-speed-is-not-activity",
     ):
         result = subprocess.run([str(executable), scenario], check=False)
