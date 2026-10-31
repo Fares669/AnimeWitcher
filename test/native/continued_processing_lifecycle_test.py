@@ -274,19 +274,28 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
     case "queued-growth-preserves-forward-progress":
       manager.stop(taskId: "session", endSession: true)
       let batchId = try manager.start(taskId: "first", displayName: "First", progress: 0.90,
-        totalBytes: 100, transferredBytes: 90, completedCount: 0, batchTotal: 2)!
+        totalBytes: 100, transferredBytes: 90, completedCount: 0, batchTotal: 1)!
       let batchTask = BGContinuedProcessingTask(identifier: batchId)
       scheduler.deliver(batchTask)
       await drainCallbacks()
       let before = batchTask.progress.fractionCompleted
       _ = try manager.start(taskId: "first", displayName: "First", progress: 0.91,
-        totalBytes: 100, transferredBytes: 91, completedCount: 0, batchTotal: 3)
-      let rebase = batchTask.progress.fractionCompleted
-      try check(rebase >= before, "adding queued work must never regress system progress")
+        totalBytes: 100, transferredBytes: 91, completedCount: 0, batchTotal: 2)
+      let firstRebase = batchTask.progress.fractionCompleted
+      try check(firstRebase >= before, "adding queued work must never regress system progress")
       _ = try manager.start(taskId: "first", displayName: "First", progress: 0.92,
-        totalBytes: 100, transferredBytes: 92, completedCount: 0, batchTotal: 3)
-      try check(batchTask.progress.fractionCompleted > rebase,
-        "progress must still advance after the queue denominator increases")
+        totalBytes: 100, transferredBytes: 92, completedCount: 0, batchTotal: 2)
+      let advancing = batchTask.progress.fractionCompleted
+      try check(advancing > firstRebase,
+        "progress must advance when a second queued task was added")
+      _ = try manager.start(taskId: "first", displayName: "First", progress: 0.93,
+        totalBytes: 100, transferredBytes: 93, completedCount: 0, batchTotal: 3)
+      let secondRebase = batchTask.progress.fractionCompleted
+      _ = try manager.start(taskId: "first", displayName: "First", progress: 0.94,
+        totalBytes: 100, transferredBytes: 94, completedCount: 0, batchTotal: 3)
+      try check(secondRebase >= advancing
+        && batchTask.progress.fractionCompleted > secondRebase,
+        "repeated queue growth must preserve forward progress")
       manager.stop(taskId: "session", endSession: true)
     case "zero-speed-is-not-activity", "positive-speed-is-activity", "stale-speed-is-not-activity":
       _ = manager.update(taskId: "episode", progress: 0.14, totalBytes: 100,
