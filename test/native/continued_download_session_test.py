@@ -79,6 +79,9 @@ CHECKS = r'''
     let oldLease = NSObject(), newLease = NSObject()
     precondition(select(page) === background, "no lease uses daemon transport")
     AnimeWitcherDownloadSessions.activate(oldLease)
+    precondition(select(page) === background,
+                 "foreground page transfers must use the daemon-owned background URLSession")
+    AnimeWitcherDownloadSessions.setForeground(false)
     let direct = select(page)
     precondition(direct !== background && direct.configuration.identifier == nil,
                  "a live continued lease must start manga pages without discretionary background scheduling")
@@ -97,6 +100,9 @@ CHECKS = r'''
     AnimeWitcherDownloadSessions.activate(newLease)
     AnimeWitcherDownloadSessions.deactivate(oldLease)
     precondition(select(page) === direct, "stale expiration cannot revoke a replacement lease")
+    AnimeWitcherDownloadSessions.setForeground(true)
+    precondition(select(page) === background, "foreground return must select durable transport for new work")
+    AnimeWitcherDownloadSessions.setForeground(false)
     let backgroundTask = URLSessionTask(), directTask = URLSessionTask()
     background.tasks = [backgroundTask]; direct.tasks = [directTask]
     let all = await AnimeWitcherDownloadSessions.allTasks()!
@@ -150,6 +156,9 @@ with tempfile.TemporaryDirectory(prefix='continued-download-session-') as direct
         subprocess.run(['swiftc', '-typecheck', '-I', str(temp), str(probe)], check=True)
         subprocess.run(['swiftc', '-frontend', '-parse', '-target', 'arm64-apple-ios15.0',
                         *map(str, (temp / relative).glob('*.swift'))], check=True)
+    # The app's scene lifecycle must feed the plugin selection cache.
+    runner = (ROOT / 'ios/Runner/DownloadNativeWaitingQueue.swift').read_text()
+    assert 'AnimeWitcherDownloadSessions.setForeground(active)' in runner
     source = (temp / relative / 'BDPlugin.swift').read_text()
     expression = next(line.strip() for line in source.splitlines() if 'let urlSessionDownloadTask = resumeData' in line)
     selection = '''func select(_ id: String) -> URLSession {
