@@ -259,6 +259,22 @@ final class _ReaderProgressRepository extends MangaReadingRepository {
   Future<void> save(MangaReadingProgress progress) async {}
 }
 
+final class _DelayedReaderProgressRepository extends MangaReadingRepository {
+  _DelayedReaderProgressRepository() : super(_ReaderStorage());
+
+  final Completer<void> firstSaveStarted = Completer<void>();
+  final Completer<void> releaseFirstSave = Completer<void>();
+  var saves = 0;
+
+  @override
+  Future<void> save(MangaReadingProgress progress) async {
+    if (++saves == 1) {
+      firstSaveStarted.complete();
+      await releaseFirstSave.future;
+    }
+  }
+}
+
 void main() {
   setUpAll(() {
     VisibilityDetectorController.instance.updateInterval = Duration.zero;
@@ -487,6 +503,49 @@ void main() {
       (await cache.get('m1', second))?.map((page) => page.imageUrl),
       pages.map((page) => page.imageUrl),
     );
+  });
+
+  test('latest stream chapter wins when an older progress flush is delayed', () async {
+    final temp = await Directory.systemTemp.createTemp('aw_reader_adoption_');
+    addTearDown(() => temp.delete(recursive: true));
+    final provider = _ReaderProvider();
+    final progress = _DelayedReaderProgressRepository();
+    const first = MangaChapter(
+      id: 'adopt-1', mangaId: 'm1',
+      url: 'https://example.test/chapter/adopt-1', name: 'Chapter 1', number: 1,
+    );
+    const second = MangaChapter(
+      id: 'adopt-2', mangaId: 'm1',
+      url: 'https://example.test/chapter/adopt-2', name: 'Chapter 2', number: 2,
+    );
+    const third = MangaChapter(
+      id: 'adopt-3', mangaId: 'm1',
+      url: 'https://example.test/chapter/adopt-3', name: 'Chapter 3', number: 3,
+    );
+    final controller = MangaReaderController(
+      provider: provider,
+      progressRepository: progress,
+      manga: MultimediaItem(
+        title: 'Reader Manga', url: 'https://animewitcher.com/manga/m1',
+        posterUrl: '', contentType: MultimediaContentType.manga,
+        provider: provider.packageName,
+      ),
+      chapter: first,
+      chapters: const <MangaChapter>[first, second, third],
+      pageCache: MangaReaderPageCache(cacheDirectory: temp),
+    );
+    addTearDown(controller.dispose);
+    await controller.load();
+
+    final stale = controller.adoptStreamChapter(second, pages, 1);
+    await progress.firstSaveStarted.future;
+    final latest = controller.adoptStreamChapter(third, pages, 2);
+    await latest;
+    progress.releaseFirstSave.complete();
+    await stale;
+
+    expect(controller.currentChapter.id, 'adopt-3');
+    expect(controller.pageIndex, 2);
   });
 
   test(
