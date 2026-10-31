@@ -35,11 +35,10 @@ void main() {
     for (var generation = 0; generation < 4; generation++) {
       await _until(() async => gateway.pageHandles.length >= generation + 1);
       final page = gateway.pageHandles.last;
-      page.progress(0.25);
-      await _until(() async => manager.snapshotFor(request.logicalId)?.networkSpeedMBps == 0.25);
+      await _until(() async => manager.snapshotFor(request.logicalId)?.taskId == gateway.startedSpecs.last.taskId);
+      await _expectByteProgress(page, manager, request.logicalId, 0.25);
       expect(manager.snapshotFor(request.logicalId)?.progress, 0);
-      page.progress(0.50);
-      await _until(() async => manager.snapshotFor(request.logicalId)?.networkSpeedMBps == 0.50);
+      await _expectByteProgress(page, manager, request.logicalId, 0.50);
       expect(manager.snapshotFor(request.logicalId)?.progress, 0);
       await page.complete(utf8.encode('<html>expired source</html>'));
       if (generation < 3) {
@@ -89,14 +88,13 @@ void main() {
     };
     for (var generation = 0; generation < 4; generation++) {
       await _until(() async => gateway.hasCurrentPage(1));
+      await _until(() async => manager.snapshotFor(request.logicalId)?.taskId == gateway.startedSpecs.last.taskId);
       if (generation == 1) {
         await File('${temp.path}/${MangaChapterManifestV2.fileName}').delete();
       }
-      gateway.currentPage(1).progress(0.25);
-      await _until(() async => manager.snapshotFor(request.logicalId)?.networkSpeedMBps == 0.25);
+      await _expectByteProgress(gateway.currentPage(1), manager, request.logicalId, 0.25);
       expect(manager.snapshotFor(request.logicalId)?.progress, .5);
-      gateway.currentPage(1).progress(0.50);
-      await _until(() async => manager.snapshotFor(request.logicalId)?.networkSpeedMBps == 0.50);
+      await _expectByteProgress(gateway.currentPage(1), manager, request.logicalId, 0.50);
       expect(manager.snapshotFor(request.logicalId)?.progress, .5);
       await gateway.currentPage(1).complete(utf8.encode('<html>expired source</html>'));
       await _until(() async => gateway.startedSpecs.length > generation + 1 ||
@@ -178,12 +176,11 @@ void main() {
     // Once valid progress stops, repeated HTML still exhausts the renewed budget.
     for (var stalled = 0; stalled < 3; stalled++) {
       await _until(() async => gateway.hasCurrentPage(5));
+      await _until(() async => manager.snapshotFor(request.logicalId)?.taskId == gateway.startedSpecs.last.taskId);
       final before = gateway.startedSpecs.length;
-      gateway.currentPage(5).progress(0.25);
-      await _until(() async => manager.snapshotFor(request.logicalId)?.networkSpeedMBps == 0.25);
+      await _expectByteProgress(gateway.currentPage(5), manager, request.logicalId, 0.25);
       expect(manager.snapshotFor(request.logicalId)?.progress, 5 / 8);
-      gateway.currentPage(5).progress(0.50);
-      await _until(() async => manager.snapshotFor(request.logicalId)?.networkSpeedMBps == 0.50);
+      await _expectByteProgress(gateway.currentPage(5), manager, request.logicalId, 0.50);
       expect(manager.snapshotFor(request.logicalId)?.progress, 5 / 8);
       await gateway.currentPage(5).complete(utf8.encode('<html>expired source</html>'));
       await _until(() async => gateway.startedSpecs.length > before ||
@@ -211,6 +208,20 @@ DownloadStartRequestV2 _request(String path) => DownloadStartRequestV2(
   sourceDescriptor: const <String, Object?>{'chapterId': 'c1'},
   allowPause: true, retries: 1, parallelChunks: 1,
 );
+
+Future<void> _expectByteProgress(
+  _PageHandle page,
+  DownloadManagerV2 manager,
+  DownloadLogicalId logicalId,
+  double fraction,
+) async {
+  final previousBytes = manager.snapshotFor(logicalId)?.transferredBytes ?? 0;
+  page.progress(fraction);
+  // Chapter speed now comes from the overall byte sampler, not from each
+  // image's networkSpeedMBps. Verify real untrusted byte progress instead.
+  await _until(() async =>
+      (manager.snapshotFor(logicalId)?.transferredBytes ?? 0) > previousBytes);
+}
 
 Future<void> _until(Future<bool> Function() done) async {
   for (var attempt = 0; attempt < 500; attempt++) {
