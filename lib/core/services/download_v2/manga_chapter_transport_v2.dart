@@ -406,7 +406,7 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
     int generation,
     DownloadTransportSnapshot snapshot,
   ) {
-    if (_disposed) return;
+    if (_disposed || _canceled || generation != _generation) return;
     _recordPageBytes(index, snapshot);
     if (snapshot.status != DownloadTransportStatus.complete) {
       unawaited(_onPageSnapshot(index, generation, snapshot));
