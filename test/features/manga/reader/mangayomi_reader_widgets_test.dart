@@ -22,6 +22,21 @@ const _pages = <MangaPage>[
 ];
 
 void main() {
+  test('double-page spreads never pair pages across chapter seams', () {
+    for (final singleFirst in <bool>[false, true]) {
+      final spreads = mangaReaderPageSpreads(
+        pageCount: 7,
+        singleFirst: singleFirst,
+        sectionStarts: const <int>[3, 5],
+      );
+      expect(spreads.expand((part) => part), orderedEquals(<int>[0, 1, 2, 3, 4, 5, 6]));
+      expect(spreads.any((part) => part.first < 3 && part.last >= 3), isFalse);
+      expect(spreads.any((part) => part.first < 5 && part.last >= 5), isFalse);
+      expect(spreads.any((part) => part.first == 3), isTrue);
+      expect(spreads.any((part) => part.first == 5), isTrue);
+    }
+  });
+
   test('preload amount two unlocks pages in ordered pairs', () {
     final controller = MangaReaderLoadBatchController(
       pageCount: 6,
