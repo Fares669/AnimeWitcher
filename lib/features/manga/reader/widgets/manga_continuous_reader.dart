@@ -122,6 +122,7 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
         for (final spread in mangaReaderPageSpreads(
           pageCount: widget.pages.length,
           singleFirst: widget.settings.doublePageSingleFirstPage,
+          sectionStarts: widget.sectionDividers.keys,
         )) ...<_ContinuousEntry>[
           if (widget.sectionDividers.containsKey(spread.first))
             _ContinuousEntry.dividerEntry(
