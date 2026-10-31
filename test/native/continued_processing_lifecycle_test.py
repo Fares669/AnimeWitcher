@@ -17,10 +17,16 @@ SOURCE = (ROOT / "ios/Runner/DownloadContinuedProcessingManager.swift").read_tex
 SOURCE = SOURCE.removeprefix("#if os(iOS)\n").rstrip().removesuffix("#endif")
 SOURCE = SOURCE.replace("import BackgroundTasks\n", "").replace("import UIKit\n", "")
 SOURCE = SOURCE.replace("Bundle.main", "TestBundle.main")
+SOURCE = SOURCE.replace("#if canImport(background_downloader)", "#if true").replace("import enum background_downloader.AnimeWitcherDownloadSessions\n", "")
 
 # Drive timer delivery explicitly; Linux MainActor has no UIKit main runloop.
 SOURCE = SOURCE.replace("RunLoop.main.add(timer, forMode: .common)", "TestTimers.current = timer")
 FAKES = r'''
+enum AnimeWitcherDownloadSessions {
+  static var lease: AnyObject?
+  static func activate(_ value: AnyObject) { lease = value }
+  static func deactivate(_ value: AnyObject) { if lease === value { lease = nil } }
+}
 final class Timer {
   let block: (Timer) -> Void
   var valid = true
@@ -104,6 +110,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
     let id = try manager.start(taskId: "episode", displayName: "Episode", progress: 0.14,
                                totalBytes: 100, transferredBytes: 14)!
     let task = BGContinuedProcessingTask(identifier: id)
+    try check(AnimeWitcherDownloadSessions.lease == nil, "submission alone cannot authorize direct transport")
     switch scenario {
     case "cancel-before-attach":
       manager.stop(taskId: "session", endSession: true)
@@ -128,11 +135,13 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
     case "valid-attach-and-stop":
       scheduler.deliver(task)
       await drainCallbacks()
+      try check(AnimeWitcherDownloadSessions.lease === task, "only attached leases authorize direct transport")
       try check(task.completions.isEmpty && task.progress.completedUnitCount == 14, "a live session attaches with its checkpoint")
       try check(manager.update(taskId: "episode", progress: 0.25, totalBytes: 100), "a live lease accepts progress")
       try check(task.progress.completedUnitCount == 25, "the real manager updates the attached lease")
       manager.stop(taskId: "session", endSession: true)
       manager.stop(taskId: "session", endSession: true)
+      try check(AnimeWitcherDownloadSessions.lease == nil, "explicit stop revokes direct transport")
       try check(task.completions == [false], "stop completes the lease exactly once")
       try check(task.expirationHandler == nil, "explicit stop detaches the expiration callback")
       try check(scheduler.canceled == [id], "explicit stop withdraws the pending request once")
@@ -170,6 +179,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
       scheduler.deliver(task)
       await drainCallbacks()
       task.expirationHandler!()
+      try check(AnimeWitcherDownloadSessions.lease == nil, "expiration synchronously revokes direct transport before actor cleanup")
       try check(task.completions == [false], "expiration acknowledges the OS before the main-actor cleanup")
       try check(scheduler.canceled.isEmpty, "ambiguous expiration must not issue an explicit cancellation")
       await drainCallbacks()
@@ -351,6 +361,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
                 "an old expiration cannot finish the new concrete lease")
       try check(manager.update(taskId: "new-episode", progress: 0.70, totalBytes: 100),
                 "an old expiration callback must not clear the current snapshot or identifier")
+      try check(AnimeWitcherDownloadSessions.lease === next, "stale expiration must preserve the current transport lease")
       try check(next.progress.completedUnitCount == 70, "the new lease still receives current progress")
       manager.stop(taskId: "session", endSession: true)
       try check(next.completions == [false], "the new lease stays owned until its own stop")

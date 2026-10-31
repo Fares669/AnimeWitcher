@@ -39,6 +39,10 @@ target 'Runner' do
   write_downloader_compatibility_version(File.expand_path(
     '.symlinks/plugins/background_downloader', __dir__
   ))
+  require_relative 'downloader_continued_session_patch'
+  patch_background_downloader_continued_session(File.expand_path(
+    '.symlinks/plugins/background_downloader', __dir__
+  ))
   target 'RunnerTests' do
     inherit! :search_paths
   end

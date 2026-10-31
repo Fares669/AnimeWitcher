@@ -1,6 +1,9 @@
 #if os(iOS)
 import BackgroundTasks
 import Foundation
+#if canImport(background_downloader)
+import enum background_downloader.AnimeWitcherDownloadSessions
+#endif
 import UIKit
 
 @available(iOS 26.0, *)
@@ -556,6 +559,9 @@ final class DownloadContinuedProcessingManager {
     }
 
     if let task = activeTask {
+      #if canImport(background_downloader)
+      AnimeWitcherDownloadSessions.deactivate(task)
+      #endif
       activeTask = nil
       let completion = activeTaskCompletion
       activeTaskCompletion = nil
@@ -620,6 +626,9 @@ final class DownloadContinuedProcessingManager {
     }
 
     activeTask = task
+    #if canImport(background_downloader)
+    AnimeWitcherDownloadSessions.activate(task)
+    #endif
     let completion = DownloadContinuedProcessingCompletion()
     activeTaskCompletion = completion
     let attachedAt = Date()
@@ -628,6 +637,11 @@ final class DownloadContinuedProcessingManager {
 
     task.expirationHandler = { [weak self, weak task] in
       guard let task else { return }
+      // Revoke direct request admission before relinquishing runtime, even if
+      // main-actor cleanup is delayed. Concrete identity fences stale expiry.
+      #if canImport(background_downloader)
+      AnimeWitcherDownloadSessions.deactivate(task)
+      #endif
       // Log synchronously before relinquishing runtime. Expiration does not
       // expose a reason, and must not be labelled as a user cancellation.
       DownloadNativeDiagnosticLog.record("continued.expired", fields: [
