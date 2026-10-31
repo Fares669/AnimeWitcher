@@ -74,6 +74,34 @@ void main() {
     },
   );
 
+  test('queued page resolution is bounded and canceled prefetches free capacity', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-prefetch-bound-');
+    addTearDown(() => temp.delete(recursive: true));
+    final gateway = _Gateway();
+    final resolver = _MangaResolver();
+    final manager = DownloadManagerV2(
+      store: InMemoryLogicalDownloadStoreV2(),
+      gateway: gateway,
+      sourceResolver: _VideoResolver(),
+      mangaChapterPageResolver: resolver,
+      maxConcurrentDownloads: () => 1,
+    );
+    addTearDown(manager.dispose);
+
+    final first = chapter('1', '${temp.path}/chapter-1');
+    final second = chapter('2', '${temp.path}/chapter-2');
+    await manager.start(first);
+    await untilSpecs(gateway, 1);
+    await manager.start(second);
+    await manager.start(chapter('3', '${temp.path}/chapter-3'));
+    await manager.start(chapter('4', '${temp.path}/chapter-4'));
+    expect(resolver.calls, 2); // The running chapter + one queued prefetch.
+
+    await manager.cancel(second.logicalId);
+    await manager.start(chapter('5', '${temp.path}/chapter-5'));
+    expect(resolver.calls, 3); // Canceling a queued chapter releases its slot.
+  });
+
   test('promotion re-resolves when the enqueue-time resolution is stale', () async {
     final temp = await Directory.systemTemp.createTemp('aw-manga-stale-');
     addTearDown(() => temp.delete(recursive: true));
