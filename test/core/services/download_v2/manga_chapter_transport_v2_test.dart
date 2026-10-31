@@ -117,7 +117,7 @@ void main() {
     final page = starter.handles[0]!;
     page.setSpeed(1);
     await untilEmitted(1);
-    expect(emitted.single.networkSpeedMBps, closeTo(1, 0.001));
+    expect(emitted.single.networkSpeedMBps, -1);
 
     // A burst of callbacks nudging the rate by a tenth is a ripple: nothing
     // is republished inside the coalescing window.
@@ -127,15 +127,17 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 120));
     expect(emitted, hasLength(1));
 
-    // The trailing emission still lands with the latest rate.
+    // The trailing emission is a chapter checkpoint, not another image speed.
     await untilEmitted(2);
-    expect(emitted.last.networkSpeedMBps, closeTo(1.1, 0.001));
+    expect(emitted.last.networkSpeedMBps, -1);
 
-    // A real swing in the rate is material and goes out immediately.
+    // Even large single-image speed changes must not redraw the whole list.
     emitted.clear();
     page.setSpeed(2);
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    expect(emitted, isEmpty);
     await untilEmitted(1);
-    expect(emitted.single.networkSpeedMBps, closeTo(2, 0.001));
+    expect(emitted.single.networkSpeedMBps, -1);
 
     await starter.complete(0);
     await starter.complete(1);
@@ -157,7 +159,8 @@ void main() {
     await starter.waitUntilStarted(0);
     starter.handles[0]!.setSpeed(1.1);
     await Future<void>.delayed(Duration.zero);
-    expect(handle.current.networkSpeedMBps, greaterThan(0));
+    expect(handle.current.networkSpeedMBps, -1,
+        reason: 'the parent exposes bytes, not speed of an individual image');
     starter.handles[0]!.setHeldSpeed(1.1);
     await Future<void>.delayed(Duration.zero);
     expect(handle.current.activeConnections, 0);
