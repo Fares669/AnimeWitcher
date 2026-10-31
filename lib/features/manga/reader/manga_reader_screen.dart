@@ -102,6 +102,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
   String? _streamAnchorChapterId;
   bool _streamAppending = false;
   bool _streamAdopting = false;
+  int _streamAdoptionRequest = 0;
   int _streamGeneration = 0;
   bool _settingsPanelOpen = false;
   MangaReaderPanelTab _panelTab = MangaReaderPanelTab.mode;
@@ -336,6 +337,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     if (segment.chapter.id != _controller.currentChapter.id ||
         local != _controller.pageIndex) {
       _streamAdopting = true;
+      final request = ++_streamAdoptionRequest;
       unawaited(
         _controller
             .adoptStreamChapter(
@@ -344,7 +346,9 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
               local,
               autoReadDuplicateChapters: settings.autoReadDuplicateChapters,
             )
-            .whenComplete(() => _streamAdopting = false),
+            .whenComplete(() {
+              if (request == _streamAdoptionRequest) _streamAdopting = false;
+            }),
       );
     }
     _maybeFlashOnPageChange(settings);
