@@ -83,16 +83,64 @@ void main() {
     );
     addTearDown(controller.dispose);
 
-    expect(controller.unlockedPages, <int>{6, 7, 8});
+    // The nearest pages behind the restored index are immediately eligible
+    // alongside the starting forward batch, without waiting for page 9.
+    expect(controller.unlockedPages, <int>{3, 4, 5, 6, 7, 8});
+    expect(controller.canLoad(5), isTrue);
+    expect(controller.canLoad(2), isFalse);
+    expect(controller.canLoad(9), isFalse);
+
+    controller.markSettled(5);
+    controller.markSettled(4);
+    controller.markSettled(3);
+    expect(controller.canLoad(2), isTrue,
+        reason: 'scrolling upward never waits for forward image downloads');
+    expect(controller.canLoad(9), isFalse);
+
     controller.markSettled(6);
     controller.markSettled(7);
     controller.markSettled(8);
-    expect(controller.canLoad(9), isTrue);
-    expect(controller.canLoad(5), isFalse);
+    expect(controller.canLoad(9), isTrue,
+        reason: 'the forward preload limit still applies independently');
+  });
 
-    controller.markSettled(9);
+  test('backward preloading continues when a forward page stalls', () {
+    final controller = MangaReaderLoadBatchController(
+      pageCount: 10,
+      initialPage: 4,
+      batchSize: 2,
+    );
+    addTearDown(controller.dispose);
+
+    expect(controller.unlockedPages, <int>{2, 3, 4, 5});
+    controller.markSettled(3);
+    controller.markSettled(2);
+    expect(controller.canLoad(1), isTrue);
+    expect(controller.canLoad(0), isTrue);
+    expect(controller.canLoad(6), isFalse);
+
+    controller.markSettled(1);
+    controller.markSettled(0);
+    expect(controller.canLoad(6), isFalse);
+    controller.markSettled(4);
+    controller.markSettled(5);
+    expect(controller.canLoad(6), isTrue);
+    expect(controller.canLoad(7), isTrue);
+  });
+
+  test('restored page near chapter end still loads earlier pages', () {
+    final controller = MangaReaderLoadBatchController(
+      pageCount: 10,
+      initialPage: 9,
+      batchSize: 2,
+    );
+    addTearDown(controller.dispose);
+    expect(controller.unlockedPages, <int>{7, 8, 9});
+    controller.markSettled(8);
+    controller.markSettled(7);
+    expect(controller.canLoad(6), isTrue);
     expect(controller.canLoad(5), isTrue);
-    expect(controller.canLoad(2), isFalse);
+    expect(controller.canLoad(0), isFalse);
   });
 
   setUpAll(() {
