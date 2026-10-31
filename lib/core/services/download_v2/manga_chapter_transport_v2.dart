@@ -568,10 +568,12 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
 
     for (final handle in _pageHandles.values) {
       final page = handle.current;
-      if (page.status == DownloadTransportStatus.running) activeConnections++;
-      if (page.networkSpeedMBps >= 0) {
-        networkSpeed += page.networkSpeedMBps;
-        hasNetworkSpeed = true;
+      if (page.status == DownloadTransportStatus.running) {
+        activeConnections++;
+        if (page.networkSpeedMBps >= 0) {
+          networkSpeed += page.networkSpeedMBps;
+          hasNetworkSpeed = true;
+        }
       }
       if (page.timeRemaining > (timeRemaining ?? Duration.zero)) {
         timeRemaining = page.timeRemaining;
@@ -584,7 +586,11 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
       progress: progress ?? 0,
       completedPages: _manifest.completedIndexes.length,
       totalPages: pageCount,
-      networkSpeedMBps: hasNetworkSpeed ? networkSpeed : -1,
+      // A stale package speed from a held/failed page is not real network
+      // throughput. Explicit zero clears the last visible speed sample.
+      networkSpeedMBps: activeConnections == 0
+          ? 0
+          : hasNetworkSpeed ? networkSpeed : -1,
       timeRemaining: timeRemaining ?? Duration.zero,
       configuredConnections: _pageConnectionLimit,
       activeConnections: activeConnections,
