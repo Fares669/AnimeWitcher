@@ -1581,6 +1581,9 @@ enum DownloadNativeWaitingQueue {
     let changed = cachedForegroundState != active
     cachedForegroundState = active
     foregroundStateLock.unlock()
+    #if canImport(background_downloader)
+    AnimeWitcherDownloadSessions.setForeground(active)
+    #endif
     if changed {
       DownloadNativeDiagnosticLog.record("application.visibility", fields: ["inForeground": active])
     }
