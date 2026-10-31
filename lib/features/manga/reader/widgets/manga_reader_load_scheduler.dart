@@ -34,12 +34,13 @@ class MangaReaderLoadBatchController extends ChangeNotifier {
          initialPage: initialPage,
          batchSize: batchSize,
        ) {
-    if (_batches.isEmpty) return;
-    _unlocked.addAll(_batches.first);
-    final start = initialPage.clamp(0, pageCount - 1).toInt();
-    _backwardStart = _batches.indexWhere((batch) => batch.last < start);
-    _backwardIndex = _backwardStart;
-    if (_backwardIndex >= 0) _unlocked.addAll(_batches[_backwardIndex]);
+    if (_batches.isNotEmpty) {
+      _unlocked.addAll(_batches.first);
+      final start = initialPage.clamp(0, pageCount - 1).toInt();
+      _backwardStart = _batches.indexWhere((batch) => batch.last < start);
+      _backwardIndex = _backwardStart;
+      if (_backwardIndex >= 0) _unlocked.addAll(_batches[_backwardIndex]);
+    }
   }
 
   final List<List<int>> _batches;
