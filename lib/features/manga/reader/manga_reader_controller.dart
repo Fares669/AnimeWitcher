@@ -62,6 +62,7 @@ class MangaReaderController extends ChangeNotifier {
   bool _disposed = false;
   Future<void>? _closing;
   bool _autoReadDuplicateChapters = false;
+  int _streamAdoptionGeneration = 0;
   String? _lastLoadChapterId;
 
   static MangaReaderMode preferredModeFor(MultimediaItem item) {
@@ -207,12 +208,13 @@ class MangaReaderController extends ChangeNotifier {
     bool autoReadDuplicateChapters = false,
   }) async {
     if (_disposed || pages.isEmpty) return;
+    final adoption = ++_streamAdoptionGeneration;
     _autoReadDuplicateChapters = autoReadDuplicateChapters;
     final sameChapter =
         chapter.id == _chapter.id && chapter.url == _chapter.url;
     if (!sameChapter) {
       await flushProgress();
-      if (_disposed) return;
+      if (_disposed || adoption != _streamAdoptionGeneration) return;
       _chapter = chapter;
     }
     _pages = List<MangaPage>.unmodifiable(pages);
@@ -412,8 +414,9 @@ class MangaReaderController extends ChangeNotifier {
   Future<void> openChapter(MangaChapter value) async {
     if (_disposed) return;
     if (value.id == _chapter.id && value.url == _chapter.url) return;
+    final adoption = ++_streamAdoptionGeneration;
     await flushProgress();
-    if (_disposed) return;
+    if (_disposed || adoption != _streamAdoptionGeneration) return;
     _chapter = value;
     _pageIndex = 0;
     await load();
