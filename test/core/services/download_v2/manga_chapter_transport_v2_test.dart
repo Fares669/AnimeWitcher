@@ -142,6 +142,28 @@ void main() {
     await _waitForStatus(handle, DownloadTransportStatus.complete);
   });
 
+  test('held manga pages show zero speed when every network connection has stopped', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-manga-no-stale-speed-');
+    addTearDown(() => temp.delete(recursive: true));
+    final starter = _FakePageStarter();
+    final handle = await MangaChapterTransportV2(startPage: starter.start).start(
+      MangaChapterTransportSpecV2(
+        taskId: 'interrupted', mangaId: 'm1', chapterId: 'c1',
+        destinationDirectory: temp.path, retries: 1, maxConcurrentPages: 1,
+        pages: const [MangaPage(index: 0, imageUrl: 'https://cdn.test/0.png')],
+      ),
+    );
+    addTearDown(handle.dispose);
+    await starter.waitUntilStarted(0);
+    starter.handles[0]!.setSpeed(1.1);
+    await Future<void>.delayed(Duration.zero);
+    expect(handle.current.networkSpeedMBps, greaterThan(0));
+    starter.handles[0]!.setHeldSpeed(1.1);
+    await Future<void>.delayed(Duration.zero);
+    expect(handle.current.activeConnections, 0);
+    expect(handle.current.networkSpeedMBps, 0);
+  });
+
   test('manga progress counts validated whole pages and ignores child bytes', () async {
     final temp = await Directory.systemTemp.createTemp('aw-manga-page-progress-');
     addTearDown(() => temp.delete(recursive: true));
@@ -1079,6 +1101,14 @@ final class _FakePageHandle implements DownloadTransportHandle {
       progress: _current.progress, networkSpeedMBps: mbps,
       transferredBytes: _current.transferredBytes,
       totalBytes: _current.totalBytes,
+    );
+    _controller.add(_current);
+  }
+
+  void setHeldSpeed(double mbps) {
+    _current = DownloadTransportSnapshot(
+      taskId: taskId, status: DownloadTransportStatus.held,
+      progress: _current.progress, networkSpeedMBps: mbps,
     );
     _controller.add(_current);
   }
