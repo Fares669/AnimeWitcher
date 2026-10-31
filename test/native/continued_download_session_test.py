@@ -33,6 +33,9 @@ final class URLSessionConfiguration {
   var timeoutIntervalForResource = 900.0
   var connectionProxyDictionary: [AnyHashable: Any]? = ["proxy": "test"]
   var httpMaximumConnectionsPerHost = 6
+  var allowsCellularAccess = false
+  var allowsExpensiveNetworkAccess = false
+  var allowsConstrainedNetworkAccess = false
   var waitsForConnectivity = false
   static var `default`: URLSessionConfiguration { URLSessionConfiguration() }
 }
@@ -83,6 +86,10 @@ CHECKS = r'''
     precondition(direct.configuration.timeoutIntervalForRequest == 45)
     precondition(direct.configuration.timeoutIntervalForResource == 900)
     precondition(direct.configuration.connectionProxyDictionary?["proxy"] as? String == "test")
+    precondition(!direct.configuration.allowsCellularAccess &&
+                 !direct.configuration.allowsExpensiveNetworkAccess &&
+                 !direct.configuration.allowsConstrainedNetworkAccess,
+                 "direct session preserves the network policies of the background session")
     precondition(direct.configuration.waitsForConnectivity)
     for id in ["aw_v2_video_x_g1", "aw_v2_manga_x_g1_p0001", page + ".part.0", "unrelated"] {
       precondition(select(id) === background, "other transfers keep background ownership")
