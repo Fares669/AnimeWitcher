@@ -49,6 +49,48 @@ final downloadSessionSummaryNotifier =
       const DownloadSessionSummaryV2.inactive(),
     );
 
+
+//// Session-wide received-byte rate for manga, not a sum of image transfer rates.
+/// Handles duplicate progress, completed pages, and overlapping chapters.
+final class DownloadSessionThroughputV2 {
+  final Map<String, int> _highestBytesByTask = <String, int>{};
+  final List<({int timeMillis, int bytes})> _received = [];
+  int? _startedMillis;
+  static const int _windowMillis = 3000;
+
+  void observe(String taskId, int bytes, {DateTime? at}) {
+    if (taskId.isEmpty || bytes < 0) return;
+    final now = (at ?? DateTime.now()).millisecondsSinceEpoch;
+    _startedMillis ??= now;
+    final previous = _highestBytesByTask[taskId];
+    if (previous == null) {
+      // Recovered downloads can enter the observer with old transferred bytes.
+      // Their first checkpoint is a baseline, not new network traffic.
+      _highestBytesByTask[taskId] = bytes;
+      return;
+    }
+    if (bytes <= previous) return;
+    _highestBytesByTask[taskId] = bytes;
+    _received.add((timeMillis: now, bytes: bytes - previous));
+  }
+
+  double sample({DateTime? at}) {
+    final now = (at ?? DateTime.now()).millisecondsSinceEpoch;
+    _received.removeWhere((sample) => sample.timeMillis <= now - _windowMillis);
+    final bytes = _received.fold<int>(0, (sum, sample) => sum + sample.bytes);
+    final started = _startedMillis;
+    if (started == null || bytes == 0) return 0;
+    final duration = (now - started).clamp(1000, _windowMillis);
+    return bytes * 1000.0 / duration;
+  }
+
+  void clear() {
+    _highestBytesByTask.clear();
+    _received.clear();
+    _startedMillis = null;
+  }
+}
+
 /// Presentation-only observer for V2 transport snapshots.
 ///
 /// Implementations may mirror package state into platform UI, but must never
@@ -378,6 +420,9 @@ final class IosDownloadContinuedProcessingObserverV2
       <String, _ContinuedEntryV2>{};
   final Set<String> _sessionMembers = <String>{};
   final Set<String> _completedMembers = <String>{};
+  final DownloadSessionThroughputV2 _mangaBandwidth = DownloadSessionThroughputV2();
+  Timer? _mangaSpeedTimer;
+  double _lastMangaSpeedBytesPerSecond = 0;
 
   Future<void> _tail = Future<void>.value();
   final Map<String, _PendingContinuedEntryV2> _pendingObservations = {};
@@ -444,6 +489,10 @@ final class IosDownloadContinuedProcessingObserverV2
     if (_disposed && (!terminal || !_service.ownsCurrentHandler)) return;
     final logicalId = record.logicalId.value;
     final entry = _ContinuedEntryV2(record, snapshot);
+    if (record.mediaKind == DownloadMediaKind.mangaChapter &&
+        snapshot.transferredBytes != null) {
+      _mangaBandwidth.observe(snapshot.taskId, snapshot.transferredBytes!);
+    }
 
     switch (snapshot.status) {
       case DownloadTransportStatus.queued:
@@ -471,10 +520,28 @@ final class IosDownloadContinuedProcessingObserverV2
     // One total for the whole session: the strip and the iOS task show the
     // bandwidth all active downloads are pulling together, never a
     // per-download speed.
-    var totalSpeedBytesPerSecond = 0.0;
-    for (final active in presentableActive) {
-      totalSpeedBytesPerSecond += _speedBytesPerSecond(active.snapshot);
+    final hasActiveManga = presentableActive.any(
+      (active) => active.record.mediaKind == DownloadMediaKind.mangaChapter,
+    );
+    if (hasActiveManga) {
+      _mangaSpeedTimer ??= Timer.periodic(
+        const Duration(seconds: 1),
+        (_) => _sampleMangaBandwidth(),
+      );
+    } else {
+      _mangaSpeedTimer?.cancel();
+      _mangaSpeedTimer = null;
+      _lastMangaSpeedBytesPerSecond = 0;
     }
+    final totalSpeedBytesPerSecond =
+        (hasActiveManga ? _lastMangaSpeedBytesPerSecond : 0.0) +
+        presentableActive
+            .where((active) =>
+                active.record.mediaKind != DownloadMediaKind.mangaChapter)
+            .fold<double>(
+              0,
+              (sum, active) => sum + _speedBytesPerSecond(active.snapshot),
+            );
 
     if (snapshot.status == DownloadTransportStatus.complete &&
         (_sessionActive || _sessionMembers.contains(logicalId))) {
@@ -763,6 +830,58 @@ final class IosDownloadContinuedProcessingObserverV2
     return name.isEmpty ? 'Download' : name;
   }
 
+  void _sampleMangaBandwidth() {
+    if (_disposed) return;
+    final active = _outstanding.values
+        .where(_isPackageOwnedActive)
+        .toList(growable: false);
+    if (!active.any((entry) =>
+        entry.record.mediaKind == DownloadMediaKind.mangaChapter)) return;
+
+    _lastMangaSpeedBytesPerSecond = _mangaBandwidth.sample();
+    final totalSpeed = _lastMangaSpeedBytesPerSecond +
+        active
+            .where((entry) =>
+                entry.record.mediaKind != DownloadMediaKind.mangaChapter)
+            .fold<double>(
+              0,
+              (sum, entry) => sum + _speedBytesPerSecond(entry.snapshot),
+            );
+
+    final summary = downloadSessionSummaryNotifier.value;
+    if (summary.isActive) {
+      _publishSessionSummary(DownloadSessionSummaryV2(
+        currentIndex: summary.currentIndex,
+        batchTotal: summary.batchTotal,
+        totalSpeedBytesPerSecond: totalSpeed,
+      ));
+    }
+
+    // The system task gets exactly the same one-second session measurement.
+    if (_sessionActive && active.isNotEmpty) {
+      final current = active.first;
+      final snapshot = current.snapshot;
+      final totalBytes = snapshot.totalBytes ??
+          current.record.expectedBytes ?? -1;
+      unawaited(_service.update(
+        immediate: true,
+        taskId: snapshot.taskId,
+        displayName: _displayName(current.record),
+        progress: snapshot.progress,
+        completedPages: current.record.mediaKind == DownloadMediaKind.mangaChapter
+            ? snapshot.completedPages ?? 0 : null,
+        totalPages: current.record.mediaKind == DownloadMediaKind.mangaChapter
+            ? snapshot.totalPages ?? -1 : null,
+        totalBytes: totalBytes,
+        transferredBytes: snapshot.transferredBytes ?? 0,
+        completedCount: _completedMembers.length,
+        batchTotal: _sessionMembers.isEmpty ? 1 : _sessionMembers.length,
+        currentIndex: summary.currentIndex,
+        speedBytesPerSecond: totalSpeed,
+      ));
+    }
+  }
+
   double _speedBytesPerSecond(DownloadTransportSnapshot snapshot) =>
       snapshot.networkSpeedMBps > 0 ? snapshot.networkSpeedMBps * 1000000 : 0;
 
@@ -772,6 +891,10 @@ final class IosDownloadContinuedProcessingObserverV2
   }
 
   void _resetSession() {
+    _mangaSpeedTimer?.cancel();
+    _mangaSpeedTimer = null;
+    _mangaBandwidth.clear();
+    _lastMangaSpeedBytesPerSecond = 0;
     _publishSessionSummary(const DownloadSessionSummaryV2.inactive());
     _deferSystemRequestUntilForeground = false;
     _sessionActive = false;
