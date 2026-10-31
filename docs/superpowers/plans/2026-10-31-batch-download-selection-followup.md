@@ -42,3 +42,9 @@ This supersedes the server-only picker and automatic quality choice described ab
 - [x] Keep device safe insets, leave scroll room for the final row, and remove the panel when selection is cleared.
 - [x] Hide the overlay when its navigation branch is inactive.
 - [x] Add active and completed regression checks with an actual bottom navigation bar.
+
+## Manga batch submission correction
+
+- [x] Submit every selected chapter without waiting for the first chapter's asynchronous startup; retain manager admission/concurrency limits.
+- [x] Count failures per chapter without blocking remaining submissions.
+- [x] Regression check holds the first startup pending and verifies all three chapters were submitted, including an independently failed chapter.

@@ -77,7 +77,8 @@ Future<DownloadStartRequestV2> mangaChapterDownloadRequest(
   final existing = existingDownloads
       .where((record) => record.logicalId == logicalId)
       .firstOrNull;
-  final destination = existing?.destinationPath ??
+  final destination =
+      existing?.destinationPath ??
       await mangaChapterDestinationDirectoryV2(manga, chapter);
 
   return DownloadStartRequestV2(
@@ -158,6 +159,22 @@ class MangaDetailsController extends _$MangaDetailsController {
     state = state.copyWith(chapters: const AsyncLoading<List<MangaChapter>>());
     _chaptersLoadFuture = _loadChapters(provider, item);
     await _chaptersLoadFuture;
+  }
+
+  /// Submit all chapters without waiting for the first chapter's page resolver.
+  /// The download manager owns admission and transport concurrency.
+  Future<int> downloadChapters(List<MangaChapter> chapters) async {
+    final failures = await Future.wait(
+      chapters.map((chapter) async {
+        try {
+          await downloadChapter(chapter);
+          return 0;
+        } catch (_) {
+          return 1;
+        }
+      }),
+    );
+    return failures.fold<int>(0, (total, failed) => total + failed);
   }
 
   Future<void> downloadChapter(MangaChapter chapter) async {
