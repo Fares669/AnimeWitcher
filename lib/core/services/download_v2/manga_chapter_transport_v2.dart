@@ -584,19 +584,11 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
   }) {
     final pageCount = spec.pages.length;
     var activeConnections = _startingIndexes.length;
-    var networkSpeed = 0.0;
-    var hasNetworkSpeed = false;
     Duration? timeRemaining;
 
     for (final handle in _pageHandles.values) {
       final page = handle.current;
-      if (page.status == DownloadTransportStatus.running) {
-        activeConnections++;
-        if (page.networkSpeedMBps >= 0) {
-          networkSpeed += page.networkSpeedMBps;
-          hasNetworkSpeed = true;
-        }
-      }
+      if (page.status == DownloadTransportStatus.running) activeConnections++;
       if (page.timeRemaining > (timeRemaining ?? Duration.zero)) {
         timeRemaining = page.timeRemaining;
       }
@@ -609,11 +601,9 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
       completedPages: _manifest.completedIndexes.length,
       totalPages: pageCount,
       transferredBytes: _receivedBytes,
-      // A stale package speed from a held/failed page is not real network
-      // throughput. Explicit zero clears the last visible speed sample.
-      networkSpeedMBps: activeConnections == 0
-          ? 0
-          : hasNetworkSpeed ? networkSpeed : -1,
+      // The strip samples total received bytes once per second. Per-image
+      // Transfer.networkSpeed is noisy and often zero for short page tasks.
+      networkSpeedMBps: activeConnections == 0 ? 0 : -1,
       timeRemaining: timeRemaining ?? Duration.zero,
       configuredConnections: _pageConnectionLimit,
       activeConnections: activeConnections,
@@ -687,12 +677,9 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
         next.progress != current.progress) {
       return true;
     }
-    final before = current.networkSpeedMBps;
-    final after = next.networkSpeedMBps;
-    if ((before < 0) != (after < 0)) return true;
-    if (before < 0 || after < 0) return false;
-    final base = before.abs() < 0.05 ? 0.05 : before.abs();
-    return (after - before).abs() / base >= 0.25;
+    // Image-specific throughput changes never refresh the parent. The
+    // session-wide byte sampler publishes one stable speed each second.
+    return false;
   }
 
   static int _boundedPageConnections(int value) =>
