@@ -231,6 +231,9 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
   _pageSubscriptions = <int, StreamSubscription<DownloadTransportSnapshot>>{};
   final Set<int> _startingIndexes = <int>{};
   final Map<int, Future<void>> _startingPages = <int, Future<void>>{};
+  // One cumulative byte counter for the chapter, not per-image speed samples.
+  final Map<int, int> _observedPageBytes = <int, int>{};
+  int _receivedBytes = 0;
 
   MangaChapterManifestV2 _manifest;
   DownloadTransportSnapshot _current;
@@ -376,6 +379,7 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
                 : DownloadTransportStatus.running,
       );
       final currentPage = handle.current;
+      _recordPageBytes(index, currentPage);
       if (currentPage.isFinal ||
           currentPage.status == DownloadTransportStatus.missing) {
         unawaited(
@@ -403,6 +407,7 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
     DownloadTransportSnapshot snapshot,
   ) {
     if (_disposed) return;
+    _recordPageBytes(index, snapshot);
     if (snapshot.status != DownloadTransportStatus.complete) {
       unawaited(_onPageSnapshot(index, generation, snapshot));
       return;
@@ -459,6 +464,7 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
         );
         return;
       }
+      _recordPageByteCount(index, await file.length());
       final digest = await MangaChapterManifestV2.pageDigest(file);
       if (_disposed || _canceled || _failing || generation != _generation || _current.isFinal) return;
 
@@ -556,6 +562,22 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
     }
   }
 
+  void _recordPageBytes(int index, DownloadTransportSnapshot snapshot) {
+    final bytes = snapshot.transferredBytes ??
+        (snapshot.totalBytes != null && snapshot.totalBytes! > 0
+            ? (snapshot.totalBytes! * snapshot.progress).round()
+            : 0);
+    _recordPageByteCount(index, bytes);
+  }
+
+  void _recordPageByteCount(int index, int bytes) {
+    if (bytes <= 0) return;
+    final previous = _observedPageBytes[index] ?? 0;
+    if (bytes <= previous) return;
+    _observedPageBytes[index] = bytes;
+    _receivedBytes += bytes - previous;
+  }
+
   DownloadTransportSnapshot _aggregate(
     DownloadTransportStatus status, {
     double? progress,
@@ -586,6 +608,7 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
       progress: progress ?? 0,
       completedPages: _manifest.completedIndexes.length,
       totalPages: pageCount,
+      transferredBytes: _receivedBytes,
       // A stale package speed from a held/failed page is not real network
       // throughput. Explicit zero clears the last visible speed sample.
       networkSpeedMBps: activeConnections == 0
