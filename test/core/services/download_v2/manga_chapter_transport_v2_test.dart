@@ -164,6 +164,33 @@ void main() {
     expect(handle.current.networkSpeedMBps, 0);
   });
 
+  test('chapter exposes cumulative received image bytes for global speed sampling', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-manga-bandwidth-');
+    addTearDown(() => temp.delete(recursive: true));
+    final starter = _FakePageStarter();
+    final handle = await MangaChapterTransportV2(startPage: starter.start).start(
+      MangaChapterTransportSpecV2(
+        taskId: 'bandwidth', mangaId: 'm1', chapterId: 'c1',
+        destinationDirectory: temp.path, retries: 1, maxConcurrentPages: 1,
+        pages: const [
+          MangaPage(index: 0, imageUrl: 'https://cdn.test/0.png'),
+          MangaPage(index: 1, imageUrl: 'https://cdn.test/1.png'),
+        ],
+      ),
+    );
+    addTearDown(handle.dispose);
+    await starter.waitUntilStarted(0);
+    expect(handle.current.transferredBytes, 0);
+    starter.handles[0]!.setProgress(0.2);
+    await Future<void>.delayed(Duration.zero);
+    expect(handle.current.transferredBytes, greaterThan(0));
+    final before = handle.current.transferredBytes!;
+    await starter.complete(0);
+    await starter.waitUntilStarted(1);
+    expect(handle.current.transferredBytes, greaterThanOrEqualTo(before),
+        reason: 'completing a page must not reset session received bytes');
+  });
+
   test('manga progress counts validated whole pages and ignores child bytes', () async {
     final temp = await Directory.systemTemp.createTemp('aw-manga-page-progress-');
     addTearDown(() => temp.delete(recursive: true));
