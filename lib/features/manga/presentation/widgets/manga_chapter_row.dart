@@ -13,6 +13,7 @@ class MangaChapterRow extends StatelessWidget {
     this.onTap,
     this.onLongPress,
     this.selected = false,
+    this.selecting = false,
   });
 
   final MangaChapter chapter;
@@ -22,6 +23,7 @@ class MangaChapterRow extends StatelessWidget {
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
   final bool selected;
+  final bool selecting;
 
   String? get progressLabel {
     final state = progress;
@@ -73,8 +75,10 @@ class MangaChapterRow extends StatelessWidget {
                 Icon(
                   selected
                       ? Icons.check_circle_rounded
+                      : selecting
+                      ? Icons.radio_button_unchecked_rounded
                       : Icons.menu_book_rounded,
-                  color: selected ? accent : foreground,
+                  color: selecting || selected ? accent : foreground,
                 ),
                 const SizedBox(width: 14),
                 Expanded(

@@ -15,6 +15,7 @@ import 'package:animewitcher/features/library/presentation/widgets/downloads_tab
 import 'package:animewitcher/shared/widgets/underline_segment_tabs.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:background_downloader/background_downloader.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -54,12 +55,13 @@ Future<void> _awaitArtworkLookups(WidgetTester tester) async {
     find.byWidgetPredicate((widget) => widget is FutureBuilder<File?>),
   )) {
     final future = builder.future;
-    if (future != null)
+    if (future != null) {
       await pumpUntilFuture(
         tester,
         future,
         'completed downloads artwork lookup',
       );
+    }
   }
   await tester.pump();
 }
@@ -378,7 +380,8 @@ void main() {
       await tester.longPress(find.text('الحلقة 9').first);
       await tester.pumpAndSettle();
       expect(find.text('1 محدد'), findsOneWidget);
-      expect(find.byType(Checkbox), findsNWidgets(2));
+      expect(find.byType(Checkbox), findsNothing);
+      expect(find.byIcon(Icons.check_circle_rounded), findsWidgets);
       await tester.tap(find.widgetWithText(FilledButton, 'حذف'));
       await tester.pumpAndSettle();
       final l10n = AppLocalizations.of(
@@ -432,15 +435,11 @@ void main() {
     expect(find.byKey(const ValueKey('failed-delete')), findsOneWidget);
     expect(find.text('1 محدد'), findsOneWidget);
     expect(
-      tester
-          .widget<Checkbox>(
-            find.descendant(
-              of: find.byKey(const ValueKey('failed-delete')),
-              matching: find.byType(Checkbox),
-            ),
-          )
-          .value,
-      isTrue,
+      find.descendant(
+        of: find.byKey(const ValueKey('failed-delete')),
+        matching: find.byIcon(Icons.check_circle_rounded),
+      ),
+      findsOneWidget,
     );
     await tester.tap(find.byKey(const ValueKey('failed-delete')));
     await tester.pumpAndSettle();
@@ -469,12 +468,136 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('2 محدد'), findsOneWidget);
-    expect(
-      tester
-          .widgetList<Checkbox>(find.byType(Checkbox))
-          .where((box) => box.value == true),
-      hasLength(2),
+    expect(find.byType(Checkbox), findsNothing);
+    for (final id in ['a', 'b']) {
+      expect(
+        find.descendant(
+          of: find.byKey(ValueKey(id)),
+          matching: find.byIcon(Icons.check_circle_rounded),
+        ),
+        findsOneWidget,
+      );
+    }
+  });
+
+  testWidgets(
+    'active selection keeps card and poster aligned and tints the card',
+    (tester) async {
+      final notifier = _StubDownloadsNotifier([
+        _item(taskId: 'a', timestamp: 1, status: TaskStatus.running),
+        _itemTen(taskId: 'b', timestamp: 2, status: TaskStatus.paused),
+      ]);
+      await tester.pumpWidget(
+        _downloadsApp([], notifier: notifier, previewTheme: true),
+      );
+      await tester.pumpAndSettle();
+
+      final first = find.byKey(const ValueKey('a'));
+      final poster = find
+          .descendant(of: first, matching: find.byType(CachedNetworkImage))
+          .first;
+      final cardBefore = tester.getRect(first);
+      final posterBefore = tester.getRect(poster);
+      final deleteAll = tester.widget<FilledButton>(
+        find.byKey(const ValueKey('downloads-delete-all')),
+      );
+      expect(
+        deleteAll.style!.backgroundColor!.resolve({}),
+        Colors.red.shade700,
+      );
+      expect(
+        deleteAll.style!.backgroundColor!.resolve({WidgetState.disabled}),
+        Colors.red.shade700,
+      );
+
+      await tester.longPress(first);
+      await tester.pumpAndSettle();
+      expect(tester.getRect(first).left, cardBefore.left);
+      expect(tester.getRect(first).width, cardBefore.width);
+      expect(tester.getRect(poster).left, posterBefore.left);
+      expect(find.byType(Checkbox), findsNothing);
+      expect(
+        find.descendant(
+          of: first,
+          matching: find.byIcon(Icons.check_circle_rounded),
+        ),
+        findsOneWidget,
+      );
+      final card = tester.widget<Card>(
+        find.descendant(of: first, matching: find.byType(Card)),
+      );
+      final border = (card.shape! as RoundedRectangleBorder).side;
+      final primary = Theme.of(tester.element(first)).colorScheme.primary;
+      expect(border.color, primary);
+      expect(border.width, 2);
+      expect(card.color, primary.withValues(alpha: 0.24));
+      final deleteSelected = tester.widget<FilledButton>(
+        find.descendant(
+          of: find.byKey(const ValueKey('downloads-selection-bar')),
+          matching: find.widgetWithText(FilledButton, 'حذف'),
+        ),
+      );
+      expect(
+        deleteSelected.style!.backgroundColor!.resolve({}),
+        Colors.red.shade700,
+      );
+      expect(
+        deleteSelected.style!.backgroundColor!.resolve({WidgetState.disabled}),
+        Colors.red.shade700,
+      );
+    },
+  );
+
+  testWidgets('completed episode selection keeps its width and highlights it', (
+    tester,
+  ) async {
+    await _prepareArtworkStorage(tester);
+    final notifier = _StubDownloadsNotifier([
+      _item(taskId: 'ep9', timestamp: 1, status: TaskStatus.complete),
+      _itemTen(taskId: 'ep10', timestamp: 2, status: TaskStatus.complete),
+    ]);
+    await tester.pumpWidget(
+      _downloadsApp([], notifier: notifier, previewTheme: true),
     );
+    await tester.pumpAndSettle();
+    final l10n = AppLocalizations.of(
+      tester.element(find.byType(DownloadsTab)),
+    )!;
+    await tester.tap(find.text(l10n.downloadsTabCompleted));
+    await tester.pumpAndSettle();
+    await _awaitArtworkLookups(tester);
+    await tester.tap(find.text('Black Torch'));
+    await tester.pumpAndSettle();
+
+    final episode = find.byKey(const ValueKey('ep9'));
+    final episodeBefore = tester.getRect(episode);
+    await tester.longPress(find.text('الحلقة 9'));
+    await tester.pumpAndSettle();
+    expect(tester.getRect(episode).left, episodeBefore.left);
+    expect(tester.getRect(episode).width, episodeBefore.width);
+    expect(find.byType(Checkbox), findsNothing);
+    expect(
+      find.descendant(
+        of: episode,
+        matching: find.byIcon(Icons.check_circle_rounded),
+      ),
+      findsOneWidget,
+    );
+    final decoration =
+        tester
+                .widget<AnimatedContainer>(
+                  find
+                      .descendant(
+                        of: episode,
+                        matching: find.byType(AnimatedContainer),
+                      )
+                      .first,
+                )
+                .decoration!
+            as BoxDecoration;
+    final primary = Theme.of(tester.element(episode)).colorScheme.primary;
+    expect(decoration.color, primary.withValues(alpha: 0.24));
+    expect(decoration.border!.top.color, primary);
   });
 
   testWidgets('selection ends when the selected row leaves the current tab', (
@@ -629,6 +752,11 @@ void main() {
     );
     final selectAll = find.byKey(const ValueKey('downloads-select-all'));
     expect(tester.getSize(deleteButton).width, greaterThan(200));
+    final completedDelete = tester.widget<FilledButton>(deleteButton);
+    expect(
+      completedDelete.style!.backgroundColor!.resolve({}),
+      Colors.red.shade700,
+    );
     expect(
       tester.getCenter(selectAll).dx,
       lessThan(tester.getCenter(deleteButton).dx),

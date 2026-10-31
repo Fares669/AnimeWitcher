@@ -10,9 +10,19 @@
 - [x] Batch anime download: query episode *server lists* only before showing the picker; do not resolve video URLs before user selects a server.
 - [x] Server picker lists only servers shared by selected episodes; selecting one resolves valid URLs only for that server, honoring configured quality priority within it, then adds the episodes in ascending order to V2 downloads.
 - [x] Preserve existing V2 deduplication, deletion confirmation, error reporting, and per-task controls.
-- [ ] Update focused UI and launcher tests for the new behavior; run formatting, tests, analysis, and diff checks.
+- [x] Selected anime/manga downloads and completed episodes/chapters use a theme-accent highlight and circular selection markers without shrinking or shifting their cards.
+- [x] Download selection and completed selection Delete buttons, plus the Downloads Delete All button, remain red even when temporarily disabled.
+- [x] Manga completed chapters display a single selection circle and preserve their action-column width.
+- [x] Update focused UI and launcher tests for the new behavior; run formatting, tests, analysis, and diff checks.
 - [ ] Commit and push changes to `feat/batch-download-controls` for GitHub PR review; do not merge.
 
 ## Implementation notes
 
 Modify `details_screen.dart`, `downloads_tab.dart`, and `download_launcher.dart` using existing UI components and existing provider interfaces. Pick a common *server* from the raw `loadStreamSources` results, treating quality as a later property of the chosen server. Resolve only matching candidates after the picker and verify URLs before enqueue. Retain the reference screenshots' action order and proportions.
+
+## Widget preview captures
+
+- [Active Downloads selection](../previews/2026-10-31-active-selection.png)
+- [Completed Downloads selection](../previews/2026-10-31-completed-selection.png)
+
+These are automated Flutter widget previews using fixture download records and a dark/cyan test theme; real cover artwork and the user's theme settings are not included.

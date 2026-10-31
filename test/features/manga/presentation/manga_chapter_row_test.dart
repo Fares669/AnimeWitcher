@@ -32,15 +32,15 @@ void main() {
   ) async {
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(body: MangaChapterRow(chapter: chapter, progress: value)),
+        home: Scaffold(
+          body: MangaChapterRow(chapter: chapter, progress: value),
+        ),
       ),
     );
     return tester.widget<MangaChapterRow>(find.byType(MangaChapterRow));
   }
 
-  testWidgets('a fully read chapter shows no read-count label', (
-    tester,
-  ) async {
+  testWidgets('a fully read chapter shows no read-count label', (tester) async {
     final row = await pumpRow(
       tester,
       progress(pageIndex: 15, pageCount: 16, isRead: true),
@@ -55,11 +55,37 @@ void main() {
     expect(row.progressLabel, isNull);
   });
 
-  testWidgets('a part-read chapter keeps its read-count label', (
-    tester,
-  ) async {
+  testWidgets('a part-read chapter keeps its read-count label', (tester) async {
     final row = await pumpRow(tester, progress(pageIndex: 4, pageCount: 16));
     expect(row.progressLabel, '5/16');
+  });
+
+  testWidgets('selection displays one circular mark without moving the row', (
+    tester,
+  ) async {
+    Future<void> render({required bool selecting, required bool selected}) =>
+        tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: MangaChapterRow(
+                chapter: chapter,
+                selecting: selecting,
+                selected: selected,
+                action: const SizedBox.square(dimension: 34),
+              ),
+            ),
+          ),
+        );
+
+    await render(selecting: false, selected: false);
+    final original = tester.getRect(find.byType(MangaChapterRow));
+    await render(selecting: true, selected: false);
+    expect(tester.getRect(find.byType(MangaChapterRow)), original);
+    expect(find.byIcon(Icons.radio_button_unchecked_rounded), findsOneWidget);
+    await render(selecting: true, selected: true);
+    expect(tester.getRect(find.byType(MangaChapterRow)), original);
+    expect(find.byIcon(Icons.check_circle_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.menu_book_rounded), findsNothing);
   });
 
   testWidgets('an unread chapter has no label', (tester) async {

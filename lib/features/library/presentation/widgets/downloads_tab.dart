@@ -272,6 +272,10 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
                     Expanded(
                       child: FilledButton.icon(
                         style: FilledButton.styleFrom(
+                          backgroundColor: Colors.red.shade700,
+                          foregroundColor: Colors.white,
+                          disabledBackgroundColor: Colors.red.shade700,
+                          disabledForegroundColor: Colors.white70,
                           padding: const EdgeInsets.symmetric(horizontal: 4),
                           minimumSize: const Size(0, 48),
                         ),
@@ -451,8 +455,14 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
               child: Row(
                 children: [
                   Expanded(
-                    child: OutlinedButton.icon(
+                    child: FilledButton.icon(
                       key: const ValueKey('downloads-delete-all'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.red.shade700,
+                        foregroundColor: Colors.white,
+                        disabledBackgroundColor: Colors.red.shade700,
+                        disabledForegroundColor: Colors.white70,
+                      ),
                       onPressed: _bulkInFlight
                           ? null
                           : () => _bulkAction(currentDownloads, 'delete'),
@@ -834,6 +844,13 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context)!;
     final firstItem = items.first;
+    final selecting = widget.selectedIds.isNotEmpty;
+    final anySelected = items.any(
+      (item) => widget.selectedIds.contains(item.id),
+    );
+    final allSelected = items.every(
+      (item) => widget.selectedIds.contains(item.id),
+    );
     final episodeSortAscending = ref.watch(episodeSortAscendingProvider);
     final isManga = firstItem.mediaKind == DownloadMediaKind.mangaChapter;
 
@@ -860,11 +877,18 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
 
     return Card(
       margin: EdgeInsets.zero,
-      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.2),
+      color: anySelected
+          ? theme.colorScheme.primary.withValues(alpha: 0.24)
+          : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.2),
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(LayoutConstants.radiusXl),
-        side: BorderSide(color: theme.dividerColor.withValues(alpha: 0.5)),
+        side: BorderSide(
+          color: anySelected
+              ? theme.colorScheme.primary
+              : theme.dividerColor.withValues(alpha: 0.5),
+          width: anySelected ? 2 : 1,
+        ),
       ),
       clipBehavior: Clip.antiAlias,
       child: ExpansionTile(
@@ -882,21 +906,6 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
           child: Row(
             textDirection: TextDirection.ltr,
             children: [
-              if (widget.selectedIds.isNotEmpty)
-                Checkbox(
-                  tristate: true,
-                  value:
-                      items.every(
-                        (item) => widget.selectedIds.contains(item.id),
-                      )
-                      ? true
-                      : items.any(
-                          (item) => widget.selectedIds.contains(item.id),
-                        )
-                      ? null
-                      : false,
-                  onChanged: (_) => widget.onToggleGroupSelection(items),
-                ),
               ClipRRect(
                 borderRadius: BorderRadius.circular(LayoutConstants.radiusMd),
                 child: ArtworkDecode(
@@ -978,13 +987,23 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
               ),
               const SizedBox(width: LayoutConstants.spacingSm),
               IconButton(
-                icon: const Icon(Icons.delete_outline_rounded),
+                icon: Icon(
+                  selecting
+                      ? allSelected
+                            ? Icons.check_circle_rounded
+                            : anySelected
+                            ? Icons.remove_circle_outline_rounded
+                            : Icons.radio_button_unchecked_rounded
+                      : Icons.delete_outline_rounded,
+                ),
                 onPressed: widget.selectedIds.isNotEmpty
                     ? () => widget.onToggleGroupSelection(items)
                     : _deleteInFlight
                     ? null
                     : () => _confirmDeleteAll(context, ref),
-                color: theme.colorScheme.error.withValues(alpha: 0.8),
+                color: selecting
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.error.withValues(alpha: 0.8),
                 visualDensity: VisualDensity.compact,
               ),
             ],
@@ -1009,59 +1028,47 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onLongPress: () => widget.onToggleSelection(download),
-                  child: Row(
-                    children: [
-                      if (widget.selectedIds.isNotEmpty)
-                        Checkbox(
-                          value: widget.selectedIds.contains(download.id),
-                          onChanged: (_) => widget.onToggleSelection(download),
+                  child: isManga
+                      ? CompletedDownloadChapterCard(
+                          key: ValueKey(download.id),
+                          item: download,
+                          selecting: selecting,
+                          selected: widget.selectedIds.contains(download.id),
+                          onOpen: () => widget.selectedIds.isNotEmpty
+                              ? widget.onToggleSelection(download)
+                              : _openMangaChapter(
+                                  context,
+                                  download,
+                                  orderedItems,
+                                ),
+                          onDelete: () => widget.selectedIds.isNotEmpty
+                              ? widget.onToggleSelection(download)
+                              : unawaited(
+                                  confirmAndRemoveDownload(
+                                    context,
+                                    ref,
+                                    download,
+                                  ),
+                                ),
+                        )
+                      : CompletedDownloadEpisodeCard(
+                          key: ValueKey(download.id),
+                          item: download,
+                          selecting: selecting,
+                          selected: widget.selectedIds.contains(download.id),
+                          onPlay: () => widget.selectedIds.isNotEmpty
+                              ? widget.onToggleSelection(download)
+                              : _playLocalFile(context, ref, download, l10n),
+                          onDelete: () => widget.selectedIds.isNotEmpty
+                              ? widget.onToggleSelection(download)
+                              : unawaited(
+                                  confirmAndRemoveDownload(
+                                    context,
+                                    ref,
+                                    download,
+                                  ),
+                                ),
                         ),
-                      Expanded(
-                        child: isManga
-                            ? CompletedDownloadChapterCard(
-                                key: ValueKey(download.id),
-                                item: download,
-                                onOpen: () => widget.selectedIds.isNotEmpty
-                                    ? widget.onToggleSelection(download)
-                                    : _openMangaChapter(
-                                        context,
-                                        download,
-                                        orderedItems,
-                                      ),
-                                onDelete: () => widget.selectedIds.isNotEmpty
-                                    ? widget.onToggleSelection(download)
-                                    : unawaited(
-                                        confirmAndRemoveDownload(
-                                          context,
-                                          ref,
-                                          download,
-                                        ),
-                                      ),
-                              )
-                            : CompletedDownloadEpisodeCard(
-                                key: ValueKey(download.id),
-                                item: download,
-                                onPlay: () => widget.selectedIds.isNotEmpty
-                                    ? widget.onToggleSelection(download)
-                                    : _playLocalFile(
-                                        context,
-                                        ref,
-                                        download,
-                                        l10n,
-                                      ),
-                                onDelete: () => widget.selectedIds.isNotEmpty
-                                    ? widget.onToggleSelection(download)
-                                    : unawaited(
-                                        confirmAndRemoveDownload(
-                                          context,
-                                          ref,
-                                          download,
-                                        ),
-                                      ),
-                              ),
-                      ),
-                    ],
-                  ),
                 ),
               ),
               if (!isLast)
@@ -1235,11 +1242,6 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
       textDirection: TextDirection.ltr,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (widget.selecting)
-          Checkbox(
-            value: widget.selected,
-            onChanged: (_) => widget.onToggleSelection(),
-          ),
         poster,
         const SizedBox(width: LayoutConstants.spacingMd),
         Expanded(
@@ -1340,7 +1342,18 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
                   borderRadius: BorderRadius.circular(LayoutConstants.radiusSm),
                 ),
               ],
-              if (!widget.selecting)
+              if (widget.selecting)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Icon(
+                    widget.selected
+                        ? Icons.check_circle_rounded
+                        : Icons.radio_button_unchecked_rounded,
+                    color: theme.colorScheme.primary,
+                    size: 30,
+                  ),
+                )
+              else
                 Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
@@ -1410,9 +1423,16 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(LayoutConstants.radiusXl),
-        side: BorderSide(color: theme.dividerColor.withValues(alpha: 0.5)),
+        side: BorderSide(
+          color: widget.selected
+              ? theme.colorScheme.primary
+              : theme.dividerColor.withValues(alpha: 0.5),
+          width: widget.selected ? 2 : 1,
+        ),
       ),
-      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.2),
+      color: widget.selected
+          ? theme.colorScheme.primary.withValues(alpha: 0.24)
+          : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.2),
       clipBehavior: Clip.antiAlias,
       child: Padding(
         padding: const EdgeInsets.all(LayoutConstants.spacingMd),

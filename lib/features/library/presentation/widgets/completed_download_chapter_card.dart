@@ -13,11 +13,15 @@ class CompletedDownloadChapterCard extends ConsumerWidget {
     required this.item,
     required this.onOpen,
     required this.onDelete,
+    this.selecting = false,
+    this.selected = false,
   });
 
   final DownloadItem item;
   final VoidCallback onOpen;
   final VoidCallback onDelete;
+  final bool selecting;
+  final bool selected;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -34,12 +38,16 @@ class CompletedDownloadChapterCard extends ConsumerWidget {
       chapter: chapter,
       progress: progress,
       onTap: onOpen,
-      action: EpisodeActionChip(
-        tooltip: l10n?.mangaDeleteChapter ?? 'حذف الفصل',
-        onPressed: onDelete,
-        icon: Icons.delete_outline_rounded,
-        color: Theme.of(context).colorScheme.error,
-      ),
+      selected: selected,
+      selecting: selecting,
+      action: selecting
+          ? const SizedBox.square(dimension: EpisodeActionChip.defaultSize)
+          : EpisodeActionChip(
+              tooltip: l10n?.mangaDeleteChapter ?? 'حذف الفصل',
+              onPressed: onDelete,
+              icon: Icons.delete_outline_rounded,
+              color: Theme.of(context).colorScheme.error,
+            ),
     );
   }
 }
