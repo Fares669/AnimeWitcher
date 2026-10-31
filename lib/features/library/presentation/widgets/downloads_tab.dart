@@ -221,76 +221,140 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
     return SafeArea(
       key: const ValueKey('downloads-selection-bar'),
       top: false,
-      child: Material(
-        elevation: 10,
-        color: colors.surfaceContainerHigh,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-          side: BorderSide(
-            color: colors.outlineVariant.withValues(alpha: 0.45),
+      child: Directionality(
+        textDirection: TextDirection.rtl,
+        child: Material(
+          elevation: 10,
+          shadowColor: Colors.black.withValues(alpha: 0.30),
+          color: colors.surfaceContainerHigh,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(
+              color: colors.outlineVariant.withValues(alpha: 0.45),
+            ),
           ),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          child: Wrap(
-            alignment: WrapAlignment.center,
-            spacing: 6,
-            runSpacing: 4,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              Text(
-                '${selected.length} ${appText(context, english: 'selected', arabic: 'محدد')}',
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-              IconButton(
-                key: const ValueKey('downloads-clear-selection'),
-                tooltip: appText(
-                  context,
-                  english: 'Clear selection',
-                  arabic: 'إلغاء التحديد',
+          clipBehavior: Clip.antiAlias,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.checklist_rounded,
+                      color: colors.primary,
+                      size: 22,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        '${selected.length} ${appText(context, english: 'selected', arabic: 'محدد')}',
+                        style: Theme.of(context).textTheme.titleSmall
+                            ?.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    IconButton(
+                      key: const ValueKey('downloads-clear-selection'),
+                      tooltip: appText(
+                        context,
+                        english: 'Clear selection',
+                        arabic: 'إلغاء التحديد',
+                      ),
+                      onPressed: () => setState(_selectedIds.clear),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
                 ),
-                onPressed: () => setState(_selectedIds.clear),
-                icon: const Icon(Icons.close_rounded),
-              ),
-              IconButton.filledTonal(
-                key: const ValueKey('downloads-select-all'),
-                tooltip: appText(
-                  context,
-                  english: 'Select all',
-                  arabic: 'تحديد الكل',
-                ),
-                onPressed: () => _toggleGroupSelection(currentDownloads),
-                icon: const Icon(Icons.select_all_rounded),
-              ),
-              if (_tabIndex == 0) ...[
-                FilledButton.tonalIcon(
-                  onPressed: _bulkInFlight || !canPause
-                      ? null
-                      : () => _bulkAction(selected, 'pause'),
-                  icon: const Icon(Icons.pause_rounded),
-                  label: Text(
-                    appText(context, english: 'Pause', arabic: 'إيقاف'),
-                  ),
-                ),
-                FilledButton.tonalIcon(
-                  onPressed: _bulkInFlight || !canResume
-                      ? null
-                      : () => _bulkAction(selected, 'resume'),
-                  icon: const Icon(Icons.play_arrow_rounded),
-                  label: Text(
-                    appText(context, english: 'Resume', arabic: 'إكمال'),
-                  ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          minimumSize: const Size(0, 48),
+                        ),
+                        onPressed: _bulkInFlight
+                            ? null
+                            : () => _bulkAction(selected, 'delete'),
+                        icon: const Icon(
+                          Icons.delete_outline_rounded,
+                          size: 19,
+                        ),
+                        label: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(l10n.delete),
+                        ),
+                      ),
+                    ),
+                    if (_tabIndex == 0) ...[
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: FilledButton.tonalIcon(
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            minimumSize: const Size(0, 48),
+                          ),
+                          onPressed: _bulkInFlight || !canPause
+                              ? null
+                              : () => _bulkAction(selected, 'pause'),
+                          icon: const Icon(Icons.pause_rounded, size: 19),
+                          label: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              appText(
+                                context,
+                                english: 'Pause',
+                                arabic: 'إيقاف',
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: FilledButton.tonalIcon(
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            minimumSize: const Size(0, 48),
+                          ),
+                          onPressed: _bulkInFlight || !canResume
+                              ? null
+                              : () => _bulkAction(selected, 'resume'),
+                          icon: const Icon(Icons.play_arrow_rounded, size: 19),
+                          label: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              appText(
+                                context,
+                                english: 'Resume',
+                                arabic: 'إكمال',
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(width: 8),
+                    IconButton.filledTonal(
+                      key: const ValueKey('downloads-select-all'),
+                      tooltip: appText(
+                        context,
+                        english: 'Select all',
+                        arabic: 'تحديد الكل',
+                      ),
+                      onPressed: () => _toggleGroupSelection(currentDownloads),
+                      icon: const Icon(Icons.select_all_rounded),
+                      style: IconButton.styleFrom(
+                        minimumSize: const Size(48, 48),
+                        maximumSize: const Size(48, 48),
+                      ),
+                    ),
+                  ],
                 ),
               ],
-              FilledButton.icon(
-                onPressed: _bulkInFlight
-                    ? null
-                    : () => _bulkAction(selected, 'delete'),
-                icon: const Icon(Icons.delete_outline_rounded),
-                label: Text(l10n.delete),
-              ),
-            ],
+            ),
           ),
         ),
       ),
@@ -377,53 +441,63 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
           ),
         ),
         const _DownloadSessionStrip(),
-        if (currentDownloads.isNotEmpty && currentSelectedIds.isEmpty)
+        if (_tabIndex == 0 &&
+            currentDownloads.isNotEmpty &&
+            currentSelectedIds.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            child: Wrap(
-              alignment: WrapAlignment.end,
-              spacing: 8,
-              runSpacing: 6,
-              children: [
-                OutlinedButton.icon(
-                  key: const ValueKey('downloads-delete-all'),
-                  onPressed: _bulkInFlight
-                      ? null
-                      : () => _bulkAction(currentDownloads, 'delete'),
-                  icon: const Icon(Icons.delete_outline_rounded),
-                  label: Text(
-                    appText(context, english: 'Delete all', arabic: 'حذف الكل'),
-                  ),
-                ),
-                if (_tabIndex == 0 && controllableActive.isNotEmpty)
-                  FilledButton.tonalIcon(
-                    key: const ValueKey('downloads-pause-resume-all'),
-                    onPressed: _bulkInFlight
-                        ? null
-                        : () => _bulkAction(
-                            controllableActive,
-                            allPaused ? 'resume' : 'pause',
-                          ),
-                    icon: Icon(
-                      allPaused
-                          ? Icons.play_arrow_rounded
-                          : Icons.pause_rounded,
+            child: Directionality(
+              textDirection: TextDirection.rtl,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      key: const ValueKey('downloads-delete-all'),
+                      onPressed: _bulkInFlight
+                          ? null
+                          : () => _bulkAction(currentDownloads, 'delete'),
+                      icon: const Icon(Icons.delete_outline_rounded),
+                      label: Text(
+                        appText(
+                          context,
+                          english: 'Delete all',
+                          arabic: 'حذف الكل',
+                        ),
+                      ),
                     ),
-                    label: Text(
-                      allPaused
-                          ? appText(
-                              context,
-                              english: 'Resume all',
-                              arabic: 'إكمال الكل',
-                            )
-                          : appText(
-                              context,
-                              english: 'Pause all',
-                              arabic: 'إيقاف الكل',
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FilledButton.tonalIcon(
+                      key: const ValueKey('downloads-pause-resume-all'),
+                      onPressed: _bulkInFlight || controllableActive.isEmpty
+                          ? null
+                          : () => _bulkAction(
+                              controllableActive,
+                              allPaused ? 'resume' : 'pause',
                             ),
+                      icon: Icon(
+                        allPaused
+                            ? Icons.play_arrow_rounded
+                            : Icons.pause_rounded,
+                      ),
+                      label: Text(
+                        allPaused
+                            ? appText(
+                                context,
+                                english: 'Resume all',
+                                arabic: 'إكمال الكل',
+                              )
+                            : appText(
+                                context,
+                                english: 'Pause all',
+                                arabic: 'إيقاف الكل',
+                              ),
+                      ),
                     ),
                   ),
-              ],
+                ],
+              ),
             ),
           ),
         Expanded(

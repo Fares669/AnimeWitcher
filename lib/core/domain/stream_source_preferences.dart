@@ -18,6 +18,36 @@ const List<String> defaultStreamQualityPriority = <String>[
   'متعدد',
 ];
 
+/// Offer each server once when every selected episode has that server.
+/// Video URLs and qualities are only resolved after the user chooses a server.
+List<StreamResult> commonBatchStreamServers(
+  List<List<StreamResult>> episodeSources,
+) {
+  if (episodeSources.isEmpty) return const <StreamResult>[];
+  final shared = episodeSources
+      .skip(1)
+      .map(
+        (sources) => sources
+            .where((source) => source.url.trim().isNotEmpty)
+            .map(
+              (source) =>
+                  streamServerPreferenceKey(source.source).toLowerCase(),
+            )
+            .toSet(),
+      )
+      .toList();
+  final seen = <String>{};
+  return episodeSources.first
+      .where((source) {
+        final key = streamServerPreferenceKey(source.source).toLowerCase();
+        return source.url.trim().isNotEmpty &&
+            key.isNotEmpty &&
+            seen.add(key) &&
+            shared.every((keys) => keys.contains(key));
+      })
+      .toList(growable: false);
+}
+
 /// A pair is offered for a batch only if *every* episode provides it.
 /// Keep the first episode's original source for the existing picker UI.
 List<StreamResult> commonBatchStreamSources(

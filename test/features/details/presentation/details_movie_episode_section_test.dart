@@ -38,7 +38,8 @@ final class _Storage extends MemoryStorageService {
   int getPosition(String url) => 0;
 
   @override
-  List<Map<String, dynamic>> getWatchHistory() => const <Map<String, dynamic>>[];
+  List<Map<String, dynamic>> getWatchHistory() =>
+      const <Map<String, dynamic>>[];
 
   @override
   int getEpisodePosition(
@@ -111,9 +112,7 @@ final class _ReadyDetailsController extends DetailsController {
     trailers: const AsyncData<List<Trailer>>(<Trailer>[]),
     related: const AsyncData<List<MultimediaItem>>(<MultimediaItem>[]),
     recommendations: const AsyncData<List<MultimediaItem>>(<MultimediaItem>[]),
-    seasonMap: <int, List<Episode>>{
-      1: item.episodes ?? const <Episode>[],
-    },
+    seasonMap: <int, List<Episode>>{1: item.episodes ?? const <Episode>[]},
     item: item,
     isMovie: item.contentType == MultimediaContentType.movie,
     basicDetailsResolved: true,
@@ -131,106 +130,40 @@ final class _ReadyDetailsController extends DetailsController {
 }
 
 void main() {
-  testWidgets('episode selection bar downloads the selected episodes as a batch', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(390, 844));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final item = MultimediaItem(
-      title: 'Anime',
-      url: 'https://example.test/',
-      posterUrl: '',
-      contentType: MultimediaContentType.anime,
-      episodes: <Episode>[
-        Episode(name: 'Episode 1', url: 'episode://1', episode: 1),
-        Episode(name: 'Episode 2', url: 'episode://2', episode: 2),
-      ],
-    );
-    late _BatchLauncher launcher;
-    final container = ProviderContainer(
-      overrides: [
-        storageServiceProvider.overrideWithValue(_Storage()),
-        downloadsProvider.overrideWith(_EmptyDownloads.new),
-        logicalDownloadStoreV2Provider.overrideWithValue(
-          InMemoryLogicalDownloadStoreV2(),
-        ),
-        libraryProvider.overrideWith(_EmptyLibrary.new),
-        detailsControllerProvider(item.url)
-            .overrideWith(() => _ReadyDetailsController(item)),
-        downloadLauncherProvider.overrideWith((ref) {
-          launcher = _BatchLauncher(ref);
-          return launcher;
-        }),
-      ],
-    );
-    addTearDown(container.dispose);
+  testWidgets(
+    'episode selection bar downloads the selected episodes as a batch',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final item = MultimediaItem(
+        title: 'Anime',
+        url: 'https://example.test/',
+        posterUrl: '',
+        contentType: MultimediaContentType.anime,
+        episodes: <Episode>[
+          Episode(name: 'Episode 1', url: 'episode://1', episode: 1),
+          Episode(name: 'Episode 2', url: 'episode://2', episode: 2),
+        ],
+      );
+      late _BatchLauncher launcher;
+      final container = ProviderContainer(
+        overrides: [
+          storageServiceProvider.overrideWithValue(_Storage()),
+          downloadsProvider.overrideWith(_EmptyDownloads.new),
+          logicalDownloadStoreV2Provider.overrideWithValue(
+            InMemoryLogicalDownloadStoreV2(),
+          ),
+          libraryProvider.overrideWith(_EmptyLibrary.new),
+          detailsControllerProvider(item.url)
+              .overrideWith(() => _ReadyDetailsController(item)),
+          downloadLauncherProvider.overrideWith((ref) {
+            launcher = _BatchLauncher(ref);
+            return launcher;
+          }),
+        ],
+      );
+      addTearDown(container.dispose);
 
-    await tester.pumpWidget(
-      UncontrolledProviderScope(
-        container: container,
-        child: MaterialApp(
-          locale: const Locale('ar'),
-          localizationsDelegates: AppLocalizations.localizationsDelegates,
-          supportedLocales: AppLocalizations.supportedLocales,
-          theme: ThemeData.dark(),
-          home: DetailsScreen(item: item),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    final controller = container.read(
-      detailsControllerProvider(item.url).notifier,
-    );
-    controller.toggleEpisodeSelection(item.episodes!.last);
-    await tester.pumpAndSettle();
-
-    expect(find.byKey(const ValueKey('batch-download-episodes')), findsOneWidget);
-    expect(find.text('تنزيل 1 حلقة'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('batch-download-episodes')));
-    await tester.pumpAndSettle();
-
-    expect(launcher.batches, hasLength(1));
-    expect(launcher.batches.single.map((episode) => episode.url), ['episode://2']);
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('episode rail fits comment actions at fractional scale and focus', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(1920, 1080);
-    tester.view.devicePixelRatio = 1.25;
-    addTearDown(tester.view.reset);
-    final previousMode = episodeViewMode.value;
-    episodeViewMode.value = EpisodeViewMode.rail;
-    addTearDown(() => episodeViewMode.value = previousMode);
-    final episode = Episode(
-      name: 'القصة التي بدأت في المدينة الجديدة وما حدث بعدها',
-      url: 'anime|rail-episode-1',
-      episode: 1,
-    );
-    final item = MultimediaItem(
-      title: 'Anime',
-      url: 'https://animewitcher.com/watch/rail-layout',
-      posterUrl: '',
-      provider: animeWitcherNativeProviderId,
-      episodes: [episode],
-    );
-    final container = ProviderContainer(
-      overrides: [
-        storageServiceProvider.overrideWithValue(_Storage()),
-        downloadsProvider.overrideWith(_EmptyDownloads.new),
-        logicalDownloadStoreV2Provider.overrideWithValue(
-          InMemoryLogicalDownloadStoreV2(),
-        ),
-        detailsControllerProvider(item.url).overrideWith(
-          () => _ReadyDetailsController(item),
-        ),
-      ],
-    );
-    addTearDown(container.dispose);
-
-    for (final scale in [1.0, 1.5, 2.0]) {
       await tester.pumpWidget(
         UncontrolledProviderScope(
           container: container,
@@ -239,43 +172,124 @@ void main() {
             localizationsDelegates: AppLocalizations.localizationsDelegates,
             supportedLocales: AppLocalizations.supportedLocales,
             theme: ThemeData.dark(),
-            builder: (context, child) => MediaQuery(
-              data: MediaQuery.of(context).copyWith(
-                textScaler: TextScaler.linear(scale),
-              ),
-              child: child!,
-            ),
-            home: Scaffold(
-              body: SingleChildScrollView(
-                child: DetailsDesktopEpisodeColumn(
-                  parentItem: item,
-                  itemUrl: item.url,
-                  isMovie: false,
-                ),
-              ),
-            ),
+            home: DetailsScreen(item: item),
           ),
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.byIcon(Icons.chat_bubble_outline_rounded), findsOneWidget);
-      expect(tester.takeException(), isNull, reason: 'text scale $scale');
-      final focus = tester.widget<Focus>(
-        find.byWidgetPredicate(
-          (widget) => widget is Focus && widget.focusNode?.debugLabel == 'ep_body',
-        ),
-      ).focusNode!;
-      focus.requestFocus();
-      await tester.pumpAndSettle();
-      expect(
-        tester.takeException(),
-        isNull,
-        reason: 'focused at text scale $scale',
+
+      final controller = container.read(
+        detailsControllerProvider(item.url).notifier,
       );
-      focus.unfocus();
+      controller.toggleEpisodeSelection(item.episodes!.last);
       await tester.pumpAndSettle();
-    }
-  });
+
+      expect(
+        find.byKey(const ValueKey('batch-download-episodes')),
+        findsOneWidget,
+      );
+      expect(find.text('تنزيل 1 حلقة'), findsOneWidget);
+      expect(
+        tester
+            .getTopLeft(find.byKey(const ValueKey('batch-download-episodes')))
+            .dy,
+        lessThan(tester.getTopLeft(find.text('تمت مشاهدته')).dy),
+      );
+      await tester.tap(find.byKey(const ValueKey('batch-download-episodes')));
+      await tester.pumpAndSettle();
+
+      expect(launcher.batches, hasLength(1));
+      expect(launcher.batches.single.map((episode) => episode.url), [
+        'episode://2',
+      ]);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'episode rail fits comment actions at fractional scale and focus',
+    (tester) async {
+      tester.view.physicalSize = const Size(1920, 1080);
+      tester.view.devicePixelRatio = 1.25;
+      addTearDown(tester.view.reset);
+      final previousMode = episodeViewMode.value;
+      episodeViewMode.value = EpisodeViewMode.rail;
+      addTearDown(() => episodeViewMode.value = previousMode);
+      final episode = Episode(
+        name: 'القصة التي بدأت في المدينة الجديدة وما حدث بعدها',
+        url: 'anime|rail-episode-1',
+        episode: 1,
+      );
+      final item = MultimediaItem(
+        title: 'Anime',
+        url: 'https://animewitcher.com/watch/rail-layout',
+        posterUrl: '',
+        provider: animeWitcherNativeProviderId,
+        episodes: [episode],
+      );
+      final container = ProviderContainer(
+        overrides: [
+          storageServiceProvider.overrideWithValue(_Storage()),
+          downloadsProvider.overrideWith(_EmptyDownloads.new),
+          logicalDownloadStoreV2Provider.overrideWithValue(
+            InMemoryLogicalDownloadStoreV2(),
+          ),
+          detailsControllerProvider(item.url)
+              .overrideWith(() => _ReadyDetailsController(item)),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      for (final scale in [1.0, 1.5, 2.0]) {
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(
+              locale: const Locale('ar'),
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              theme: ThemeData.dark(),
+              builder: (context, child) => MediaQuery(
+                data: MediaQuery.of(context)
+                    .copyWith(textScaler: TextScaler.linear(scale)),
+                child: child!,
+              ),
+              home: Scaffold(
+                body: SingleChildScrollView(
+                  child: DetailsDesktopEpisodeColumn(
+                    parentItem: item,
+                    itemUrl: item.url,
+                    isMovie: false,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.byIcon(Icons.chat_bubble_outline_rounded), findsOneWidget);
+        expect(tester.takeException(), isNull, reason: 'text scale $scale');
+        final focus = tester
+            .widget<Focus>(
+              find.byWidgetPredicate(
+                (widget) =>
+                    widget is Focus &&
+                    widget.focusNode?.debugLabel == 'ep_body',
+              ),
+            )
+            .focusNode!;
+        focus.requestFocus();
+        await tester.pumpAndSettle();
+        expect(
+          tester.takeException(),
+          isNull,
+          reason: 'focused at text scale $scale',
+        );
+        focus.unfocus();
+        await tester.pumpAndSettle();
+      }
+    },
+  );
 
   for (final platform in <TargetPlatform>[
     TargetPlatform.windows,
@@ -284,48 +298,45 @@ void main() {
     TargetPlatform.android,
     TargetPlatform.iOS,
   ]) {
-    testWidgets(
-      'wide anime poster is restored only on Windows ($platform)',
-      (tester) async {
-        tester.view.physicalSize = const Size(1280, 900);
-        tester.view.devicePixelRatio = 1;
-        addTearDown(tester.view.resetPhysicalSize);
-        addTearDown(tester.view.resetDevicePixelRatio);
-        final item = MultimediaItem(
-          title: 'Anime',
-          url: 'https://example.test/windows-poster',
-          posterUrl: '',
-          contentType: MultimediaContentType.anime,
-        );
-        await tester.pumpWidget(
-          ProviderScope(
-            overrides: [
-              storageServiceProvider.overrideWithValue(_Storage()),
-              logicalDownloadStoreV2Provider.overrideWithValue(
-                InMemoryLogicalDownloadStoreV2(),
-              ),
-              libraryProvider.overrideWith(_EmptyLibrary.new),
-              detailsControllerProvider(item.url).overrideWith(
-                () => _ReadyDetailsController(item),
-              ),
-            ],
-            child: MaterialApp(
-              localizationsDelegates: AppLocalizations.localizationsDelegates,
-              supportedLocales: AppLocalizations.supportedLocales,
-              theme: ThemeData.dark(),
-              home: DetailsScreen(item: item),
+    testWidgets('wide anime poster is restored only on Windows ($platform)', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(1280, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final item = MultimediaItem(
+        title: 'Anime',
+        url: 'https://example.test/windows-poster',
+        posterUrl: '',
+        contentType: MultimediaContentType.anime,
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            storageServiceProvider.overrideWithValue(_Storage()),
+            logicalDownloadStoreV2Provider.overrideWithValue(
+              InMemoryLogicalDownloadStoreV2(),
             ),
+            libraryProvider.overrideWith(_EmptyLibrary.new),
+            detailsControllerProvider(item.url)
+                .overrideWith(() => _ReadyDetailsController(item)),
+          ],
+          child: MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            theme: ThemeData.dark(),
+            home: DetailsScreen(item: item),
           ),
-        );
-        await tester.pump();
-        expect(
-          find.byKey(const ValueKey('details-hero-poster')),
-          platform == TargetPlatform.windows ? findsOneWidget : findsNothing,
-        );
-        expect(tester.takeException(), isNull);
-      },
-      variant: TargetPlatformVariant(<TargetPlatform>{platform}),
-    );
+        ),
+      );
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('details-hero-poster')),
+        platform == TargetPlatform.windows ? findsOneWidget : findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    }, variant: TargetPlatformVariant(<TargetPlatform>{platform}));
   }
 
   testWidgets('episode comments use the anime outline and retain their target', (
@@ -529,9 +540,8 @@ void main() {
             InMemoryLogicalDownloadStoreV2(),
           ),
           libraryProvider.overrideWith(_EmptyLibrary.new),
-          detailsControllerProvider(movie.url).overrideWith(
-            () => _ReadyDetailsController(movie),
-          ),
+          detailsControllerProvider(movie.url)
+              .overrideWith(() => _ReadyDetailsController(movie)),
         ],
         child: MaterialApp(
           navigatorObservers: [observer],
@@ -616,9 +626,8 @@ void main() {
           logicalDownloadStoreV2Provider.overrideWithValue(
             InMemoryLogicalDownloadStoreV2(),
           ),
-          detailsControllerProvider(movie.url).overrideWith(
-            () => _ReadyDetailsController(movie),
-          ),
+          detailsControllerProvider(movie.url)
+              .overrideWith(() => _ReadyDetailsController(movie)),
         ],
         child: MaterialApp(
           localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -646,10 +655,7 @@ void main() {
       const ValueKey<String>('details-episode-controls-reveal'),
     );
     expect(controlsReveal, findsOneWidget);
-    expect(
-      tester.widget<FadeTransition>(controlsReveal).opacity.value,
-      0.4,
-    );
+    expect(tester.widget<FadeTransition>(controlsReveal).opacity.value, 0.4);
     expect(
       find.descendant(
         of: controlsReveal,

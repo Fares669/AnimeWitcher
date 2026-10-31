@@ -182,15 +182,10 @@ class DownloadLauncher {
                 final sources = await provider!.loadStreamSources(
                   episodes[index].url,
                 );
-                final resolved = await resolveBatchStreamSources(
-                  sources,
-                  resolveCandidate: (candidate) =>
-                      provider!.loadStreams(candidate.url),
-                );
-                if (resolved.isEmpty) {
-                  throw StateError('No usable sources for episode');
+                if (sources.where((s) => s.url.trim().isNotEmpty).isEmpty) {
+                  throw StateError('No servers for episode');
                 }
-                allSources[index] = resolved;
+                allSources[index] = sources;
                 sourceProgress.value = allSources
                     .whereType<List<StreamResult>>()
                     .length;
@@ -238,20 +233,18 @@ class DownloadLauncher {
       }
       if (!context.mounted) return;
       messenger?.hideCurrentSnackBar();
-      final resolvedSources = <List<StreamResult>>[
+      final serverLists = <List<StreamResult>>[
         for (final sources in allSources) sources!,
       ];
-      final common = commonBatchStreamSources(resolvedSources);
+      final common = commonBatchStreamServers(serverLists);
       if (common.isEmpty) {
-        notifications.showError(
-          'لا يوجد سيرفر وجودة مشتركان بين كل الحلقات المحددة',
-        );
+        notifications.showError('لا يوجد سيرفر مشترك بين كل الحلقات المحددة');
         return;
       }
 
       final preferences = _ref.read(generalSettingsProvider);
       final orderedCommon = orderStreamSourcesByPreference(
-        common,
+        [for (final server in common) server.copyWith(quality: 'السيرفرات')],
         qualityPriority: preferences.streamQualityPriority,
         serverPriority: preferences.streamServerPriority,
       );
@@ -266,7 +259,7 @@ class DownloadLauncher {
         builder: (dialogContext) => AlertDialog(
           title: Text(l10n.confirmDownload),
           content: Text(
-            'تنزيل ${episodes.length} حلقة بالترتيب التصاعدي\n${selected.source} • ${selected.quality ?? ''}',
+            'تنزيل ${episodes.length} حلقة بالترتيب التصاعدي\nالسيرفر: ${selected.source}',
           ),
           actions: [
             TextButton(
@@ -284,32 +277,51 @@ class DownloadLauncher {
 
       var queued = 0;
       var failed = 0;
-      final wanted = batchStreamSourceKey(selected);
+      final wantedServer = streamServerPreferenceKey(selected.source)
+          .toLowerCase();
       for (var i = 0; i < episodes.length; i++) {
         final episode = episodes[i];
         try {
-          final candidate = resolvedSources[i].firstWhere(
-            (source) => batchStreamSourceKey(source) == wanted,
+          final candidates = serverLists[i]
+              .where(
+                (source) =>
+                    streamServerPreferenceKey(source.source).toLowerCase() ==
+                    wantedServer,
+              )
+              .toList();
+          final resolved = await resolveBatchStreamSources(
+            candidates,
+            resolveCandidate: (candidate) =>
+                provider!.loadStreams(candidate.url),
           );
-          StreamResult stream = candidate;
-          if (candidate.requiresResolution) {
-            final resolved = await provider.loadStreams(candidate.url);
-            if (resolved.isEmpty) throw StateError('Missing stream URL');
-            stream = resolved.first.refreshUrl?.trim().isNotEmpty == true
-                ? resolved.first
-                : resolved.first.copyWith(refreshUrl: candidate.url);
+          final prioritized = orderStreamSourcesByPreference(
+            resolved,
+            qualityPriority: preferences.streamQualityPriority,
+            serverPriority: preferences.streamServerPriority,
+          );
+          if (prioritized.isEmpty) throw StateError('Missing stream URL');
+          StreamResult? stream;
+          DownloadSourceMetadataV2? metadata;
+          for (final option in prioritized) {
+            final probe = await probeDownloadSourceV2(
+              _ref.read(dioClientProvider),
+              option.url,
+              headers: option.headers,
+            ).timeout(const Duration(seconds: 15), onTimeout: () => null);
+            if (probe?.size != null) {
+              stream = option;
+              metadata = probe;
+              break;
+            }
           }
-          final metadata = await probeDownloadSourceV2(
-            _ref.read(dioClientProvider),
-            stream.url,
-            headers: stream.headers,
-          ).timeout(const Duration(seconds: 15), onTimeout: () => null);
-          if (metadata?.size == null) throw StateError('Unavailable source');
+          if (stream == null || metadata == null) {
+            throw StateError('Unavailable source');
+          }
           await _startDownload(
             stream,
             item,
             episode.url,
-            metadata: metadata!,
+            metadata: metadata,
             providerId: provider.packageName,
             episode: episode,
             forceEpisodeFilename: true,

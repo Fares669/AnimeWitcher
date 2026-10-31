@@ -64,6 +64,20 @@ Future<void> _awaitArtworkLookups(WidgetTester tester) async {
   await tester.pump();
 }
 
+Future<void> _captureSelectionPreview(WidgetTester tester, String name) async {
+  final directory = debugShotDirectory();
+  if (directory == null) return;
+  await tester.runAsync(() async {
+    final boundary = tester.renderObject<RenderRepaintBoundary>(
+      find.byKey(const ValueKey('downloads-tab-root')),
+    );
+    final preview = await boundary.toImage(pixelRatio: 2);
+    final data = await preview.toByteData(format: ui.ImageByteFormat.png);
+    File('${directory.path}/$name.png')
+        .writeAsBytesSync(data!.buffer.asUint8List());
+  });
+}
+
 MultimediaItem _blackTorch() {
   return MultimediaItem(
     title: 'Black Torch',
@@ -217,6 +231,7 @@ class _StubEpisodeSortAscendingNotifier extends EpisodeSortAscendingNotifier {
 
 Widget _downloadsApp(
   List<DownloadItem> items, {
+  bool previewTheme = false,
   TextDirection? shellDirection,
   bool episodeSortAscending = true,
   Object? resumeError,
@@ -257,6 +272,16 @@ Widget _downloadsApp(
       locale: const Locale('ar'),
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
+      theme: previewTheme
+          ? ThemeData(
+              useMaterial3: true,
+              colorScheme: ColorScheme.fromSeed(
+                seedColor: const Color(0xFF52C6F5),
+                brightness: Brightness.dark,
+              ),
+              scaffoldBackgroundColor: const Color(0xFF0B1422),
+            )
+          : null,
       home: home,
     ),
   );
@@ -265,6 +290,15 @@ Widget _downloadsApp(
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() async {
+    if (debugShotDirectory() != null) {
+      await TestFonts.loadFamily('Roboto', [
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+      ]);
+      await TestFonts.loadFamily('MaterialIcons', [
+        TestFonts.materialFont('MaterialIcons-Regular.otf'),
+      ]);
+    }
     _artworkFixtureRoot = await Directory.systemTemp.createTemp(
       'aw-downloads-tab-artwork-',
     );
@@ -551,7 +585,9 @@ void main() {
       _item(taskId: 'a', timestamp: 1, status: TaskStatus.complete),
       _itemTen(taskId: 'b', timestamp: 2, status: TaskStatus.complete),
     ]);
-    await tester.pumpWidget(_downloadsApp([], notifier: notifier));
+    await tester.pumpWidget(
+      _downloadsApp([], notifier: notifier, previewTheme: true),
+    );
     await tester.pumpAndSettle();
     final l10n = AppLocalizations.of(
       tester.element(find.byType(DownloadsTab)),
@@ -587,6 +623,17 @@ void main() {
       ),
       findsOneWidget,
     );
+    final deleteButton = find.descendant(
+      of: bar,
+      matching: find.widgetWithText(FilledButton, l10n.delete),
+    );
+    final selectAll = find.byKey(const ValueKey('downloads-select-all'));
+    expect(tester.getSize(deleteButton).width, greaterThan(200));
+    expect(
+      tester.getCenter(selectAll).dx,
+      lessThan(tester.getCenter(deleteButton).dx),
+    );
+    await _captureSelectionPreview(tester, 'completed_selection_new');
   });
 
   testWidgets('wrapped selection bar never covers the final active row', (
@@ -618,7 +665,9 @@ void main() {
       activeItem('five', 5),
       activeItem('last', 6),
     ]);
-    await tester.pumpWidget(_downloadsApp([], notifier: notifier));
+    await tester.pumpWidget(
+      _downloadsApp([], notifier: notifier, previewTheme: true),
+    );
     await tester.pumpAndSettle();
 
     await tester.longPress(find.byKey(const ValueKey('first')));
@@ -643,6 +692,33 @@ void main() {
       ),
       findsOneWidget,
     );
+    final delete = tester.getRect(
+      find.descendant(
+        of: bar,
+        matching: find.widgetWithText(FilledButton, 'حذف'),
+      ),
+    );
+    final pause = tester.getRect(
+      find.descendant(
+        of: bar,
+        matching: find.widgetWithText(FilledButton, 'إيقاف'),
+      ),
+    );
+    final resume = tester.getRect(
+      find.descendant(
+        of: bar,
+        matching: find.widgetWithText(FilledButton, 'إكمال'),
+      ),
+    );
+    final selectAll = tester.getRect(
+      find.byKey(const ValueKey('downloads-select-all')),
+    );
+    expect(delete.center.dy, closeTo(pause.center.dy, 1));
+    expect(pause.center.dy, closeTo(resume.center.dy, 1));
+    expect(delete.width, closeTo(pause.width, 1));
+    expect(pause.width, closeTo(resume.width, 1));
+    expect(selectAll.right, lessThan(resume.left));
+    await _captureSelectionPreview(tester, 'active_selection_new');
 
     await tester.drag(find.byType(ListView).first, const Offset(0, -2000));
     await tester.pumpAndSettle();
@@ -672,7 +748,9 @@ void main() {
     expect(notifier.removedBatches.single, ['a']);
   });
 
-  testWidgets('delete all only targets the completed tab', (tester) async {
+  testWidgets('completed tab has no delete all and selection deletes items', (
+    tester,
+  ) async {
     await _prepareArtworkStorage(tester);
     final notifier = _StubDownloadsNotifier([
       _item(taskId: 'a', timestamp: 1, status: TaskStatus.running),
@@ -687,9 +765,16 @@ void main() {
     await tester.tap(find.text(l10n.downloadsTabCompleted));
     await tester.pumpAndSettle();
     await _awaitArtworkLookups(tester);
-    await tester.tap(find.byKey(const ValueKey('downloads-delete-all')));
+    expect(find.byKey(const ValueKey('downloads-delete-all')), findsNothing);
+    await tester.longPress(find.text('Black Torch'));
     await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('downloads-selection-bar')),
+      findsOneWidget,
+    );
     await tester.tap(find.widgetWithText(FilledButton, l10n.delete));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, l10n.delete).last);
     await tester.pumpAndSettle();
     expect(notifier.removedBatches.single, ['b']);
   });

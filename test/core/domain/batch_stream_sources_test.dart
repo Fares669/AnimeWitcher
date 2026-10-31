@@ -6,6 +6,24 @@ StreamResult source(String server, String? quality, String url) =>
     StreamResult(source: server, quality: quality, url: url);
 
 void main() {
+  test('common servers ignore quality but require a usable source URL', () {
+    final common = commonBatchStreamServers([
+      [
+        source('PD', '1080p', 'pd-1080'),
+        source('PD', '720p', 'pd-720'),
+        source('MF', '720p', 'mf-720'),
+        source('ST', '1080p', ''),
+      ],
+      [
+        source('pd server', '480p', 'other-pd'),
+        source('Mediafire', '1080p', 'other-mf'),
+        source('ST', '1080p', 'other-st'),
+      ],
+    ]);
+    expect(common.map((entry) => entry.url), ['pd-1080', 'mf-720']);
+    expect(commonBatchStreamServers([]), isEmpty);
+  });
+
   test(
     'batch options require the same server AND quality in every episode',
     () {

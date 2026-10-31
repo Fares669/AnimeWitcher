@@ -102,6 +102,7 @@ class _BatchDownloadSource extends AnimeWitcherProvider {
   final Map<String, Future<List<StreamResult>> Function()> sourceLoaders;
   final Map<String, int> sourceCallsByEpisode = <String, int>{};
   final List<String> sourceCallOrder = <String>[];
+  final List<String> resolvedUrls = <String>[];
   int resolutionCalls = 0;
 
   @override
@@ -147,6 +148,7 @@ class _BatchDownloadSource extends AnimeWitcherProvider {
   @override
   Future<List<StreamResult>> loadStreams(String url) async {
     resolutionCalls++;
+    resolvedUrls.add(url);
     return resolvedBySource[url] ?? const <StreamResult>[];
   }
 }
@@ -301,7 +303,7 @@ void main() {
 
     expect(provider.sourceCallsByEpisode['ep1'] ?? 0, 0);
     expect(provider.sourceCallsByEpisode['ep2'], 1);
-    expect(find.text('1080p'), findsOneWidget);
+    expect(find.text('السيرفرات'), findsOneWidget);
 
     Navigator.of(tester.element(find.text('PD'))).pop();
     await tester.pumpAndSettle();
@@ -425,10 +427,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(notifications.toasts, isNotEmpty);
-    expect(
-      notifications.toasts.last.message,
-      contains('لا يوجد سيرفر وجودة مشتركان'),
-    );
+    expect(notifications.toasts.last.message, contains('لا يوجد سيرفر مشترك'));
     expect(find.text('PD'), findsNothing);
     await tester.pump(const Duration(seconds: 1));
   });
@@ -503,91 +502,112 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets(
-    'batch picker intersects actual qualities after resolving server sources',
-    (tester) async {
-      final provider = _BatchDownloadSource(
-        sourcesByEpisode: const {
-          'ep1': [
-            StreamResult(
-              url: 'ep1-pd',
-              source: 'PD',
-              quality: 'متعدد',
-              requiresResolution: true,
-            ),
-          ],
-          'ep2': [
-            StreamResult(
-              url: 'ep2-pd',
-              source: 'PD',
-              quality: 'متعدد',
-              requiresResolution: true,
-            ),
-          ],
-        },
-        resolvedBySource: const {
-          'ep1-pd': [
-            StreamResult(url: 'ep1-1080', source: 'PD', quality: '1080p'),
-            StreamResult(url: 'ep1-720', source: 'PD', quality: '720p'),
-          ],
-          'ep2-pd': [
-            StreamResult(url: 'ep2-1080', source: 'PD', quality: '1080p'),
-          ],
-        },
-      );
-      late BuildContext launchContext;
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            storageServiceProvider.overrideWithValue(MemoryStorageService()),
-            logicalDownloadStoreV2Provider.overrideWithValue(
-              InMemoryLogicalDownloadStoreV2(),
-            ),
-            extensionManagerProvider.overrideWith(
-              () => _StubExtensions(<AnimeWitcherProvider>[provider]),
-            ),
-            activeProviderProvider.overrideWithValue(provider),
-          ],
-          child: MaterialApp(
-            locale: const Locale('ar'),
-            localizationsDelegates: AppLocalizations.localizationsDelegates,
-            supportedLocales: AppLocalizations.supportedLocales,
-            home: Scaffold(
-              body: Builder(
-                builder: (context) {
-                  launchContext = context;
-                  return const Text('ready');
-                },
-              ),
+  testWidgets('batch lists common servers before resolving any stream URLs', (
+    tester,
+  ) async {
+    final provider = _BatchDownloadSource(
+      sourcesByEpisode: const {
+        'ep1': [
+          StreamResult(
+            url: 'ep1-pd',
+            source: 'PD',
+            quality: 'متعدد',
+            requiresResolution: true,
+          ),
+          StreamResult(
+            url: 'ep1-mf',
+            source: 'MF',
+            quality: 'متعدد',
+            requiresResolution: true,
+          ),
+        ],
+        'ep2': [
+          StreamResult(
+            url: 'ep2-pd',
+            source: 'PD',
+            quality: 'متعدد',
+            requiresResolution: true,
+          ),
+          StreamResult(
+            url: 'ep2-mf',
+            source: 'MF',
+            quality: 'متعدد',
+            requiresResolution: true,
+          ),
+        ],
+      },
+      resolvedBySource: const {
+        'ep1-pd': [
+          StreamResult(url: 'ep1-1080', source: 'PD', quality: '1080p'),
+          StreamResult(url: 'ep1-720', source: 'PD', quality: '720p'),
+        ],
+        'ep2-pd': [
+          StreamResult(url: 'ep2-1080', source: 'PD', quality: '1080p'),
+        ],
+      },
+    );
+    late BuildContext launchContext;
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          storageServiceProvider.overrideWithValue(MemoryStorageService()),
+          logicalDownloadStoreV2Provider.overrideWithValue(
+            InMemoryLogicalDownloadStoreV2(),
+          ),
+          extensionManagerProvider.overrideWith(
+            () => _StubExtensions(<AnimeWitcherProvider>[provider]),
+          ),
+          activeProviderProvider.overrideWithValue(provider),
+        ],
+        child: MaterialApp(
+          locale: const Locale('ar'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: Builder(
+              builder: (context) {
+                launchContext = context;
+                return const Text('ready');
+              },
             ),
           ),
         ),
-      );
-      final launcher = ProviderScope.containerOf(launchContext)
-          .read(downloadLauncherProvider);
-      final item = MultimediaItem(
-        title: 'Show',
-        url: 'show',
-        posterUrl: '',
-        provider: provider.packageName,
-      );
-      unawaited(
-        launcher.launchBatch(launchContext, item, <Episode>[
-          Episode(name: '', url: 'ep2', episode: 2, season: 1),
-          Episode(name: '', url: 'ep1', episode: 1, season: 1),
-        ]),
-      );
-      await tester.pumpAndSettle();
+      ),
+    );
+    final launcher = ProviderScope.containerOf(launchContext)
+        .read(downloadLauncherProvider);
+    final item = MultimediaItem(
+      title: 'Show',
+      url: 'show',
+      posterUrl: '',
+      provider: provider.packageName,
+    );
+    unawaited(
+      launcher.launchBatch(launchContext, item, <Episode>[
+        Episode(name: '', url: 'ep2', episode: 2, season: 1),
+        Episode(name: '', url: 'ep1', episode: 1, season: 1),
+      ]),
+    );
+    await tester.pumpAndSettle();
 
-      expect(provider.resolutionCalls, 2);
-      expect(find.text('1080p'), findsOneWidget);
-      expect(find.text('720p'), findsNothing);
-      expect(find.text('متعدد'), findsNothing);
+    expect(provider.resolutionCalls, 0);
+    expect(find.text('السيرفرات'), findsOneWidget);
+    expect(find.text('PD'), findsOneWidget);
+    expect(find.text('MF'), findsOneWidget);
+    expect(find.text('720p'), findsNothing);
+    expect(find.text('متعدد'), findsNothing);
 
-      Navigator.of(tester.element(find.text('PD'))).pop();
-      await tester.pumpAndSettle();
-    },
-  );
+    await tester.tap(find.text('PD'));
+    await tester.pumpAndSettle();
+    expect(provider.resolutionCalls, 0);
+    expect(find.text('ep1-pd'), findsNothing);
+    final l10n = AppLocalizations.of(launchContext)!;
+    await tester.tap(find.widgetWithText(FilledButton, l10n.downloadNow));
+    await tester.pumpAndSettle();
+    expect(provider.resolvedUrls, ['ep1-pd', 'ep2-pd']);
+    expect(provider.sourceCallOrder, ['ep1', 'ep2']);
+      await tester.pump(const Duration(seconds: 2));
+  });
 
   testWidgets('batch source scan reports progress as each episode finishes', (
     tester,
@@ -734,7 +754,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(provider.sourceCallsByEpisode['ep1'], 1);
     expect(provider.sourceCallsByEpisode['ep2'], 2);
-    expect(find.text('1080p'), findsOneWidget);
+    expect(find.text('السيرفرات'), findsOneWidget);
 
     Navigator.of(tester.element(find.text('PD'))).pop();
     await tester.pumpAndSettle();

@@ -1227,6 +1227,17 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
                         ],
                       ),
                       const SizedBox(height: 4),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 42,
+                        child: FilledButton.icon(
+                          key: const ValueKey('batch-download-episodes'),
+                          onPressed: downloadSelected,
+                          icon: const Icon(Icons.download_rounded),
+                          label: Text('تنزيل $selectedCount حلقة'),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
                       Row(
                         children: [
                           Expanded(
@@ -1267,17 +1278,6 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
                             ),
                           ),
                         ],
-                      ),
-                      const SizedBox(height: 6),
-                      SizedBox(
-                        width: double.infinity,
-                        height: 42,
-                        child: FilledButton.icon(
-                          key: const ValueKey('batch-download-episodes'),
-                          onPressed: downloadSelected,
-                          icon: const Icon(Icons.download_rounded),
-                          label: Text('تنزيل $selectedCount حلقة'),
-                        ),
                       ),
                     ],
                   );
