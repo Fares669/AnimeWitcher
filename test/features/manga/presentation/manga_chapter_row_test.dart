@@ -71,7 +71,10 @@ void main() {
                 chapter: chapter,
                 selecting: selecting,
                 selected: selected,
-                action: const SizedBox.square(dimension: 34),
+                action: const SizedBox.square(
+                  key: ValueKey('chapter-action'),
+                  dimension: 34,
+                ),
               ),
             ),
           ),
@@ -79,13 +82,26 @@ void main() {
 
     await render(selecting: false, selected: false);
     final original = tester.getRect(find.byType(MangaChapterRow));
+    final actionCenter = tester.getCenter(
+      find.byKey(const ValueKey('chapter-action')),
+    );
+    final bookCenter = tester.getCenter(find.byIcon(Icons.menu_book_rounded));
     await render(selecting: true, selected: false);
     expect(tester.getRect(find.byType(MangaChapterRow)), original);
     expect(find.byIcon(Icons.radio_button_unchecked_rounded), findsOneWidget);
+    expect(
+      tester.getCenter(find.byIcon(Icons.radio_button_unchecked_rounded)),
+      actionCenter,
+    );
+    expect(tester.getCenter(find.byIcon(Icons.menu_book_rounded)), bookCenter);
     await render(selecting: true, selected: true);
     expect(tester.getRect(find.byType(MangaChapterRow)), original);
     expect(find.byIcon(Icons.check_circle_rounded), findsOneWidget);
-    expect(find.byIcon(Icons.menu_book_rounded), findsNothing);
+    expect(find.byIcon(Icons.menu_book_rounded), findsOneWidget);
+    expect(
+      tester.getCenter(find.byIcon(Icons.check_circle_rounded)),
+      actionCenter,
+    );
   });
 
   testWidgets('an unread chapter has no label', (tester) async {

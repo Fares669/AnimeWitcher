@@ -48,3 +48,11 @@ This supersedes the server-only picker and automatic quality choice described ab
 - [x] Submit every selected chapter without waiting for the first chapter's asynchronous startup; retain manager admission/concurrency limits.
 - [x] Count failures per chapter without blocking remaining submissions.
 - [x] Regression check holds the first startup pending and verifies all three chapters were submitted, including an independently failed chapter.
+
+## Manga chapter selection marker placement
+
+- [x] Keep the book icon beside the chapter title in both Manga and Completed.
+- [x] Replace the trailing delete/download action with the circular selection marker while selecting, keeping its width and row dimensions.
+- [x] Check selected/unselected marker positions against the original action and preserve the book position.
+
+This supersedes the earlier book-replacement selection icon.

@@ -40,14 +40,12 @@ class CompletedDownloadChapterCard extends ConsumerWidget {
       onTap: onOpen,
       selected: selected,
       selecting: selecting,
-      action: selecting
-          ? const SizedBox.square(dimension: EpisodeActionChip.defaultSize)
-          : EpisodeActionChip(
-              tooltip: l10n?.mangaDeleteChapter ?? 'حذف الفصل',
-              onPressed: onDelete,
-              icon: Icons.delete_outline_rounded,
-              color: Theme.of(context).colorScheme.error,
-            ),
+      action: EpisodeActionChip(
+        tooltip: l10n?.mangaDeleteChapter ?? 'حذف الفصل',
+        onPressed: onDelete,
+        icon: Icons.delete_outline_rounded,
+        color: Theme.of(context).colorScheme.error,
+      ),
     );
   }
 }

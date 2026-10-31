@@ -782,9 +782,8 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
         progress: repository.get(chapter.mangaId, chapter.id),
         publishedLabel: publishedLabel,
         selected: _selectedChapterIds.contains(chapter.id),
-        action: _selecting
-            ? null
-            : _downloadAction(context, chapter, progressById),
+        selecting: _selecting,
+        action: _downloadAction(context, chapter, progressById),
         onLongPress: () => _beginSelection(chapter),
         onTap: () {
           if (_selecting) {
