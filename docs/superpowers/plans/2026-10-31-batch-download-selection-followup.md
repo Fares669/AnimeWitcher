@@ -14,7 +14,7 @@
 - [x] Download selection and completed selection Delete buttons, plus the Downloads Delete All button, remain red even when temporarily disabled.
 - [x] Manga completed chapters display a single selection circle and preserve their action-column width.
 - [x] Update focused UI and launcher tests for the new behavior; run formatting, tests, analysis, and diff checks.
-- [ ] Commit and push changes to `feat/batch-download-controls` for GitHub PR review; do not merge.
+- [x] Commit and push changes to `feat/batch-download-controls` for GitHub PR review; do not merge.
 
 ## Implementation notes
 
