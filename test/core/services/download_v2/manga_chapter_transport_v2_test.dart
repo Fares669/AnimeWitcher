@@ -182,7 +182,8 @@ void main() {
     await starter.waitUntilStarted(0);
     expect(handle.current.transferredBytes, 0);
     starter.handles[0]!.setProgress(0.2);
-    await Future<void>.delayed(Duration.zero);
+    // Ordinary page progress is intentionally coalesced into a 1s aggregate.
+    await Future<void>.delayed(const Duration(milliseconds: 1100));
     expect(handle.current.transferredBytes, greaterThan(0));
     final before = handle.current.transferredBytes!;
     await starter.complete(0);
