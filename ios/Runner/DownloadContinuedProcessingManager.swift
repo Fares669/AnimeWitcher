@@ -121,6 +121,10 @@ final class DownloadContinuedProcessingManager {
   /// per second no matter how the feeders interleave (device logs,
   /// 2026-10-30: bursts of 3-5 native feeds inside one second).
   private var lastPresentationAt: CFTimeInterval = 0
+  // Rebase only when a queue grows. A larger denominator would otherwise
+  // pin the OS progress bar until the fresh percentage catches up.
+  private var lastPresentedBatchTotal = 0
+  private var progressRebase: (display: Double, raw: Double)?
   // V2 ranged children report a subtotal of child bytes, not a whole-file
   // absolute byte count. Capture that subtotal at the foreground -> background
   // handoff and advance the system UI by its delta over the latest Dart parent
@@ -593,6 +597,8 @@ final class DownloadContinuedProcessingManager {
       }
     }
 
+    progressRebase = nil
+    lastPresentedBatchTotal = 0
     snapshot = nil
     identifier = nil
     requestSubmittedAt = nil
@@ -663,6 +669,8 @@ final class DownloadContinuedProcessingManager {
         // owned by the download coordinator. See download_background_lifecycle.md.
         self.activeTask = nil
         self.activeTaskCompletion = nil
+        self.progressRebase = nil
+        self.lastPresentedBatchTotal = 0
         self.snapshot = nil
         self.identifier = nil
         self.requestSubmittedAt = nil
@@ -685,6 +693,8 @@ final class DownloadContinuedProcessingManager {
     // also presents immediately; the once-per-second gate applies from
     // there on.
     lastPresentationAt = 0
+    progressRebase = nil
+    lastPresentedBatchTotal = 0
     if let snapshot {
       apply(snapshot, to: task)
     } else {
@@ -732,7 +742,20 @@ final class DownloadContinuedProcessingManager {
     if snapshot.batchTotal > 1 || snapshot.completedPages != nil {
       let batch = Double(max(snapshot.batchTotal, 1))
       let sessionFraction = min((Double(snapshot.completedCount) + fraction) / batch, 0.999_999_999)
-      let monotonic = max(task.progress.fractionCompleted, sessionFraction)
+      if lastPresentedBatchTotal > 0 && snapshot.batchTotal > lastPresentedBatchTotal {
+        progressRebase = (display: task.progress.fractionCompleted, raw: sessionFraction)
+      }
+      lastPresentedBatchTotal = snapshot.batchTotal
+      let reweighted: Double
+      if let progressRebase {
+        let remainingRaw = max(1 - progressRebase.raw, 0.000_001)
+        reweighted = progressRebase.display
+          + max(sessionFraction - progressRebase.raw, 0)
+            * (1 - progressRebase.display) / remainingRaw
+      } else {
+        reweighted = sessionFraction
+      }
+      let monotonic = min(max(task.progress.fractionCompleted, reweighted), 0.999_999_999)
       task.progress.totalUnitCount = 1_000_000_000_000
       task.progress.completedUnitCount = Int64((monotonic * 1_000_000_000_000).rounded(.down))
     } else if snapshot.totalBytes > 0 {
