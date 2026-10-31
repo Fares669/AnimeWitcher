@@ -26,3 +26,12 @@ Modify `details_screen.dart`, `downloads_tab.dart`, and `download_launcher.dart`
 - [Completed Downloads selection](../previews/2026-10-31-completed-selection.png)
 
 These are automated Flutter widget previews using fixture download records and a dark/cyan test theme; real cover artwork and the user's theme settings are not included.
+
+## Quality picker correction
+
+- [x] Use the single-episode source picker with shared quality/server pairs, preserving quality headings instead of collapsing servers into one section.
+- [x] Resolve only the selected quality/server pair after confirmation; do not fall back to a different quality. Multi-quality sources retain their existing automatic behavior.
+- [x] Include the selected quality in the batch confirmation.
+- [x] Regression test checks multiple quality headings, the same server under two qualities, and no stream resolution before confirmation.
+
+This supersedes the server-only picker and automatic quality choice described above.

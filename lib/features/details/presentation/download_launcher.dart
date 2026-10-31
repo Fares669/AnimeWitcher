@@ -236,15 +236,17 @@ class DownloadLauncher {
       final serverLists = <List<StreamResult>>[
         for (final sources in allSources) sources!,
       ];
-      final common = commonBatchStreamServers(serverLists);
+      final common = commonBatchStreamSources(serverLists);
       if (common.isEmpty) {
-        notifications.showError('لا يوجد سيرفر مشترك بين كل الحلقات المحددة');
+        notifications.showError(
+          'لا توجد جودة وسيرفر مشتركان بين كل الحلقات المحددة',
+        );
         return;
       }
 
       final preferences = _ref.read(generalSettingsProvider);
       final orderedCommon = orderStreamSourcesByPreference(
-        [for (final server in common) server.copyWith(quality: 'السيرفرات')],
+        common,
         qualityPriority: preferences.streamQualityPriority,
         serverPriority: preferences.streamServerPriority,
       );
@@ -259,7 +261,7 @@ class DownloadLauncher {
         builder: (dialogContext) => AlertDialog(
           title: Text(l10n.confirmDownload),
           content: Text(
-            'تنزيل ${episodes.length} حلقة بالترتيب التصاعدي\nالسيرفر: ${selected.source}',
+            'تنزيل ${episodes.length} حلقة بالترتيب التصاعدي\nالسيرفر: ${selected.source} — الجودة: ${selected.quality}',
           ),
           actions: [
             TextButton(
@@ -277,17 +279,12 @@ class DownloadLauncher {
 
       var queued = 0;
       var failed = 0;
-      final wantedServer = streamServerPreferenceKey(selected.source)
-          .toLowerCase();
+      final wantedSource = batchStreamSourceKey(selected);
       for (var i = 0; i < episodes.length; i++) {
         final episode = episodes[i];
         try {
           final candidates = serverLists[i]
-              .where(
-                (source) =>
-                    streamServerPreferenceKey(source.source).toLowerCase() ==
-                    wantedServer,
-              )
+              .where((source) => batchStreamSourceKey(source) == wantedSource)
               .toList();
           final resolved = await resolveBatchStreamSources(
             candidates,
@@ -295,7 +292,15 @@ class DownloadLauncher {
                 provider!.loadStreams(candidate.url),
           );
           final prioritized = orderStreamSourcesByPreference(
-            resolved,
+            resolved
+                .where(
+                  (source) =>
+                      wantedSource.$2 == 'متعدد' ||
+                      streamQualityPreferenceKey(source.quality)
+                              .toLowerCase() ==
+                          wantedSource.$2,
+                )
+                .toList(),
             qualityPriority: preferences.streamQualityPriority,
             serverPriority: preferences.streamServerPriority,
           );
