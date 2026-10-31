@@ -35,7 +35,7 @@ on:
         type: boolean
 
   push:
-    branches: [fix/download-manager-performance-v2, fix/ios-background-downloads]
+    branches: [fix/download-manager-performance-v2]
 
 jobs:
   android:
