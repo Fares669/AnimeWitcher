@@ -76,6 +76,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
       ? mangaReaderPageSpreads(
           pageCount: widget.pages.length,
           singleFirst: widget.settings.doublePageSingleFirstPage,
+          sectionStarts: widget.sectionDividers.keys,
         )
       : <List<int>>[
           for (var index = 0; index < widget.pages.length; index++)
