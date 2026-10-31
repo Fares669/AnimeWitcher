@@ -63,3 +63,12 @@ This supersedes the earlier book-replacement selection icon.
 - [x] Logs show successful 206 transfers beside 403 failures on parallel PD ranges (16 configured connections). Limit PD source descriptors to one transport connection, including queue promotion/restarts. This is a compatibility mitigation; an actual device download is still needed to confirm the server behavior.
 - [x] Final cancellation awaits pending native ACKs and verifies native writers stopped, then fences late checkpoint writes instead of waiting forever for missing resume data. Keep the existing checkpoint fence for ordinary pause/resume and range recovery.
 - [x] Add regressions for unavailable checkpoints during delete, late persistent writes, PD connection width, and bulk controls inside the active pager.
+
+## Preserve ascending manga queue order
+
+- [x] Fix the race introduced by parallel batch submissions: asynchronous destination/metadata preparation could reorder persisted admission stamps.
+- [x] Add an enqueue-only start mode that durably queues a request and returns before provider page resolution or native startup.
+- [x] Submit the already-sorted chapter list sequentially in enqueue-only mode; continue after individual enqueue errors.
+- [x] Verify chapters 1–4 retain persisted FIFO order and start in that order while page resolution is deliberately blocked, without blocking batch enqueue.
+
+This supersedes simultaneous manga batch submission from the previous correction.

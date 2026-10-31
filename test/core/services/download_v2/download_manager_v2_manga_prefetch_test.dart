@@ -37,6 +37,35 @@ void main() {
     }
   }
 
+  test('ordered enqueue returns while page resolution is blocked', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-ordered-enqueue-');
+    addTearDown(() => temp.delete(recursive: true));
+    final gate = Completer<void>();
+    final gateway = _Gateway();
+    final store = InMemoryLogicalDownloadStoreV2();
+    final manager = DownloadManagerV2(
+      store: store, gateway: gateway, sourceResolver: _VideoResolver(),
+      mangaChapterPageResolver: _MangaResolver(gate: gate.future),
+      maxConcurrentDownloads: () => 1,
+    );
+    addTearDown(manager.dispose);
+    addTearDown(() { if (!gate.isCompleted) gate.complete(); });
+    for (final id in ['1', '2', '3', '4']) {
+      await manager.start(chapter(id, '${temp.path}/chapter-$id'), enqueueOnly: true)
+          .timeout(const Duration(seconds: 2));
+    }
+    final records = (await store.all()).toList()
+      ..sort((a, b) => a.enqueuedAtMillis.compareTo(b.enqueuedAtMillis));
+    expect(records.map((record) => record.unitKey), ['1', '2', '3', '4']);
+    expect(gateway.mangaSpecs, isEmpty);
+    gate.complete();
+    for (var index = 0; index < records.length; index++) {
+      await untilSpecs(gateway, index + 1);
+      expect(gateway.mangaSpecs[index].chapterId, '${index + 1}');
+      await manager.cancel(records[index].logicalId);
+    }
+  });
+
   test(
     'a queued chapter resolves its pages at enqueue time, not at promotion',
     () async {
@@ -167,7 +196,9 @@ void main() {
 }
 
 final class _MangaResolver implements MangaChapterPageResolverV2 {
-  _MangaResolver({this.failFirstAttemptFor});
+  _MangaResolver({this.failFirstAttemptFor, this.gate});
+
+  final Future<void>? gate;
 
   final String? failFirstAttemptFor;
   int calls = 0;
@@ -178,6 +209,7 @@ final class _MangaResolver implements MangaChapterPageResolverV2 {
   @override
   Future<List<MangaPage>> resolve(Map<String, Object?> descriptor) async {
     calls++;
+    if (gate != null) await gate;
     final chapterId = descriptor['chapterId']?.toString() ?? '';
     final attempt = attemptsFor(chapterId) + 1;
     _attempts[chapterId] = attempt;

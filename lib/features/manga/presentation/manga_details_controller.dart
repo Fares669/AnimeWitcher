@@ -161,23 +161,20 @@ class MangaDetailsController extends _$MangaDetailsController {
     await _chaptersLoadFuture;
   }
 
-  /// Submit all chapters without waiting for the first chapter's page resolver.
-  /// The download manager owns admission and transport concurrency.
+  /// Persist the batch in order without awaiting page resolution or transport.
   Future<int> downloadChapters(List<MangaChapter> chapters) async {
-    final failures = await Future.wait(
-      chapters.map((chapter) async {
-        try {
-          await downloadChapter(chapter);
-          return 0;
-        } catch (_) {
-          return 1;
-        }
-      }),
-    );
-    return failures.fold<int>(0, (total, failed) => total + failed);
+    var failed = 0;
+    for (final chapter in chapters) {
+      try {
+        await downloadChapter(chapter, enqueueOnly: true);
+      } catch (_) {
+        failed++;
+      }
+    }
+    return failed;
   }
 
-  Future<void> downloadChapter(MangaChapter chapter) async {
+  Future<void> downloadChapter(MangaChapter chapter, {bool enqueueOnly = false}) async {
     final item = state.item;
     if (item == null) {
       throw StateError('Manga details are not loaded.');
@@ -218,7 +215,7 @@ class MangaDetailsController extends _$MangaDetailsController {
     }
 
     try {
-      await manager.start(request);
+      await manager.start(request, enqueueOnly: enqueueOnly);
       if (hasExistingMetadata) {
         await storage.saveDownloadMetadata(
           request.logicalId.value,

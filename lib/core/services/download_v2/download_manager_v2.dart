@@ -666,8 +666,9 @@ final class DownloadManagerV2 {
   }
 
   /// Starts a logical download, coalescing concurrent duplicate starts into
-  /// the same exact package writer.
-  Future<DownloadTransportSnapshot> start(DownloadStartRequestV2 request) {
+  /// the same exact package writer. With [enqueueOnly], persist its FIFO slot
+  /// and return before resolving sources or starting transport.
+  Future<DownloadTransportSnapshot> start(DownloadStartRequestV2 request, {bool enqueueOnly = false}) {
     return _runControlCommand(request.logicalId, 'start', () async {
       await initialize();
       final currentRecord = await _store.get(request.logicalId);
@@ -733,7 +734,7 @@ final class DownloadManagerV2 {
       _mangaSourceRefreshVerifiedPages.remove(request.logicalId);
 
       _firstRenewedPositiveSample.remove(request.logicalId);
-      return _startFreshGeneration(request, currentRecord);
+      return _startFreshGeneration(request, currentRecord, enqueueOnly: enqueueOnly);
     });
   }
 
@@ -1386,6 +1387,7 @@ final class DownloadManagerV2 {
   Future<DownloadTransportSnapshot> _startFreshGeneration(
     DownloadStartRequestV2 request,
     LogicalDownloadRecordV2? previous, {
+    bool enqueueOnly = false,
     bool cancelPreviousEvenIfFinal = false,
     DownloadTransportHandle? previousHandle,
     bool lookUpPreviousHandle = true,
@@ -1404,7 +1406,7 @@ final class DownloadManagerV2 {
         );
       }
 
-      if (!await _reserveAdmission(request.logicalId)) {
+      if (enqueueOnly || !await _reserveAdmission(request.logicalId)) {
         return _queueFreshGenerationUnsafe(
           request,
           previous,

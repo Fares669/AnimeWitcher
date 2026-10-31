@@ -14,7 +14,8 @@ class _PendingDownloads extends MangaDetailsController {
   MangaDetailsState build(String itemUrl) => const MangaDetailsState();
 
   @override
-  Future<void> downloadChapter(MangaChapter chapter) {
+  Future<void> downloadChapter(MangaChapter chapter, {bool enqueueOnly = false}) {
+    expect(enqueueOnly, isTrue);
     requested.add(chapter.id);
     return (pending[chapter.id] = Completer<void>()).future;
   }
@@ -22,7 +23,7 @@ class _PendingDownloads extends MangaDetailsController {
 
 void main() {
   test(
-    'batch submits every chapter while the first start is pending',
+    'batch persists chapters in order and continues after a failed enqueue',
     () async {
       final controller = _PendingDownloads();
       final container = ProviderContainer(
@@ -44,10 +45,14 @@ void main() {
           MangaChapter(id: '$i', mangaId: 'm1', url: '/chapter/$i', name: '$i'),
       ]);
       await Future<void>.delayed(Duration.zero);
-      expect(controller.requested, ['1', '2', '3']);
-      controller.pending['2']!.completeError(StateError('unavailable'));
-      controller.pending['3']!.complete();
+      expect(controller.requested, ['1']);
       controller.pending['1']!.complete();
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.requested, ['1', '2']);
+      controller.pending['2']!.completeError(StateError('unavailable'));
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.requested, ['1', '2', '3']);
+      controller.pending['3']!.complete();
       expect(await result, 1);
     },
   );
