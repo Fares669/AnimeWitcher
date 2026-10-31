@@ -50,7 +50,7 @@ final downloadSessionSummaryNotifier =
     );
 
 
-//// Session-wide received-byte rate for manga, not a sum of image transfer rates.
+/// Session-wide received-byte rate for manga, not a sum of image transfer rates.
 /// Handles duplicate progress, completed pages, and overlapping chapters.
 final class DownloadSessionThroughputV2 {
   final Map<String, int> _highestBytesByTask = <String, int>{};
@@ -878,7 +878,7 @@ final class IosDownloadContinuedProcessingObserverV2
         batchTotal: _sessionMembers.isEmpty ? 1 : _sessionMembers.length,
         currentIndex: summary.currentIndex,
         speedBytesPerSecond: totalSpeed,
-      ));
+      ).catchError((Object _, StackTrace __) {}));
     }
   }
 
