@@ -14,7 +14,7 @@ import 'package:animewitcher/core/account/animewitcher_comment_models.dart';
 import 'package:animewitcher/features/comments/presentation/animewitcher_comments_screen.dart';
 import 'package:animewitcher/core/storage/history_repository.dart';
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
-import 'package:animewitcher/core/utils/download_time_remaining.dart'
+import 'package:animewitcher/core/utils/download_progress_data.dart'
     show DownloadProgressData;
 import 'package:animewitcher/core/utils/localized_text.dart';
 import 'package:animewitcher/core/utils/artwork_quality.dart';
@@ -45,7 +45,8 @@ String _downloadDialogTitle(MultimediaItem parentItem, Episode episode) {
     isFinal: episode.isFinal,
     serverName: episode.serverName,
   );
-  return label.isEmpty ? parentItem.title : '${parentItem.title} - $label';
+  // The dialog names the episode only ("الحلقة X"), like manga chapters.
+  return label.isEmpty ? parentItem.title : label;
 }
 
 class EpisodeCard extends HookConsumerWidget {

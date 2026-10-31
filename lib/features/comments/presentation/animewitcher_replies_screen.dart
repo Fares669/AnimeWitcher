@@ -1,4 +1,8 @@
 import 'package:flutter/material.dart';
+
+import 'comment_pager.dart';
+import '../../../core/utils/relative_time.dart';
+
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import 'package:animewitcher/shared/widgets/app_page_header.dart';
@@ -10,7 +14,6 @@ import 'package:animewitcher/core/account/animewitcher_comment_models.dart';
 import 'package:animewitcher/core/account/animewitcher_reply_mention.dart';
 import 'package:animewitcher/core/account/firestore_rest_client.dart';
 import 'package:animewitcher/core/services/notification_service.dart';
-import 'package:animewitcher/core/utils/request_generation.dart';
 
 import 'widgets/animewitcher_comment_sort_control.dart';
 import '../../../core/utils/avatar_image.dart';
@@ -39,17 +42,11 @@ class _AnimeWitcherRepliesScreenState
   final Set<String> _pendingLikes = <String>{};
   late final ScrollController _scrollController;
 
-  List<AnimeWitcherComment> _replies = <AnimeWitcherComment>[];
+  final CommentPager _pager = CommentPager();
   AnimeWitcherCommentSort _sort = AnimeWitcherCommentSort.repliesDefault;
-  Object? _loadError;
-  FirestoreDocument? _cursor;
-  bool _loadingInitial = true;
-  bool _loadingMore = false;
-  bool _hasMore = true;
   bool _publishing = false;
   bool _parentRevealed = false;
   String? _userTagId;
-  final RequestGeneration _loadGeneration = RequestGeneration();
 
   @override
   void initState() {
@@ -75,87 +72,40 @@ class _AnimeWitcherRepliesScreenState
   }
 
   void _onScroll() {
-    if (!_scrollController.hasClients ||
-        _loadingInitial ||
-        _loadingMore ||
-        !_hasMore) {
-      return;
-    }
-    if (_scrollController.position.extentAfter < 520) {
-      _loadMore();
-    }
+    if (_pager.shouldLoadMore(_scrollController)) _loadMore();
+  }
+
+  Future<AnimeWitcherCommentPage> _fetchPage(FirestoreDocument? cursor) {
+    final sort = _sort;
+    return ref
+        .read(animeWitcherAccountServiceProvider)
+        .loadReplies(
+          widget.parentComment,
+          sort: sort,
+          cursor: cursor,
+          limit: _pageSize,
+        );
   }
 
   Future<void> _loadInitial() async {
     if (!mounted) return;
-    final generation = _loadGeneration.begin();
-    final sort = _sort;
-    setState(() {
-      _loadingInitial = true;
-      _loadingMore = false;
-      _loadError = null;
-      _cursor = null;
-      _hasMore = true;
-    });
-    try {
-      final page = await ref
-          .read(animeWitcherAccountServiceProvider)
-          .loadReplies(
-            widget.parentComment,
-            sort: sort,
-            cursor: null,
-            limit: _pageSize,
-          );
-      if (!mounted || !_loadGeneration.isCurrent(generation)) return;
-      setState(() {
-        _replies = page.items;
-        _cursor = page.cursor;
-        _hasMore = page.hasMore;
-        _loadingInitial = false;
-      });
-    } catch (error) {
-      if (!mounted || !_loadGeneration.isCurrent(generation)) return;
-      setState(() {
-        _loadError = error;
-        _loadingInitial = false;
-      });
-    }
+    final future = _pager.loadInitial(_fetchPage);
+    setState(() {});
+    if (await future && mounted) setState(() {});
   }
 
   Future<void> _loadMore() async {
-    if (_loadingInitial || _loadingMore || !_hasMore) return;
-    final generation = _loadGeneration.current;
-    final sort = _sort;
-    final cursor = _cursor;
-    setState(() => _loadingMore = true);
-    try {
-      final page = await ref
-          .read(animeWitcherAccountServiceProvider)
-          .loadReplies(
-            widget.parentComment,
-            sort: sort,
-            cursor: cursor,
-            limit: _pageSize,
-          );
-      if (!mounted || !_loadGeneration.isCurrent(generation)) return;
-      final existing = _replies.map((item) => item.path).toSet();
-      final additions = page.items
-          .where((item) => existing.add(item.path))
-          .toList(growable: false);
-      setState(() {
-        _replies = <AnimeWitcherComment>[..._replies, ...additions];
-        _cursor = page.cursor;
-        _hasMore = page.hasMore;
-        _loadingMore = false;
-      });
-    } catch (error) {
-      if (!mounted || !_loadGeneration.isCurrent(generation)) return;
-      setState(() {
-        _loadError = error;
-        _loadingMore = false;
-      });
-      _showMessage(_replyErrorText(error), isError: true);
+    if (_pager.loadingInitial || _pager.loadingMore || !_pager.hasMore) {
+      return;
     }
+    final future = _pager.loadMore(
+      _fetchPage,
+      onError: (error) {
+        if (mounted) _showMessage(_replyErrorText(error), isError: true);
+      },
+    );
+    setState(() {});
+    if (await future && mounted) setState(() {});
   }
 
   Future<void> _toggleLike(AnimeWitcherComment reply) async {
@@ -172,8 +122,8 @@ class _AnimeWitcherRepliesScreenState
     try {
       final updated = await service.toggleCommentLike(reply);
       if (!mounted) return;
-      final index = _replies.indexWhere((item) => item.path == reply.path);
-      if (index >= 0) setState(() => _replies[index] = updated);
+      final index = _pager.items.indexWhere((item) => item.path == reply.path);
+      if (index >= 0) setState(() => _pager.items[index] = updated);
     } catch (error) {
       if (mounted) {
         _showMessage(_replyErrorText(error), isError: true);
@@ -340,10 +290,10 @@ class _AnimeWitcherRepliesScreenState
 
   Widget _buildRepliesBody(BuildContext context) {
     if (widget.showParent) return _buildNotificationThread(context);
-    if (_loadingInitial) {
+    if (_pager.loadingInitial) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (_loadError != null && _replies.isEmpty) {
+    if (_pager.loadError != null && _pager.items.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -364,7 +314,7 @@ class _AnimeWitcherRepliesScreenState
         ),
       );
     }
-    if (_replies.isEmpty) {
+    if (_pager.items.isEmpty) {
       return MouseDragRefreshIndicator(
         onRefresh: _loadInitial,
         child: ListView(
@@ -395,10 +345,12 @@ class _AnimeWitcherRepliesScreenState
           12,
           24,
         ),
-        itemCount: _replies.length + (_hasMore || _loadingMore ? 1 : 0),
+        itemCount:
+            _pager.items.length +
+            (_pager.hasMore || _pager.loadingMore ? 1 : 0),
         separatorBuilder: (_, __) => const SizedBox(height: 8),
         itemBuilder: (context, index) {
-          if (index >= _replies.length) {
+          if (index >= _pager.items.length) {
             return const Padding(
               padding: EdgeInsets.symmetric(vertical: 18),
               child: Center(
@@ -410,7 +362,7 @@ class _AnimeWitcherRepliesScreenState
               ),
             );
           }
-          return _buildReplyCard(context, _replies[index]);
+          return _buildReplyCard(context, _pager.items[index]);
         },
       ),
     );
@@ -446,21 +398,22 @@ class _AnimeWitcherRepliesScreenState
               label: const Text('تعليق يحتوي على حرق — اضغط للعرض'),
             ),
           const SizedBox(height: 16),
-          if (_loadingInitial)
+          if (_pager.loadingInitial)
             const Center(child: CircularProgressIndicator())
           else ...[
-            if (_loadError != null)
+            if (_pager.loadError != null)
               TextButton(
                 onPressed: _loadInitial,
                 child: const Text('تعذر تحميل الردود. إعادة المحاولة'),
               ),
-            if (_replies.isEmpty && _loadError == null)
+            if (_pager.items.isEmpty && _pager.loadError == null)
               const Text('لا توجد ردود بعد.', textAlign: TextAlign.center),
-            for (final reply in _replies) ...[
+            for (final reply in _pager.items) ...[
               _buildReplyCard(context, reply),
               const SizedBox(height: 8),
             ],
-            if (_loadingMore) const Center(child: CircularProgressIndicator()),
+            if (_pager.loadingMore)
+              const Center(child: CircularProgressIndicator()),
           ],
         ],
       ),
@@ -516,7 +469,7 @@ class _AnimeWitcherRepliesScreenState
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          _replyTimeAgo(reply.date),
+                          formatArabicRelativeTime(reply.date),
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: colors.onSurfaceVariant,
                           ),
@@ -735,26 +688,4 @@ String _replyErrorText(Object error) {
     };
   }
   return 'حدث خطأ. حاول مرة أخرى.';
-}
-
-String _replyTimeAgo(DateTime? date) {
-  if (date == null) return '';
-  final raw = DateTime.now().difference(date);
-  final elapsed = raw.isNegative ? Duration.zero : raw;
-  if (elapsed.inMinutes < 1) return 'منذ لحظات';
-  if (elapsed.inMinutes < 60) {
-    final value = elapsed.inMinutes;
-    return 'منذ $value دقيقة';
-  }
-  if (elapsed.inHours < 24) {
-    final value = elapsed.inHours;
-    return 'منذ $value ساعة';
-  }
-  if (elapsed.inDays < 30) {
-    final value = elapsed.inDays;
-    return 'منذ $value يوم';
-  }
-  final local = date.toLocal();
-  String two(int value) => value.toString().padLeft(2, '0');
-  return '${two(local.day)}/${two(local.month)}/${local.year}';
 }

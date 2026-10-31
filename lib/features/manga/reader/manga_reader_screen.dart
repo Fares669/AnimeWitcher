@@ -11,6 +11,7 @@ import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/storage/manga_reading_repository.dart';
+import '../../../core/utils/immersive_mode.dart';
 import '../../../core/utils/window_controls_inset.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
@@ -35,6 +36,16 @@ import 'widgets/manga_reader_settings_panel.dart';
 import 'widgets/manga_paged_reader.dart';
 import 'widgets/manga_webtoon_reader.dart';
 import 'widgets/manga_zoomable_page.dart';
+
+/// One chapter inside the connected stream of the vertical scrolling
+/// readers: its pages follow the chapter before it in the same scroll,
+/// so chapters read as one long chapter.
+class _StreamSegment {
+  const _StreamSegment(this.chapter, this.pages);
+
+  final MangaChapter chapter;
+  final List<MangaPage> pages;
+}
 
 class MangaReaderScreen extends ConsumerStatefulWidget {
   const MangaReaderScreen({
@@ -70,6 +81,9 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
   Timer? _autoScrollTimer;
   Timer? _flashTimer;
   bool _controlsVisible = true;
+  bool _readerScrolling = false;
+  int _scrollStateGeneration = 0;
+  bool _tapBeganWhileScrolling = false;
   bool _forceDoublePage = false;
   bool _autoScrollRunning = false;
   bool _showNavigationOverlay = false;
@@ -79,6 +93,17 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
   bool? _keepAwakeApplied;
   bool? _fullScreenApplied;
   bool _chapterNavigationInProgress = false;
+
+  /// The connected chapter stream (vertical continuous + webtoon modes):
+  /// the opened chapter, with next chapters appended below as reading
+  /// reaches them — no chapter jumps, and nothing connected above.
+  List<_StreamSegment> _streamSegments = const <_StreamSegment>[];
+  bool _streamReady = false;
+  String? _streamAnchorChapterId;
+  bool _streamAppending = false;
+  bool _streamAdopting = false;
+  int _streamAdoptionRequest = 0;
+  int _streamGeneration = 0;
   bool _settingsPanelOpen = false;
   MangaReaderPanelTab _panelTab = MangaReaderPanelTab.mode;
 
@@ -164,6 +189,169 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
   void _handleControllerChanged() {
     if (!mounted) return;
     setState(() {});
+    _maybeAssembleStream();
+  }
+
+  bool get _streamModeActive =>
+      _controller.mode == MangaReaderMode.verticalContinuous ||
+      _controller.mode == MangaReaderMode.webtoon;
+
+  bool get _streamCoversCurrentChapter => _streamSegments.any(
+    (segment) => segment.chapter.id == _controller.currentChapter.id,
+  );
+
+  /// (Re)builds the stream whenever the opened chapter is not part of it:
+  /// the first load, an explicit chapter pick, the chapter buttons. A
+  /// stream adoption moves the current chapter inside the existing
+  /// stream and must not trigger a rebuild.
+  void _maybeAssembleStream() {
+    if (!_streamModeActive ||
+        _streamAdopting ||
+        _controller.isLoading ||
+        _controller.error != null ||
+        _controller.pages.isEmpty ||
+        _streamCoversCurrentChapter) {
+      return;
+    }
+    _streamReady = false;
+    unawaited(_assembleStream());
+  }
+
+  Future<void> _assembleStream() async {
+    final generation = ++_streamGeneration;
+    final anchor = _controller.currentChapter;
+    final anchorPages = _controller.pages;
+    if (!mounted || generation != _streamGeneration) return;
+    // The stream starts at the opened chapter and grows forward only:
+    // the previous chapter is never connected above it.
+    setState(() {
+      _streamSegments = <_StreamSegment>[_StreamSegment(anchor, anchorPages)];
+      _streamAnchorChapterId = anchor.id;
+      _streamReady = true;
+    });
+  }
+
+  int _streamSegmentStart(int segmentIndex) {
+    var start = 0;
+    for (var i = 0; i < segmentIndex; i++) {
+      start += _streamSegments[i].pages.length;
+    }
+    return start;
+  }
+
+  List<MangaPage> get _streamFlatPages => <MangaPage>[
+    for (final segment in _streamSegments) ...segment.pages,
+  ];
+
+  /// The flattened page index reading should start from: the controller's
+  /// page inside its own segment of the stream.
+  int get _streamInitialFlatPage {
+    for (var i = 0; i < _streamSegments.length; i++) {
+      if (_streamSegments[i].chapter.id == _controller.currentChapter.id) {
+        return _streamSegmentStart(i) + _controller.pageIndex;
+      }
+    }
+    return _controller.pageIndex;
+  }
+
+  Map<int, Widget> _streamDividers() {
+    final dividers = <int, Widget>{};
+    for (var i = 1; i < _streamSegments.length; i++) {
+      dividers[_streamSegmentStart(i)] = MangaReaderChapterDivider(
+        currentChapter: _streamSegments[i - 1].chapter,
+        nextChapter: _streamSegments[i].chapter,
+        mangaName: widget.manga.title,
+      );
+    }
+    return dividers;
+  }
+
+  MangaChapter? _chapterAfter(_StreamSegment segment) {
+    final chapters = _controller.chapters;
+    final index = chapters.indexWhere(
+      (value) =>
+          value.id == segment.chapter.id ||
+          (value.url.isNotEmpty && value.url == segment.chapter.url),
+    );
+    if (index < 0 || index + 1 >= chapters.length) return null;
+    return chapters[index + 1];
+  }
+
+  bool get _streamCanAppend =>
+      _streamSegments.isNotEmpty && _chapterAfter(_streamSegments.last) != null;
+
+  Widget _streamTrailingPage() {
+    final last = _streamSegments.last;
+    return MangaReaderChapterDivider(
+      currentChapter: last.chapter,
+      nextChapter: _chapterAfter(last),
+      mangaName: widget.manga.title,
+      onContinue: _streamCanAppend ? _appendNextStreamSegment : null,
+    );
+  }
+
+  /// The next chapter joins the stream below the last one: its pages are
+  /// resolved and appended, the scroll never moves and nothing is
+  /// reloaded — reading just continues into it.
+  Future<void> _appendNextStreamSegment() async {
+    if (_streamAppending || !_streamCanAppend) return;
+    final next = _chapterAfter(_streamSegments.last)!;
+    if (_streamSegments.any((segment) => segment.chapter.id == next.id)) {
+      return;
+    }
+    _streamAppending = true;
+    try {
+      final pages = await _controller.fetchChapterPages(next);
+      if (!mounted || pages.isEmpty) return;
+      if (_streamSegments.any((segment) => segment.chapter.id == next.id)) {
+        return;
+      }
+      setState(() {
+        _streamSegments = <_StreamSegment>[
+          ..._streamSegments,
+          _StreamSegment(next, pages),
+        ];
+      });
+    } finally {
+      _streamAppending = false;
+    }
+  }
+
+  /// A page report from a stream reader carries a flattened index across
+  /// segments; translate it back to the chapter and page on screen and
+  /// let the controller follow, so the chrome and progress stay truthful
+  /// without any navigation taking place.
+  void _onStreamPageChanged(int flatIndex, MangaReaderSettings settings) {
+    if (_streamSegments.isEmpty) return;
+    var segment = _streamSegments.last;
+    var local = segment.pages.length - 1;
+    var start = 0;
+    for (final candidate in _streamSegments) {
+      if (flatIndex < start + candidate.pages.length) {
+        segment = candidate;
+        local = flatIndex - start;
+        break;
+      }
+      start += candidate.pages.length;
+    }
+    if (segment.chapter.id != _controller.currentChapter.id ||
+        local != _controller.pageIndex) {
+      _streamAdopting = true;
+      final request = ++_streamAdoptionRequest;
+      unawaited(
+        _controller
+            .adoptStreamChapter(
+              segment.chapter,
+              segment.pages,
+              local,
+              autoReadDuplicateChapters: settings.autoReadDuplicateChapters,
+            )
+            .whenComplete(() {
+              if (request == _streamAdoptionRequest) _streamAdopting = false;
+            }),
+      );
+    }
+    _maybeFlashOnPageChange(settings);
   }
 
   @override
@@ -184,6 +372,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _streamGeneration++;
     _autoScrollTimer?.cancel();
     _flashTimer?.cancel();
     _toastTimer?.cancel();
@@ -199,10 +388,10 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     _controller.removeListener(_handleControllerChanged);
     _controller.dispose();
     unawaited(WakelockPlus.disable().catchError((_) {}));
-    unawaited(
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge)
-          .catchError((_) {}),
-    );
+    // The phone's bars come back on the way out, whatever state reading
+    // left them in.
+    applyImmersiveFullScreen(false);
+    _fullScreenApplied = false;
     super.dispose();
   }
 
@@ -214,15 +403,16 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
             .catchError((_) {}),
       );
     }
-    if (_fullScreenApplied != settings.fullScreen) {
-      _fullScreenApplied = settings.fullScreen;
-      unawaited(
-        SystemChrome.setEnabledSystemUIMode(
-          settings.fullScreen
-              ? SystemUiMode.immersiveSticky
-              : SystemUiMode.edgeToEdge,
-        ).catchError((_) {}),
-      );
+    // The phone's own bars follow the reader's bars: with full screen on
+    // they are gone while reading and come back with the top and bottom
+    // bars, so the clock and battery are there when the reader's are.
+    // Through the shared helper — iOS answers only its manual plan, and
+    // asking it for Android's sticky mode or edge-to-edge did nothing,
+    // which left a hidden bar hidden after leaving the reader.
+    final barsHidden = settings.fullScreen && !_controlsVisible;
+    if (_fullScreenApplied != barsHidden) {
+      _fullScreenApplied = barsHidden;
+      applyImmersiveFullScreen(barsHidden);
     }
     if (_canRotate) {
       final wanted = mangaReaderOrientations(
@@ -308,6 +498,17 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         if (_chapterNavigationInProgress) return;
         _autoScrollTimer?.cancel();
         _autoScrollTimer = null;
+        if (_streamModeActive && _streamReady && _streamCanAppend) {
+          // The stream grows instead of jumping chapters: append the
+          // next chapter below and keep the auto-scroll running.
+          unawaited(
+            _appendNextStreamSegment().then((_) {
+              if (!mounted || !_autoScrollRunning) return;
+              _syncAutoScroll(ref.read(mangaReaderSettingsProvider));
+            }),
+          );
+          return;
+        }
         if (_controller.canNext) {
           unawaited(
             _navigateChapter(next: true).then((_) {
@@ -366,6 +567,10 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
       index,
       autoReadDuplicateChapters: settings.autoReadDuplicateChapters,
     );
+    _maybeFlashOnPageChange(settings);
+  }
+
+  void _maybeFlashOnPageChange(MangaReaderSettings settings) {
     _pageChangeCount++;
     if (!settings.flashOnPageChange ||
         _pageChangeCount % settings.flashInterval != 0) {
@@ -473,11 +678,18 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
   }
 
   void _toggleControls() {
+    // A tap that begins while the page is still moving is usually the reader
+    // catching the page, not a request for the bars.
+    if (_tapBeganWhileScrolling) {
+      _tapBeganWhileScrolling = false;
+      return;
+    }
     setState(() {
       _controlsVisible = !_controlsVisible;
       // The panel belongs to the bars: it goes when they do.
       if (!_controlsVisible) _settingsPanelOpen = false;
     });
+    _syncDeviceState(ref.read(mangaReaderSettingsProvider));
   }
 
   void _handleTapZone(
@@ -553,6 +765,18 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     ScrollNotification notification,
     MangaReaderSettings settings,
   ) {
+    if (notification is ScrollStartNotification) {
+      _scrollStateGeneration++;
+      _readerScrolling = true;
+    } else if (notification is ScrollEndNotification) {
+      // Cleared next frame, not now: the tap that stops a moving page ends
+      // its scroll from inside its own pointer-down, and that tap must still
+      // count as landing on a moving page.
+      final generation = ++_scrollStateGeneration;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scrollStateGeneration == generation) _readerScrolling = false;
+      });
+    }
     if (notification is ScrollUpdateNotification &&
         _controlsVisible &&
         (notification.scrollDelta ?? 0).abs() >
@@ -561,6 +785,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         _controlsVisible = false;
         _settingsPanelOpen = false;
       });
+      _syncDeviceState(ref.read(mangaReaderSettingsProvider));
     }
     return true;
   }
@@ -634,9 +859,9 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
       showDragHandle: true,
       builder: (context) => SafeArea(
         child: ListView.builder(
-          itemCount: widget.chapters.length,
+          itemCount: _controller.chapters.length,
           itemBuilder: (context, index) {
-            final item = widget.chapters[index];
+            final item = _controller.chapters[index];
             final selected = item.id == _controller.currentChapter.id;
             return ListTile(
               selected: selected,
@@ -830,17 +1055,32 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
 
   MangaChapter? get _nextChapter {
     final index = _controller.currentChapterIndex;
-    if (index < 0 || index + 1 >= widget.chapters.length) return null;
-    return widget.chapters[index + 1];
+    if (index < 0 || index + 1 >= _controller.chapters.length) return null;
+    return _controller.chapters[index + 1];
   }
 
-  Widget _chapterTransitionPage() => MangaReaderChapterTransitionPage(
-    currentChapter: _controller.currentChapter,
-    nextChapter: _nextChapter,
-    mangaName: widget.manga.title,
-    readerMode: _controller.mode,
-    onContinue: _controller.canNext ? _openNextChapter : null,
-  );
+  Widget _chapterTransitionPage() {
+    // The scrolling readers flow into the next chapter: a slim divider
+    // between chapters, and the readers advance on their own when it
+    // arrives — no page to stop at and tap. Paged modes keep the full
+    // transition page, where a page turn is the gesture.
+    if (_controller.mode == MangaReaderMode.verticalContinuous ||
+        _controller.mode == MangaReaderMode.webtoon) {
+      return MangaReaderChapterDivider(
+        currentChapter: _controller.currentChapter,
+        nextChapter: _nextChapter,
+        mangaName: widget.manga.title,
+        onContinue: _controller.canNext ? _openNextChapter : null,
+      );
+    }
+    return MangaReaderChapterTransitionPage(
+      currentChapter: _controller.currentChapter,
+      nextChapter: _nextChapter,
+      mangaName: widget.manga.title,
+      readerMode: _controller.mode,
+      onContinue: _controller.canNext ? _openNextChapter : null,
+    );
+  }
 
   Widget _readerBody(BuildContext context, MangaReaderSettings settings) {
     if (_controller.isLoading) {
@@ -868,8 +1108,12 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
       );
     }
 
+    // In stream modes the reader must survive the current chapter moving
+    // inside the stream (adoptions change it constantly), so its key is
+    // anchored to the chapter the stream was built around, not the one
+    // currently on screen.
     final key = ValueKey<String>(
-      '${_controller.currentChapter.id}-${_controller.mode.name}-'
+      '${_streamModeActive && _streamAnchorChapterId != null ? _streamAnchorChapterId : _controller.currentChapter.id}-${_controller.mode.name}-'
       '$_readerEpoch-$_forceDoublePage',
     );
     final doublePage = shouldUseMangaDoublePage(
@@ -917,30 +1161,42 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         onTrailingAdvance: _controller.canNext ? _openNextChapter : null,
         onPageChanged: (value) => _onPageChanged(value, settings),
       ),
-      MangaReaderMode.verticalContinuous => MangaContinuousReader(
-        key: key,
-        pages: _controller.pages,
-        initialPage: _controller.pageIndex,
-        scrollDirection: Axis.vertical,
-        reverse: false,
-        doublePage: doublePage,
-        settings: settings,
-        controller: _continuousController,
-        trailingPage: _chapterTransitionPage(),
-        onTrailingAdvance: _controller.canNext ? _openNextChapter : null,
-        onPageChanged: (value) => _onPageChanged(value, settings),
-      ),
-      MangaReaderMode.webtoon => MangaWebtoonReader(
-        key: key,
-        pages: _controller.pages,
-        initialPage: _controller.pageIndex,
-        settings: settings,
-        doublePage: doublePage,
-        controller: _continuousController,
-        trailingPage: _chapterTransitionPage(),
-        onTrailingAdvance: _controller.canNext ? _openNextChapter : null,
-        onPageChanged: (value) => _onPageChanged(value, settings),
-      ),
+      MangaReaderMode.verticalContinuous =>
+        !_streamReady
+            ? const Center(child: AppLoadingIndicator())
+            : MangaContinuousReader(
+                key: key,
+                pages: _streamFlatPages,
+                initialPage: _streamInitialFlatPage,
+                scrollDirection: Axis.vertical,
+                reverse: false,
+                doublePage: doublePage,
+                settings: settings,
+                controller: _continuousController,
+                trailingPage: _streamTrailingPage(),
+                onTrailingAdvance: _streamCanAppend
+                    ? _appendNextStreamSegment
+                    : null,
+                onPageChanged: (value) => _onStreamPageChanged(value, settings),
+                sectionDividers: _streamDividers(),
+              ),
+      MangaReaderMode.webtoon =>
+        !_streamReady
+            ? const Center(child: AppLoadingIndicator())
+            : MangaWebtoonReader(
+                key: key,
+                pages: _streamFlatPages,
+                initialPage: _streamInitialFlatPage,
+                settings: settings,
+                doublePage: doublePage,
+                controller: _continuousController,
+                trailingPage: _streamTrailingPage(),
+                onTrailingAdvance: _streamCanAppend
+                    ? _appendNextStreamSegment
+                    : null,
+                onPageChanged: (value) => _onStreamPageChanged(value, settings),
+                sectionDividers: _streamDividers(),
+              ),
       MangaReaderMode.horizontalContinuous => MangaContinuousReader(
         key: key,
         pages: _controller.pages,
@@ -1427,27 +1683,34 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
                   children: <Widget>[
                     ColoredBox(
                       color: background,
-                      child: GestureDetector(
-                        key: const ValueKey<String>(
-                          'manga-reader-image-actions-gesture',
-                        ),
-                        behavior: HitTestBehavior.translucent,
-                        onTapUp: (details) => _handleTapZone(
-                          details,
-                          Size(constraints.maxWidth, constraints.maxHeight),
-                          settings,
-                        ),
-                        // The page owns double-tap zoom. Absorb double taps
-                        // outside it (or with zoom disabled) and holds so they
-                        // cannot become single taps when released.
-                        onDoubleTap: () {},
-                        onLongPress: () {},
-                        onSecondaryTap: _showImageActions,
-                        child: MangaReaderFilterLayer(
-                          settings: settings,
-                          child: KeyedSubtree(
-                            key: _readerBodyKey,
-                            child: _readerBody(context, settings),
+                      child: Listener(
+                        onPointerDown: (_) {
+                          // Judged at pointer-down: touching a moving page
+                          // stops it, so by tap-up it is no longer moving.
+                          _tapBeganWhileScrolling = _readerScrolling;
+                        },
+                        child: GestureDetector(
+                          key: const ValueKey<String>(
+                            'manga-reader-image-actions-gesture',
+                          ),
+                          behavior: HitTestBehavior.translucent,
+                          onTapUp: (details) => _handleTapZone(
+                            details,
+                            Size(constraints.maxWidth, constraints.maxHeight),
+                            settings,
+                          ),
+                          // The page owns double-tap zoom. Absorb double taps
+                          // outside it (or with zoom disabled) and holds so they
+                          // cannot become single taps when released.
+                          onDoubleTap: () {},
+                          onLongPress: () {},
+                          onSecondaryTap: _showImageActions,
+                          child: MangaReaderFilterLayer(
+                            settings: settings,
+                            child: KeyedSubtree(
+                              key: _readerBodyKey,
+                              child: _readerBody(context, settings),
+                            ),
                           ),
                         ),
                       ),

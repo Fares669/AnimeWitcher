@@ -142,7 +142,7 @@ class _MangaHomeScreenState extends ConsumerState<MangaHomeScreen> {
           itemBuilder: (context, item, index) => MultimediaCard.fromItem(
             key: ValueKey<String>('manga-popular-all-${item.url}'),
             item: item,
-            heroTag: 'manga_popular_all_${item.url}_$index',
+            heroTag: heroTagWithUrl('manga_popular_all', item, index),
             onTap: () => _open(context, item),
           ),
         ),
@@ -258,7 +258,11 @@ class _MangaHomeScreenState extends ConsumerState<MangaHomeScreen> {
                               child: MultimediaCard.fromItem(
                                 key: ValueKey<String>('manga-home-${item.url}'),
                                 item: item,
-                                heroTag: 'manga_home_${item.url}_$index',
+                                heroTag: heroTagWithUrl(
+                                  'manga_home',
+                                  item,
+                                  index,
+                                ),
                                 onTap: () => _open(context, item),
                               ),
                             );

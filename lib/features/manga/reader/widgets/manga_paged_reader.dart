@@ -127,19 +127,32 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
       initialPage: _safeInitialPage,
       batchSize: widget.settings.pagePreloadAmount,
     );
-    for (final batch in batches) {
-      if (!mounted || generation != _preloadGeneration) return;
-      await Future.wait(
-        batch.map((index) async {
-          final page = widget.pages[index];
-          final uri = Uri.tryParse(page.imageUrl);
-          if (uri?.scheme == 'file') return;
-          try {
-            await precacheImage(mangaPageImageProvider(page), context);
-          } catch (_) {}
-        }),
-      );
-    }
+    // The next page and the previous page must not block each other:
+    // a late forward request must not delay backing up from a saved position.
+    final backwardStart = batches.indexWhere(
+      (batch) => batch.last < _safeInitialPage,
+    );
+    final directions = backwardStart < 0
+        ? <List<List<int>>>[batches]
+        : <List<List<int>>>[
+            batches.sublist(0, backwardStart),
+            batches.sublist(backwardStart),
+          ];
+    await Future.wait(directions.map((direction) async {
+      for (final batch in direction) {
+        if (!mounted || generation != _preloadGeneration) return;
+        await Future.wait(
+          batch.map((index) async {
+            final page = widget.pages[index];
+            final uri = Uri.tryParse(page.imageUrl);
+            if (uri?.scheme == 'file') return;
+            try {
+              await precacheImage(mangaPageImageProvider(page), context);
+            } catch (_) {}
+          }),
+        );
+      }
+    }));
   }
 
   @override

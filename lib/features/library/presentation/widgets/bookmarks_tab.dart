@@ -57,7 +57,7 @@ void openLibraryItem(BuildContext context, MultimediaItem item) {
         .push<void>(context);
     return;
   }
-  DetailsRoute($extra: DetailsRouteExtra(item: item)).push<void>(context);
+  item.openDetails(context);
 }
 
 /// The library's poster grid. [labels], when given, names the list each
@@ -116,7 +116,7 @@ class LibraryItemsGrid extends StatelessWidget {
           final card = MultimediaCard.fromItem(
             key: ValueKey(item.url),
             item: item,
-            heroTag: '${heroPrefix}_${item.url}_$index',
+            heroTag: heroTagWithUrl(heroPrefix, item, index),
             onTap: () => openLibraryItem(context, item),
             onLongPress: onLongPress == null ? null : () => onLongPress!(item),
           );

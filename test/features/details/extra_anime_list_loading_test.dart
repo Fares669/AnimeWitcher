@@ -22,7 +22,7 @@ class _MemoryStorage extends StorageService {
 }
 
 void main() {
-  testWidgets('loading posters extend behind the progressive header blur', (
+  testWidgets('loading posters start below the progressive header', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 844));
@@ -60,8 +60,7 @@ void main() {
     await tester.pump();
     final header = tester.getRect(find.byType(AppProgressiveHeaderBackdrop));
     final poster = tester.getRect(find.byType(AnimePosterShimmer).first);
-    expect(poster.top, lessThan(header.bottom));
-    expect(poster.bottom, greaterThan(header.top));
+    expect(poster.top, greaterThanOrEqualTo(header.bottom));
     expect(find.byType(BackdropFilter), findsWidgets);
     expect(tester.takeException(), isNull);
     gate.complete([]);

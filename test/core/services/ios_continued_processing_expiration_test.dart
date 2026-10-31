@@ -13,8 +13,15 @@ void main() {
       final source = (await File(
         'ios/Runner/DownloadContinuedProcessingManager.swift',
       ).readAsString()).replaceAll('\r\n', '\n');
-      final start = source.indexOf('task.expirationHandler =');
-      final end = source.indexOf('\n\n    if let snapshot', start);
+      // Anchored on the closure assignment itself: the file also contains
+      // an earlier 'task.expirationHandler = nil' detach assignment, which
+      // must not match. The block ends at the closure's own closing brace —
+      // the first following line indented exactly like the assignment. An
+      // earlier version delimited the block by a later statement in
+      // attach(); inserting unrelated lines there (the presentation-clock
+      // reset, 29b0fb1d) broke that marker on a tree that is correct.
+      final start = source.indexOf('task.expirationHandler = {');
+      final end = source.indexOf('\n    }', start);
 
       expect(start, greaterThanOrEqualTo(0));
       expect(end, greaterThan(start));

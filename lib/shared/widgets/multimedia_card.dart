@@ -15,6 +15,21 @@ import 'fallback_poster_image.dart';
 import 'thumbnail_error_placeholder.dart';
 
 /// Shared poster + caption metrics so rails and grids reserve the same space.
+/// Hero tag for a card keyed by the item's url:
+/// '<scope>_<url>_<index>'. Every catalogue builds its tags through
+/// one of these two helpers so the formats stay consistent.
+String heroTagWithUrl(String scope, MultimediaItem item, int index) =>
+    '${scope}_${item.url}_$index';
+
+/// Hero tag for a card keyed by the item's id:
+/// '<scope>_<id>_<index>', or '<scope>-<id>-<index>' when [dashed].
+String heroTagWithId(
+  String scope,
+  MultimediaItem item,
+  int index, {
+  bool dashed = false,
+}) => dashed ? '$scope-${item.id}-$index' : '${scope}_${item.id}_$index';
+
 class MultimediaCardLayout {
   static const double captionHeight = 46;
   static const double posterRadius = 12;

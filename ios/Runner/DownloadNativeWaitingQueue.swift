@@ -1581,6 +1581,9 @@ enum DownloadNativeWaitingQueue {
     let changed = cachedForegroundState != active
     cachedForegroundState = active
     foregroundStateLock.unlock()
+    #if canImport(background_downloader)
+    AnimeWitcherDownloadSessions.setForeground(active)
+    #endif
     if changed {
       DownloadNativeDiagnosticLog.record("application.visibility", fields: ["inForeground": active])
     }
@@ -2471,6 +2474,13 @@ enum DownloadNativeWaitingQueue {
         || now - lastOverlay >= chunkBridgeInterval)
     if shouldUpdateNativeOverlay {
       lastV2ParallelOverlayTimes[parentId] = now
+      // The aggregate that is about to feed the system overlay, at the same
+      // 1-second cadence. A missing or frozen series in the log localizes a
+      // silent background-presentation failure to this side of the bridge;
+      // a growing series with a frozen banner localizes it to the manager.
+      DownloadNativeDiagnosticLog.record("overlay.native.sample", fields: [
+        "taskId": parentId, "transferredBytes": aggregateWritten,
+      ])
     }
 
     // background_downloader already delivers child progress to Dart while the

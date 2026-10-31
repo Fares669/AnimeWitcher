@@ -13,7 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
-import '../../../core/extensions/extension_manager.dart';
+import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
@@ -110,19 +110,10 @@ class _BroadcastScheduleScreenState
     };
   }
 
-  AnimeWitcherNativeProvider? _provider() {
-    final active = ref.read(activeProviderProvider);
-    if (active is AnimeWitcherNativeProvider) return active;
-    for (final provider in ref.read(extensionManagerProvider)) {
-      if (provider is AnimeWitcherNativeProvider) return provider;
-    }
-    return null;
-  }
-
   Future<void> _loadDay(String day, {required bool refresh}) async {
     final previous = _dayStates[day] ?? const _BroadcastScheduleDayState();
     if (!refresh && (previous.loading || !previous.hasMore)) return;
-    final provider = _provider();
+    final provider = ref.nativeProvider;
     if (provider == null) {
       if (!mounted) return;
       setState(() {
@@ -407,10 +398,13 @@ class _ScheduleGrid extends StatelessWidget {
             return MultimediaCard.fromItem(
               key: ValueKey('broadcast-$day-${item.url}'),
               item: item,
-              heroTag: 'broadcast-$day-${item.id}-$index',
-              onTap: () =>
-                  DetailsRoute($extra: DetailsRouteExtra(item: item))
-                      .push<void>(context),
+              heroTag: heroTagWithId(
+                'broadcast-$day',
+                item,
+                index,
+                dashed: true,
+              ),
+              onTap: () => item.openDetails(context),
             );
           },
         ),

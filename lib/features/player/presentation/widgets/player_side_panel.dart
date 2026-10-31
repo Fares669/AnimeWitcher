@@ -17,7 +17,7 @@ import '../../../../core/storage/history_repository.dart';
 import '../../../../core/storage/episode_watch_repository.dart';
 import '../../../../core/account/account_providers.dart';
 import '../../../../core/services/notification_service.dart';
-import '../../../../core/utils/download_time_remaining.dart'
+import '../../../../core/utils/download_progress_data.dart'
     show DownloadProgressData;
 import '../../../library/presentation/download_delete_confirmation.dart';
 import '../../../library/presentation/download_progress_v2_provider.dart';
@@ -63,7 +63,8 @@ String _playerEpisodeDownloadTitle(MultimediaItem item, Episode episode) {
     isFinal: episode.isFinal,
     serverName: episode.serverName,
   );
-  return label.isEmpty ? item.title : '${item.title} - $label';
+  // The dialog names the episode only ("الحلقة X"), like manga chapters.
+  return label.isEmpty ? item.title : label;
 }
 
 /// A reusable right-anchored drawer shell for the player.

@@ -5,7 +5,7 @@ import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/services/notification_service.dart';
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
 import 'package:animewitcher/core/storage/history_repository.dart';
-import 'package:animewitcher/core/utils/download_time_remaining.dart';
+import 'package:animewitcher/core/utils/download_progress_data.dart';
 import 'package:animewitcher/features/details/presentation/details_controller.dart';
 import 'package:animewitcher/features/details/presentation/download_launcher.dart';
 import 'package:animewitcher/features/details/presentation/downloaded_file_provider.dart';
@@ -166,8 +166,6 @@ Future<ProviderContainer> _pumpPanel(
           'episode-nine-logical': DownloadProgressData(
             taskId: downloads.items.single.id,
             progress: 0.4,
-            networkSpeed: -1,
-            timeRemaining: Duration.zero,
             status: downloads.items.single.status,
           ),
       }),
@@ -276,7 +274,7 @@ void main() {
       final l10n = AppLocalizations.of(
         tester.element(find.byType(AlertDialog)),
       )!;
-      await tester.tap(find.widgetWithText(TextButton, l10n.delete));
+      await tester.tap(find.widgetWithText(FilledButton, l10n.delete));
       await tester.pumpAndSettle();
 
       expect(downloads.removed, [same(completed)]);
@@ -309,7 +307,7 @@ void main() {
       final l10n = AppLocalizations.of(
         tester.element(find.byType(AlertDialog)),
       )!;
-      await tester.tap(find.widgetWithText(TextButton, l10n.delete));
+      await tester.tap(find.widgetWithText(FilledButton, l10n.delete));
       await tester.pumpAndSettle();
 
       expect(find.byIcon(Icons.delete_outline_rounded), findsOneWidget);
@@ -341,7 +339,7 @@ void main() {
     await tester.tap(find.byIcon(Icons.delete_outline_rounded));
     await tester.pumpAndSettle();
     final l10n = AppLocalizations.of(tester.element(find.byType(AlertDialog)))!;
-    await tester.tap(find.widgetWithText(TextButton, l10n.delete));
+    await tester.tap(find.widgetWithText(FilledButton, l10n.delete));
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
@@ -370,7 +368,7 @@ void main() {
     await tester.tap(find.byIcon(Icons.delete_outline_rounded));
     await tester.pumpAndSettle();
     final l10n = AppLocalizations.of(tester.element(find.byType(AlertDialog)))!;
-    await tester.tap(find.widgetWithText(TextButton, l10n.delete));
+    await tester.tap(find.widgetWithText(FilledButton, l10n.delete));
     await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.delete_outline_rounded));
     await tester.pumpAndSettle();

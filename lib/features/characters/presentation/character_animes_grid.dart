@@ -64,7 +64,7 @@ class CharacterAnimesGrid extends StatelessWidget {
               return MultimediaCard.fromItem(
                 key: ValueKey('character-animes-grid-$index'),
                 item: item,
-                heroTag: 'character_anime_${item.url}_$index',
+                heroTag: heroTagWithUrl('character_anime', item, index),
                 showRelationBadge: true,
                 onTap: () => onItemTap(item),
               );

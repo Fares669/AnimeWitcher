@@ -794,19 +794,26 @@ bool shouldUseMangaDoublePage({
 List<List<int>> mangaReaderPageSpreads({
   required int pageCount,
   required bool singleFirst,
+  Iterable<int> sectionStarts = const <int>[],
 }) {
   if (pageCount <= 0) return const <List<int>>[];
   final result = <List<int>>[];
-  var index = 0;
-  if (singleFirst) {
-    result.add(const <int>[0]);
-    index = 1;
-  }
-  while (index < pageCount) {
-    final pair = <int>[index];
-    if (index + 1 < pageCount) pair.add(index + 1);
-    result.add(List<int>.unmodifiable(pair));
-    index += 2;
+  final boundaries = <int>[0, ...sectionStarts.where((i) => i > 0 && i < pageCount), pageCount]
+    ..sort();
+  final starts = boundaries.toSet().toList()..sort();
+  for (var section = 0; section + 1 < starts.length; section++) {
+    final end = starts[section + 1];
+    var index = starts[section];
+    if (singleFirst) {
+      result.add(<int>[index]);
+      index++;
+    }
+    while (index < end) {
+      final pair = <int>[index];
+      if (index + 1 < end) pair.add(index + 1);
+      result.add(List<int>.unmodifiable(pair));
+      index += 2;
+    }
   }
   return List<List<int>>.unmodifiable(result);
 }

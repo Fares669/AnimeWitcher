@@ -68,6 +68,7 @@
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.bbflight.background_downloader.task</string>
+		<string>com.animewitcher.app.download.session</string>
 		<string>com.animewitcher.app.download.*</string>
 	</array>
 	<key>UIBackgroundModes</key>

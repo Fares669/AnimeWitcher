@@ -478,7 +478,7 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
   }
 
   void _navigateToDetails(BuildContext context, MultimediaItem item) {
-    DetailsRoute($extra: DetailsRouteExtra(item: item)).push<void>(context);
+    item.openDetails(context);
   }
 
   Widget _buildCarouselItem(

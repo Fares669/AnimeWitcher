@@ -142,12 +142,24 @@ class EpisodeBrowseBar extends StatelessWidget {
             ? current
             : null;
         final filter = episodeListFilter.value;
+        // Same pill as the manga chapter filters: stadium outline, the
+        // selected one ringed and worded in the primary colour.
         Widget chip(EpisodeListFilter value, String label) => FilterChip(
           key: ValueKey<String>('episode-filter-${value.name}'),
           label: Text(label),
           selected: filter == value,
           showCheckmark: false,
           onSelected: (_) => episodeListFilter.value = value,
+          labelStyle: TextStyle(
+            fontSize: 13,
+            color: filter == value ? colors.primary : colors.onSurface,
+          ),
+          side: BorderSide(
+            color: filter == value
+                ? colors.primary
+                : colors.onSurfaceVariant.withValues(alpha: 0.16),
+          ),
+          shape: const StadiumBorder(),
         );
         final filters = Wrap(
           spacing: 8,

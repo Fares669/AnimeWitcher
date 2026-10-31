@@ -1,4 +1,7 @@
 import 'dart:async';
+
+import '../../../../shared/widgets/confirm_dialog.dart';
+
 import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
@@ -14,6 +17,7 @@ import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 
 import '../../../../core/domain/entity/manga.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
+import '../../../../core/services/download_v2/download_continued_processing_v2.dart';
 import '../../../../core/services/download_v2/download_v2_models.dart';
 import '../../../../core/router/app_router.dart';
 import '../../../../core/services/download_concurrency.dart';
@@ -33,7 +37,7 @@ import 'completed_download_chapter_card.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../../../core/utils/file_size_formatter.dart';
-import '../../../../core/utils/download_time_remaining.dart';
+import '../../../../core/utils/download_progress_data.dart';
 import '../../../../shared/widgets/loading_indicator.dart';
 import '../../../../shared/widgets/underline_segment_tabs.dart';
 
@@ -170,6 +174,7 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
             ),
           ),
         ),
+        const _DownloadSessionStrip(),
         Expanded(
           child: Directionality(
             textDirection: TextDirection.rtl,
@@ -207,6 +212,64 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
       ],
     );
   }
+}
+
+/// Compact session strip under the tab header: "يتم تنزيل x من y" with the
+/// TOTAL throughput of all active downloads on the left. Per-download speed
+/// is never shown; the strip disappears when no session is active.
+class _DownloadSessionStrip extends StatelessWidget {
+  const _DownloadSessionStrip();
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<DownloadSessionSummaryV2>(
+      valueListenable: downloadSessionSummaryNotifier,
+      builder: (context, summary, _) {
+        if (!summary.isActive) return const SizedBox.shrink();
+        final style = Theme.of(
+          context,
+        ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600);
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+          child: Directionality(
+            textDirection: TextDirection.rtl,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    appText(
+                      context,
+                      english:
+                          'Downloading ${summary.currentIndex} of ${summary.batchTotal}',
+                      arabic:
+                          'يتم تنزيل ${summary.currentIndex} من ${summary.batchTotal}',
+                    ),
+                    style: style,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Text(
+                  formatTotalDownloadSpeed(summary.totalSpeedBytesPerSecond),
+                  textDirection: TextDirection.ltr,
+                  style: style,
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// The one download speed the app displays: total bytes per second across
+/// every active download, formatted like "274KB/s" / "1.2MB/s".
+String formatTotalDownloadSpeed(double bytesPerSecond) {
+  if (!bytesPerSecond.isFinite || bytesPerSecond <= 0) return '0 KB/s';
+  final kiloBytes = bytesPerSecond / 1000;
+  if (kiloBytes < 1000) return '${kiloBytes.round()}KB/s';
+  return '${(kiloBytes / 1000).toStringAsFixed(1)}MB/s';
 }
 
 class _DownloadsEmptyState extends StatelessWidget {
@@ -627,29 +690,17 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
     final selected = List<DownloadItem>.of(items);
     final notifications = ref.read(notificationServiceProvider);
     try {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text(l10n.deleteAllEpisodes),
-          content: Text(
-            l10n.confirmDeleteAllEpisodes(items.length, items.first.item.title),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: Text(l10n.cancel),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: Text(
-                l10n.deleteAll,
-                style: const TextStyle(color: Colors.red),
-              ),
-            ),
-          ],
+      final confirmed = await showConfirmDialog(
+        context,
+        title: l10n.deleteAllEpisodes,
+        message: l10n.confirmDeleteAllEpisodes(
+          items.length,
+          items.first.item.title,
         ),
+        confirmLabel: l10n.deleteAll,
+        cancelLabel: l10n.cancel,
       );
-      if (confirmed != true || !context.mounted) return;
+      if (!confirmed || !context.mounted) return;
       final removed = await ref
           .read(downloadsProvider.notifier)
           .removeDownloads(selected);
@@ -700,6 +751,7 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
     )[item.task.taskId];
     final parallelParts = downloadTaskPartCount(item.task);
     final isDone = status == TaskStatus.complete;
+    final isQueued = status == TaskStatus.enqueued;
     final isWorking =
         status == TaskStatus.running ||
         status == TaskStatus.enqueued ||
@@ -777,6 +829,8 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
                   Icon(
                     isDone
                         ? Icons.check_circle_rounded
+                        : isQueued
+                        ? Icons.hourglass_top_rounded
                         : Icons.download_rounded,
                     size: 14,
                     color: isDone
@@ -838,35 +892,6 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
                   backgroundColor: theme.dividerColor.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(LayoutConstants.radiusSm),
                 ),
-                const SizedBox(height: 4),
-                if (progressData != null && isWorking)
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          formatDownloadSpeed(progressData!, l10n),
-                          textDirection: TextDirection.ltr,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            fontSize: 10,
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: LayoutConstants.spacingSm),
-                      Text(
-                        formatDownloadTimeRemaining(progressData!, l10n),
-                        textDirection: TextDirection.rtl,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          fontSize: 10,
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
               ],
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
@@ -948,14 +973,11 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
     setState(() => _controlInFlight = true);
     final notifications = ref.read(notificationServiceProvider);
     try {
-      final notifier = ref.read(downloadsProvider.notifier);
-      if (status == TaskStatus.failed || status == TaskStatus.notFound) {
-        await notifier.retryDownload(item.task.taskId);
-      } else if (status == TaskStatus.paused) {
-        await notifier.resumeDownload(item.task.taskId);
-      } else {
-        await notifier.pauseDownload(item.task.taskId);
-      }
+      await toggleDownloadPlayback(
+        ref.read(downloadsProvider.notifier),
+        item.task.taskId,
+        status,
+      );
     } catch (error) {
       showDownloadActionError(notifications, error);
     } finally {

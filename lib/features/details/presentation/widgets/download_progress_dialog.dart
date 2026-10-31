@@ -6,9 +6,10 @@ import '../../../../core/services/download_v2/download_v2_identity.dart';
 import '../../../../core/services/download_v2/download_v2_provider.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../../../core/utils/localized_text.dart';
-import '../../../../core/utils/download_time_remaining.dart';
+import '../../../../core/utils/download_progress_data.dart';
 import '../../../../core/utils/file_size_formatter.dart';
 import '../../../library/presentation/download_progress_v2_provider.dart';
+import '../../../library/presentation/download_delete_confirmation.dart';
 import '../../../library/presentation/downloads_provider.dart';
 
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
@@ -93,15 +94,11 @@ class _DownloadProgressDialogState
     if (_commandInFlight || _dismissRequested) return;
     setState(() => _commandInFlight = true);
     try {
-      final notifier = ref.read(downloadsProvider.notifier);
-      if (data.status == TaskStatus.failed ||
-          data.status == TaskStatus.notFound) {
-        await notifier.retryDownload(data.taskId);
-      } else if (data.status == TaskStatus.paused) {
-        await notifier.resumeDownload(data.taskId);
-      } else {
-        await notifier.pauseDownload(data.taskId);
-      }
+      await toggleDownloadPlayback(
+        ref.read(downloadsProvider.notifier),
+        data.taskId,
+        data.status,
+      );
     } catch (error) {
       if (mounted) _showCommandError(error);
     } finally {
@@ -110,13 +107,11 @@ class _DownloadProgressDialogState
   }
 
   void _showCommandError(Object error) {
-    var message = error.toString().trim();
-    const stateErrorPrefix = 'Bad state: ';
-    if (message.startsWith(stateErrorPrefix)) {
-      message = message.substring(stateErrorPrefix.length).trim();
-    }
-    if (message.isEmpty) message = 'تعذر التحكم في التنزيل';
-    ref.read(notificationServiceProvider).showError(message);
+    showDownloadActionError(
+      ref.read(notificationServiceProvider),
+      error,
+      fallbackMessage: 'تعذر التحكم في التنزيل',
+    );
   }
 
   @override
@@ -162,6 +157,7 @@ class _DownloadProgressDialogState
                       TaskStatus.paused => l10n.downloadPaused,
                       TaskStatus.complete => l10n.statusFinished,
                       TaskStatus.canceled => l10n.statusCanceled,
+                      TaskStatus.enqueued => l10n.statusQueued,
                       _ => l10n.downloading,
                     },
                     textDirection: Directionality.of(context),
@@ -172,13 +168,17 @@ class _DownloadProgressDialogState
                   ),
                 ),
                 const SizedBox(height: 8),
-                Text(
-                  widget.title,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
+                Align(
+                  alignment: AlignmentDirectional.centerEnd,
+                  child: Text(
+                    widget.title,
+                    textDirection: TextDirection.rtl,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 24),
                 Row(
@@ -231,26 +231,6 @@ class _DownloadProgressDialogState
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    _buildInfoItem(
-                      context,
-                      Icons.speed_rounded,
-                      l10n.speed,
-                      formatDownloadSpeed(data, l10n),
-                      valueTextDirection: TextDirection.ltr,
-                    ),
-                    _buildInfoItem(
-                      context,
-                      Icons.timer_outlined,
-                      l10n.remaining,
-                      formatDownloadTimeRemaining(data, l10n),
-                      valueTextDirection: TextDirection.rtl,
-                    ),
-                  ],
-                ),
                 const SizedBox(height: 24),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -294,37 +274,4 @@ class _DownloadProgressDialogState
     );
   }
 
-  Widget _buildInfoItem(
-    BuildContext context,
-    IconData icon,
-    String label,
-    String value, {
-    TextDirection? valueTextDirection,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Icon(icon, size: 16, color: Theme.of(context).colorScheme.primary),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              textDirection: TextDirection.rtl,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          textDirection: valueTextDirection ?? TextDirection.ltr,
-          style: Theme.of(context).textTheme.bodyLarge
-              ?.copyWith(fontWeight: FontWeight.w600),
-        ),
-      ],
-    );
-  }
 }

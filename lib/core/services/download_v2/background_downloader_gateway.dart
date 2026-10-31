@@ -589,7 +589,10 @@ final class PackageBackgroundDownloaderGateway
       _downloader,
       _notificationPreferences(),
     );
-    final transport = MangaChapterTransportV2(startPage: _startMangaPageTaskV2);
+    final transport = MangaChapterTransportV2(
+      startPage: _startMangaPageTaskV2,
+      startAllPagesImmediately: _isIOS(),
+    );
     final handle = await transport.start(spec);
     final previous = _mangaHandles[spec.taskId];
     _mangaHandles[spec.taskId] = handle;

@@ -22,6 +22,21 @@ const _pages = <MangaPage>[
 ];
 
 void main() {
+  test('double-page spreads never pair pages across chapter seams', () {
+    for (final singleFirst in <bool>[false, true]) {
+      final spreads = mangaReaderPageSpreads(
+        pageCount: 7,
+        singleFirst: singleFirst,
+        sectionStarts: const <int>[3, 5],
+      );
+      expect(spreads.expand((part) => part), orderedEquals(<int>[0, 1, 2, 3, 4, 5, 6]));
+      expect(spreads.any((part) => part.first < 3 && part.last >= 3), isFalse);
+      expect(spreads.any((part) => part.first < 5 && part.last >= 5), isFalse);
+      expect(spreads.any((part) => part.first == 3), isTrue);
+      expect(spreads.any((part) => part.first == 5), isTrue);
+    }
+  });
+
   test('preload amount two unlocks pages in ordered pairs', () {
     final controller = MangaReaderLoadBatchController(
       pageCount: 6,
@@ -44,6 +59,88 @@ void main() {
     controller.markSettled(3);
     expect(controller.canLoad(4), isTrue);
     expect(controller.canLoad(5), isTrue);
+  });
+
+  test('preload batches reach back from a mid-list start, nearest first', () {
+    expect(
+      mangaReaderOrderedPreloadBatches(
+        pageCount: 10,
+        initialPage: 6,
+        batchSize: 3,
+      ),
+      <List<int>>[
+        <int>[6, 7, 8],
+        <int>[9],
+        <int>[3, 4, 5],
+        <int>[0, 1, 2],
+      ],
+    );
+
+    final controller = MangaReaderLoadBatchController(
+      pageCount: 10,
+      initialPage: 6,
+      batchSize: 3,
+    );
+    addTearDown(controller.dispose);
+
+    // The nearest pages behind the restored index are immediately eligible
+    // alongside the starting forward batch, without waiting for page 9.
+    expect(controller.unlockedPages, <int>{3, 4, 5, 6, 7, 8});
+    expect(controller.canLoad(5), isTrue);
+    expect(controller.canLoad(2), isFalse);
+    expect(controller.canLoad(9), isFalse);
+
+    controller.markSettled(5);
+    controller.markSettled(4);
+    controller.markSettled(3);
+    expect(controller.canLoad(2), isTrue,
+        reason: 'scrolling upward never waits for forward image downloads');
+    expect(controller.canLoad(9), isFalse);
+
+    controller.markSettled(6);
+    controller.markSettled(7);
+    controller.markSettled(8);
+    expect(controller.canLoad(9), isTrue,
+        reason: 'the forward preload limit still applies independently');
+  });
+
+  test('backward preloading continues when a forward page stalls', () {
+    final controller = MangaReaderLoadBatchController(
+      pageCount: 10,
+      initialPage: 4,
+      batchSize: 2,
+    );
+    addTearDown(controller.dispose);
+
+    expect(controller.unlockedPages, <int>{2, 3, 4, 5});
+    controller.markSettled(3);
+    controller.markSettled(2);
+    expect(controller.canLoad(1), isTrue);
+    expect(controller.canLoad(0), isTrue);
+    expect(controller.canLoad(6), isFalse);
+
+    controller.markSettled(1);
+    controller.markSettled(0);
+    expect(controller.canLoad(6), isFalse);
+    controller.markSettled(4);
+    controller.markSettled(5);
+    expect(controller.canLoad(6), isTrue);
+    expect(controller.canLoad(7), isTrue);
+  });
+
+  test('restored page near chapter end still loads earlier pages', () {
+    final controller = MangaReaderLoadBatchController(
+      pageCount: 10,
+      initialPage: 9,
+      batchSize: 2,
+    );
+    addTearDown(controller.dispose);
+    expect(controller.unlockedPages, <int>{7, 8, 9});
+    controller.markSettled(8);
+    controller.markSettled(7);
+    expect(controller.canLoad(6), isTrue);
+    expect(controller.canLoad(5), isTrue);
+    expect(controller.canLoad(0), isFalse);
   });
 
   setUpAll(() {
@@ -182,6 +279,255 @@ void main() {
     await tester.pump();
 
     expect(continued, 1);
+  });
+
+  testWidgets('chapter divider shows the finished and next chapters', (
+    tester,
+  ) async {
+    var continued = 0;
+    const current = MangaChapter(
+      id: 'c1',
+      mangaId: 'm1',
+      url: 'https://example.test/c1',
+      name: 'Chapter 1',
+    );
+    const next = MangaChapter(
+      id: 'c2',
+      mangaId: 'm1',
+      url: 'https://example.test/c2',
+      name: 'Chapter 2',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        locale: const Locale('en'),
+        home: MangaReaderChapterDivider(
+          currentChapter: current,
+          nextChapter: next,
+          mangaName: 'Reader Manga',
+          onContinue: () => continued++,
+        ),
+      ),
+    );
+
+    expect(find.text('Chapter 1'), findsOneWidget);
+    expect(find.text('الفصل التالي'), findsOneWidget);
+    expect(find.text('Chapter 2'), findsOneWidget);
+    // The divider is a between-chapters strip, not a page of its own.
+    expect(find.text('نهاية الفصل'), findsNothing);
+
+    await tester.tap(
+      find.byKey(
+        const ValueKey<String>('manga-reader-next-chapter-transition'),
+      ),
+    );
+    await tester.pump();
+    expect(continued, 1);
+  });
+
+  testWidgets('continuous reader advances on its own at the chapter divider', (
+    tester,
+  ) async {
+    var advanced = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaContinuousReader(
+          pages: _pages,
+          initialPage: 0,
+          scrollDirection: Axis.vertical,
+          reverse: false,
+          settings: const MangaReaderSettings(),
+          onPageChanged: (_) {},
+          pageBuilder: (_, page) => Text('page-${page.index}'),
+          trailingPage: const Text('chapter-transition'),
+          onTrailingAdvance: () => advanced++,
+        ),
+      ),
+    );
+
+    // The whole short chapter and its divider fit on screen: reaching the
+    // divider is finishing the chapter, with no tap and no overscroll.
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(advanced, 1);
+  });
+
+  testWidgets('continuous reader advances when scrolled to the divider', (
+    tester,
+  ) async {
+    var advanced = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaContinuousReader(
+          pages: _pages,
+          initialPage: 0,
+          scrollDirection: Axis.vertical,
+          reverse: false,
+          settings: const MangaReaderSettings(),
+          onPageChanged: (_) {},
+          pageBuilder: (_, page) =>
+              SizedBox(height: 500, child: Text('page-${page.index}')),
+          trailingPage: const Text('chapter-transition'),
+          onTrailingAdvance: () => advanced++,
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(advanced, 0);
+
+    await tester.drag(find.byType(SuperListView), const Offset(0, -1600));
+    await tester.pumpAndSettle();
+    expect(advanced, 1);
+  });
+
+  testWidgets('a dropped advance is retried on the next approach to the end', (
+    tester,
+  ) async {
+    var advanced = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaContinuousReader(
+          pages: _pages,
+          initialPage: 0,
+          scrollDirection: Axis.vertical,
+          reverse: false,
+          settings: const MangaReaderSettings(),
+          onPageChanged: (_) {},
+          pageBuilder: (_, page) =>
+              SizedBox(height: 500, child: Text('page-${page.index}')),
+          trailingPage: const Text('chapter-transition'),
+          onTrailingAdvance: () => advanced++,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.drag(find.byType(SuperListView), const Offset(0, -1600));
+    await tester.pumpAndSettle();
+    expect(advanced, 1);
+
+    // The first request went nowhere (say a navigation was already in
+    // flight). Scrolling away and back to the end must ask again — a
+    // latched one-shot guard would leave the reader stuck here forever.
+    await tester.drag(find.byType(SuperListView), const Offset(0, 1200));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(SuperListView), const Offset(0, -1600));
+    await tester.pumpAndSettle();
+    expect(advanced, 2);
+  });
+
+  testWidgets('webtoon reports the page on screen for tall pages', (
+    tester,
+  ) async {
+    final reported = <int>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaWebtoonReader(
+          pages: _pages,
+          initialPage: 0,
+          settings: const MangaReaderSettings(),
+          onPageChanged: reported.add,
+          pageBuilder: (_, page) =>
+              SizedBox(height: 1400, child: Text('page-${page.index}')),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // Each page is more than twice the viewport tall, so no page can
+    // ever be more than ~43% visible. Reading the second page must
+    // still report it: the first page's last fraction cannot be allowed
+    // to win forever once it has scrolled away.
+    for (var i = 0; i < 10 && (reported.isEmpty || reported.last != 1); i++) {
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, -400));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 30)),
+      );
+      await tester.pump(const Duration(milliseconds: 60));
+    }
+    expect(reported, isNotEmpty);
+    expect(reported.last, 1);
+  });
+
+  testWidgets('webtoon reader advances when scrolled to the divider', (
+    tester,
+  ) async {
+    var advanced = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaWebtoonReader(
+          pages: _pages,
+          initialPage: 0,
+          settings: const MangaReaderSettings(),
+          onPageChanged: (_) {},
+          pageBuilder: (_, page) =>
+              SizedBox(height: 500, child: Text('page-${page.index}')),
+          trailingPage: const Text('chapter-transition'),
+          onTrailingAdvance: () => advanced++,
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(advanced, 0);
+
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -1600));
+    await tester.pumpAndSettle();
+    expect(advanced, 1);
+  });
+
+  testWidgets('continuous reader renders a section divider in the stream', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaContinuousReader(
+          pages: _pages,
+          initialPage: 0,
+          scrollDirection: Axis.vertical,
+          reverse: false,
+          settings: const MangaReaderSettings(),
+          onPageChanged: (_) {},
+          pageBuilder: (_, page) =>
+              SizedBox(height: 500, child: Text('page-${page.index}')),
+          sectionDividers: const <int, Widget>{2: Text('between-chapters')},
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.drag(find.byType(SuperListView), const Offset(0, -900));
+    await tester.pumpAndSettle();
+
+    expect(find.text('between-chapters'), findsOneWidget);
+    final dividerY = tester.getTopLeft(find.text('between-chapters')).dy;
+    expect(dividerY, greaterThan(tester.getTopLeft(find.text('page-1')).dy));
+    expect(dividerY, lessThan(tester.getTopLeft(find.text('page-2')).dy));
+  });
+
+  testWidgets('webtoon reader renders a section divider in the stream', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaWebtoonReader(
+          pages: _pages,
+          initialPage: 0,
+          settings: const MangaReaderSettings(),
+          onPageChanged: (_) {},
+          pageBuilder: (_, page) =>
+              SizedBox(height: 500, child: Text('page-${page.index}')),
+          sectionDividers: const <int, Widget>{2: Text('between-chapters')},
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -900));
+    await tester.pumpAndSettle();
+
+    expect(find.text('between-chapters'), findsOneWidget);
+    final dividerY = tester.getTopLeft(find.text('between-chapters')).dy;
+    expect(dividerY, greaterThan(tester.getTopLeft(find.text('page-1')).dy));
+    expect(dividerY, lessThan(tester.getTopLeft(find.text('page-2')).dy));
   });
 
   testWidgets('paged reader appends Mangayomi chapter transition page', (

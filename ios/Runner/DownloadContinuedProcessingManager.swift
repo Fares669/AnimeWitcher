@@ -1,6 +1,9 @@
 #if os(iOS)
 import BackgroundTasks
 import Foundation
+#if canImport(background_downloader)
+import enum background_downloader.AnimeWitcherDownloadSessions
+#endif
 import UIKit
 
 @available(iOS 26.0, *)
@@ -53,6 +56,21 @@ private enum DownloadPageProgress {
   }
 }
 
+/// Rate-limited presentation of measured download activity. Updating a title
+/// cannot extend an OS lease or substitute for real Progress advancement.
+enum DownloadPresentationPulse {
+  static let interval: TimeInterval = 1.0
+
+  static func title(displayName: String, filled: Bool) -> String {
+    let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let dot = filled ? "◉" : "○"
+    if name.isEmpty {
+      return "\(dot) Downloading"
+    }
+    return "\(dot) Downloading “\(name)”"
+  }
+}
+
 /// Owns the **one** iOS 26 BGContinuedProcessingTask for an active download
 /// session (the whole queue), not one task per episode.
 ///
@@ -90,6 +108,23 @@ final class DownloadContinuedProcessingManager {
   private var currentEpisodeTaskId = ""
   private var requestSubmittedAt: Date?
   private var leaseStartedAt: Date?
+  private var pulseTimer: Timer?
+  private var pulseFilled = true
+  private var lastSpeedSampleAt: TimeInterval = 0
+  private var lastNativePageActivityAt: TimeInterval = 0
+  private var nativePageFractions: [String: (initial: Double, latest: Double)] = [:]
+  private var nativePageBaseline: Double?
+  private var lastNativeRejectionTaskId = ""
+  /// Stamp of the last presentation actually applied to the system task.
+  /// Every feeder (Dart updates, the native background feed, the pulse)
+  /// funnels through this one clock, so the banner changes at most once
+  /// per second no matter how the feeders interleave (device logs,
+  /// 2026-10-30: bursts of 3-5 native feeds inside one second).
+  private var lastPresentationAt: CFTimeInterval = 0
+  // Rebase only when a queue grows. A larger denominator would otherwise
+  // pin the OS progress bar until the fresh percentage catches up.
+  private var lastPresentedBatchTotal = 0
+  private var progressRebase: (display: Double, raw: Double)?
   // V2 ranged children report a subtotal of child bytes, not a whole-file
   // absolute byte count. Capture that subtotal at the foreground -> background
   // handoff and advance the system UI by its delta over the latest Dart parent
@@ -178,6 +213,12 @@ final class DownloadContinuedProcessingManager {
         ? currentIndex
         : (self.snapshot?.currentIndex ?? 0)
     )
+    if switched || self.snapshot == nil {
+      nativePageFractions.removeAll()
+      nativePageBaseline = nil
+      lastNativePageActivityAt = 0
+    }
+    if speedBytesPerSecond >= 0 { lastSpeedSampleAt = Date().timeIntervalSinceReferenceDate }
     self.snapshot = snapshot
 
     if let active = activeTask {
@@ -248,10 +289,35 @@ final class DownloadContinuedProcessingManager {
     return sessionId
   }
 
-  func acceptsDartUpdate(inForeground: Bool, completedPages: Int?) -> Bool {
-    DownloadPageProgress.acceptsDartUpdate(
+  func acceptsDartUpdate(
+    inForeground: Bool,
+    completedPages: Int?,
+    taskId: String = "",
+    progress: Double = -1,
+    transferredBytes: Int64 = -1
+  ) -> Bool {
+    if DownloadPageProgress.acceptsDartUpdate(
       inForeground: inForeground, incomingPages: completedPages, currentPages: snapshot?.completedPages
-    )
+    ) {
+      return true
+    }
+    // Background, non-page session: the pure gate gives native observation
+    // precedence because a briefly-woken Dart may hold a stale snapshot.
+    // But a Dart kept alive by the lease reports authoritative durable
+    // bytes, and a native feed that goes silent must not freeze the
+    // presentation until the system expires the task. Accept only what a
+    // stale snapshot cannot fake: a different episode Dart is driving, or
+    // values that strictly advance the current presentation.
+    guard let snapshot, completedPages == nil, snapshot.completedPages == nil
+    else { return false }
+    if !taskId.isEmpty, taskId != Self.sessionKey,
+       taskId != snapshot.currentTaskId {
+      return true
+    }
+    if transferredBytes >= 0 {
+      return transferredBytes > snapshot.transferredBytes
+    }
+    return progress > snapshot.progress
   }
 
   func update(
@@ -281,6 +347,12 @@ final class DownloadContinuedProcessingManager {
       && taskId != Self.sessionKey
       && taskId != previousEpisodeTaskId
 
+    if switched {
+      nativePageFractions.removeAll()
+      nativePageBaseline = nil
+      lastNativePageActivityAt = 0
+    }
+    if speedBytesPerSecond >= 0 { lastSpeedSampleAt = Date().timeIntervalSinceReferenceDate }
     snapshot.progress = min(max(progress, 0.0), 1.0)
     snapshot.completedPages = completedPages
     snapshot.totalPages = totalPages
@@ -320,7 +392,7 @@ final class DownloadContinuedProcessingManager {
     self.snapshot = snapshot
 
     if let task = activeTask {
-      apply(snapshot, to: task)
+      presentIfDue(snapshot, to: task)
     }
     return activeTask != nil || identifier != nil
   }
@@ -335,9 +407,46 @@ final class DownloadContinuedProcessingManager {
     transferredBytes: Int64 = -1,
     speedBytesPerSecond: Double = -1
   ) -> Bool {
+    // Manga page tasks have no Range metadata. Route only an exact page child
+    // of the current generation; a child fraction is activity, not a validated
+    // completed page. Dart alone owns the page count and chapter completion.
+    if let current = snapshot, current.completedPages != nil,
+       let total = current.totalPages, total > 0,
+       taskId.hasPrefix(currentEpisodeTaskId + "_p"),
+       taskId.dropFirst(currentEpisodeTaskId.count + 2).count >= 4,
+       taskId.dropFirst(currentEpisodeTaskId.count + 2).allSatisfy({ $0.isASCII && $0.isNumber }),
+       let progress, progress.isFinite, progress >= 0 {
+      let fraction = min(progress, 1)
+      let sample = nativePageFractions[taskId] ?? (initial: fraction, latest: fraction)
+      nativePageFractions[taskId] = (sample.initial, max(sample.latest, fraction))
+      if fraction > sample.latest {
+        // A positive native fraction delta proves nonzero throughput even
+        // when this callback does not expose a byte/s value to Dart.
+        lastNativePageActivityAt = Date().timeIntervalSinceReferenceDate
+      }
+      if nativePageBaseline == nil { nativePageBaseline = current.progress }
+      // Count only movement since first observation, including final progress
+      // 1. A delayed first callback must not credit bytes already checkpointed
+      // by Dart. Keep this baseline fixed as later Dart page counts catch up.
+      let movement = nativePageFractions.values.reduce(0.0) { $0 + $1.latest - $1.initial }
+      var next = current
+      next.progress = max(current.progress, min((nativePageBaseline ?? 0) + movement / Double(total), 0.999))
+      snapshot = next
+      if let task = activeTask { presentIfDue(next, to: task) }
+      return true
+    }
     guard taskId == currentEpisodeTaskId,
           let current = snapshot
-    else { return false }
+    else {
+      // A native observation for a task the session does not own is the
+      // signature of a silently broken background feed; make it visible in
+      // the diagnostic log instead of dropping it without a trace.
+      if snapshot != nil, taskId != lastNativeRejectionTaskId {
+        lastNativeRejectionTaskId = taskId
+        recordLifecycle("continued.native.rejected", fields: ["taskId": taskId])
+      }
+      return false
+    }
 
     guard current.completedPages == nil else { return false }
 
@@ -425,6 +534,7 @@ final class DownloadContinuedProcessingManager {
   }
 
   private func completeSession(success: Bool, status: String) {
+    stopPulse()
     cancelPendingRequest()
 
     // Flutter can decide that the session has no *running* entries after an
@@ -453,6 +563,9 @@ final class DownloadContinuedProcessingManager {
     }
 
     if let task = activeTask {
+      #if canImport(background_downloader)
+      AnimeWitcherDownloadSessions.deactivate(task)
+      #endif
       activeTask = nil
       let completion = activeTaskCompletion
       activeTaskCompletion = nil
@@ -484,11 +597,18 @@ final class DownloadContinuedProcessingManager {
       }
     }
 
+    progressRebase = nil
+    lastPresentedBatchTotal = 0
     snapshot = nil
     identifier = nil
     requestSubmittedAt = nil
     leaseStartedAt = nil
     currentEpisodeTaskId = ""
+    lastPresentationAt = 0
+    nativePageFractions.removeAll()
+    nativePageBaseline = nil
+    lastNativePageActivityAt = 0
+    lastSpeedSampleAt = 0
     resetNativeAggregateBaseline()
   }
 
@@ -512,6 +632,9 @@ final class DownloadContinuedProcessingManager {
     }
 
     activeTask = task
+    #if canImport(background_downloader)
+    AnimeWitcherDownloadSessions.activate(task)
+    #endif
     let completion = DownloadContinuedProcessingCompletion()
     activeTaskCompletion = completion
     let attachedAt = Date()
@@ -520,6 +643,11 @@ final class DownloadContinuedProcessingManager {
 
     task.expirationHandler = { [weak self, weak task] in
       guard let task else { return }
+      // Revoke direct request admission before relinquishing runtime, even if
+      // main-actor cleanup is delayed. Concrete identity fences stale expiry.
+      #if canImport(background_downloader)
+      AnimeWitcherDownloadSessions.deactivate(task)
+      #endif
       // Log synchronously before relinquishing runtime. Expiration does not
       // expose a reason, and must not be labelled as a user cancellation.
       DownloadNativeDiagnosticLog.record("continued.expired", fields: [
@@ -541,23 +669,55 @@ final class DownloadContinuedProcessingManager {
         // owned by the download coordinator. See download_background_lifecycle.md.
         self.activeTask = nil
         self.activeTaskCompletion = nil
+        self.progressRebase = nil
+        self.lastPresentedBatchTotal = 0
         self.snapshot = nil
         self.identifier = nil
         self.requestSubmittedAt = nil
         self.leaseStartedAt = nil
         self.currentEpisodeTaskId = ""
+        self.lastPresentationAt = 0
+        self.nativePageFractions.removeAll()
+        self.nativePageBaseline = nil
+        self.lastNativePageActivityAt = 0
+        self.lastSpeedSampleAt = 0
+        self.stopPulse()
         self.resetNativeAggregateBaseline()
       }
     }
 
     recordLifecycle("continued.attached")
 
+    // A fresh task starts a fresh presentation clock: attach presents the
+    // checkpoint immediately, and the first progress update after attach
+    // also presents immediately; the once-per-second gate applies from
+    // there on.
+    lastPresentationAt = 0
+    progressRebase = nil
+    lastPresentedBatchTotal = 0
     if let snapshot {
       apply(snapshot, to: task)
     } else {
       task.progress.totalUnitCount = 1000
       task.progress.completedUnitCount = 0
     }
+    startPulse()
+  }
+
+  /// Applies a progress presentation only when the shared clock says the
+  /// task is due for one — at most once per
+  /// `DownloadPresentationPulse.interval`. A skipped presentation is not
+  /// lost: the caller has already stored the snapshot, and the pulse tick
+  /// presents the latest stored snapshot on a later beat.
+  private func presentIfDue(
+    _ snapshot: Snapshot,
+    to task: BGContinuedProcessingTask
+  ) {
+    let now = Date().timeIntervalSinceReferenceDate
+    guard now - lastPresentationAt >= DownloadPresentationPulse.interval
+    else { return }
+    lastPresentationAt = now
+    apply(snapshot, to: task)
   }
 
   private func apply(
@@ -566,35 +726,87 @@ final class DownloadContinuedProcessingManager {
   ) {
     let normalized = min(max(snapshot.progress, 0.0), 1.0)
 
+    // The system task represents the whole queue. Resetting it to each
+    // episode's percentage can leave iOS seeing no forward work even while
+    // the next episode downloads. Sub-page precision also avoids waiting for
+    // a complete page (or a rounded MB) to demonstrate real network progress.
+    let fraction: Double
     if let completed = snapshot.completedPages {
-      let progress = DownloadPageProgress.fraction(
+      let durable = DownloadPageProgress.fraction(
         completed: completed, total: snapshot.totalPages ?? -1, progress: normalized
       )
-      task.progress.totalUnitCount = 1000
-      task.progress.completedUnitCount = Int64((progress * 1000).rounded(.down))
-    } else if snapshot.totalBytes > 0 {
-      task.progress.totalUnitCount = snapshot.totalBytes
-      let completed = snapshot.transferredBytes >= 0
-        ? snapshot.transferredBytes
-        : overlayTransferredBytes(
-          progress: normalized,
-          totalBytes: snapshot.totalBytes
-        )
-      task.progress.completedUnitCount = min(
-        max(completed, 0),
-        snapshot.totalBytes
-      )
+      fraction = max(durable, min(normalized, 0.999))
     } else {
-      task.progress.totalUnitCount = 1000
-      task.progress.completedUnitCount = Int64(
-        (normalized * 1000.0).rounded(.down)
-      )
+      fraction = normalized
+    }
+    if snapshot.batchTotal > 1 || snapshot.completedPages != nil {
+      let batch = Double(max(snapshot.batchTotal, 1))
+      let sessionFraction = min((Double(snapshot.completedCount) + fraction) / batch, 0.999_999_999)
+      if lastPresentedBatchTotal > 0 && snapshot.batchTotal > lastPresentedBatchTotal {
+        progressRebase = (display: task.progress.fractionCompleted, raw: sessionFraction)
+      }
+      lastPresentedBatchTotal = snapshot.batchTotal
+      let reweighted: Double
+      if let progressRebase {
+        let remainingRaw = max(1 - progressRebase.raw, 0.000_001)
+        reweighted = progressRebase.display
+          + max(sessionFraction - progressRebase.raw, 0)
+            * (1 - progressRebase.display) / remainingRaw
+      } else {
+        reweighted = sessionFraction
+      }
+      let monotonic = min(max(task.progress.fractionCompleted, reweighted), 0.999_999_999)
+      task.progress.totalUnitCount = 1_000_000_000_000
+      task.progress.completedUnitCount = Int64((monotonic * 1_000_000_000_000).rounded(.down))
+    } else if snapshot.totalBytes > 0 {
+      lastPresentedBatchTotal = snapshot.batchTotal
+      progressRebase = nil
+      task.progress.totalUnitCount = snapshot.totalBytes
+      task.progress.completedUnitCount = min(max(snapshot.transferredBytes, 0), snapshot.totalBytes)
+    } else {
+      task.progress.totalUnitCount = 1_000_000_000_000
+      task.progress.completedUnitCount = Int64((fraction * 1_000_000_000_000).rounded(.down))
     }
 
     task.updateTitle(
       title(for: snapshot),
       subtitle: subtitle(for: snapshot)
     )
+  }
+
+  private func startPulse() {
+    guard pulseTimer == nil else { return }
+    let timer = Timer(
+      timeInterval: DownloadPresentationPulse.interval, repeats: true
+    ) { [weak self] _ in
+      Task { @MainActor in self?.pulseTick() }
+    }
+    RunLoop.main.add(timer, forMode: .common)
+    pulseTimer = timer
+  }
+
+  private func stopPulse() {
+    pulseTimer?.invalidate()
+    pulseTimer = nil
+    pulseFilled = true
+  }
+
+  /// Speed controls the activity indicator, not completion or lease ownership.
+  /// An old nonzero sample must not keep claiming activity on a stalled socket.
+  private func pulseTick() {
+    guard let task = activeTask, let snapshot else {
+      stopPulse()
+      return
+    }
+    let now = Date().timeIntervalSinceReferenceDate
+    let hasMeasuredSpeed = snapshot.speedBytesPerSecond.isFinite
+      && snapshot.speedBytesPerSecond > 0 && now - lastSpeedSampleAt < 3
+    if hasMeasuredSpeed || now - lastNativePageActivityAt < 3 {
+      pulseFilled.toggle()
+    } else {
+      pulseFilled = false
+    }
+    presentIfDue(snapshot, to: task)
   }
 
   private func cancelPendingRequest() {
@@ -624,11 +836,9 @@ final class DownloadContinuedProcessingManager {
   }
 
   private func title(for snapshot: Snapshot) -> String {
-    let name = snapshot.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-    if name.isEmpty {
-      return "Downloading"
-    }
-    return "Downloading “\(name)”"
+    DownloadPresentationPulse.title(
+      displayName: snapshot.displayName, filled: pulseFilled
+    )
   }
 
   private func currentIndex(for snapshot: Snapshot) -> Int {

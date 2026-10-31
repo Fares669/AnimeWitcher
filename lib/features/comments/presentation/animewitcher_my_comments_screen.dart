@@ -1,4 +1,10 @@
 import 'package:flutter/material.dart';
+
+import 'comment_edit_dialog.dart';
+import 'comment_pager.dart';
+import '../../../core/utils/relative_time.dart';
+import '../../../shared/widgets/confirm_dialog.dart';
+
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
@@ -11,7 +17,6 @@ import '../../../core/account/animewitcher_sync_ids.dart';
 import '../../../core/account/firestore_rest_client.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/services/notification_service.dart';
-import '../../../core/utils/request_generation.dart';
 import '../../../core/router/app_router.dart';
 import 'animewitcher_replies_screen.dart';
 import 'widgets/animewitcher_comment_sort_control.dart';
@@ -39,14 +44,8 @@ class _AnimeWitcherMyCommentsScreenState
   late final ScrollController _scrollController;
   final Set<String> _busyComments = <String>{};
 
-  List<AnimeWitcherComment> _comments = <AnimeWitcherComment>[];
+  final CommentPager _pager = CommentPager();
   AnimeWitcherCommentSort _sort = AnimeWitcherCommentSort.newest;
-  FirestoreDocument? _cursor;
-  Object? _loadError;
-  bool _loadingInitial = true;
-  bool _loadingMore = false;
-  bool _hasMore = true;
-  final RequestGeneration _loadGeneration = RequestGeneration();
 
   String get _editDialogTitle =>
       _isReviews ? 'تعديل المراجعة' : 'تعديل التعليق';
@@ -74,87 +73,36 @@ class _AnimeWitcherMyCommentsScreenState
   }
 
   void _onScroll() {
-    if (!_scrollController.hasClients ||
-        _loadingInitial ||
-        _loadingMore ||
-        !_hasMore) {
-      return;
-    }
-    if (_scrollController.position.extentAfter < 520) {
-      _loadMore();
-    }
+    if (_pager.shouldLoadMore(_scrollController)) _loadMore();
+  }
+
+  Future<AnimeWitcherCommentPage> _fetchPage(FirestoreDocument? cursor) {
+    final sort = _sort;
+    final service = ref.read(animeWitcherAccountServiceProvider);
+    return _isReviews
+        ? service.loadMyReviews(sort: sort, cursor: cursor, limit: _pageSize)
+        : service.loadMyComments(sort: sort, cursor: cursor, limit: _pageSize);
   }
 
   Future<void> _loadInitial() async {
     if (!mounted) return;
-    final generation = _loadGeneration.begin();
-    final sort = _sort;
-    setState(() {
-      _loadingInitial = true;
-      _loadingMore = false;
-      _hasMore = true;
-      _cursor = null;
-      _loadError = null;
-    });
-    try {
-      final service = ref.read(animeWitcherAccountServiceProvider);
-      final page = _isReviews
-          ? await service.loadMyReviews(sort: sort, limit: _pageSize)
-          : await service.loadMyComments(sort: sort, limit: _pageSize);
-      if (!mounted || !_loadGeneration.isCurrent(generation)) return;
-      setState(() {
-        _comments = page.items;
-        _cursor = page.cursor;
-        _hasMore = page.hasMore;
-        _loadingInitial = false;
-      });
-    } catch (error) {
-      if (!mounted || !_loadGeneration.isCurrent(generation)) return;
-      setState(() {
-        _loadError = error;
-        _loadingInitial = false;
-      });
-    }
+    final future = _pager.loadInitial(_fetchPage);
+    setState(() {});
+    if (await future && mounted) setState(() {});
   }
 
   Future<void> _loadMore() async {
-    if (_loadingInitial || _loadingMore || !_hasMore) return;
-    final generation = _loadGeneration.current;
-    final sort = _sort;
-    final cursor = _cursor;
-    setState(() => _loadingMore = true);
-    try {
-      final service = ref.read(animeWitcherAccountServiceProvider);
-      final page = _isReviews
-          ? await service.loadMyReviews(
-              sort: sort,
-              cursor: cursor,
-              limit: _pageSize,
-            )
-          : await service.loadMyComments(
-              sort: sort,
-              cursor: cursor,
-              limit: _pageSize,
-            );
-      if (!mounted || !_loadGeneration.isCurrent(generation)) return;
-      final paths = _comments.map((comment) => comment.path).toSet();
-      final additions = page.items
-          .where((comment) => paths.add(comment.path))
-          .toList(growable: false);
-      setState(() {
-        _comments = <AnimeWitcherComment>[..._comments, ...additions];
-        _cursor = page.cursor;
-        _hasMore = page.hasMore;
-        _loadingMore = false;
-      });
-    } catch (error) {
-      if (!mounted || !_loadGeneration.isCurrent(generation)) return;
-      setState(() {
-        _loadError = error;
-        _loadingMore = false;
-      });
-      _showMessage(_errorText(error), isError: true);
+    if (_pager.loadingInitial || _pager.loadingMore || !_pager.hasMore) {
+      return;
     }
+    final future = _pager.loadMore(
+      _fetchPage,
+      onError: (error) {
+        if (mounted) _showMessage(_errorText(error), isError: true);
+      },
+    );
+    setState(() {});
+    if (await future && mounted) setState(() {});
   }
 
   Future<void> _changeSort(AnimeWitcherCommentSort sort) async {
@@ -182,108 +130,38 @@ class _AnimeWitcherMyCommentsScreenState
   }
 
   Future<void> _editComment(AnimeWitcherComment comment) async {
-    final controller = TextEditingController(text: comment.text);
-    var spoiler = _isReviews ? false : comment.spoiler;
+    final draft = await showCommentEditDialog(
+      context,
+      title: _editDialogTitle,
+      hint: _editHint,
+      initialText: comment.text,
+      initialSpoiler: comment.spoiler,
+      isReview: _isReviews,
+    );
+    if (draft == null || !mounted) return;
+    _setBusy(comment.path, true);
     try {
-      final draft = await showDialog<_CommentEditDraft>(
-        context: context,
-        builder: (dialogContext) => StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
-            title: Text(_editDialogTitle),
-            content: SizedBox(
-              width: 520,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: controller,
-                    autofocus: true,
-                    minLines: 3,
-                    maxLines: 7,
-                    maxLength: 500,
-                    textDirection: TextDirection.rtl,
-                    decoration: InputDecoration(
-                      hintText: _editHint,
-                      border: const OutlineInputBorder(),
-                    ),
-                  ),
-                  if (!_isReviews)
-                    CheckboxListTile(
-                      value: spoiler,
-                      contentPadding: EdgeInsets.zero,
-                      title: Text('يحتوي على حرق'),
-                      onChanged: (value) {
-                        setDialogState(() => spoiler = value == true);
-                      },
-                    ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext),
-                child: Text('إلغاء'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  final text = controller.text.trim();
-                  if (text.isEmpty) return;
-                  Navigator.pop(
-                    dialogContext,
-                    _CommentEditDraft(
-                      text: text,
-                      spoiler: _isReviews ? false : spoiler,
-                    ),
-                  );
-                },
-                child: Text('حفظ'),
-              ),
-            ],
-          ),
-        ),
-      );
-      if (draft == null || !mounted) return;
-      _setBusy(comment.path, true);
-      try {
-        final updated = await ref
-            .read(animeWitcherAccountServiceProvider)
-            .updateOwnComment(comment, draft.text, spoiler: draft.spoiler);
-        if (!mounted) return;
-        _replaceComment(updated);
-        _showMessage(_editedMessage);
-      } catch (error) {
-        if (mounted) _showMessage(_errorText(error), isError: true);
-      } finally {
-        if (mounted) _setBusy(comment.path, false);
-      }
+      final updated = await ref
+          .read(animeWitcherAccountServiceProvider)
+          .updateOwnComment(comment, draft.text, spoiler: draft.spoiler);
+      if (!mounted) return;
+      _replaceComment(updated);
+      _showMessage(_editedMessage);
+    } catch (error) {
+      if (mounted) _showMessage(_errorText(error), isError: true);
     } finally {
-      controller.dispose();
+      if (mounted) _setBusy(comment.path, false);
     }
   }
 
   Future<void> _deleteComment(AnimeWitcherComment comment) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text('حذف التعليق؟'),
-        content: Text('هل أنت متأكد من حذف هذا التعليق؟'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: Text('إلغاء'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(dialogContext).colorScheme.error,
-              foregroundColor: Theme.of(dialogContext).colorScheme.onError,
-            ),
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: Text('حذف'),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'حذف التعليق؟',
+      message: 'هل أنت متأكد من حذف هذا التعليق؟',
+      confirmLabel: 'حذف',
     );
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
 
     _setBusy(comment.path, true);
     try {
@@ -292,7 +170,7 @@ class _AnimeWitcherMyCommentsScreenState
           .deleteOwnComment(comment);
       if (!mounted) return;
       setState(() {
-        _comments.removeWhere((item) => item.path == comment.path);
+        _pager.items.removeWhere((item) => item.path == comment.path);
       });
       _showMessage('تم حذف التعليق.');
     } catch (error) {
@@ -304,24 +182,14 @@ class _AnimeWitcherMyCommentsScreenState
 
   Future<void> _closeReplies(AnimeWitcherComment comment) async {
     if (comment.repliesClosed) return;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text('منع الردود؟'),
-        content: Text('هل أنت متأكد من منع الردود على هذا التعليق؟'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: Text('إلغاء'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: Text('منع'),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'منع الردود؟',
+      message: 'هل أنت متأكد من منع الردود على هذا التعليق؟',
+      confirmLabel: 'منع',
+      destructive: false,
     );
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
 
     _setBusy(comment.path, true);
     try {
@@ -364,9 +232,9 @@ class _AnimeWitcherMyCommentsScreenState
   }
 
   void _replaceComment(AnimeWitcherComment updated) {
-    final index = _comments.indexWhere((item) => item.path == updated.path);
+    final index = _pager.items.indexWhere((item) => item.path == updated.path);
     if (index < 0) return;
-    setState(() => _comments[index] = updated);
+    setState(() => _pager.items[index] = updated);
   }
 
   void _setBusy(String path, bool busy) {
@@ -438,17 +306,17 @@ class _AnimeWitcherMyCommentsScreenState
   }
 
   Widget _buildBody() {
-    if (_loadingInitial) {
+    if (_pager.loadingInitial) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (_loadError != null && _comments.isEmpty) {
+    if (_pager.loadError != null && _pager.items.isEmpty) {
       return _MyCommentsError(
-        message: _errorText(_loadError!),
+        message: _errorText(_pager.loadError!),
         retryLabel: 'إعادة المحاولة',
         onRetry: _loadInitial,
       );
     }
-    if (_comments.isEmpty) {
+    if (_pager.items.isEmpty) {
       return MouseDragRefreshIndicator(
         onRefresh: _loadInitial,
         child: ListView(
@@ -480,10 +348,12 @@ class _AnimeWitcherMyCommentsScreenState
           12,
           28,
         ),
-        itemCount: _comments.length + (_hasMore || _loadingMore ? 1 : 0),
+        itemCount:
+            _pager.items.length +
+            (_pager.hasMore || _pager.loadingMore ? 1 : 0),
         separatorBuilder: (_, __) => const SizedBox(height: 10),
         itemBuilder: (context, index) {
-          if (index >= _comments.length) {
+          if (index >= _pager.items.length) {
             return const Padding(
               padding: EdgeInsets.symmetric(vertical: 18),
               child: Center(
@@ -494,7 +364,7 @@ class _AnimeWitcherMyCommentsScreenState
               ),
             );
           }
-          final comment = _comments[index];
+          final comment = _pager.items[index];
           return _buildCommentCard(
             comment,
             busy: _busyComments.contains(comment.path),
@@ -559,7 +429,7 @@ class _AnimeWitcherMyCommentsScreenState
                                   ),
                                 ),
                                 Text(
-                                  _timeAgo(comment.date),
+                                  formatArabicRelativeTime(comment.date),
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     color: colors.onSurfaceVariant,
                                   ),
@@ -804,35 +674,9 @@ class _AnimeWitcherMyCommentsScreenState
     }
     return 'حدث خطأ. حاول مرة أخرى.';
   }
-
-  String _timeAgo(DateTime? date) {
-    if (date == null) return '';
-    final raw = DateTime.now().difference(date);
-    final elapsed = raw.isNegative ? Duration.zero : raw;
-    if (elapsed.inMinutes < 1) return 'منذ لحظات';
-    if (elapsed.inMinutes < 60) {
-      return 'منذ ${elapsed.inMinutes} دقيقة';
-    }
-    if (elapsed.inHours < 24) {
-      return 'منذ ${elapsed.inHours} ساعة';
-    }
-    if (elapsed.inDays < 30) {
-      return 'منذ ${elapsed.inDays} يوم';
-    }
-    final local = date.toLocal();
-    String two(int value) => value.toString().padLeft(2, '0');
-    return '${two(local.day)}/${two(local.month)}/${local.year}';
-  }
 }
 
 enum _MyCommentAction { edit, delete, closeReplies }
-
-class _CommentEditDraft {
-  const _CommentEditDraft({required this.text, required this.spoiler});
-
-  final String text;
-  final bool spoiler;
-}
 
 class _MyCommentsError extends StatelessWidget {
   const _MyCommentsError({

@@ -8,7 +8,7 @@ import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/core/storage/manga_reading_repository.dart';
-import 'package:animewitcher/core/utils/download_time_remaining.dart';
+import 'package:animewitcher/core/utils/download_progress_data.dart';
 import 'package:animewitcher/features/details/presentation/widgets/download_progress_dialog.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/features/library/presentation/download_progress_v2_provider.dart';
@@ -262,8 +262,6 @@ void main() {
                 logicalId: const DownloadProgressData(
                   taskId: 'task-c1',
                   progress: 0.42,
-                  networkSpeed: 1,
-                  timeRemaining: Duration(seconds: 5),
                   status: TaskStatus.running,
                 ),
               },
@@ -310,8 +308,6 @@ void main() {
               progress: completed / 23,
               completedPages: completed,
               totalPages: 23,
-              networkSpeed: -1,
-              timeRemaining: Duration.zero,
               status: state ?? status,
             );
         final container = ProviderContainer(
@@ -451,8 +447,6 @@ void main() {
               logicalId: const DownloadProgressData(
                 taskId: 'task-c1',
                 progress: 1,
-                networkSpeed: 0,
-                timeRemaining: Duration.zero,
                 status: TaskStatus.complete,
               ),
             },

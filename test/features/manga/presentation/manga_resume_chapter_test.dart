@@ -11,15 +11,18 @@ MangaChapter _chapter(String id, double? number) => MangaChapter(
   number: number,
 );
 
-MangaReadingProgress _progress(String id, {bool read = false}) =>
-    MangaReadingProgress(
-      mangaId: 'm1',
-      chapterId: id,
-      pageIndex: 3,
-      pageCount: 20,
-      updatedAt: 1,
-      isRead: read,
-    );
+MangaReadingProgress _progress(
+  String id, {
+  bool read = false,
+  int pageIndex = 3,
+}) => MangaReadingProgress(
+  mangaId: 'm1',
+  chapterId: id,
+  pageIndex: pageIndex,
+  pageCount: 20,
+  updatedAt: 1,
+  isRead: read,
+);
 
 void main() {
   // Listed newest first, the way sources often do.
@@ -42,20 +45,38 @@ void main() {
     expect(target?.kind, MangaResumeKind.resume);
   });
 
-  test('a finished chapter leads to the next one', () {
+  test('an untouched earlier chapter is offered before later progress', () {
     final progress = {'2': _progress('2', read: true)};
     final target = mangaResumeTarget(chapters, (c) => progress[c.id]);
-    expect(target?.chapter.id, '3');
+    expect(target?.chapter.id, '1');
     expect(target?.kind, MangaResumeKind.next);
   });
 
-  test('with everything read the last chapter is offered again', () {
+  test('the first unfinished chapter wins over a later part-read one', () {
+    final progress = {'1': _progress('1', read: true), '3': _progress('3')};
+    final target = mangaResumeTarget(chapters, (c) => progress[c.id]);
+    expect(target?.chapter.id, '2');
+    expect(target?.kind, MangaResumeKind.next);
+  });
+
+  test('marking every chapter unread points back at the first chapter', () {
+    // Fully paged once, then marked unread: page counts are complete
+    // but nothing counts as finished, so reading starts over.
+    final target = mangaResumeTarget(
+      chapters,
+      (c) => _progress(c.id, pageIndex: 19),
+    );
+    expect(target?.chapter.id, '1');
+    expect(target?.kind, MangaResumeKind.start);
+  });
+
+  test('with everything read the first chapter is offered to start over', () {
     final target = mangaResumeTarget(
       chapters,
       (c) => _progress(c.id, read: true),
     );
-    expect(target?.chapter.id, '3');
-    expect(target?.kind, MangaResumeKind.resume);
+    expect(target?.chapter.id, '1');
+    expect(target?.kind, MangaResumeKind.start);
   });
 
   test('chapters without numbers keep the order the source gave', () {
