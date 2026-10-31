@@ -759,6 +759,8 @@ final class DownloadContinuedProcessingManager {
       task.progress.totalUnitCount = 1_000_000_000_000
       task.progress.completedUnitCount = Int64((monotonic * 1_000_000_000_000).rounded(.down))
     } else if snapshot.totalBytes > 0 {
+      lastPresentedBatchTotal = snapshot.batchTotal
+      progressRebase = nil
       task.progress.totalUnitCount = snapshot.totalBytes
       task.progress.completedUnitCount = min(max(snapshot.transferredBytes, 0), snapshot.totalBytes)
     } else {
