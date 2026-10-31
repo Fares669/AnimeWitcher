@@ -19,6 +19,30 @@ import '../../../support/memory_storage_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('manga bandwidth samples cumulative bytes across chapters once per second', () {
+    final meter = DownloadSessionThroughputV2();
+    final start = DateTime.fromMillisecondsSinceEpoch(100000);
+    meter.observe('chapter-a', 0, at: start);
+    meter.observe('chapter-b', 0, at: start);
+    meter.observe('chapter-a', 400000,
+        at: start.add(const Duration(milliseconds: 300)));
+    meter.observe('chapter-b', 300000,
+        at: start.add(const Duration(milliseconds: 700)));
+    // Repeated and regressing callbacks cannot invent transferred data.
+    meter.observe('chapter-a', 400000,
+        at: start.add(const Duration(milliseconds: 800)));
+    meter.observe('chapter-a', 100000,
+        at: start.add(const Duration(milliseconds: 900)));
+
+    expect(meter.sample(at: start.add(const Duration(seconds: 1))), 700000);
+    meter.observe('chapter-a', 500000,
+        at: start.add(const Duration(milliseconds: 1500)));
+    expect(meter.sample(at: start.add(const Duration(seconds: 2))), 400000);
+    expect(meter.sample(at: start.add(const Duration(seconds: 5))), 0);
+    meter.clear();
+    expect(meter.sample(at: start.add(const Duration(seconds: 6))), 0);
+  });
+
   test('app strip and iOS receive the same total speed sample without another timer', () async {
     const channel = MethodChannel(
       'com.animewitcher.app/download_continued_processing',
