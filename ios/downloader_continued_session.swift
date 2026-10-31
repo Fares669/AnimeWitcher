@@ -6,6 +6,7 @@ public enum AnimeWitcherDownloadSessions {
   private final class State: @unchecked Sendable {
     let lock = NSLock()
     var lease: ObjectIdentifier?
+    var foreground = true
     var directSession: URLSession?
   }
   private static let state = State()
@@ -22,13 +23,20 @@ public enum AnimeWitcherDownloadSessions {
     if state.lease == ObjectIdentifier(lease) { state.lease = nil }
   }
 
+  public static func setForeground(_ foreground: Bool) {
+    state.lock.lock()
+    defer { state.lock.unlock() }
+    state.foreground = foreground
+  }
+
   static func session(forTaskId taskId: String) -> URLSession {
     let background = UrlSessionDelegate.urlSession!
     state.lock.lock()
     defer { state.lock.unlock() }
-    // Background-created background-session tasks are always discretionary.
-    // During continued processing, direct requests use the granted runtime.
-    guard state.lease != nil,
+    // Foreground-created background URLSession tasks survive suspension.
+    // Only background-created pages use the lease-bound direct session to
+    // avoid iOS scheduling those background-created requests discretionary.
+    guard state.lease != nil, !state.foreground,
           taskId.range(of: #"^aw_v2_manga_[0-9a-f]{32}_g[1-9][0-9]*_p[0-9]{4,}$"#,
                        options: .regularExpression) != nil else { return background }
     if let session = state.directSession { return session }
