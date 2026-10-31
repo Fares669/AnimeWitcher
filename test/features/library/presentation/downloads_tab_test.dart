@@ -234,6 +234,7 @@ class _StubEpisodeSortAscendingNotifier extends EpisodeSortAscendingNotifier {
 Widget _downloadsApp(
   List<DownloadItem> items, {
   bool previewTheme = false,
+  bool withTaskbar = false,
   TextDirection? shellDirection,
   bool episodeSortAscending = true,
   Object? resumeError,
@@ -242,7 +243,10 @@ Widget _downloadsApp(
   _StubDownloadsNotifier? notifier,
   Map<String, DownloadProgressData>? progressData,
 }) {
-  Widget home = const Scaffold(
+  Widget home = Scaffold(
+    bottomNavigationBar: withTaskbar
+        ? const SizedBox(height: 80, child: ColoredBox(color: Colors.purple))
+        : null,
     body: RepaintBoundary(
       key: ValueKey('downloads-tab-root'),
       child: DownloadsTab(),
@@ -652,6 +656,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('الحلقة 10'));
     await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('الحلقة 11'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('الحلقة 11'));
     await tester.pumpAndSettle();
     expect(find.text('3 محدد'), findsOneWidget);
@@ -697,6 +703,42 @@ void main() {
       <String>['ep9'],
     ]);
   });
+
+  for (final completed in [false, true]) {
+    testWidgets('selection covers taskbar (completed: $completed)', (
+      tester,
+    ) async {
+      await _prepareArtworkStorage(tester);
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        _downloadsApp([
+          _item(
+            taskId: 'selected',
+            timestamp: 1,
+            status: completed ? TaskStatus.complete : TaskStatus.running,
+          ),
+        ], withTaskbar: true),
+      );
+      await tester.pumpAndSettle();
+      if (completed) {
+        final l10n = AppLocalizations.of(
+          tester.element(find.byType(DownloadsTab)),
+        )!;
+        await tester.tap(find.text(l10n.downloadsTabCompleted));
+        await tester.pumpAndSettle();
+      }
+      await _awaitArtworkLookups(tester);
+      await tester.longPress(find.text('Black Torch'));
+      await tester.pumpAndSettle();
+      final bar = find.byKey(const ValueKey('downloads-selection-bar'));
+      expect(tester.getBottomRight(bar).dy, greaterThan(830));
+      expect(tester.getTopLeft(bar).dy, lessThan(764));
+      await tester.tap(find.byKey(const ValueKey('downloads-clear-selection')));
+      await tester.pumpAndSettle();
+      expect(bar, findsNothing);
+    });
+  }
 
   testWidgets('completed selection bar is bottom aligned and delete only', (
     tester,

@@ -35,3 +35,10 @@ These are automated Flutter widget previews using fixture download records and a
 - [x] Regression test checks multiple quality headings, the same server under two qualities, and no stream resolution before confirmation.
 
 This supersedes the server-only picker and automatic quality choice described above.
+
+## Selection panel over the bottom taskbar
+
+- [x] Anchor active/completed download selection panels to the root overlay so they cover the entire bottom taskbar.
+- [x] Keep device safe insets, leave scroll room for the final row, and remove the panel when selection is cleared.
+- [x] Hide the overlay when its navigation branch is inactive.
+- [x] Add active and completed regression checks with an actual bottom navigation bar.

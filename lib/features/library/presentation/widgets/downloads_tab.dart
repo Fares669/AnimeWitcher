@@ -113,6 +113,7 @@ class DownloadsTab extends ConsumerStatefulWidget {
 class _DownloadsTabState extends ConsumerState<DownloadsTab>
     with AutomaticKeepAliveClientMixin, TickerProviderStateMixin {
   late final TabController _tabs;
+  final _selectionOverlay = OverlayPortalController();
   final Set<String> _selectedIds = <String>{};
   bool _bulkInFlight = false;
   int _tabIndex = 0;
@@ -198,6 +199,7 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
   @override
   void initState() {
     super.initState();
+    _selectionOverlay.show();
     _tabs = TabController(length: 2, vsync: this);
     _tabs.addListener(_handleTabChanged);
   }
@@ -417,154 +419,162 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
         controllableActive.every((item) => item.status == TaskStatus.paused);
     // RTL only for the tab strip + pager swipe (like المواسم). Each
     // pane is LTR so cards stay poster-left — do not mirror the page.
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: widget.headerPadding,
-          child: Directionality(
-            textDirection: TextDirection.rtl,
-            child: Row(
-              children: [
-                Expanded(
-                  child: FilterStyleTabBar(
-                    controller: _tabs,
-                    isScrollable: false,
-                    tabs: [
-                      FilterStyleTab(label: l10n.downloads),
-                      FilterStyleTab(label: l10n.downloadsTabCompleted),
-                    ],
-                  ),
+    final activePage = TickerMode.valuesOf(context).enabled;
+    return OverlayPortal(
+      overlayLocation: OverlayChildLocation.rootOverlay,
+      controller: _selectionOverlay,
+      overlayChildBuilder: (context) => selected.isEmpty || !activePage
+          ? const SizedBox.shrink()
+          : Positioned(
+              left: 12,
+              right: 12,
+              bottom: 8,
+              // Use device safe insets, without the shell's reserved dock space.
+              child: MediaQuery.fromView(
+                view: View.of(context),
+                child: _buildSelectionBar(
+                  selected: selected,
+                  currentDownloads: currentDownloads,
+                  canPause: canPause,
+                  canResume: canResume,
+                  l10n: l10n,
                 ),
-                // The side menu's button, in the corner it comes from.
-                const AppSideMenuButton(
-                  padding: EdgeInsetsDirectional.only(start: 4, end: 12),
-                ),
-              ],
+              ),
             ),
-          ),
-        ),
-        const _DownloadSessionStrip(),
-        if (_tabIndex == 0 &&
-            currentDownloads.isNotEmpty &&
-            currentSelectedIds.isEmpty)
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            padding: widget.headerPadding,
             child: Directionality(
               textDirection: TextDirection.rtl,
               child: Row(
                 children: [
                   Expanded(
-                    child: FilledButton.icon(
-                      key: const ValueKey('downloads-delete-all'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: Colors.red.shade700,
-                        foregroundColor: Colors.white,
-                        disabledBackgroundColor: Colors.red.shade700,
-                        disabledForegroundColor: Colors.white70,
-                      ),
-                      onPressed: _bulkInFlight
-                          ? null
-                          : () => _bulkAction(currentDownloads, 'delete'),
-                      icon: const Icon(Icons.delete_outline_rounded),
-                      label: Text(
-                        appText(
-                          context,
-                          english: 'Delete all',
-                          arabic: 'حذف الكل',
+                    child: FilterStyleTabBar(
+                      controller: _tabs,
+                      isScrollable: false,
+                      tabs: [
+                        FilterStyleTab(label: l10n.downloads),
+                        FilterStyleTab(label: l10n.downloadsTabCompleted),
+                      ],
+                    ),
+                  ),
+                  // The side menu's button, in the corner it comes from.
+                  const AppSideMenuButton(
+                    padding: EdgeInsetsDirectional.only(start: 4, end: 12),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const _DownloadSessionStrip(),
+          if (_tabIndex == 0 &&
+              currentDownloads.isNotEmpty &&
+              currentSelectedIds.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: Directionality(
+                textDirection: TextDirection.rtl,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.icon(
+                        key: const ValueKey('downloads-delete-all'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Colors.red.shade700,
+                          foregroundColor: Colors.white,
+                          disabledBackgroundColor: Colors.red.shade700,
+                          disabledForegroundColor: Colors.white70,
+                        ),
+                        onPressed: _bulkInFlight
+                            ? null
+                            : () => _bulkAction(currentDownloads, 'delete'),
+                        icon: const Icon(Icons.delete_outline_rounded),
+                        label: Text(
+                          appText(
+                            context,
+                            english: 'Delete all',
+                            arabic: 'حذف الكل',
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: FilledButton.tonalIcon(
-                      key: const ValueKey('downloads-pause-resume-all'),
-                      onPressed: _bulkInFlight || controllableActive.isEmpty
-                          ? null
-                          : () => _bulkAction(
-                              controllableActive,
-                              allPaused ? 'resume' : 'pause',
-                            ),
-                      icon: Icon(
-                        allPaused
-                            ? Icons.play_arrow_rounded
-                            : Icons.pause_rounded,
-                      ),
-                      label: Text(
-                        allPaused
-                            ? appText(
-                                context,
-                                english: 'Resume all',
-                                arabic: 'إكمال الكل',
-                              )
-                            : appText(
-                                context,
-                                english: 'Pause all',
-                                arabic: 'إيقاف الكل',
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: FilledButton.tonalIcon(
+                        key: const ValueKey('downloads-pause-resume-all'),
+                        onPressed: _bulkInFlight || controllableActive.isEmpty
+                            ? null
+                            : () => _bulkAction(
+                                controllableActive,
+                                allPaused ? 'resume' : 'pause',
                               ),
+                        icon: Icon(
+                          allPaused
+                              ? Icons.play_arrow_rounded
+                              : Icons.pause_rounded,
+                        ),
+                        label: Text(
+                          allPaused
+                              ? appText(
+                                  context,
+                                  english: 'Resume all',
+                                  arabic: 'إكمال الكل',
+                                )
+                              : appText(
+                                  context,
+                                  english: 'Pause all',
+                                  arabic: 'إيقاف الكل',
+                                ),
+                        ),
                       ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          Expanded(
+            child: Directionality(
+              textDirection: TextDirection.rtl,
+              child: TabBarView(
+                controller: _tabs,
+                children: [
+                  Directionality(
+                    textDirection: TextDirection.ltr,
+                    child: downloadsAsync.when(
+                      skipLoadingOnRefresh: false,
+                      skipLoadingOnReload: false,
+                      data: (_) => _ActiveDownloadsList(
+                        items: active,
+                        activeProgress: activeProgress,
+                        emptyMessage: l10n.noDownloadsYet,
+                        selectedIds: currentSelectedIds,
+                        onToggleSelection: _toggleSelected,
+                      ),
+                      loading: () => const Center(child: AppLoadingIndicator()),
+                      error: (err, stack) =>
+                          Center(child: Text(l10n.errorPrefix(err.toString()))),
+                    ),
+                  ),
+                  Directionality(
+                    textDirection: TextDirection.ltr,
+                    child: _CompletedDownloadsList(
+                      items: completed,
+                      emptyMessage: l10n.noCompletedDownloadsYet,
+                      selectedIds: currentSelectedIds,
+                      onToggleSelection: _toggleSelected,
+                      onToggleGroupSelection: _toggleGroupSelection,
                     ),
                   ),
                 ],
               ),
             ),
           ),
-        Expanded(
-          child: Directionality(
-            textDirection: TextDirection.rtl,
-            child: TabBarView(
-              controller: _tabs,
-              children: [
-                Directionality(
-                  textDirection: TextDirection.ltr,
-                  child: downloadsAsync.when(
-                    skipLoadingOnRefresh: false,
-                    skipLoadingOnReload: false,
-                    data: (_) => _ActiveDownloadsList(
-                      items: active,
-                      activeProgress: activeProgress,
-                      emptyMessage: l10n.noDownloadsYet,
-                      selectedIds: currentSelectedIds,
-                      onToggleSelection: _toggleSelected,
-                    ),
-                    loading: () => const Center(child: AppLoadingIndicator()),
-                    error: (err, stack) =>
-                        Center(child: Text(l10n.errorPrefix(err.toString()))),
-                  ),
-                ),
-                Directionality(
-                  textDirection: TextDirection.ltr,
-                  child: _CompletedDownloadsList(
-                    items: completed,
-                    emptyMessage: l10n.noCompletedDownloadsYet,
-                    selectedIds: currentSelectedIds,
-                    onToggleSelection: _toggleSelected,
-                    onToggleGroupSelection: _toggleGroupSelection,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        AnimatedSwitcher(
-          duration: const Duration(milliseconds: 180),
-          child: currentSelectedIds.isEmpty
-              ? const SizedBox.shrink(
-                  key: ValueKey('downloads-selection-empty'),
-                )
-              : Padding(
-                  padding: const EdgeInsetsDirectional.fromSTEB(12, 0, 12, 8),
-                  child: _buildSelectionBar(
-                    selected: selected,
-                    currentDownloads: currentDownloads,
-                    canPause: canPause,
-                    canResume: canResume,
-                    l10n: l10n,
-                  ),
-                ),
-        ),
-      ],
+          // Reserve room so the last download can scroll clear of the controls.
+          if (selected.isNotEmpty) const SizedBox(height: 148),
+        ],
+      ),
     );
   }
 }
