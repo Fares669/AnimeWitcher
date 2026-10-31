@@ -1516,7 +1516,10 @@ final class DownloadManagerV2 {
     );
     _snapshots[request.logicalId] = queued;
     _recordDiagnostic(request.logicalId, queued);
-    if (isManga) _prefetchMangaPages(request);
+    if (isManga) {
+      _mangaPagePrefetches.remove(request.logicalId);
+      _prefetchMangaPages(request);
+    }
     _scheduleAdmissionPromotion();
     return queued;
   }
@@ -1528,7 +1531,10 @@ final class DownloadManagerV2 {
 
   void _prefetchMangaPages(DownloadStartRequestV2 request) {
     final resolver = _mangaChapterPageResolver;
-    if (resolver == null) return;
+    // Keep only near-term provider resolutions in flight. Deep queues may
+    // contain hundreds of chapters; they resolve fresh at promotion.
+    final limit = clampDownloadConcurrency(_maxConcurrentDownloads()).clamp(1, 4);
+    if (resolver == null || _mangaPagePrefetches.length >= limit) return;
     final pages = resolver.resolve(
       Map<String, Object?>.from(request.sourceDescriptor),
     );
@@ -2820,6 +2826,9 @@ final class DownloadManagerV2 {
   }
 
   void _rememberRecord(LogicalDownloadRecordV2 record) {
+    if (record.intent != DownloadUserIntent.active) {
+      _mangaPagePrefetches.remove(record.logicalId);
+    }
     _recordsByLogicalId[record.logicalId] = record;
     _currentTaskIds[record.logicalId] = record.taskId;
     _currentGenerations[record.logicalId] = record.generation;
