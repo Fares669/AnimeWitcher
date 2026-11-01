@@ -188,6 +188,7 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('تنزيل 1 حلقة'), findsOneWidget);
+
       expect(
         tester
             .getTopLeft(find.byKey(const ValueKey('batch-download-episodes')))
@@ -337,6 +338,27 @@ void main() {
       expect(tester.takeException(), isNull);
     }, variant: TargetPlatformVariant(<TargetPlatform>{platform}));
   }
+
+  testWidgets('episode selection circle is centered on the thumbnail', (tester) async {
+    final episode = Episode(name: 'Episode 1', url: 'episode://1', episode: 1);
+    final item = MultimediaItem(title: 'Anime', url: 'anime://selection', posterUrl: '', episodes: [episode]);
+    final container = ProviderContainer(overrides: [
+      storageServiceProvider.overrideWithValue(_Storage()),
+      downloadsProvider.overrideWith(_EmptyDownloads.new),
+      logicalDownloadStoreV2Provider.overrideWithValue(InMemoryLogicalDownloadStoreV2()),
+      detailsControllerProvider(item.url).overrideWith(() => _ReadyDetailsController(item)),
+    ]);
+    addTearDown(container.dispose);
+    await tester.pumpWidget(UncontrolledProviderScope(container: container,
+      child: MaterialApp(localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(body: EpisodeCard(episode: episode, parentItem: item)))));
+    await tester.pumpAndSettle();
+    container.read(detailsControllerProvider(item.url).notifier).toggleEpisodeSelection(episode);
+    await tester.pumpAndSettle();
+    expect(tester.getCenter(find.byIcon(Icons.check_circle_rounded)).dy,
+      closeTo(tester.getCenter(find.byType(AspectRatio).first).dy, 1));
+  });
 
   testWidgets('episode comments use the anime outline and retain their target', (
     tester,

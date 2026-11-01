@@ -37,6 +37,26 @@ void main() {
     }
   }
 
+  test('deleting selected queued chapters preserves the unselected active chapter', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-delete-selected-');
+    addTearDown(() => temp.delete(recursive: true));
+    final gateway = _Gateway();
+    final store = InMemoryLogicalDownloadStoreV2();
+    final manager = DownloadManagerV2(store: store, gateway: gateway,
+      sourceResolver: _VideoResolver(), mangaChapterPageResolver: _MangaResolver(),
+      maxConcurrentDownloads: () => 1);
+    addTearDown(manager.dispose);
+    final requests = [for (final id in ['1', '2', '3']) chapter(id, '${temp.path}/$id')];
+    for (final request in requests) {
+      await manager.start(request, enqueueOnly: true);
+    }
+    await untilSpecs(gateway, 1);
+    await Future.wait(requests.skip(1).map((r) => manager.delete(r.logicalId)))
+        .timeout(const Duration(seconds: 2));
+    expect((await store.all()).map((r) => r.unitKey), ['1']);
+    expect(gateway.mangaSpecs.map((s) => s.chapterId), ['1']);
+  });
+
   test('batch delete interrupts episode URL resolution without starting queued videos', () async {
     final temp = await Directory.systemTemp.createTemp('aw-delete-videos-');
     addTearDown(() => temp.delete(recursive: true));

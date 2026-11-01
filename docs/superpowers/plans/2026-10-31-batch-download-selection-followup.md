@@ -80,3 +80,10 @@ This supersedes simultaneous manga batch submission from the previous correction
 - [x] Interrupt waits for chapter pages and episode source URLs when a stop arrives; late results cannot create native transfers.
 - [x] Preserve native writer settlement and metadata incarnation checks during cleanup.
 - [x] Test deletion of active/queued chapters and unresolved episodes without starting waiting items or waiting for provider responses.
+
+## Selected deletion and centered anime marker
+
+- [x] Confirm selected downloads use the same bulk removal path as Delete All.
+- [x] Verify deleting selected queued chapters does not start them or remove the unselected active chapter.
+- [x] Center the anime episode selection circle vertically against its thumbnail, keeping the title at the top.
+- [x] Add a position regression for the anime marker.
