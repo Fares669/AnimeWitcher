@@ -37,6 +37,65 @@ void main() {
     }
   }
 
+  test('batch delete interrupts episode URL resolution without starting queued videos', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-delete-videos-');
+    addTearDown(() => temp.delete(recursive: true));
+    final gate = Completer<void>();
+    final started = Completer<void>();
+    final gateway = _Gateway();
+    final store = InMemoryLogicalDownloadStoreV2();
+    final manager = DownloadManagerV2(store: store, gateway: gateway,
+      sourceResolver: _VideoResolver(gate: gate.future, started: started),
+      maxConcurrentDownloads: () => 1);
+    addTearDown(manager.dispose);
+    addTearDown(() { if (!gate.isCompleted) gate.complete(); });
+    final requests = [for (final id in ['1', '2', '3'])
+      DownloadStartRequestV2(logicalId: DownloadLogicalId('video-$id'), mediaId: 'anime',
+        unitKey: id, variantKey: '1080p', destinationPath: '${temp.path}/$id.mp4',
+        sourceDescriptor: const {}, allowPause: true, retries: 0, parallelChunks: 1)];
+    for (final request in requests) {
+      await manager.start(request, enqueueOnly: true);
+    }
+    await started.future;
+    await Future.wait(requests.map((r) => manager.delete(r.logicalId)))
+        .timeout(const Duration(seconds: 2));
+    expect(await store.all(), isEmpty);
+    gate.complete();
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(gateway.videoSpecs, isEmpty);
+  });
+
+  for (final blocked in [false, true]) {
+    test('batch delete never starts waiting chapters (resolver blocked: $blocked)', () async {
+      final temp = await Directory.systemTemp.createTemp('aw-delete-batch-');
+      addTearDown(() => temp.delete(recursive: true));
+      final gate = Completer<void>();
+      final resolver = _MangaResolver(gate: blocked ? gate.future : null);
+      final gateway = _Gateway();
+      final store = InMemoryLogicalDownloadStoreV2();
+      final manager = DownloadManagerV2(
+        store: store, gateway: gateway, sourceResolver: _VideoResolver(),
+        mangaChapterPageResolver: resolver, maxConcurrentDownloads: () => 1,
+      );
+      addTearDown(manager.dispose);
+      addTearDown(() { if (!gate.isCompleted) gate.complete(); });
+      final requests = [for (final id in ['1', '2', '3', '4'])
+        chapter(id, '${temp.path}/chapter-$id')];
+      for (final request in requests) {
+        await manager.start(request, enqueueOnly: true);
+      }
+      if (!blocked) await untilSpecs(gateway, 1);
+      final starts = gateway.mangaSpecs.length;
+      await Future.wait(requests.map((request) => manager.delete(request.logicalId)))
+          .timeout(const Duration(seconds: 2));
+      expect(await store.all(), isEmpty);
+      expect(gateway.mangaSpecs, hasLength(starts));
+      gate.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(gateway.mangaSpecs, hasLength(starts), reason: 'late pages cannot restart deleted chapters');
+    });
+  }
+
   test('ordered enqueue returns while page resolution is blocked', () async {
     final temp = await Directory.systemTemp.createTemp('aw-ordered-enqueue-');
     addTearDown(() => temp.delete(recursive: true));
@@ -224,10 +283,17 @@ final class _MangaResolver implements MangaChapterPageResolverV2 {
 }
 
 final class _VideoResolver implements DownloadSourceResolverV2 {
+  _VideoResolver({this.gate, this.started});
+  final Future<void>? gate;
+  final Completer<void>? started;
   @override
   Future<ResolvedDownloadSourceV2> resolve(
     Map<String, Object?> descriptor,
-  ) async => const ResolvedDownloadSourceV2(url: 'https://cdn.test/video.mp4');
+  ) async {
+    if (started != null && !started!.isCompleted) started!.complete();
+    if (gate != null) await gate;
+    return const ResolvedDownloadSourceV2(url: 'https://cdn.test/video.mp4');
+  }
 }
 
 final class _Gateway

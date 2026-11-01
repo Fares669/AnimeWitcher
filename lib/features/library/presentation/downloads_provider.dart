@@ -527,13 +527,15 @@ class DownloadsNotifier extends _$DownloadsNotifier {
           b.logicalId?.trim().isNotEmpty == true ? 0 : 1,
         ),
       );
-    for (final item in orderedItems) {
+    // Snapshot metadata once, then register every logical stop before awaiting
+    // any deletion. A freed slot must never promote another batch member.
+    final metadata = await storage.getAllDownloadMetadata();
+    await Future.wait(orderedItems.map((item) async {
       final logical = item.logicalId?.trim();
       if (logical != null && logical.isNotEmpty) {
         // Capture the deleted incarnation before releasing the manager queue.
         // A re-download can already have replaced this logical-key metadata
         // when delete returns, including a newly reused generation-one task.
-        final metadata = await storage.getAllDownloadMetadata();
         await manager.delete(DownloadLogicalId(logical));
         for (final entry in metadata.entries) {
           if ((entry.value['logicalId'] as String?)?.trim() == logical) {
@@ -549,16 +551,16 @@ class DownloadsNotifier extends _$DownloadsNotifier {
           try {
             final file = File(path);
             if (!await manager.deleteLegacyDownloadedVideo(file)) {
-              continue;
+              return;
             }
           } catch (_) {
-            continue;
+            return;
           }
         }
         await storage.removeDownloadMetadata(item.id);
       }
       droppedIds.add(item.id);
-    }
+    }));
 
     if (state.value != null) {
       state = AsyncData(

@@ -72,3 +72,11 @@ This supersedes the earlier book-replacement selection icon.
 - [x] Verify chapters 1–4 retain persisted FIFO order and start in that order while page resolution is deliberately blocked, without blocking batch enqueue.
 
 This supersedes simultaneous manga batch submission from the previous correction.
+
+## Immediate bulk deletion without queue promotion
+
+- [x] Capture metadata once and register every selected logical delete together, instead of waiting for each delete before requesting the next.
+- [x] Exclude pending stop controls from queued admission, with rechecks inside admission commands.
+- [x] Interrupt waits for chapter pages and episode source URLs when a stop arrives; late results cannot create native transfers.
+- [x] Preserve native writer settlement and metadata incarnation checks during cleanup.
+- [x] Test deletion of active/queued chapters and unresolved episodes without starting waiting items or waiting for provider responses.
