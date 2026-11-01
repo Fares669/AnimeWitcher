@@ -301,6 +301,18 @@ CollapsedDownloads collapseDuplicateDownloads(List<DownloadItem> items) {
 class DownloadsNotifier extends _$DownloadsNotifier {
   static const Duration _durableRefreshInterval = Duration(seconds: 30);
 
+  final _pendingRemovalBatches = <Object, List<DownloadItem>>{};
+
+  bool _isRemovalPending(DownloadItem item) =>
+      _pendingRemovalBatches.values.any(
+        (batch) => batch.any(
+          (pending) =>
+              pending.id == item.id &&
+              pending.logicalId == item.logicalId &&
+              pending.timestamp == item.timestamp,
+        ),
+      );
+
   final Set<String> _artworkScheduledIds = <String>{};
   List<LogicalDownloadRecordV2> _records = const <LogicalDownloadRecordV2>[];
   Map<String, Map<String, dynamic>> _metadataByTaskId =
@@ -461,6 +473,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
         completedPages: snapshot?.completedPages,
         totalPages: snapshot?.totalPages,
       );
+      if (_isRemovalPending(projected)) continue;
       items.add(projected);
       if (projected.status == TaskStatus.complete &&
           projected.mediaKind == DownloadMediaKind.videoEpisode &&
@@ -518,59 +531,70 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       }
     }
 
-    final manager = ref.read(downloadManagerV2Provider);
-    final storage = ref.read(storageServiceProvider);
-    final droppedIds = <String>{};
-    final orderedItems = toRemove.values.toList()
-      ..sort(
-        (a, b) => (a.logicalId?.trim().isNotEmpty == true ? 0 : 1).compareTo(
-          b.logicalId?.trim().isNotEmpty == true ? 0 : 1,
-        ),
-      );
-    // Snapshot metadata once, then register every logical stop before awaiting
-    // any deletion. A freed slot must never promote another batch member.
-    final metadata = await storage.getAllDownloadMetadata();
-    await Future.wait(orderedItems.map((item) async {
-      final logical = item.logicalId?.trim();
-      if (logical != null && logical.isNotEmpty) {
-        // Capture the deleted incarnation before releasing the manager queue.
-        // A re-download can already have replaced this logical-key metadata
-        // when delete returns, including a newly reused generation-one task.
-        await manager.delete(DownloadLogicalId(logical));
-        for (final entry in metadata.entries) {
-          if ((entry.value['logicalId'] as String?)?.trim() == logical) {
-            await storage.removeDownloadMetadataIfUnchanged(
-              entry.key,
-              entry.value,
-            );
-          }
-        }
-      } else {
-        final path = item.destinationPath.trim();
-        if (path.isNotEmpty) {
-          try {
-            final file = File(path);
-            if (!await manager.deleteLegacyDownloadedVideo(file)) {
-              return;
+    final operation = Object();
+    _pendingRemovalBatches[operation] = toRemove.values.toList();
+    state = AsyncData(
+      current.where((item) => !_isRemovalPending(item)).toList(),
+    );
+    try {
+      final manager = ref.read(downloadManagerV2Provider);
+      final storage = ref.read(storageServiceProvider);
+      final droppedIds = <String>{};
+      final orderedItems = toRemove.values.toList()
+        ..sort(
+          (a, b) => (a.logicalId?.trim().isNotEmpty == true ? 0 : 1).compareTo(
+            b.logicalId?.trim().isNotEmpty == true ? 0 : 1,
+          ),
+        );
+      // Snapshot metadata once, then register every logical stop before awaiting
+      // any deletion. A freed slot must never promote another batch member.
+      final metadata = await storage.getAllDownloadMetadata();
+      await Future.wait(
+        orderedItems.map((item) async {
+          final logical = item.logicalId?.trim();
+          if (logical != null && logical.isNotEmpty) {
+            // Capture the deleted incarnation before releasing the manager queue.
+            // A re-download can already have replaced this logical-key metadata
+            // when delete returns, including a newly reused generation-one task.
+            await manager.delete(DownloadLogicalId(logical));
+            for (final entry in metadata.entries) {
+              if ((entry.value['logicalId'] as String?)?.trim() == logical) {
+                await storage.removeDownloadMetadataIfUnchanged(
+                  entry.key,
+                  entry.value,
+                );
+              }
             }
-          } catch (_) {
-            return;
+          } else {
+            final path = item.destinationPath.trim();
+            if (path.isNotEmpty) {
+              try {
+                final file = File(path);
+                if (!await manager.deleteLegacyDownloadedVideo(file)) {
+                  return;
+                }
+              } catch (_) {
+                return;
+              }
+            }
+            await storage.removeDownloadMetadata(item.id);
           }
-        }
-        await storage.removeDownloadMetadata(item.id);
-      }
-      droppedIds.add(item.id);
-    }));
-
-    if (state.value != null) {
-      state = AsyncData(
-        state.value!.where((item) => !droppedIds.contains(item.id)).toList(),
+          droppedIds.add(item.id);
+        }),
       );
+
+      if (state.value != null) {
+        state = AsyncData(
+          state.value!.where((item) => !droppedIds.contains(item.id)).toList(),
+        );
+      }
+      // The persisted records, not taskId tombstones, own visibility. New
+      // downloads may legitimately reuse the deleted task's generation-one ID.
+      return droppedIds.length == toRemove.length;
+    } finally {
+      _pendingRemovalBatches.remove(operation);
+      if (ref.mounted) await _reloadDurableState();
     }
-    // The persisted records, not taskId tombstones, own visibility. New
-    // downloads may legitimately reuse the deleted task's generation-one ID.
-    await _reloadDurableState();
-    return droppedIds.length == toRemove.length;
   }
 
   Future<void> pauseDownload(String taskId) async {

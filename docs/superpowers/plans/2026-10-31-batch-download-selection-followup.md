@@ -87,3 +87,12 @@ This supersedes simultaneous manga batch submission from the previous correction
 - [x] Verify deleting selected queued chapters does not start them or remove the unselected active chapter.
 - [x] Center the anime episode selection circle vertically against its thumbnail, keeping the title at the top.
 - [x] Add a position regression for the anime marker.
+
+## Immediate visible deletion for all entry points
+
+- [x] Hide the exact selected download incarnations synchronously when removal is requested, shared by single, selected, and all deletion.
+- [x] Keep temporary suppression across transport/progress refreshes until cleanup finishes; clear it and reconcile durable state even when cleanup fails.
+- [x] Preserve replacement downloads through task ID, logical ID, and metadata timestamp matching.
+- [x] Test single, selected and all removal while native cancellation is deliberately blocked, plus restoration after rejected cancellation and replacement metadata protection.
+
+Native writers still settle before file cleanup; immediate disappearance does not claim disk cleanup has already completed.
