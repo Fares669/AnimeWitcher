@@ -121,6 +121,8 @@ DownloadItem _item({
   String metaData = 'https://animewitcher.test/black-torch/9',
   Episode? episode,
   String? logicalId,
+  int activeConnections = 0,
+  int parallelChunks = 16,
 }) {
   return DownloadItem(
     task: _task(taskId: taskId, filename: filename, metaData: metaData),
@@ -130,6 +132,8 @@ DownloadItem _item({
     episode: episode ?? _episode9(),
     timestamp: timestamp,
     logicalId: logicalId,
+    activeConnections: activeConnections,
+    parallelChunks: parallelChunks,
   );
 }
 
@@ -320,6 +324,21 @@ void main() {
     }
   });
   tearDownAll(() => _artworkFixtureRoot.delete(recursive: true));
+
+  testWidgets('connection badge follows active count instead of selected ceiling', (tester) async {
+    DownloadItem row(int count) => _item(taskId: 'live-count', timestamp: 1,
+      status: TaskStatus.running, activeConnections: count, parallelChunks: 16);
+    final notifier = _StubDownloadsNotifier([row(8)]);
+    await tester.pumpWidget(_downloadsApp([], notifier: notifier));
+    await tester.pumpAndSettle();
+    expect(find.text('8×  40%'), findsOneWidget);
+    expect(find.text('16×  40%'), findsNothing);
+    for (final count in [4, 1, 0]) {
+      notifier.publish([row(count)]);
+      await tester.pump(const Duration(seconds: 2));
+      expect(find.text('$count×  40%'), findsOneWidget);
+    }
+  });
 
   testWidgets('global pause controls all active rows in queue order', (
     tester,

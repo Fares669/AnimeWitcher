@@ -21,7 +21,6 @@ import '../../../../core/services/download_v2/download_continued_processing_v2.d
 import '../../../../core/services/download_v2/download_v2_models.dart';
 import '../../../../core/router/app_router.dart';
 import '../../../../core/services/download_concurrency.dart';
-import '../../../../core/services/download_parallel.dart';
 import 'segmented_download_progress.dart';
 import 'completed_download_episode_card.dart';
 import '../../../../core/utils/layout_constants.dart';
@@ -1222,7 +1221,6 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
     final chunkProgress = ref.watch(
       downloadChunkProgressProvider,
     )[item.task.taskId];
-    final parallelParts = downloadTaskPartCount(item.task);
     final isDone = status == TaskStatus.complete;
     final isQueued = status == TaskStatus.enqueued;
     final isWorking =
@@ -1348,9 +1346,7 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
                     ),
                     const SizedBox(width: LayoutConstants.spacingSm),
                     Text(
-                      parallelParts > 1
-                          ? '$parallelParts×  ${(progress.clamp(0.0, 1.0) * 100).floor()}%'
-                          : '${(progress.clamp(0.0, 1.0) * 100).floor()}%',
+                      '${item.activeConnections}×  ${(progress.clamp(0.0, 1.0) * 100).floor()}%',
                       textDirection: TextDirection.ltr,
                       textAlign: TextAlign.end,
                       style: theme.textTheme.bodySmall?.copyWith(

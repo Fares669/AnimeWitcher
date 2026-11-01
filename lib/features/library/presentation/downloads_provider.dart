@@ -31,6 +31,7 @@ class DownloadItem {
   final String trackingUrl;
   final String destinationPath;
   final int parallelChunks;
+  final int activeConnections;
   final int? transferredBytes;
   final int? totalBytes;
   final int? completedPages;
@@ -50,6 +51,7 @@ class DownloadItem {
     String? trackingUrl,
     String? destinationPath,
     int? parallelChunks,
+    this.activeConnections = 0,
     this.transferredBytes,
     this.totalBytes,
     this.completedPages,
@@ -320,6 +322,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
   StreamSubscription<List<LogicalDownloadRecordV2>>? _recordsSubscription;
   StreamSubscription<void>? _presentationSubscription;
   Timer? _durableRefreshTimer;
+  Timer? _connectionRefreshTimer;
   Future<void>? _durableReloadInFlight;
 
   @override
@@ -349,6 +352,18 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     _presentationSubscription = manager.presentationChanges.listen((_) {
       if (ref.mounted) _refreshPresentationState();
     });
+    // Refresh live connection counts from memory, without polling disk or
+    // changing the frequency of progress and speed measurements.
+    _connectionRefreshTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (ref.mounted &&
+          _records.any(
+            (record) =>
+                record.completedAtMillis == null &&
+                record.intent != DownloadUserIntent.canceled,
+          )) {
+        _refreshPresentationState();
+      }
+    });
     // Keep a much slower durable reconciliation as a lifecycle/race safety net.
     _durableRefreshTimer = Timer.periodic(_durableRefreshInterval, (_) {
       final needsDurableReconciliation = _records.any(
@@ -365,6 +380,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       unawaited(_recordsSubscription?.cancel());
       unawaited(_presentationSubscription?.cancel());
       _durableRefreshTimer?.cancel();
+      _connectionRefreshTimer?.cancel();
     });
 
     return _projectList();
@@ -468,6 +484,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
         trackingUrl: trackingUrl,
         destinationPath: record.destinationPath,
         parallelChunks: record.parallelChunks,
+        activeConnections: snapshot?.activeConnections ?? 0,
         transferredBytes: snapshot?.transferredBytes,
         totalBytes: snapshot?.totalBytes ?? record.expectedBytes,
         completedPages: snapshot?.completedPages,

@@ -106,3 +106,10 @@ Native writers still settle before file cleanup; immediate disappearance does no
 - [x] Add a regression for a 16-connection request with four accepted ranges, several simultaneous refusals, same-range retry after a slot opens, and persistent refusal. Existing 429/overload learning remains unchanged.
 - [x] Update the cutover source guard to accept the new enqueueOnly argument while continuing to check metadata-save ordering.
 - Device confirmation remains necessary: a 403 alone does not reveal the server's exact connection limit. The receiving width is a conservative learned ceiling, not a claim that every server advertises its maximum.
+
+
+## Show actual active connections in download rows
+
+- [x] Replace the configured-width badge with the transport snapshot's active connection count, including zero and one.
+- [x] Refresh the in-memory row projection every two seconds while unfinished downloads exist, and release the timer on provider disposal. Progress events continue to update the same projection.
+- [x] Keep the selected connection ceiling available for scheduling; never substitute it for an unknown active count.
