@@ -1873,7 +1873,6 @@ int effectivePackageParallelChunksV2(
   String? sourceName,
 }) {
   assert(requestedChunks > 0);
-  if (sourceName?.trim().toUpperCase() == 'PD') return 1;
   return requestedChunks;
 }
 

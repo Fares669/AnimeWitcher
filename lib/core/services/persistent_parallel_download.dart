@@ -3817,9 +3817,8 @@ class PersistentParallelDownload {
               return;
             }
 
-            _stabilizeSessionForRecovery(session);
             final recovering = await _schedulePartRecovery(
-              session, part, failure: update,
+              session, part, failure: update, stabilizeConnections: true,
             );
             await _persist(session);
             if (recovering) await _status(session, TaskStatus.running);
@@ -4014,6 +4013,7 @@ class PersistentParallelDownload {
     _DownloadPart part, {
     TaskStatusUpdate? failure,
     bool metadataResolved = false,
+    bool stabilizeConnections = false,
   }) async {
     if (part.recoveryTimer != null || part.sourceVerification != null)
       return true;
@@ -4025,7 +4025,52 @@ class PersistentParallelDownload {
     // A concurrent Pause may set pauseRequested while lookup is in flight.
     // Still save the observed server deadline before the queued pause fences it.
     if (update == null || _disposed || !session.active || session.deleted) return false;
-    final decision = _partFailureDecision(update, part.recoveryAttempts);
+    final exception = update.exception;
+    final statusCode =
+        update.responseStatusCode ??
+        (exception is TaskHttpException ? exception.httpResponseCode : null);
+    // Some CDNs report their connection limit as 403. Only try a narrower
+    // width when other ranges are demonstrably receiving this same source.
+    // A repeat refusal without new bytes still takes the signed-URL refresh
+    // path; this must never become an unbounded authentication retry loop.
+    final receiving = session.parts
+        .where(
+          (sibling) =>
+              !identical(sibling, part) &&
+              sibling.launched &&
+              !sibling.complete &&
+              sibling.credibleProgress > 0,
+        )
+        .length;
+    final connectionRefusal =
+        statusCode == 403 &&
+        part.recoveryAttempts == 0 &&
+        receiving > 0 &&
+        _activeConnectionsForSession(session) > receiving;
+    if (connectionRefusal) {
+      final learned = _connectionGovernor.learnTransferCeiling(
+        session.task.url,
+        receiving,
+      );
+      _capSessionAt(session, learned);
+      _recordDiagnostic('parallel.connectionRefusalBackoff', {
+        'taskId': session.task.taskId,
+        'childTaskId': part.task.taskId,
+        'connectionCeiling': session.connectionCeiling,
+        'statusCode': statusCode,
+      });
+    } else if (stabilizeConnections) {
+      _stabilizeSessionForRecovery(session);
+    }
+    final decision = connectionRefusal
+        ? DownloadRetryDecision(
+            DownloadFailureAction.retry,
+            delay: downloadRetryDelay(
+              retryIndex: part.recoveryAttempts,
+              baseDelay: recoveryDelay,
+            ),
+          )
+        : _partFailureDecision(update, part.recoveryAttempts);
     if (!decision.shouldRetry) {
       await _parkPartFailure(session, part, update);
       return false;

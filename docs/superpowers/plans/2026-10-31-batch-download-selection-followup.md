@@ -96,3 +96,13 @@ This supersedes simultaneous manga batch submission from the previous correction
 - [x] Test single, selected and all removal while native cancellation is deliberately blocked, plus restoration after rejected cancellation and replacement metadata protection.
 
 Native writers still settle before file cleanup; immediate disappearance does not claim disk cleanup has already completed.
+
+
+## Adaptive PD connections instead of the fixed single-connection cap
+
+- [x] Remove the PD-only cap of one; preserve the user's requested ceiling and use the existing gradual range scheduler.
+- [x] When a range receives HTTP 403 while sibling ranges demonstrably receive bytes from the same source, learn their receiving width for this transfer and retry the rejected range through the existing backoff/ownership scheduler. Keep received bytes and healthy workers.
+- [x] Treat a repeated refusal without new bytes, or an initial refusal with no receiving siblings, as a signed-source/authentication failure through the existing refresh path.
+- [x] Add a regression for a 16-connection request with four accepted ranges, several simultaneous refusals, same-range retry after a slot opens, and persistent refusal. Existing 429/overload learning remains unchanged.
+- [x] Update the cutover source guard to accept the new enqueueOnly argument while continuing to check metadata-save ordering.
+- Device confirmation remains necessary: a 403 alone does not reveal the server's exact connection limit. The receiving width is a conservative learned ceiling, not a claim that every server advertises its maximum.

@@ -169,7 +169,7 @@ void main() {
 
     final task = await packageTaskForV2(spec, isIOS: true);
 
-    expect(effectivePackageParallelChunksV2(16, sourceName: 'PD'), 1);
+    expect(effectivePackageParallelChunksV2(16, sourceName: 'PD'), 16);
     expect(effectivePackageParallelChunksV2(16, sourceName: 'MF'), 16);
     expect(effectivePackageParallelChunksV2(16, isIOS: true), 16);
     expect(effectivePackageParallelChunksV2(16, isIOS: false), 16);

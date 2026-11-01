@@ -232,7 +232,7 @@ void main() {
         final mangaManager = manga.indexOf(
           'final manager = ref.read(downloadManagerV2Provider)',
         );
-        final mangaStart = manga.indexOf('await manager.start(request)');
+        final mangaStart = manga.indexOf('await manager.start(request');
         expect(mangaManager, greaterThanOrEqualTo(0));
         expect(mangaStart, greaterThan(mangaManager));
         final mangaRefresh = manga.indexOf('if (hasExistingMetadata)', mangaStart);
