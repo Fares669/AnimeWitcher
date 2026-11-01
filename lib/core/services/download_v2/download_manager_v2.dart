@@ -124,6 +124,7 @@ final class DownloadManagerV2 {
       <String, StreamSubscription<DownloadTransportSnapshot>>{};
   final Set<DownloadLogicalId> _parallelPausePending = <DownloadLogicalId>{};
   final Map<String, Future<bool>> _unsettledResumeAcks = <String, Future<bool>>{};
+  final _sourceResolutionStops = <DownloadLogicalId, Completer<void>>{};
   final Map<DownloadLogicalId, int> _pendingStopControls = <DownloadLogicalId, int>{};
   final Map<DownloadLogicalId, int> _lastPositiveSpeedAtMillis =
       <DownloadLogicalId, int>{};
@@ -666,8 +667,9 @@ final class DownloadManagerV2 {
   }
 
   /// Starts a logical download, coalescing concurrent duplicate starts into
-  /// the same exact package writer.
-  Future<DownloadTransportSnapshot> start(DownloadStartRequestV2 request) {
+  /// the same exact package writer. With [enqueueOnly], persist its FIFO slot
+  /// and return before resolving sources or starting transport.
+  Future<DownloadTransportSnapshot> start(DownloadStartRequestV2 request, {bool enqueueOnly = false}) {
     return _runControlCommand(request.logicalId, 'start', () async {
       await initialize();
       final currentRecord = await _store.get(request.logicalId);
@@ -733,7 +735,7 @@ final class DownloadManagerV2 {
       _mangaSourceRefreshVerifiedPages.remove(request.logicalId);
 
       _firstRenewedPositiveSample.remove(request.logicalId);
-      return _startFreshGeneration(request, currentRecord);
+      return _startFreshGeneration(request, currentRecord, enqueueOnly: enqueueOnly);
     });
   }
 
@@ -1386,6 +1388,7 @@ final class DownloadManagerV2 {
   Future<DownloadTransportSnapshot> _startFreshGeneration(
     DownloadStartRequestV2 request,
     LogicalDownloadRecordV2? previous, {
+    bool enqueueOnly = false,
     bool cancelPreviousEvenIfFinal = false,
     DownloadTransportHandle? previousHandle,
     bool lookUpPreviousHandle = true,
@@ -1404,7 +1407,7 @@ final class DownloadManagerV2 {
         );
       }
 
-      if (!await _reserveAdmission(request.logicalId)) {
+      if (enqueueOnly || !await _reserveAdmission(request.logicalId)) {
         return _queueFreshGenerationUnsafe(
           request,
           previous,
@@ -1478,7 +1481,7 @@ final class DownloadManagerV2 {
     final isManga = request.mediaKind == DownloadMediaKind.mangaChapter;
     final parallelChunks = isManga
         ? mangaChapterPageConnectionsFromPreference(request.parallelChunks)
-        : effectivePackageParallelChunksV2(request.parallelChunks);
+        : effectivePackageParallelChunksV2(request.parallelChunks, sourceName: request.sourceDescriptor['source']?.toString());
     final queuedRecord = LogicalDownloadRecordV2(
       schemaVersion: kLogicalDownloadSchemaVersionV2,
       logicalId: request.logicalId,
@@ -1693,7 +1696,8 @@ final class DownloadManagerV2 {
         .where(
           (record) =>
               record.intent == DownloadUserIntent.active &&
-              record.awaitingAdmission,
+              record.awaitingAdmission &&
+              !_pendingStopControls.containsKey(record.logicalId),
         )
         .toList()
       ..sort((a, b) {
@@ -1719,7 +1723,8 @@ final class DownloadManagerV2 {
           final current = await _store.get(candidate.logicalId);
           if (current == null ||
               current.intent != DownloadUserIntent.active ||
-              !current.awaitingAdmission) {
+              !current.awaitingAdmission ||
+              _pendingStopControls.containsKey(candidate.logicalId)) {
             return _AdmissionAttempt.skip;
           }
           final destinationKey = await _canonicalDestinationPath(
@@ -1729,7 +1734,8 @@ final class DownloadManagerV2 {
             final latest = await _store.get(candidate.logicalId);
             if (latest == null ||
                 latest.intent != DownloadUserIntent.active ||
-                !latest.awaitingAdmission) {
+                !latest.awaitingAdmission ||
+                _pendingStopControls.containsKey(candidate.logicalId)) {
               return _AdmissionAttempt.skip;
             }
 
@@ -1897,12 +1903,12 @@ final class DownloadManagerV2 {
     final isManga = request.mediaKind == DownloadMediaKind.mangaChapter;
     final source = isManga
         ? null
-        : await _sourceResolver.resolve(request.sourceDescriptor);
+        : await _resolveUntilStop<ResolvedDownloadSourceV2>(request.logicalId, () => _sourceResolver.resolve(request.sourceDescriptor));
     final admitted = record.copyWith(
       awaitingAdmission: false,
       parallelChunks: isManga
           ? mangaChapterPageConnectionsFromPreference(request.parallelChunks)
-          : effectivePackageParallelChunksV2(record.parallelChunks),
+          : effectivePackageParallelChunksV2(record.parallelChunks, sourceName: record.sourceDescriptor['source']?.toString()),
       expectedBytes: source?.expectedBytes ?? record.expectedBytes,
       clearFailure: true,
       updatedAtMillis: _nowMillis(),
@@ -2004,6 +2010,28 @@ final class DownloadManagerV2 {
     }
   }
 
+  Future<T> _resolveUntilStop<T>(DownloadLogicalId logicalId, Future<T> Function() resolve) async {
+    if (_pendingStopControls.containsKey(logicalId)) {
+      throw StateError('Download startup interrupted by stop request');
+    }
+    final stop = Completer<void>();
+    _sourceResolutionStops[logicalId] = stop;
+    try {
+      final result = await Future.any([
+        resolve(),
+        stop.future.then<T>((_) => throw StateError('Download startup interrupted by stop request')),
+      ]);
+      if (_pendingStopControls.containsKey(logicalId)) {
+        throw StateError('Download startup interrupted by stop request');
+      }
+      return result;
+    } finally {
+      if (identical(_sourceResolutionStops[logicalId], stop)) {
+        _sourceResolutionStops.remove(logicalId);
+      }
+    }
+  }
+
   Future<DownloadTransportHandle> _startTransportForRequest({
     required DownloadStartRequestV2 request,
     required String taskId,
@@ -2019,7 +2047,8 @@ final class DownloadManagerV2 {
           throw StateError('Manga chapter transport is unavailable.');
         }
         final mangaGateway = gateway as MangaChapterGatewayV2;
-        final pages = await _resolveMangaPages(request);
+        final pages = await _resolveUntilStop(request.logicalId,
+          () => _resolveMangaPages(request));
         return await mangaGateway.startMangaChapter(
           MangaChapterTransportSpecV2(
             taskId: taskId,
@@ -2036,7 +2065,7 @@ final class DownloadManagerV2 {
       }
 
       final source =
-          videoSource ?? await _sourceResolver.resolve(request.sourceDescriptor);
+          videoSource ?? await _resolveUntilStop<ResolvedDownloadSourceV2>(request.logicalId, () => _sourceResolver.resolve(request.sourceDescriptor));
       return await _gateway.start(
         DownloadTaskSpecV2(
           taskId: taskId,
@@ -2116,7 +2145,7 @@ final class DownloadManagerV2 {
     try {
       source = isManga
           ? null
-          : await _sourceResolver.resolve(request.sourceDescriptor);
+          : await _resolveUntilStop<ResolvedDownloadSourceV2>(request.logicalId, () => _sourceResolver.resolve(request.sourceDescriptor));
     } catch (error) {
       if (!_recordChanges.isClosed && previous != null &&
           previous.intent != DownloadUserIntent.canceled) {
@@ -2151,7 +2180,7 @@ final class DownloadManagerV2 {
     final expectedBytes = source?.expectedBytes ?? request.expectedBytes;
     final parallelChunks = isManga
         ? mangaChapterPageConnectionsFromPreference(request.parallelChunks)
-        : effectivePackageParallelChunksV2(request.parallelChunks);
+        : effectivePackageParallelChunksV2(request.parallelChunks, sourceName: request.sourceDescriptor['source']?.toString());
 
     final nextRecord = LogicalDownloadRecordV2(
       schemaVersion: kLogicalDownloadSchemaVersionV2,
@@ -2236,6 +2265,8 @@ final class DownloadManagerV2 {
     final stops = action == 'pause' || action == 'cancel' || action == 'delete';
     if (stops) {
       _pendingStopControls.update(logicalId, (count) => count + 1, ifAbsent: () => 1);
+      final resolving = _sourceResolutionStops[logicalId];
+      if (resolving != null && !resolving.isCompleted) resolving.complete();
       final handle = _handlesByTaskId[_currentTaskIds[logicalId]];
       if (handle is SourceRenewingDownloadTransportHandleV2) {
         (handle as SourceRenewingDownloadTransportHandleV2).interruptSourceRenewal();

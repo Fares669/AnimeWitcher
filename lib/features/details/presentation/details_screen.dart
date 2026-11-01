@@ -36,6 +36,7 @@ import '../../../core/account/account_providers.dart';
 import '../../settings/presentation/account_screen.dart';
 
 import 'details_controller.dart';
+import 'download_launcher.dart';
 import "widgets/details_layout_widgets.dart";
 import "widgets/episode_browse.dart";
 import "widgets/details_desktop_hero.dart";
@@ -1125,6 +1126,23 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       detailsControllerProvider(widget.item.url).notifier,
     );
 
+    Future<void> downloadSelected() async {
+      final state = ref.read(detailsControllerProvider(widget.item.url));
+      final episodes = state.seasonMap.values
+          .expand((season) => season)
+          .where(
+            (episode) => state.selectedEpisodeKeys.contains(
+              episodeSelectionKey(episode),
+            ),
+          )
+          .toList();
+      if (episodes.isEmpty) return;
+      final item = state.item ?? widget.item;
+      await ref
+          .read(downloadLauncherProvider)
+          .launchBatch(context, item, episodes);
+    }
+
     return SafeArea(
       top: false,
       child: Padding(
@@ -1141,7 +1159,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
           ),
           clipBehavior: Clip.antiAlias,
           child: SizedBox(
-            height: 112,
+            height: 168,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               child: LayoutBuilder(
@@ -1209,6 +1227,17 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
                         ],
                       ),
                       const SizedBox(height: 4),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 42,
+                        child: FilledButton.icon(
+                          key: const ValueKey('batch-download-episodes'),
+                          onPressed: downloadSelected,
+                          icon: const Icon(Icons.download_rounded),
+                          label: Text('تنزيل $selectedCount حلقة'),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
                       Row(
                         children: [
                           Expanded(

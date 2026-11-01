@@ -889,6 +889,21 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
                 onDownload:
                     widget.onDownloadChapter ??
                     (chapter) => unawaited(controller.downloadChapter(chapter)),
+                onDownloadSelected: (selected) async {
+                  final customDownload = widget.onDownloadChapter;
+                  if (customDownload == null) {
+                    return controller.downloadChapters(selected);
+                  }
+                  var failed = 0;
+                  for (final chapter in selected) {
+                    try {
+                      customDownload(chapter);
+                    } catch (_) {
+                      failed++;
+                    }
+                  }
+                  return failed;
+                },
               ),
             ),
           SliverToBoxAdapter(

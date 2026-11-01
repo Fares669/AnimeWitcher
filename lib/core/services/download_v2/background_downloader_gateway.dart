@@ -371,6 +371,7 @@ final class PackageBackgroundDownloaderGateway
   PackageBackgroundDownloaderGateway({
     FileDownloader? downloader,
     Future<void> Function(String taskId)? retireDurableResumeCheckpoint,
+    Future<void> Function(String taskId)? discardDurableResumeCheckpoint,
     DownloadNotificationPrefs Function()? notificationPreferences,
     Future<void> Function()? initializePackage,
     bool Function()? isIOS,
@@ -380,6 +381,8 @@ final class PackageBackgroundDownloaderGateway
   }) : _downloader = downloader ?? configuredFileDownloaderV2(),
        _retireDurableResumeCheckpoint = retireDurableResumeCheckpoint ??
            (downloader == null ? retireConfiguredResumeCheckpointV2 : null),
+       _discardDurableResumeCheckpoint = discardDurableResumeCheckpoint ??
+           (downloader == null ? discardConfiguredResumeCheckpointV2 : null),
        _notificationPreferences =
            notificationPreferences ?? (() => const DownloadNotificationPrefs()),
        _initializePackage = initializePackage,
@@ -389,6 +392,8 @@ final class PackageBackgroundDownloaderGateway
 
   final FileDownloader _downloader;
   final Future<void> Function(String taskId)? _retireDurableResumeCheckpoint;
+  final Future<void> Function(String taskId)? _discardDurableResumeCheckpoint;
+  final _deletingDurableParents = <String>{};
   final DownloadNotificationPrefs Function() _notificationPreferences;
   final Future<void> Function()? _initializePackage;
   final bool Function() _isIOS;
@@ -1179,9 +1184,22 @@ final class PackageBackgroundDownloaderGateway
         }
       },
       cancelParts: (ids) async {
-        await _waitForDurablePauseCheckpoints(ids.toSet());
+        final deleting = ids.isNotEmpty && ids.every((id) =>
+            _deletingDurableParents.any((parent) => id.startsWith('$parent.part.')));
+        final discard = deleting ? _discardDurableResumeCheckpoint : null;
+        if (discard == null) {
+          await _waitForDurablePauseCheckpoints(ids.toSet());
+        } else {
+          // A final delete needs stopped writers, not a resumable checkpoint.
+          // Still await pause ACKs: a late pause must not race cancellation.
+          await Future.wait([
+            for (final id in ids)
+              if (_pendingDurablePauses[id] != null) _pendingDurablePauses[id]!,
+          ]).timeout(_nativeControlAckTimeoutV2);
+        }
         await _settlePendingDurableStarts(ids);
-        if (!await _downloader.cancelTasksWithIds(ids)
+        if (!await _downloader
+            .cancelTasksWithIds(ids)
             .timeout(_nativeControlAckTimeoutV2)) {
           throw StateError('Native ranges rejected cancellation');
         }
@@ -1189,15 +1207,28 @@ final class PackageBackgroundDownloaderGateway
         while (true) {
           final remaining = deadline.difference(DateTime.now());
           if (remaining <= Duration.zero) {
-            throw TimeoutException('Native ranges did not settle after cancellation');
+            throw TimeoutException(
+              'Native ranges did not settle after cancellation',
+            );
           }
           Set<String> live;
           try {
             live = await _activeDurablePartTaskIds().timeout(remaining);
           } catch (_) {
-            throw TimeoutException('Native range ownership could not be established');
+            throw TimeoutException(
+              'Native range ownership could not be established',
+            );
           }
-          if (!live.any(ids.contains)) return;
+          if (!live.any(ids.contains)) {
+            if (discard != null) {
+              for (final id in ids) {
+                await discard(id);
+                _pendingDurablePauseCheckpoints.remove(id);
+                _rejectedDurablePauses.remove(id);
+              }
+            }
+            return;
+          }
           await Future<void>.delayed(const Duration(milliseconds: 50));
         }
       },
@@ -1462,6 +1493,15 @@ final class PackageBackgroundDownloaderGateway
       totalBytes: totalBytes,
       coordinator: coordinator,
       afterPause: () => _afterDurablePause(parent.taskId),
+      cancelParent: () async {
+        _deletingDurableParents.add(parent.taskId);
+        try {
+          await coordinator.cancel(parent,
+            beforeCancel: () => withdrawNativeRangeParentV2(parent.taskId));
+        } finally {
+          _deletingDurableParents.remove(parent.taskId);
+        }
+      },
       beforeResume: () => _waitForDurablePauseCheckpoints(_durablePauseIdsForParent(parent.taskId)),
       initialStatus: restored || initialStatus == DownloadTransportStatus.complete
           ? initialStatus
@@ -1827,7 +1867,11 @@ Future<int?> availableDownloadStorageBytesV2(String path) async {
 /// Returns the requested parent width. On iOS the gateway routes widths greater
 /// than one through AnimeWitcher's durable immutable-range coordinator instead
 /// of background_downloader's ParallelDownloadTask resume implementation.
-int effectivePackageParallelChunksV2(int requestedChunks, {bool? isIOS}) {
+int effectivePackageParallelChunksV2(
+  int requestedChunks, {
+  bool? isIOS,
+  String? sourceName,
+}) {
   assert(requestedChunks > 0);
   return requestedChunks;
 }
@@ -2211,6 +2255,7 @@ final class _DurableParallelDownloadTransportHandle
     required this.coordinator,
     required this.afterPause,
     required this.beforeResume,
+    required this.cancelParent,
     required DownloadTransportStatus initialStatus,
   }) : _current = durableParallelInitialSnapshotV2(
          taskId: parent.taskId,
@@ -2228,6 +2273,7 @@ final class _DurableParallelDownloadTransportHandle
   final PersistentParallelDownload coordinator;
   final Future<void> Function() afterPause;
   final Future<void> Function() beforeResume;
+  final Future<void> Function() cancelParent;
   final StreamController<DownloadTransportSnapshot> _snapshots =
       StreamController<DownloadTransportSnapshot>.broadcast(sync: true);
   DownloadTransportSnapshot _current;
@@ -2330,10 +2376,7 @@ final class _DurableParallelDownloadTransportHandle
 
   @override
   Future<bool> cancel() async {
-    await coordinator.cancel(
-      parent,
-      beforeCancel: () => withdrawNativeRangeParentV2(taskId),
-    );
+    await cancelParent();
     if (_current.status != DownloadTransportStatus.canceled) {
       _emit(
         DownloadTransportSnapshot(

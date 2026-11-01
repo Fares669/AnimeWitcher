@@ -1565,6 +1565,55 @@ void main() {
     },
   );
 
+  test('403 with four receiving ranges keeps four connections and retries rejected ranges', () async {
+    parent = ParallelDownloadTask(
+      taskId: 'pd-16',
+      url: 'https://pd.example/video',
+      filename: 'video.mp4',
+      directory: directory.path,
+      baseDirectory: BaseDirectory.root,
+      chunks: 16,
+      allowPause: true,
+    );
+    expect(await coordinator.start(parent, 160), isTrue);
+    await markRunning(starts.take(1));
+    await waitUntil(() => starts.length == 3);
+    await markRunning(starts.skip(1).take(2));
+    await waitUntil(() => starts.length == 7);
+    final initial = starts.toList();
+    for (final task in initial.take(4)) {
+      coordinator.handleUpdate(TaskProgressUpdate(task, 0.2));
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    for (final task in initial.skip(4)) {
+      coordinator.handleUpdate(
+        TaskStatusUpdate(
+          task,
+          TaskStatus.failed,
+          TaskHttpException('connection limit', 403),
+        ),
+      );
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    expect(pauses, isEmpty);
+    expect(coordinator.activeConnectionCount, 4);
+    expect(starts, hasLength(7));
+    await completePart(initial.first, List<int>.filled(10, 1));
+    await waitUntil(() => starts.length == 8);
+    expect(coordinator.activeConnectionCount, 4);
+    expect(starts.last.taskId, initial[4].taskId);
+    // A second refusal at the learned width is an authentication failure,
+    // not permission to hammer a signed URL indefinitely.
+    coordinator.handleUpdate(
+      TaskStatusUpdate(
+        starts.last,
+        TaskStatus.failed,
+        TaskHttpException('still forbidden', 403),
+      ),
+    );
+    await waitUntil(() => pauses.isNotEmpty);
+  });
+
   test(
     '429 during slow start falls back to last healthy level and teaches host',
     () async {

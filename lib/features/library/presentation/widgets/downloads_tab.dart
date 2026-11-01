@@ -21,7 +21,6 @@ import '../../../../core/services/download_v2/download_continued_processing_v2.d
 import '../../../../core/services/download_v2/download_v2_models.dart';
 import '../../../../core/router/app_router.dart';
 import '../../../../core/services/download_concurrency.dart';
-import '../../../../core/services/download_parallel.dart';
 import 'segmented_download_progress.dart';
 import 'completed_download_episode_card.dart';
 import '../../../../core/utils/layout_constants.dart';
@@ -66,8 +65,9 @@ MultimediaItem _savedPlaybackItem(
     }
   }
   final current = selected.episode;
-  if (current != null && current.url.trim().isNotEmpty)
+  if (current != null && current.url.trim().isNotEmpty) {
     episodes[current.url.trim()] = current;
+  }
   return episodes.isEmpty
       ? selected.item
       : selected.item.copyWith(
@@ -112,6 +112,85 @@ class DownloadsTab extends ConsumerStatefulWidget {
 class _DownloadsTabState extends ConsumerState<DownloadsTab>
     with AutomaticKeepAliveClientMixin, TickerProviderStateMixin {
   late final TabController _tabs;
+  final _selectionOverlay = OverlayPortalController();
+  final Set<String> _selectedIds = <String>{};
+  bool _bulkInFlight = false;
+  int _tabIndex = 0;
+
+  void _toggleSelected(DownloadItem item) {
+    setState(() {
+      if (!_selectedIds.add(item.id)) {
+        _selectedIds.remove(item.id);
+      }
+    });
+  }
+
+  void _toggleGroupSelection(List<DownloadItem> items) {
+    setState(() {
+      if (items.every((item) => _selectedIds.contains(item.id))) {
+        _selectedIds.removeAll(items.map((item) => item.id));
+      } else {
+        _selectedIds.addAll(items.map((item) => item.id));
+      }
+    });
+  }
+
+  Future<void> _bulkAction(List<DownloadItem> items, String action) async {
+    if (_bulkInFlight || items.isEmpty) return;
+    final l10n = AppLocalizations.of(context)!;
+    if (action == 'delete') {
+      final confirmed = await showConfirmDialog(
+        context,
+        title: l10n.deleteDownload,
+        message:
+            '${items.length} ${appText(context, english: 'downloads will be deleted.', arabic: 'تنزيل سيتم حذفه.')} ',
+        confirmLabel: l10n.delete,
+        cancelLabel: l10n.cancel,
+      );
+      if (!confirmed || !mounted) return;
+    }
+    setState(() => _bulkInFlight = true);
+    var failed = 0;
+    final notifier = ref.read(downloadsProvider.notifier);
+    final notifications = ref.read(notificationServiceProvider);
+    try {
+      if (action == 'delete') {
+        if (!await notifier.removeDownloads(items)) failed++;
+        if (mounted) {
+          final latest = ref.read(downloadsProvider);
+          if (latest.hasValue) {
+            final remainingIds = (latest.value ?? const <DownloadItem>[])
+                .map((item) => item.id)
+                .toSet();
+            setState(() => _selectedIds.retainAll(remainingIds));
+          }
+        }
+      } else {
+        for (final item in items) {
+          try {
+            if (action == 'pause' &&
+                (item.status == TaskStatus.running ||
+                    item.status == TaskStatus.enqueued ||
+                    item.status == TaskStatus.waitingToRetry)) {
+              await notifier.pauseDownload(item.id);
+            } else if (action == 'resume' && item.status == TaskStatus.paused) {
+              await notifier.resumeDownload(item.id);
+            }
+          } catch (error) {
+            failed++;
+            showDownloadActionError(notifications, error);
+          }
+        }
+      }
+      if (failed > 0) {
+        notifications.showError('تعذر تنفيذ العملية على $failed تنزيل');
+      }
+    } catch (error) {
+      showDownloadActionError(notifications, error);
+    } finally {
+      if (mounted) setState(() => _bulkInFlight = false);
+    }
+  }
 
   @override
   bool get wantKeepAlive => true;
@@ -119,11 +198,177 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
   @override
   void initState() {
     super.initState();
+    _selectionOverlay.show();
     _tabs = TabController(length: 2, vsync: this);
+    _tabs.addListener(_handleTabChanged);
+  }
+
+  void _handleTabChanged() {
+    if (!mounted || _tabs.index == _tabIndex) return;
+    setState(() {
+      _tabIndex = _tabs.index;
+      _selectedIds.clear();
+    });
+  }
+
+  Widget _buildSelectionBar({
+    required List<DownloadItem> selected,
+    required List<DownloadItem> currentDownloads,
+    required bool canPause,
+    required bool canResume,
+    required AppLocalizations l10n,
+  }) {
+    final colors = Theme.of(context).colorScheme;
+    return SafeArea(
+      key: const ValueKey('downloads-selection-bar'),
+      top: false,
+      child: Directionality(
+        textDirection: TextDirection.rtl,
+        child: Material(
+          elevation: 10,
+          shadowColor: Colors.black.withValues(alpha: 0.30),
+          color: colors.surfaceContainerHigh,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(
+              color: colors.outlineVariant.withValues(alpha: 0.45),
+            ),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.checklist_rounded,
+                      color: colors.primary,
+                      size: 22,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        '${selected.length} ${appText(context, english: 'selected', arabic: 'محدد')}',
+                        style: Theme.of(context).textTheme.titleSmall
+                            ?.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    IconButton(
+                      key: const ValueKey('downloads-clear-selection'),
+                      tooltip: appText(
+                        context,
+                        english: 'Clear selection',
+                        arabic: 'إلغاء التحديد',
+                      ),
+                      onPressed: () => setState(_selectedIds.clear),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Colors.red.shade700,
+                          foregroundColor: Colors.white,
+                          disabledBackgroundColor: Colors.red.shade700,
+                          disabledForegroundColor: Colors.white70,
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          minimumSize: const Size(0, 48),
+                        ),
+                        onPressed: _bulkInFlight
+                            ? null
+                            : () => _bulkAction(selected, 'delete'),
+                        icon: const Icon(
+                          Icons.delete_outline_rounded,
+                          size: 19,
+                        ),
+                        label: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(l10n.delete),
+                        ),
+                      ),
+                    ),
+                    if (_tabIndex == 0) ...[
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: FilledButton.tonalIcon(
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            minimumSize: const Size(0, 48),
+                          ),
+                          onPressed: _bulkInFlight || !canPause
+                              ? null
+                              : () => _bulkAction(selected, 'pause'),
+                          icon: const Icon(Icons.pause_rounded, size: 19),
+                          label: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              appText(
+                                context,
+                                english: 'Pause',
+                                arabic: 'إيقاف',
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: FilledButton.tonalIcon(
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            minimumSize: const Size(0, 48),
+                          ),
+                          onPressed: _bulkInFlight || !canResume
+                              ? null
+                              : () => _bulkAction(selected, 'resume'),
+                          icon: const Icon(Icons.play_arrow_rounded, size: 19),
+                          label: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              appText(
+                                context,
+                                english: 'Resume',
+                                arabic: 'إكمال',
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(width: 8),
+                    IconButton.filledTonal(
+                      key: const ValueKey('downloads-select-all'),
+                      tooltip: appText(
+                        context,
+                        english: 'Select all',
+                        arabic: 'تحديد الكل',
+                      ),
+                      onPressed: () => _toggleGroupSelection(currentDownloads),
+                      icon: const Icon(Icons.select_all_rounded),
+                      style: IconButton.styleFrom(
+                        minimumSize: const Size(48, 48),
+                        maximumSize: const Size(48, 48),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
   void dispose() {
+    _tabs.removeListener(_handleTabChanged);
     _tabs.dispose();
     super.dispose();
   }
@@ -144,72 +389,209 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
     final completed = visibleDownloads
         .where((item) => !isActiveDownloadStatus(item.status))
         .toList();
-
+    final active = visibleDownloads
+        .where((item) => isActiveDownloadStatus(item.status))
+        .toList();
+    final currentDownloads = _tabIndex == 0 ? active : completed;
+    final selected = currentDownloads
+        .where((item) => _selectedIds.contains(item.id))
+        .toList();
+    final currentSelectedIds = selected.map((item) => item.id).toSet();
+    final canPause = selected.any(
+      (item) =>
+          item.status == TaskStatus.running ||
+          item.status == TaskStatus.enqueued ||
+          item.status == TaskStatus.waitingToRetry,
+    );
+    final canResume = selected.any((item) => item.status == TaskStatus.paused);
+    final controllableActive = active
+        .where(
+          (item) =>
+              item.status == TaskStatus.running ||
+              item.status == TaskStatus.enqueued ||
+              item.status == TaskStatus.waitingToRetry ||
+              item.status == TaskStatus.paused,
+        )
+        .toList();
+    final allPaused =
+        controllableActive.isNotEmpty &&
+        controllableActive.every((item) => item.status == TaskStatus.paused);
     // RTL only for the tab strip + pager swipe (like المواسم). Each
     // pane is LTR so cards stay poster-left — do not mirror the page.
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: widget.headerPadding,
-          child: Directionality(
-            textDirection: TextDirection.rtl,
-            child: Row(
-              children: [
-                Expanded(
-                  child: FilterStyleTabBar(
-                    controller: _tabs,
-                    isScrollable: false,
-                    tabs: [
-                      FilterStyleTab(label: l10n.downloads),
-                      FilterStyleTab(label: l10n.downloadsTabCompleted),
-                    ],
-                  ),
+    final activePage = TickerMode.valuesOf(context).enabled;
+    return OverlayPortal(
+      overlayLocation: OverlayChildLocation.rootOverlay,
+      controller: _selectionOverlay,
+      overlayChildBuilder: (context) => selected.isEmpty || !activePage
+          ? const SizedBox.shrink()
+          : Positioned(
+              left: 12,
+              right: 12,
+              bottom: 8,
+              // Use device safe insets, without the shell's reserved dock space.
+              child: MediaQuery.fromView(
+                view: View.of(context),
+                child: _buildSelectionBar(
+                  selected: selected,
+                  currentDownloads: currentDownloads,
+                  canPause: canPause,
+                  canResume: canResume,
+                  l10n: l10n,
                 ),
-                // The side menu's button, in the corner it comes from.
-                const AppSideMenuButton(
-                  padding: EdgeInsetsDirectional.only(start: 4, end: 12),
-                ),
-              ],
+              ),
             ),
-          ),
-        ),
-        const _DownloadSessionStrip(),
-        Expanded(
-          child: Directionality(
-            textDirection: TextDirection.rtl,
-            child: TabBarView(
-              controller: _tabs,
-              children: [
-                Directionality(
-                  textDirection: TextDirection.ltr,
-                  child: downloadsAsync.when(
-                    skipLoadingOnRefresh: false,
-                    skipLoadingOnReload: false,
-                    data: (_) => _ActiveDownloadsList(
-                      items: visibleDownloads
-                          .where((item) => isActiveDownloadStatus(item.status))
-                          .toList(),
-                      activeProgress: activeProgress,
-                      emptyMessage: l10n.noDownloadsYet,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: widget.headerPadding,
+            child: Directionality(
+              textDirection: TextDirection.rtl,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: FilterStyleTabBar(
+                      controller: _tabs,
+                      isScrollable: false,
+                      tabs: [
+                        FilterStyleTab(label: l10n.downloads),
+                        FilterStyleTab(label: l10n.downloadsTabCompleted),
+                      ],
                     ),
-                    loading: () => const Center(child: AppLoadingIndicator()),
-                    error: (err, stack) =>
-                        Center(child: Text(l10n.errorPrefix(err.toString()))),
                   ),
-                ),
-                Directionality(
-                  textDirection: TextDirection.ltr,
-                  child: _CompletedDownloadsList(
-                    items: completed,
-                    emptyMessage: l10n.noCompletedDownloadsYet,
+                  // The side menu's button, in the corner it comes from.
+                  const AppSideMenuButton(
+                    padding: EdgeInsetsDirectional.only(start: 4, end: 12),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
-        ),
-      ],
+          Expanded(
+            child: Directionality(
+              textDirection: TextDirection.rtl,
+              child: TabBarView(
+                controller: _tabs,
+                children: [
+                  Directionality(
+                    textDirection: TextDirection.ltr,
+                    child: Column(
+                      children: [
+                        const _DownloadSessionStrip(),
+                        if (active.isNotEmpty && currentSelectedIds.isEmpty)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 6,
+                            ),
+                            child: Directionality(
+                              textDirection: TextDirection.rtl,
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: FilledButton.icon(
+                                      key: const ValueKey(
+                                        'downloads-delete-all',
+                                      ),
+                                      style: FilledButton.styleFrom(
+                                        backgroundColor: Colors.red.shade700,
+                                        foregroundColor: Colors.white,
+                                        disabledBackgroundColor:
+                                            Colors.red.shade700,
+                                        disabledForegroundColor: Colors.white70,
+                                      ),
+                                      onPressed: _bulkInFlight
+                                          ? null
+                                          : () => _bulkAction(active, 'delete'),
+                                      icon: const Icon(
+                                        Icons.delete_outline_rounded,
+                                      ),
+                                      label: Text(
+                                        appText(
+                                          context,
+                                          english: 'Delete all',
+                                          arabic: 'حذف الكل',
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: FilledButton.tonalIcon(
+                                      key: const ValueKey(
+                                        'downloads-pause-resume-all',
+                                      ),
+                                      onPressed:
+                                          _bulkInFlight ||
+                                              controllableActive.isEmpty
+                                          ? null
+                                          : () => _bulkAction(
+                                              controllableActive,
+                                              allPaused ? 'resume' : 'pause',
+                                            ),
+                                      icon: Icon(
+                                        allPaused
+                                            ? Icons.play_arrow_rounded
+                                            : Icons.pause_rounded,
+                                      ),
+                                      label: Text(
+                                        allPaused
+                                            ? appText(
+                                                context,
+                                                english: 'Resume all',
+                                                arabic: 'إكمال الكل',
+                                              )
+                                            : appText(
+                                                context,
+                                                english: 'Pause all',
+                                                arabic: 'إيقاف الكل',
+                                              ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        Expanded(
+                          child: downloadsAsync.when(
+                            skipLoadingOnRefresh: false,
+                            skipLoadingOnReload: false,
+                            data: (_) => _ActiveDownloadsList(
+                              items: active,
+                              activeProgress: activeProgress,
+                              emptyMessage: l10n.noDownloadsYet,
+                              selectedIds: currentSelectedIds,
+                              onToggleSelection: _toggleSelected,
+                            ),
+                            loading: () =>
+                                const Center(child: AppLoadingIndicator()),
+                            error: (err, stack) => Center(
+                              child: Text(l10n.errorPrefix(err.toString())),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Directionality(
+                    textDirection: TextDirection.ltr,
+                    child: _CompletedDownloadsList(
+                      items: completed,
+                      emptyMessage: l10n.noCompletedDownloadsYet,
+                      selectedIds: currentSelectedIds,
+                      onToggleSelection: _toggleSelected,
+                      onToggleGroupSelection: _toggleGroupSelection,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Reserve room so the last download can scroll clear of the controls.
+          if (selected.isNotEmpty) const SizedBox(height: 148),
+        ],
+      ),
     );
   }
 }
@@ -226,9 +608,8 @@ class _DownloadSessionStrip extends StatelessWidget {
       valueListenable: downloadSessionSummaryNotifier,
       builder: (context, summary, _) {
         if (!summary.isActive) return const SizedBox.shrink();
-        final style = Theme.of(
-          context,
-        ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600);
+        final style = Theme.of(context).textTheme.bodyMedium
+            ?.copyWith(fontWeight: FontWeight.w600);
         return Padding(
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
           child: Directionality(
@@ -301,11 +682,15 @@ class _ActiveDownloadsList extends StatelessWidget {
     required this.items,
     required this.activeProgress,
     required this.emptyMessage,
+    required this.selectedIds,
+    required this.onToggleSelection,
   });
 
   final List<DownloadItem> items;
   final Map<String, DownloadProgressData> activeProgress;
   final String emptyMessage;
+  final Set<String> selectedIds;
+  final ValueChanged<DownloadItem> onToggleSelection;
 
   @override
   Widget build(BuildContext context) {
@@ -339,6 +724,9 @@ class _ActiveDownloadsList extends StatelessWidget {
             progress: displayProgress,
             status: displayStatus,
             progressData: progressData,
+            selecting: selectedIds.isNotEmpty,
+            selected: selectedIds.contains(download.id),
+            onToggleSelection: () => onToggleSelection(download),
           );
         },
       ),
@@ -350,10 +738,16 @@ class _CompletedDownloadsList extends StatelessWidget {
   const _CompletedDownloadsList({
     required this.items,
     required this.emptyMessage,
+    required this.selectedIds,
+    required this.onToggleSelection,
+    required this.onToggleGroupSelection,
   });
 
   final List<DownloadItem> items;
   final String emptyMessage;
+  final Set<String> selectedIds;
+  final ValueChanged<DownloadItem> onToggleSelection;
+  final ValueChanged<List<DownloadItem>> onToggleGroupSelection;
 
   @override
   Widget build(BuildContext context) {
@@ -385,7 +779,13 @@ class _CompletedDownloadsList extends StatelessWidget {
         separatorBuilder: (context, index) => const SizedBox(height: 16),
         itemBuilder: (context, index) {
           final key = keys[index];
-          return _GroupedDownloadTile(key: ValueKey(key), items: grouped[key]!);
+          return _GroupedDownloadTile(
+            key: ValueKey(key),
+            items: grouped[key]!,
+            selectedIds: selectedIds,
+            onToggleSelection: onToggleSelection,
+            onToggleGroupSelection: onToggleGroupSelection,
+          );
         },
       ),
     );
@@ -394,8 +794,17 @@ class _CompletedDownloadsList extends StatelessWidget {
 
 class _GroupedDownloadTile extends ConsumerStatefulWidget {
   final List<DownloadItem> items;
+  final Set<String> selectedIds;
+  final ValueChanged<DownloadItem> onToggleSelection;
+  final ValueChanged<List<DownloadItem>> onToggleGroupSelection;
 
-  const _GroupedDownloadTile({super.key, required this.items});
+  const _GroupedDownloadTile({
+    super.key,
+    required this.items,
+    required this.selectedIds,
+    required this.onToggleSelection,
+    required this.onToggleGroupSelection,
+  });
 
   @override
   ConsumerState<_GroupedDownloadTile> createState() =>
@@ -428,8 +837,9 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
   @override
   void didUpdateWidget(covariant _GroupedDownloadTile oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (_posterKey(oldWidget.items) != _posterKey(items))
+    if (_posterKey(oldWidget.items) != _posterKey(items)) {
       _poster = _loadPoster();
+    }
   }
 
   Future<File?> _loadPoster() async {
@@ -461,6 +871,13 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context)!;
     final firstItem = items.first;
+    final selecting = widget.selectedIds.isNotEmpty;
+    final anySelected = items.any(
+      (item) => widget.selectedIds.contains(item.id),
+    );
+    final allSelected = items.every(
+      (item) => widget.selectedIds.contains(item.id),
+    );
     final episodeSortAscending = ref.watch(episodeSortAscendingProvider);
     final isManga = firstItem.mediaKind == DownloadMediaKind.mangaChapter;
 
@@ -487,11 +904,18 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
 
     return Card(
       margin: EdgeInsets.zero,
-      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.2),
+      color: anySelected
+          ? theme.colorScheme.primary.withValues(alpha: 0.24)
+          : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.2),
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(LayoutConstants.radiusXl),
-        side: BorderSide(color: theme.dividerColor.withValues(alpha: 0.5)),
+        side: BorderSide(
+          color: anySelected
+              ? theme.colorScheme.primary
+              : theme.dividerColor.withValues(alpha: 0.5),
+          width: anySelected ? 2 : 1,
+        ),
       ),
       clipBehavior: Clip.antiAlias,
       child: ExpansionTile(
@@ -503,98 +927,114 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
           horizontal: LayoutConstants.spacingMd,
           vertical: LayoutConstants.spacingXs,
         ),
-        title: Row(
-          textDirection: TextDirection.ltr,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(LayoutConstants.radiusMd),
-              child: ArtworkDecode(
-                paintedWidth: 80,
-                builder: (BuildContext context, int? decodeWidth) =>
-                    FutureBuilder<File?>(
-                      future: _poster,
-                      builder: (context, snapshot) {
-                        final saved = snapshot.data;
-                        if (saved != null) {
-                          return Image.file(
-                            saved,
+        title: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onLongPress: () => widget.onToggleGroupSelection(items),
+          child: Row(
+            textDirection: TextDirection.ltr,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(LayoutConstants.radiusMd),
+                child: ArtworkDecode(
+                  paintedWidth: 80,
+                  builder: (BuildContext context, int? decodeWidth) =>
+                      FutureBuilder<File?>(
+                        future: _poster,
+                        builder: (context, snapshot) {
+                          final saved = snapshot.data;
+                          if (saved != null) {
+                            return Image.file(
+                              saved,
+                              width: 80,
+                              height: 120,
+                              fit: BoxFit.cover,
+                              cacheWidth: decodeWidth,
+                              filterQuality: FilterQuality.medium,
+                              errorBuilder: (_, _, _) =>
+                                  _posterPlaceholder(theme),
+                            );
+                          }
+                          return CachedNetworkImage(
+                            imageUrl:
+                                AppImageFallbacks.poster(
+                                  firstItem.item.posterUrl,
+                                ) ??
+                                '',
                             width: 80,
                             height: 120,
                             fit: BoxFit.cover,
-                            cacheWidth: decodeWidth,
+                            memCacheWidth: decodeWidth,
                             filterQuality: FilterQuality.medium,
-                            errorBuilder: (_, _, _) =>
-                                _posterPlaceholder(theme),
+                            errorWidget: (_, _, _) => _posterPlaceholder(theme),
                           );
-                        }
-                        return CachedNetworkImage(
-                          imageUrl:
-                              AppImageFallbacks.poster(
-                                firstItem.item.posterUrl,
-                              ) ??
-                              '',
-                          width: 80,
-                          height: 120,
-                          fit: BoxFit.cover,
-                          memCacheWidth: decodeWidth,
-                          filterQuality: FilterQuality.medium,
-                          errorWidget: (_, _, _) => _posterPlaceholder(theme),
-                        );
-                      },
-                    ),
-              ),
-            ),
-            const SizedBox(width: LayoutConstants.spacingMd),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    firstItem.item.title,
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: theme.colorScheme.primary,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.library_books_rounded,
-                        size: 14,
-                        color: theme.colorScheme.onSurfaceVariant,
+                        },
                       ),
-                      const SizedBox(width: 4),
-                      Text(
-                        completedDownloadUnitCountLabel(
-                          kind: firstItem.mediaKind,
-                          count: items.length,
-                        ),
-                        // The card stays poster-left, but an Arabic count
-                        // needs its own RTL paragraph for number/noun order.
-                        textDirection: TextDirection.rtl,
-                        textAlign: TextAlign.left,
-                        style: theme.textTheme.bodySmall?.copyWith(
+                ),
+              ),
+              const SizedBox(width: LayoutConstants.spacingMd),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      firstItem.item.title,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: theme.colorScheme.primary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.library_books_rounded,
+                          size: 14,
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
-                      ),
-                    ],
-                  ),
-                ],
+                        const SizedBox(width: 4),
+                        Text(
+                          completedDownloadUnitCountLabel(
+                            kind: firstItem.mediaKind,
+                            count: items.length,
+                          ),
+                          // The card stays poster-left, but an Arabic count
+                          // needs its own RTL paragraph for number/noun order.
+                          textDirection: TextDirection.rtl,
+                          textAlign: TextAlign.left,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(width: LayoutConstants.spacingSm),
-            IconButton(
-              icon: const Icon(Icons.delete_outline_rounded),
-              onPressed: _deleteInFlight
-                  ? null
-                  : () => _confirmDeleteAll(context, ref),
-              color: theme.colorScheme.error.withValues(alpha: 0.8),
-              visualDensity: VisualDensity.compact,
-            ),
-          ],
+              const SizedBox(width: LayoutConstants.spacingSm),
+              IconButton(
+                icon: Icon(
+                  selecting
+                      ? allSelected
+                            ? Icons.check_circle_rounded
+                            : anySelected
+                            ? Icons.remove_circle_outline_rounded
+                            : Icons.radio_button_unchecked_rounded
+                      : Icons.delete_outline_rounded,
+                ),
+                onPressed: widget.selectedIds.isNotEmpty
+                    ? () => widget.onToggleGroupSelection(items)
+                    : _deleteInFlight
+                    ? null
+                    : () => _confirmDeleteAll(context, ref),
+                color: selecting
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.error.withValues(alpha: 0.8),
+                visualDensity: VisualDensity.compact,
+              ),
+            ],
+          ),
         ),
         children: orderedItems.asMap().entries.map((entry) {
           final download = entry.value;
@@ -612,25 +1052,51 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
                   horizontal: LayoutConstants.spacingMd,
                   vertical: LayoutConstants.spacingSm,
                 ),
-                child: isManga
-                    ? CompletedDownloadChapterCard(
-                        key: ValueKey(download.id),
-                        item: download,
-                        onOpen: () =>
-                            _openMangaChapter(context, download, orderedItems),
-                        onDelete: () => unawaited(
-                          confirmAndRemoveDownload(context, ref, download),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onLongPress: () => widget.onToggleSelection(download),
+                  child: isManga
+                      ? CompletedDownloadChapterCard(
+                          key: ValueKey(download.id),
+                          item: download,
+                          selecting: selecting,
+                          selected: widget.selectedIds.contains(download.id),
+                          onOpen: () => widget.selectedIds.isNotEmpty
+                              ? widget.onToggleSelection(download)
+                              : _openMangaChapter(
+                                  context,
+                                  download,
+                                  orderedItems,
+                                ),
+                          onDelete: () => widget.selectedIds.isNotEmpty
+                              ? widget.onToggleSelection(download)
+                              : unawaited(
+                                  confirmAndRemoveDownload(
+                                    context,
+                                    ref,
+                                    download,
+                                  ),
+                                ),
+                        )
+                      : CompletedDownloadEpisodeCard(
+                          key: ValueKey(download.id),
+                          item: download,
+                          selecting: selecting,
+                          selected: widget.selectedIds.contains(download.id),
+                          onPlay: () => widget.selectedIds.isNotEmpty
+                              ? widget.onToggleSelection(download)
+                              : _playLocalFile(context, ref, download, l10n),
+                          onDelete: () => widget.selectedIds.isNotEmpty
+                              ? widget.onToggleSelection(download)
+                              : unawaited(
+                                  confirmAndRemoveDownload(
+                                    context,
+                                    ref,
+                                    download,
+                                  ),
+                                ),
                         ),
-                      )
-                    : CompletedDownloadEpisodeCard(
-                        key: ValueKey(download.id),
-                        item: download,
-                        onPlay: () =>
-                            _playLocalFile(context, ref, download, l10n),
-                        onDelete: () => unawaited(
-                          confirmAndRemoveDownload(context, ref, download),
-                        ),
-                      ),
+                ),
               ),
               if (!isLast)
                 Divider(
@@ -720,6 +1186,9 @@ class _DownloadItemTile extends ConsumerStatefulWidget {
   final double progress;
   final TaskStatus status;
   final DownloadProgressData? progressData;
+  final bool selecting;
+  final bool selected;
+  final VoidCallback onToggleSelection;
 
   const _DownloadItemTile({
     super.key,
@@ -727,6 +1196,9 @@ class _DownloadItemTile extends ConsumerStatefulWidget {
     required this.progress,
     required this.status,
     this.progressData,
+    required this.selecting,
+    required this.selected,
+    required this.onToggleSelection,
   });
 
   @override
@@ -749,7 +1221,6 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
     final chunkProgress = ref.watch(
       downloadChunkProgressProvider,
     )[item.task.taskId];
-    final parallelParts = downloadTaskPartCount(item.task);
     final isDone = status == TaskStatus.complete;
     final isQueued = status == TaskStatus.enqueued;
     final isWorking =
@@ -838,14 +1309,18 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
                         : theme.colorScheme.onSurfaceVariant,
                   ),
                   const SizedBox(width: 4),
-                  Text(
-                    isDone
-                        ? l10n.completed
-                        : _getStatusText(context, status, l10n),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: isDone
-                          ? Colors.green
-                          : theme.colorScheme.onSurfaceVariant,
+                  Flexible(
+                    child: Text(
+                      isDone
+                          ? l10n.completed
+                          : _getStatusText(context, status, l10n),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: isDone
+                            ? Colors.green
+                            : theme.colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
                 ],
@@ -871,9 +1346,7 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
                     ),
                     const SizedBox(width: LayoutConstants.spacingSm),
                     Text(
-                      parallelParts > 1
-                          ? '$parallelParts×  ${(progress.clamp(0.0, 1.0) * 100).floor()}%'
-                          : '${(progress.clamp(0.0, 1.0) * 100).floor()}%',
+                      '${item.activeConnections}×  ${(progress.clamp(0.0, 1.0) * 100).floor()}%',
                       textDirection: TextDirection.ltr,
                       textAlign: TextAlign.end,
                       style: theme.textTheme.bodySmall?.copyWith(
@@ -893,53 +1366,65 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
                   borderRadius: BorderRadius.circular(LayoutConstants.radiusSm),
                 ),
               ],
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  if (isWorking)
-                    IconButton(
-                      icon: const Icon(Icons.pause_rounded),
-                      onPressed: _controlInFlight || _deleteInFlight
-                          ? null
-                          : _controlDownload,
-                      visualDensity: VisualDensity.compact,
-                    ),
-                  if (isPaused || isFailed)
-                    IconButton(
-                      tooltip: isFailed
-                          ? appText(
-                              context,
-                              english: 'Retry',
-                              arabic: 'إعادة المحاولة',
-                            )
-                          : l10n.statusPaused,
-                      icon: Icon(
-                        isFailed
-                            ? Icons.refresh_rounded
-                            : Icons.play_arrow_rounded,
-                      ),
-                      onPressed: _controlInFlight || _deleteInFlight
-                          ? null
-                          : _controlDownload,
-                      visualDensity: VisualDensity.compact,
-                    ),
-                  if (isDone)
-                    IconButton(
-                      icon: const Icon(
-                        Icons.play_circle_fill_rounded,
-                        color: Colors.green,
-                      ),
-                      onPressed: () => _playLocalFile(context, ref, l10n),
-                      iconSize: 28,
-                    ),
-                  IconButton(
-                    icon: const Icon(Icons.delete_outline_rounded),
-                    onPressed: _deleteInFlight ? null : _confirmDelete,
-                    color: theme.colorScheme.error.withValues(alpha: 0.8),
-                    visualDensity: VisualDensity.compact,
+              if (widget.selecting)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Icon(
+                    widget.selected
+                        ? Icons.check_circle_rounded
+                        : Icons.radio_button_unchecked_rounded,
+                    color: theme.colorScheme.primary,
+                    size: 30,
                   ),
-                ],
-              ),
+                )
+              else
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    if (isWorking)
+                      IconButton(
+                        icon: const Icon(Icons.pause_rounded),
+                        onPressed: _controlInFlight || _deleteInFlight
+                            ? null
+                            : _controlDownload,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    if (isPaused || isFailed)
+                      IconButton(
+                        tooltip: isFailed
+                            ? appText(
+                                context,
+                                english: 'Retry',
+                                arabic: 'إعادة المحاولة',
+                              )
+                            : l10n.statusPaused,
+                        icon: Icon(
+                          isFailed
+                              ? Icons.refresh_rounded
+                              : Icons.play_arrow_rounded,
+                        ),
+                        onPressed: _controlInFlight || _deleteInFlight
+                            ? null
+                            : _controlDownload,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    if (isDone)
+                      IconButton(
+                        icon: const Icon(
+                          Icons.play_circle_fill_rounded,
+                          color: Colors.green,
+                        ),
+                        onPressed: () => _playLocalFile(context, ref, l10n),
+                        iconSize: 28,
+                      ),
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline_rounded),
+                      onPressed: _deleteInFlight ? null : _confirmDelete,
+                      color: theme.colorScheme.error.withValues(alpha: 0.8),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ],
+                ),
             ],
           ),
         ),
@@ -947,7 +1432,12 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
     );
 
     final tile = InkWell(
-      onTap: isDone ? () => _playLocalFile(context, ref, l10n) : null,
+      onLongPress: widget.onToggleSelection,
+      onTap: widget.selecting
+          ? widget.onToggleSelection
+          : isDone
+          ? () => _playLocalFile(context, ref, l10n)
+          : null,
       borderRadius: BorderRadius.circular(LayoutConstants.radiusLg),
       child: content,
     );
@@ -957,9 +1447,16 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(LayoutConstants.radiusXl),
-        side: BorderSide(color: theme.dividerColor.withValues(alpha: 0.5)),
+        side: BorderSide(
+          color: widget.selected
+              ? theme.colorScheme.primary
+              : theme.dividerColor.withValues(alpha: 0.5),
+          width: widget.selected ? 2 : 1,
+        ),
       ),
-      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.2),
+      color: widget.selected
+          ? theme.colorScheme.primary.withValues(alpha: 0.24)
+          : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.2),
       clipBehavior: Clip.antiAlias,
       child: Padding(
         padding: const EdgeInsets.all(LayoutConstants.spacingMd),

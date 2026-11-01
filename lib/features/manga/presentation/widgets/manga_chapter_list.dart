@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/domain/entity/manga.dart';
 import '../../../../core/providers/episode_sort_provider.dart';
 import '../../../../core/services/download_v2/download_v2_identity.dart';
+import '../../../../core/services/notification_service.dart';
 import '../../../../core/storage/manga_reading_repository.dart';
 import '../../../../core/utils/download_progress_data.dart';
 import '../../../../l10n/generated/app_localizations.dart';
@@ -64,6 +65,7 @@ class MangaChapterList extends ConsumerStatefulWidget {
     required this.chapters,
     this.onOpen,
     this.onDownload,
+    this.onDownloadSelected,
     this.downloads = const <DownloadItem>[],
     this.onDeleteDownload,
     this.embedded = false,
@@ -76,6 +78,7 @@ class MangaChapterList extends ConsumerStatefulWidget {
   final List<MangaChapter> chapters;
   final ValueChanged<MangaChapter>? onOpen;
   final ValueChanged<MangaChapter>? onDownload;
+  final Future<int> Function(List<MangaChapter>)? onDownloadSelected;
   final List<DownloadItem> downloads;
   final ValueChanged<DownloadItem>? onDeleteDownload;
   final ValueChanged<Widget?>? onSelectionBarChanged;
@@ -440,6 +443,50 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     }
   }
 
+  Future<void> _downloadSelected() async {
+    final action = widget.onDownloadSelected;
+    if (action == null) return;
+    final selected = widget.chapters
+        .where((chapter) => _selectedChapterIds.contains(chapter.id))
+        .toList();
+    final chapters = selected
+        .where(
+          (chapter) =>
+              !mangaChapterDownloadAlreadyPresent(widget.downloads, chapter),
+        )
+        .toList();
+    final skipped = selected.length - chapters.length;
+    chapters.sort((a, b) {
+      if (a.number != null && b.number == null) return -1;
+      if (a.number == null && b.number != null) return 1;
+      if (a.number != null && b.number != null) {
+        final result = a.number!.compareTo(b.number!);
+        if (result != 0) return result;
+      }
+      return a.displayName.compareTo(b.displayName);
+    });
+    _clearSelection();
+    var failed = 0;
+    if (chapters.isNotEmpty) {
+      try {
+        failed = await action(chapters);
+      } catch (_) {
+        failed = chapters.length;
+      }
+    }
+    if (!mounted) return;
+    final added = chapters.length - failed;
+    final message =
+        'تمت إضافة $added فصل، وتم تجاوز $skipped'
+        '${failed > 0 ? '، وفشل $failed' : ''}';
+    final notifications = ref.read(notificationServiceProvider);
+    if (failed > 0) {
+      notifications.showError(message);
+    } else {
+      notifications.showSuccess(message);
+    }
+  }
+
   Widget _selectionBar(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
@@ -491,7 +538,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
           ),
           clipBehavior: Clip.antiAlias,
           child: SizedBox(
-            height: 120,
+            height: widget.onDownloadSelected == null ? 120 : 168,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               child: Column(
@@ -523,6 +570,19 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
                       ),
                     ],
                   ),
+                  if (widget.onDownloadSelected != null) ...[
+                    const SizedBox(height: 6),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 42,
+                      child: FilledButton.icon(
+                        key: const ValueKey('batch-download-chapters'),
+                        onPressed: _downloadSelected,
+                        icon: const Icon(Icons.download_rounded),
+                        label: Text('تنزيل $count فصل'),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 4),
                   Row(
                     children: <Widget>[
@@ -722,9 +782,8 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
         progress: repository.get(chapter.mangaId, chapter.id),
         publishedLabel: publishedLabel,
         selected: _selectedChapterIds.contains(chapter.id),
-        action: _selecting
-            ? null
-            : _downloadAction(context, chapter, progressById),
+        selecting: _selecting,
+        action: _downloadAction(context, chapter, progressById),
         onLongPress: () => _beginSelection(chapter),
         onTap: () {
           if (_selecting) {

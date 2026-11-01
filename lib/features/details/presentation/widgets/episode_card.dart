@@ -510,14 +510,20 @@ class EpisodeCard extends HookConsumerWidget {
                     // the icon returns focus to the body via this widget's own
                     // onKeyEvent.
                     if (isSelectionMode)
-                      Icon(
-                        isSelected
-                            ? Icons.check_circle_rounded
-                            : Icons.radio_button_unchecked_rounded,
-                        color: isSelected
-                            ? primary
-                            : theme.colorScheme.onSurfaceVariant,
-                        size: 30,
+                      SizedBox(
+                        height: vertical ? 30 : 140 / _thumbnailAspectRatio,
+                        width: 30,
+                        child: Center(
+                          child: Icon(
+                            isSelected
+                                ? Icons.check_circle_rounded
+                                : Icons.radio_button_unchecked_rounded,
+                            color: isSelected
+                                ? primary
+                                : theme.colorScheme.onSurfaceVariant,
+                            size: 30,
+                          ),
+                        ),
                       )
                     else
                       _buildActionButtons(

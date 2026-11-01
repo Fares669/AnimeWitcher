@@ -31,6 +31,7 @@ class DownloadItem {
   final String trackingUrl;
   final String destinationPath;
   final int parallelChunks;
+  final int activeConnections;
   final int? transferredBytes;
   final int? totalBytes;
   final int? completedPages;
@@ -50,6 +51,7 @@ class DownloadItem {
     String? trackingUrl,
     String? destinationPath,
     int? parallelChunks,
+    this.activeConnections = 0,
     this.transferredBytes,
     this.totalBytes,
     this.completedPages,
@@ -94,6 +96,39 @@ DownloadItem? completedMangaChapterDownload(
   List<DownloadItem> downloads,
   MangaChapter chapter,
 ) {
+  for (final item in downloads) {
+    if (item.status == TaskStatus.complete &&
+        _downloadMatchesMangaChapter(item, chapter)) {
+      return item;
+    }
+  }
+  return null;
+}
+
+bool mangaChapterDownloadAlreadyPresent(
+  List<DownloadItem> downloads,
+  MangaChapter chapter,
+) {
+  for (final item in downloads) {
+    if (!_downloadMatchesMangaChapter(item, chapter)) continue;
+    switch (item.status) {
+      case TaskStatus.running:
+      case TaskStatus.enqueued:
+      case TaskStatus.waitingToRetry:
+      case TaskStatus.paused:
+      case TaskStatus.complete:
+        return true;
+      case TaskStatus.failed:
+      case TaskStatus.notFound:
+      case TaskStatus.canceled:
+        break;
+    }
+  }
+  return false;
+}
+
+bool _downloadMatchesMangaChapter(DownloadItem item, MangaChapter chapter) {
+  if (item.mediaKind != DownloadMediaKind.mangaChapter) return false;
   final mangaId = chapter.mangaId.trim();
   final chapterId = chapter.id.trim();
   final logicalId = mangaId.isNotEmpty && chapterId.isNotEmpty
@@ -103,26 +138,16 @@ DownloadItem? completedMangaChapterDownload(
         ).value
       : null;
   final chapterUrl = chapter.url.trim();
-
-  for (final item in downloads) {
-    if (item.status != TaskStatus.complete ||
-        item.mediaKind != DownloadMediaKind.mangaChapter) {
-      continue;
-    }
-    if (logicalId != null && item.logicalId?.trim() == logicalId) return item;
-    final downloadedChapter = item.chapter;
-    if (downloadedChapter != null &&
-        downloadedChapter.mangaId.trim() == mangaId &&
-        downloadedChapter.id.trim() == chapterId) {
-      return item;
-    }
-    if (chapterUrl.isNotEmpty &&
-        (item.trackingUrl.trim() == chapterUrl ||
-            downloadedChapter?.url.trim() == chapterUrl)) {
-      return item;
-    }
+  if (logicalId != null && item.logicalId?.trim() == logicalId) return true;
+  final downloadedChapter = item.chapter;
+  if (downloadedChapter != null &&
+      downloadedChapter.mangaId.trim() == mangaId &&
+      downloadedChapter.id.trim() == chapterId) {
+    return true;
   }
-  return null;
+  return chapterUrl.isNotEmpty &&
+      (item.trackingUrl.trim() == chapterUrl ||
+          downloadedChapter?.url.trim() == chapterUrl);
 }
 
 DownloadItem? completedEpisodeDownload(
@@ -278,6 +303,18 @@ CollapsedDownloads collapseDuplicateDownloads(List<DownloadItem> items) {
 class DownloadsNotifier extends _$DownloadsNotifier {
   static const Duration _durableRefreshInterval = Duration(seconds: 30);
 
+  final _pendingRemovalBatches = <Object, List<DownloadItem>>{};
+
+  bool _isRemovalPending(DownloadItem item) =>
+      _pendingRemovalBatches.values.any(
+        (batch) => batch.any(
+          (pending) =>
+              pending.id == item.id &&
+              pending.logicalId == item.logicalId &&
+              pending.timestamp == item.timestamp,
+        ),
+      );
+
   final Set<String> _artworkScheduledIds = <String>{};
   List<LogicalDownloadRecordV2> _records = const <LogicalDownloadRecordV2>[];
   Map<String, Map<String, dynamic>> _metadataByTaskId =
@@ -285,6 +322,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
   StreamSubscription<List<LogicalDownloadRecordV2>>? _recordsSubscription;
   StreamSubscription<void>? _presentationSubscription;
   Timer? _durableRefreshTimer;
+  Timer? _connectionRefreshTimer;
   Future<void>? _durableReloadInFlight;
 
   @override
@@ -314,6 +352,18 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     _presentationSubscription = manager.presentationChanges.listen((_) {
       if (ref.mounted) _refreshPresentationState();
     });
+    // Refresh live connection counts from memory, without polling disk or
+    // changing the frequency of progress and speed measurements.
+    _connectionRefreshTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (ref.mounted &&
+          _records.any(
+            (record) =>
+                record.completedAtMillis == null &&
+                record.intent != DownloadUserIntent.canceled,
+          )) {
+        _refreshPresentationState();
+      }
+    });
     // Keep a much slower durable reconciliation as a lifecycle/race safety net.
     _durableRefreshTimer = Timer.periodic(_durableRefreshInterval, (_) {
       final needsDurableReconciliation = _records.any(
@@ -330,6 +380,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       unawaited(_recordsSubscription?.cancel());
       unawaited(_presentationSubscription?.cancel());
       _durableRefreshTimer?.cancel();
+      _connectionRefreshTimer?.cancel();
     });
 
     return _projectList();
@@ -425,16 +476,21 @@ class DownloadsNotifier extends _$DownloadsNotifier {
         chapter: chapter,
         mediaKind: record.mediaKind,
         logicalId: record.logicalId.value,
-        artworkMetadataVerified: downloadArtworkMetadataMatchesRecordV2(metadata, record),
+        artworkMetadataVerified: downloadArtworkMetadataMatchesRecordV2(
+          metadata,
+          record,
+        ),
         timestamp: (metadata['timestamp'] as int?) ?? record.updatedAtMillis,
         trackingUrl: trackingUrl,
         destinationPath: record.destinationPath,
         parallelChunks: record.parallelChunks,
+        activeConnections: snapshot?.activeConnections ?? 0,
         transferredBytes: snapshot?.transferredBytes,
         totalBytes: snapshot?.totalBytes ?? record.expectedBytes,
         completedPages: snapshot?.completedPages,
         totalPages: snapshot?.totalPages,
       );
+      if (_isRemovalPending(projected)) continue;
       items.add(projected);
       if (projected.status == TaskStatus.complete &&
           projected.mediaKind == DownloadMediaKind.videoEpisode &&
@@ -492,54 +548,70 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       }
     }
 
-    final manager = ref.read(downloadManagerV2Provider);
-    final storage = ref.read(storageServiceProvider);
-    final droppedIds = <String>{};
-    final orderedItems = toRemove.values.toList()
-      ..sort((a, b) => (a.logicalId?.trim().isNotEmpty == true ? 0 : 1)
-          .compareTo(b.logicalId?.trim().isNotEmpty == true ? 0 : 1));
-    for (final item in orderedItems) {
-      final logical = item.logicalId?.trim();
-      if (logical != null && logical.isNotEmpty) {
-        // Capture the deleted incarnation before releasing the manager queue.
-        // A re-download can already have replaced this logical-key metadata
-        // when delete returns, including a newly reused generation-one task.
-        final metadata = await storage.getAllDownloadMetadata();
-        await manager.delete(DownloadLogicalId(logical));
-        for (final entry in metadata.entries) {
-          if ((entry.value['logicalId'] as String?)?.trim() == logical) {
-            await storage.removeDownloadMetadataIfUnchanged(
-              entry.key,
-              entry.value,
-            );
-          }
-        }
-      } else {
-        final path = item.destinationPath.trim();
-        if (path.isNotEmpty) {
-          try {
-            final file = File(path);
-            if (!await manager.deleteLegacyDownloadedVideo(file)) {
-              continue;
+    final operation = Object();
+    _pendingRemovalBatches[operation] = toRemove.values.toList();
+    state = AsyncData(
+      current.where((item) => !_isRemovalPending(item)).toList(),
+    );
+    try {
+      final manager = ref.read(downloadManagerV2Provider);
+      final storage = ref.read(storageServiceProvider);
+      final droppedIds = <String>{};
+      final orderedItems = toRemove.values.toList()
+        ..sort(
+          (a, b) => (a.logicalId?.trim().isNotEmpty == true ? 0 : 1).compareTo(
+            b.logicalId?.trim().isNotEmpty == true ? 0 : 1,
+          ),
+        );
+      // Snapshot metadata once, then register every logical stop before awaiting
+      // any deletion. A freed slot must never promote another batch member.
+      final metadata = await storage.getAllDownloadMetadata();
+      await Future.wait(
+        orderedItems.map((item) async {
+          final logical = item.logicalId?.trim();
+          if (logical != null && logical.isNotEmpty) {
+            // Capture the deleted incarnation before releasing the manager queue.
+            // A re-download can already have replaced this logical-key metadata
+            // when delete returns, including a newly reused generation-one task.
+            await manager.delete(DownloadLogicalId(logical));
+            for (final entry in metadata.entries) {
+              if ((entry.value['logicalId'] as String?)?.trim() == logical) {
+                await storage.removeDownloadMetadataIfUnchanged(
+                  entry.key,
+                  entry.value,
+                );
+              }
             }
-          } catch (_) {
-            continue;
+          } else {
+            final path = item.destinationPath.trim();
+            if (path.isNotEmpty) {
+              try {
+                final file = File(path);
+                if (!await manager.deleteLegacyDownloadedVideo(file)) {
+                  return;
+                }
+              } catch (_) {
+                return;
+              }
+            }
+            await storage.removeDownloadMetadata(item.id);
           }
-        }
-        await storage.removeDownloadMetadata(item.id);
-      }
-      droppedIds.add(item.id);
-    }
-
-    if (state.value != null) {
-      state = AsyncData(
-        state.value!.where((item) => !droppedIds.contains(item.id)).toList(),
+          droppedIds.add(item.id);
+        }),
       );
+
+      if (state.value != null) {
+        state = AsyncData(
+          state.value!.where((item) => !droppedIds.contains(item.id)).toList(),
+        );
+      }
+      // The persisted records, not taskId tombstones, own visibility. New
+      // downloads may legitimately reuse the deleted task's generation-one ID.
+      return droppedIds.length == toRemove.length;
+    } finally {
+      _pendingRemovalBatches.remove(operation);
+      if (ref.mounted) await _reloadDurableState();
     }
-    // The persisted records, not taskId tombstones, own visibility. New
-    // downloads may legitimately reuse the deleted task's generation-one ID.
-    await _reloadDurableState();
-    return droppedIds.length == toRemove.length;
   }
 
   Future<void> pauseDownload(String taskId) async {
@@ -652,7 +724,9 @@ double _progressFor(
   DownloadTransportSnapshot? snapshot,
 ) {
   if (record.completedAtMillis != null) return 1;
-  final progress = snapshot?.taskId == record.taskId ? snapshot?.progress ?? 0 : 0;
+  final progress = snapshot?.taskId == record.taskId
+      ? snapshot?.progress ?? 0
+      : 0;
   return progress.clamp(0.0, 1.0).toDouble();
 }
 

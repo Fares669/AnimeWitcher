@@ -13,6 +13,7 @@ class MangaChapterRow extends StatelessWidget {
     this.onTap,
     this.onLongPress,
     this.selected = false,
+    this.selecting = false,
   });
 
   final MangaChapter chapter;
@@ -22,6 +23,7 @@ class MangaChapterRow extends StatelessWidget {
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
   final bool selected;
+  final bool selecting;
 
   String? get progressLabel {
     final state = progress;
@@ -70,12 +72,7 @@ class MangaChapterRow extends StatelessWidget {
               children: <Widget>[
                 // The name already carries the number, so the leading place
                 // is the book: a second number beside it read as a repeat.
-                Icon(
-                  selected
-                      ? Icons.check_circle_rounded
-                      : Icons.menu_book_rounded,
-                  color: selected ? accent : foreground,
-                ),
+                Icon(Icons.menu_book_rounded, color: foreground),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Column(
@@ -136,9 +133,24 @@ class MangaChapterRow extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (action != null) ...<Widget>[
+                if (action != null || selecting || selected) ...<Widget>[
                   const SizedBox(width: 10),
-                  action!,
+                  if (selecting || selected)
+                    SizedBox.square(
+                      dimension: 34,
+                      child: InkWell(
+                        customBorder: const CircleBorder(),
+                        onTap: onTap,
+                        child: Icon(
+                          selected
+                              ? Icons.check_circle_rounded
+                              : Icons.radio_button_unchecked_rounded,
+                          color: accent,
+                        ),
+                      ),
+                    )
+                  else
+                    action!,
                 ],
               ],
             ),

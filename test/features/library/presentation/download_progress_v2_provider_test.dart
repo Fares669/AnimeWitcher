@@ -26,6 +26,52 @@ final class _EmptyDownloadsNotifier extends DownloadsNotifier {
 }
 
 void main() {
+  for (final scenario in [([0], true), ([1, 2], true), ([0, 1, 2], true), ([0], false)]) {
+    final selection = scenario.$1;
+    final accepted = scenario.$2;
+    test('deletion hides $selection before native cancellation finishes (accepted: $accepted)', () async {
+      final temp = await Directory.systemTemp.createTemp('aw-immediate-delete-');
+      final gate = Completer<void>();
+      final store = InMemoryLogicalDownloadStoreV2();
+      final storage = _DownloadMetadataStorage();
+      final gateway = _ReaddGateway(cancelGate: gate.future, cancelAccepted: accepted);
+      final manager = DownloadManagerV2(store: store, gateway: gateway,
+        sourceResolver: StaticSourceResolverV2());
+      final container = ProviderContainer(overrides: [
+        downloadManagerV2Provider.overrideWithValue(manager),
+        logicalDownloadStoreV2Provider.overrideWithValue(store),
+        storageServiceProvider.overrideWithValue(storage),
+      ]);
+      final subscription = container.listen(downloadsProvider, (_, _) {});
+      addTearDown(() async {
+        if (!gate.isCompleted) gate.complete();
+        subscription.close(); container.dispose(); await manager.dispose();
+        await temp.delete(recursive: true);
+      });
+      await container.read(downloadsProvider.future);
+      for (var i = 0; i < 3; i++) {
+        final id = DownloadLogicalId('immediate-$i');
+        storage.metadata[id.value] = {'logicalId': id.value, 'timestamp': i + 1,
+          'item': MultimediaItem(title: 'Episode $i', url: 'anime://test', posterUrl: '').toJson()};
+        await manager.start(DownloadStartRequestV2(logicalId: id, mediaId: 'anime',
+          unitKey: '$i', variantKey: 'original', destinationPath: '${temp.path}/$i.mp4',
+          sourceDescriptor: const {}, allowPause: true, retries: 0, parallelChunks: 1));
+      }
+      await _waitForDownloadCount(container, 3);
+      final items = container.read(downloadsProvider).requireValue;
+      final removal = container.read(downloadsProvider.notifier)
+          .removeDownloads([for (final i in selection) items[i]]);
+      final outcome = removal.then<Object>((value) => value, onError: (Object error) => error);
+      expect(container.read(downloadsProvider).requireValue, hasLength(3 - selection.length));
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(container.read(downloadsProvider).requireValue, hasLength(3 - selection.length),
+        reason: 'native progress and record updates must not resurrect pending removals');
+      gate.complete();
+      expect(await outcome, accepted ? isTrue : isA<StateError>());
+      await _waitForDownloadCount(container, accepted ? 3 - selection.length : 3);
+    });
+  }
+
   testWidgets('idle downloads do not publish a new list every second', (
     tester,
   ) async {
@@ -322,6 +368,9 @@ final class _DownloadMetadataStorage extends MemoryStorageService {
 }
 
 final class _ReaddGateway implements BackgroundDownloaderGateway {
+  _ReaddGateway({this.cancelGate, this.cancelAccepted = true});
+  final Future<void>? cancelGate;
+  final bool cancelAccepted;
   final Map<String, _ReaddHandle> handles = {};
 
   @override
@@ -329,7 +378,7 @@ final class _ReaddGateway implements BackgroundDownloaderGateway {
 
   @override
   Future<DownloadTransportHandle> start(DownloadTaskSpecV2 spec) async {
-    final handle = _ReaddHandle(spec.taskId);
+    final handle = _ReaddHandle(spec.taskId, cancelGate: cancelGate, cancelAccepted: cancelAccepted);
     handles[spec.taskId] = handle;
     return handle;
   }
@@ -347,7 +396,7 @@ final class _ReaddGateway implements BackgroundDownloaderGateway {
 }
 
 final class _ReaddHandle implements DownloadTransportHandle {
-  _ReaddHandle(this.taskId) : _current = DownloadTransportSnapshot(
+  _ReaddHandle(this.taskId, {this.cancelGate, this.cancelAccepted = true}) : _current = DownloadTransportSnapshot(
     taskId: taskId,
     status: DownloadTransportStatus.running,
     progress: 0,
@@ -356,6 +405,8 @@ final class _ReaddHandle implements DownloadTransportHandle {
   @override
   final String taskId;
 
+  final Future<void>? cancelGate;
+  final bool cancelAccepted;
   DownloadTransportSnapshot _current;
   final StreamController<DownloadTransportSnapshot> _changes =
       StreamController<DownloadTransportSnapshot>.broadcast(sync: true);
@@ -374,6 +425,8 @@ final class _ReaddHandle implements DownloadTransportHandle {
 
   @override
   Future<bool> cancel() async {
+    if (cancelGate != null) await cancelGate;
+    if (!cancelAccepted) return false;
     _current = DownloadTransportSnapshot(
       taskId: taskId,
       status: DownloadTransportStatus.canceled,

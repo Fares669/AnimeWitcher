@@ -32,11 +32,15 @@ class CompletedDownloadEpisodeCard extends ConsumerStatefulWidget {
     required this.item,
     required this.onPlay,
     required this.onDelete,
+    this.selecting = false,
+    this.selected = false,
   });
 
   final DownloadItem item;
   final VoidCallback onPlay;
   final VoidCallback onDelete;
+  final bool selecting;
+  final bool selected;
 
   @override
   ConsumerState<CompletedDownloadEpisodeCard> createState() =>
@@ -202,12 +206,19 @@ class _CompletedDownloadEpisodeCardState
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
           decoration: BoxDecoration(
-            color: watchState.isWatched ? watchedCardColor : normalCardColor,
+            color: widget.selected
+                ? theme.colorScheme.primary.withValues(alpha: 0.24)
+                : watchState.isWatched
+                ? watchedCardColor
+                : normalCardColor,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: theme.dividerColor.withValues(
-                alpha: theme.brightness == Brightness.dark ? 0.1 : 0.5,
-              ),
+              color: widget.selected
+                  ? theme.colorScheme.primary
+                  : theme.dividerColor.withValues(
+                      alpha: theme.brightness == Brightness.dark ? 0.1 : 0.5,
+                    ),
+              width: widget.selected ? 2 : 1,
             ),
           ),
           clipBehavior: Clip.antiAlias,
@@ -276,12 +287,20 @@ class _CompletedDownloadEpisodeCardState
                     width: 34,
                     height: 76,
                     child: Center(
-                      child: EpisodeActionChip(
-                        tooltip: 'حذف الحلقة',
-                        icon: Icons.delete_outline_rounded,
-                        color: theme.colorScheme.error,
-                        onPressed: widget.onDelete,
-                      ),
+                      child: widget.selecting
+                          ? Icon(
+                              widget.selected
+                                  ? Icons.check_circle_rounded
+                                  : Icons.radio_button_unchecked_rounded,
+                              color: theme.colorScheme.primary,
+                              size: 30,
+                            )
+                          : EpisodeActionChip(
+                              tooltip: 'حذف الحلقة',
+                              icon: Icons.delete_outline_rounded,
+                              color: theme.colorScheme.error,
+                              onPressed: widget.onDelete,
+                            ),
                     ),
                   ),
                 ],
