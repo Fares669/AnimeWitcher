@@ -13,6 +13,10 @@ import 'package:flutter_test/flutter_test.dart';
 
 class _Storage extends StorageService {
   final values = <String, String>{};
+  final removedNativeUrls = <String>[];
+  @override
+  Future<void> removeFromContinueWatching(String url) async =>
+      removedNativeUrls.add(url);
   @override
   String? getString(String key) => values[key];
   @override
@@ -102,6 +106,20 @@ void main() {
           .saveProgress(item, 25, 100, lastEpisodeUrl: 'ep');
       expect(container.read(watchHistoryProvider).single.item.title, 'Rift');
       expect(container.read(continueWatchingProvider).single.position, 25);
+      final nativeItem = MultimediaItem(
+        title: 'Native',
+        url: 'same',
+        posterUrl: '',
+        provider: native.packageName,
+      );
+      await container
+          .read(continueWatchingProvider.notifier)
+          .removeForItem(nativeItem);
+      expect(storage.removedNativeUrls, ['same']);
+      expect(
+        container.read(continueWatchingProvider).single.item.title,
+        'Rift',
+      );
       await container.read(activeProviderProvider.notifier).set(native);
       expect(container.read(watchHistoryProvider).single.item.title, 'Native');
       expect(container.read(continueWatchingProvider), isEmpty);

@@ -13,7 +13,6 @@ import '../../../core/extensions/item_provider_resolution.dart';
 import '../../../core/extensions/extension_manager.dart';
 
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
-import 'package:animewitcher/core/storage/provider_local_library.dart';
 import '../../library/presentation/history_provider.dart';
 import 'playback_launcher.dart';
 import '../../library/presentation/downloads_provider.dart';
@@ -303,11 +302,7 @@ class DetailsController extends _$DetailsController {
       await ref.read(continueWatchingProvider.notifier).remove(mainUrl);
     } else {
       await setEpisodesWatchedFor(watchRepo, contextItem, selectedEpisodes, watched);
-      if (contextItem.provider == animeRiftProviderId) {
-        await ref.read(continueWatchingProvider.notifier).removeForItem(contextItem);
-      } else {
-        await ref.read(continueWatchingProvider.notifier).remove(mainUrl);
-      }
+      await ref.read(continueWatchingProvider.notifier).removeForItem(contextItem);
     }
 
     if (!ref.mounted) {
