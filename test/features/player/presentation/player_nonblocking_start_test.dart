@@ -302,6 +302,17 @@ class _History extends WatchHistory {
 }
 
 class _ContinueWatching extends ContinueWatchingNotifier {
+  MultimediaItem? saved;
+  MultimediaItem? removedItem;
+  int unqualifiedRemovals = 0;
+  @override
+  Future<void> remove(String url) async {
+    unqualifiedRemovals++;
+  }
+  @override
+  Future<void> removeForItem(MultimediaItem item) async {
+    removedItem = item;
+  }
   @override
   List<HistoryItem> build() => const [];
   @override
@@ -317,7 +328,9 @@ class _ContinueWatching extends ContinueWatchingNotifier {
     String? episodeServerName,
     String? episodeServerNumber,
     String? episodePosterUrl,
-  }) async {}
+  }) async {
+    saved = item;
+  }
 }
 
 class _Files extends DownloadedFiles {
@@ -736,6 +749,47 @@ void main() {
       // No error, no pause, no ten-minute expiry, no 12-second stall occurred.
     },
   );
+
+  test('completed native movie removes progress using item identity', () async {
+    final item = MultimediaItem(
+      title: 'native', url: 'same', posterUrl: '',
+      provider: 'com.fares669.animewitcher.native',
+      contentType: MultimediaContentType.movie,
+    );
+    await controller.init(
+      player: player, item: item, videoUrl: 'https://video.test/movie.mp4',
+    );
+    player.value = player.value.copyWith(
+      position: const Duration(seconds: 95),
+      duration: const Duration(seconds: 100),
+    );
+    controller.saveProgress();
+    await flush();
+    final history =
+        container.read(continueWatchingProvider.notifier) as _ContinueWatching;
+    expect(history.removedItem, same(item));
+    expect(history.unqualifiedRemovals, 0);
+  });
+
+  test('legacy untagged playback progress preserves its original identity', () async {
+    final item = MultimediaItem(
+      title: 'legacy', url: 'same', posterUrl: '',
+      contentType: MultimediaContentType.movie,
+    );
+    await controller.init(
+      player: player, item: item, videoUrl: 'https://video.test/movie.mp4',
+    );
+    player.value = player.value.copyWith(
+      position: const Duration(seconds: 50),
+      duration: const Duration(seconds: 100),
+    );
+    controller.saveProgress();
+    await flush();
+    final history =
+        container.read(continueWatchingProvider.notifier) as _ContinueWatching;
+    expect(history.saved?.provider, isNull);
+    expect(history.saved?.url, item.url);
+  });
 
   test('transient error waits for progress before refreshing source', () async {
     await startSource();

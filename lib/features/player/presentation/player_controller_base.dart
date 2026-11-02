@@ -3792,15 +3792,10 @@ class PlayerController extends Notifier<PlayerState> {
   }
 
   Future<void> _recordEpisodeOpened(Episode episode) async {
-    final pId =
-        _item.provider ??
-        ref.read(activeProviderProvider)?.packageName ??
-        'Unknown';
-    final itemToSave = _item.copyWith(provider: pId);
     await ref
         .read(watchHistoryProvider.notifier)
         .recordOpened(
-          itemToSave,
+          _item,
           lastEpisodeUrl: episode.url,
           season: episode.season,
           episode: episode.episode,
@@ -4027,15 +4022,10 @@ class PlayerController extends Notifier<PlayerState> {
 
       // Livestreams: save to history without progress (position=0, duration=0)
       if (isLivestream) {
-        final pId =
-            _item.provider ??
-            ref.read(activeProviderProvider)?.packageName ??
-            'Unknown';
-        final itemToSave = _item.copyWith(provider: pId);
         ref
             .read(continueWatchingProvider.notifier)
             .saveProgress(
-              itemToSave,
+              _item,
               0,
               0,
               lastStreamUrl: null, // Don't save temporary links for livestreams
@@ -4066,16 +4056,9 @@ class PlayerController extends Notifier<PlayerState> {
         }
 
         final continueNotifier = ref.read(continueWatchingProvider.notifier);
-        final pId =
-            _item.provider ??
-            ref.read(activeProviderProvider)?.packageName ??
-            'Unknown';
-        final itemToSave = _item.copyWith(provider: pId);
 
         if (!isSeries) {
-          _item.provider == animeRiftProviderId
-              ? continueNotifier.removeForItem(_item)
-              : continueNotifier.remove(_item.url);
+          continueNotifier.removeForItem(_item);
           return;
         } else if (currentEpisode != null) {
           // Find next episode
@@ -4090,7 +4073,7 @@ class PlayerController extends Notifier<PlayerState> {
             final nextEpisode = episodes[currentIndex + 1];
             // Save NEXT episode as current progress (reset to 0)
             continueNotifier.saveProgress(
-              itemToSave,
+              _item,
               0,
               0,
               lastStreamUrl: null,
@@ -4110,9 +4093,7 @@ class PlayerController extends Notifier<PlayerState> {
             return;
           } else {
             // Last episode of the series completed
-            _item.provider == animeRiftProviderId
-              ? continueNotifier.removeForItem(_item)
-              : continueNotifier.remove(_item.url);
+            continueNotifier.removeForItem(_item);
             return;
           }
         }
@@ -4120,15 +4101,10 @@ class PlayerController extends Notifier<PlayerState> {
 
       // 3. Normal local progress saving.
       if (progressPercent > 5 || isSeries) {
-        final pId =
-            _item.provider ??
-            ref.read(activeProviderProvider)?.packageName ??
-            'Unknown';
-        final itemToSave = _item.copyWith(provider: pId);
         ref
             .read(continueWatchingProvider.notifier)
             .saveProgress(
-              itemToSave,
+              _item,
               pos,
               dur,
               lastStreamUrl: state.currentStream?.url,
