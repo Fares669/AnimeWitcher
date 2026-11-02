@@ -22,6 +22,7 @@ import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/extensions/base_provider.dart';
 import '../../../../core/extensions/extension_manager.dart';
 import '../../../../core/storage/history_repository.dart';
+import '../../../../core/storage/provider_local_library.dart';
 import '../../../../core/storage/episode_watch_repository.dart';
 import '../../library/presentation/history_provider.dart';
 import '../../../../core/providers/device_info_provider.dart';
@@ -2592,14 +2593,21 @@ class PlayerController extends Notifier<PlayerState> {
           _item.contentType == MultimediaContentType.anime);
 
       String? lastUrl;
-      if (isSeries) {
+      if (isSeries && _item.provider != animeRiftProviderId) {
         lastUrl = historyRepo.getLastStreamUrl(_item.url);
       }
 
       if (lastUrl == null) {
-        final continueList = ref.read(continueWatchingProvider);
+        final activeId = ref.read(activeProviderProvider)?.packageName;
+        final continueList = _item.provider == animeRiftProviderId
+            ? historyRepo.getContinueWatchingFor(animeRiftProviderId)
+            : activeId == animeRiftProviderId
+                ? historyRepo.getContinueWatching()
+                : ref.read(continueWatchingProvider);
         final previousState = continueList.firstWhere(
-          (h) => h.item.url == _item.url,
+          (h) => h.item.url == _item.url &&
+              (h.item.provider == animeRiftProviderId) ==
+                  (_item.provider == animeRiftProviderId),
           orElse: () => HistoryItem(
             item: _item,
             position: 0,
@@ -4050,9 +4058,7 @@ class PlayerController extends Notifier<PlayerState> {
         if (!_hasMarkedWatched) {
           if (isSeries && currentEpisode != null) {
             unawaited(
-              ref
-                  .read(episodeWatchRepositoryProvider)
-                  .setWatched(_item.url, currentEpisode, true)
+              setEpisodeWatchedFor(ref.read(episodeWatchRepositoryProvider), _item, currentEpisode, true)
                   .catchError((Object error) {
                     talker.error('Failed to save local watched state', error);
                   }),
@@ -4069,7 +4075,9 @@ class PlayerController extends Notifier<PlayerState> {
         final itemToSave = _item.copyWith(provider: pId);
 
         if (!isSeries) {
-          continueNotifier.remove(_item.url);
+          _item.provider == animeRiftProviderId
+              ? continueNotifier.removeForItem(_item)
+              : continueNotifier.remove(_item.url);
           return;
         } else if (currentEpisode != null) {
           // Find next episode
@@ -4104,7 +4112,9 @@ class PlayerController extends Notifier<PlayerState> {
             return;
           } else {
             // Last episode of the series completed
-            continueNotifier.remove(_item.url);
+            _item.provider == animeRiftProviderId
+              ? continueNotifier.removeForItem(_item)
+              : continueNotifier.remove(_item.url);
             return;
           }
         }
@@ -5091,14 +5101,14 @@ class PlayerController extends Notifier<PlayerState> {
     final history = ref.read(historyRepositoryProvider);
     final episode = _resolveCurrentEpisode();
     if (isSeries) {
-      return history.getEpisodePosition(
-        _currentProgressUrl,
-        mainUrl: _item.url,
+      return historyPositionForItem(history,
+        _item,
+        episodeUrl: _currentProgressUrl,
         season: episode?.season,
         episode: episode?.episode,
       );
     }
-    return history.getPosition(_item.url);
+    return historyPositionForItem(history, _item);
   }
 
   /// [persist] = true marks this as a user-driven speed change that should

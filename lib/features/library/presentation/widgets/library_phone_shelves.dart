@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/storage/library_category.dart';
+import '../../../../core/storage/provider_local_library.dart';
+import '../../../../core/extensions/extension_manager.dart';
 import '../../../../core/storage/library_repository.dart';
 import '../../../../core/storage/storage_service.dart';
 import '../../../../shared/widgets/app_search_field.dart';
@@ -103,7 +105,7 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
   ) => _lists.putIfAbsent(
     (kind, category),
     () => sortLibraryItems(
-      libraryItemsFor(repository, category, kind),
+      ref.read(libraryProvider.notifier).itemsForCategory(kind, category),
       _prefs.sort,
     ),
   );
@@ -384,7 +386,18 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
                               : (index) => _selectList(kind, tabs[index]),
                         ),
                 ),
-                body: body,
+                body: kind == LibraryMediaKind.anime &&
+                        ref.watch(activeProviderProvider)?.packageName == animeRiftProviderId
+                    ? Column(children: [
+                        Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Text(_t(context,
+                            'Anime Rift library is stored on this device and is not synced.',
+                            'مكتبة Anime Rift محفوظة على هذا الجهاز ولا تتم مزامنتها.')),
+                        ),
+                        Expanded(child: body),
+                      ])
+                    : body,
               );
             },
           ),

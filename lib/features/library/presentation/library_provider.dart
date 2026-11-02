@@ -37,6 +37,13 @@ class Library extends _$Library {
         : LibrarySuccess(items, category, mediaKind);
   }
 
+  List<MultimediaItem> itemsForCategory(LibraryMediaKind kind, LibraryCategory category) {
+    final local = ref.read(activeProviderProvider)?.packageName == animeRiftProviderId &&
+        kind == LibraryMediaKind.anime;
+    final items = local ? _local().items(category) : ref.read(libraryRepositoryProvider).getLibraryItems(category: category);
+    return filterLibraryItemsByKind(items, kind);
+  }
+
   LibraryCategory get selectedCategory => state.category;
   LibraryMediaKind get selectedMediaKind => state.mediaKind;
 

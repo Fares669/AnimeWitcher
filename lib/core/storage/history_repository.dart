@@ -7,6 +7,8 @@ import '../account/account_providers.dart';
 import '../account/animewitcher_account_service.dart';
 import '../domain/entity/multimedia_item.dart';
 import 'storage_service.dart';
+import 'provider_local_history.dart';
+import 'provider_local_library.dart';
 
 part 'history_repository.g.dart';
 
@@ -84,6 +86,61 @@ class HistoryItem {
   }
 }
 
+List<HistoryItem> historyForItem(HistoryRepository repository, MultimediaItem item) =>
+    item.provider == animeRiftProviderId
+        ? repository.getWatchHistoryFor(animeRiftProviderId)
+        : repository.getWatchHistory();
+
+int historyPositionForItem(
+  HistoryRepository repository,
+  MultimediaItem item, {
+  String? episodeUrl,
+  int? season,
+  int? episode,
+}) {
+  if (item.provider == animeRiftProviderId) {
+    return repository.positionForItem(
+      item,
+      episodeUrl: episodeUrl,
+      season: season,
+      episode: episode,
+    );
+  }
+  return episodeUrl == null
+      ? repository.getPosition(item.url)
+      : repository.getEpisodePosition(
+          episodeUrl,
+          mainUrl: item.url,
+          season: season,
+          episode: episode,
+        );
+}
+
+int historyDurationForItem(
+  HistoryRepository repository,
+  MultimediaItem item, {
+  String? episodeUrl,
+  int? season,
+  int? episode,
+}) {
+  if (item.provider == animeRiftProviderId) {
+    return repository.durationForItem(
+      item,
+      episodeUrl: episodeUrl,
+      season: season,
+      episode: episode,
+    );
+  }
+  return episodeUrl == null
+      ? repository.getDuration(item.url)
+      : repository.getEpisodeDuration(
+          episodeUrl,
+          mainUrl: item.url,
+          season: season,
+          episode: episode,
+        );
+}
+
 @Riverpod(keepAlive: true)
 HistoryRepository historyRepository(Ref ref) {
   return HistoryRepository(
@@ -98,6 +155,72 @@ class HistoryRepository {
 
   HistoryRepository(this._storageService, this._accountService);
 
+  ProviderLocalHistory _local() =>
+      ProviderLocalHistory(_storageService, animeRiftProviderId);
+
+  List<HistoryItem> getWatchHistoryFor(String? providerId) =>
+      providerId == animeRiftProviderId
+      ? _local().history()
+      : getWatchHistory();
+  List<HistoryItem> getContinueWatchingFor(String? providerId) =>
+      providerId == animeRiftProviderId
+      ? _local().continueWatching()
+      : getContinueWatching();
+  Future<void> clearContinueWatchingFor(String? providerId) =>
+      providerId == animeRiftProviderId
+      ? _local().clearContinueWatching()
+      : clearContinueWatching();
+  Future<void> removeContinueWatchingFor(String url, String? providerId) =>
+      providerId == animeRiftProviderId
+      ? _local().removeContinueWatching(url)
+      : removeContinueWatching(url);
+  Future<void> clearHistoryFor(String? providerId) =>
+      providerId == animeRiftProviderId
+      ? _local().clearHistory()
+      : clearAllHistory();
+  Future<void> removeHistoryFor(String url, String? providerId) =>
+      providerId == animeRiftProviderId
+      ? _local().removeHistory(url)
+      : removeFromHistory(url);
+
+  int positionForItem(
+    MultimediaItem item, {
+    String? episodeUrl,
+    int? season,
+    int? episode,
+  }) {
+    if (item.provider == animeRiftProviderId) {
+      return _local().position(item.url, episodeUrl);
+    }
+    return episodeUrl == null
+        ? getPosition(item.url)
+        : getEpisodePosition(
+            episodeUrl,
+            mainUrl: item.url,
+            season: season,
+            episode: episode,
+          );
+  }
+
+  int durationForItem(
+    MultimediaItem item, {
+    String? episodeUrl,
+    int? season,
+    int? episode,
+  }) {
+    if (item.provider == animeRiftProviderId) {
+      return _local().duration(item.url, episodeUrl);
+    }
+    return episodeUrl == null
+        ? getDuration(item.url)
+        : getEpisodeDuration(
+            episodeUrl,
+            mainUrl: item.url,
+            season: season,
+            episode: episode,
+          );
+  }
+
   Future<void> removeFromHistory(String url) async {
     await _storageService.removeFromHistory(url);
     _syncInBackground(
@@ -111,6 +234,10 @@ class HistoryRepository {
     int timestamp,
     int position,
   ) async {
+    if (item.item.provider == animeRiftProviderId) {
+      await _local().updateHistory(item, timestamp, position);
+      return;
+    }
     await _storageService.updateHistoryItemTimestampAndPosition(
       item.item.url,
       item.lastEpisodeUrl,
@@ -148,6 +275,19 @@ class HistoryRepository {
     String? episodeServerNumber,
     String? episodePosterUrl,
   }) async {
+    if (item.provider == animeRiftProviderId) {
+      await _local().recordOpened(
+        item,
+        episodeUrl: lastEpisodeUrl,
+        season: season,
+        episode: episode,
+        episodeTitle: episodeTitle,
+        episodeServerName: episodeServerName,
+        episodeServerNumber: episodeServerNumber,
+        episodePosterUrl: episodePosterUrl,
+      );
+      return;
+    }
     await _storageService.recordHistoryOpen(
       item,
       lastEpisodeUrl: lastEpisodeUrl,
@@ -177,6 +317,22 @@ class HistoryRepository {
     String? episodeServerNumber,
     String? episodePosterUrl,
   }) async {
+    if (item.provider == animeRiftProviderId) {
+      await _local().saveProgress(
+        item,
+        position,
+        duration,
+        episodeUrl: lastEpisodeUrl,
+        season: season,
+        episode: episode,
+        episodeTitle: episodeTitle,
+        episodeServerName: episodeServerName,
+        episodeServerNumber: episodeServerNumber,
+        episodePosterUrl: episodePosterUrl,
+        lastStreamUrl: lastStreamUrl,
+      );
+      return;
+    }
     await _storageService.saveContinueWatchingProgress(
       item,
       position,

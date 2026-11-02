@@ -1,3 +1,8 @@
+import 'package:animewitcher/core/extensions/base_provider.dart';
+import 'package:animewitcher/core/storage/provider_local_library.dart';
+import 'package:animewitcher/core/storage/library_category.dart';
+import 'package:dio/dio.dart';
+import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_account_service.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
@@ -76,6 +81,19 @@ final class _LibraryStorage extends MemoryStorageService {
   String? getLibraryItemCategory(String url) => null;
 }
 
+class _RiftProvider extends AnimeWitcherProvider {
+  @override String get packageName => animeRiftProviderId;
+  @override String get name => 'Anime Rift';
+  @override String get mainUrl => 'https://example.test';
+  @override String get version => '1';
+  @override List<String> get languages => ['ar'];
+  @override Set<ProviderType> get supportedTypes => {ProviderType.anime};
+  @override Future<List<MultimediaItem>> search(String query, {CancelToken? cancelToken}) async => [];
+  @override Future<Map<String, List<MultimediaItem>>> getHome() async => {};
+  @override Future<MultimediaItem> getDetails(String url) => throw UnimplementedError();
+  @override Future<List<StreamResult>> loadStreams(String url) async => [];
+}
+
 final class _History extends WatchHistory {
   _History(this.items);
 
@@ -95,6 +113,7 @@ Future<_LibraryStorage> _pump(
   List<HistoryItem> history = const <HistoryItem>[],
   Map<String, String> strings = const <String, String>{},
   bool? showPageMenuButtons,
+  bool rift = false,
 }) async {
   final storage =
       _LibraryStorage({
@@ -107,6 +126,10 @@ Future<_LibraryStorage> _pump(
         })
         ..strings['library_media_kind'] = kind
         ..strings.addAll(strings);
+  if (rift) {
+    await ProviderLocalLibrary(storage, animeRiftProviderId)
+        .setCategory(_item('RiftOnly'), LibraryCategory.watching);
+  }
   final account = AnimeWitcherAccountService(
     storage: storage,
     secureStorage: SecureTokenStorage(storage),
@@ -118,6 +141,7 @@ Future<_LibraryStorage> _pump(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
+        activeProviderProvider.overrideWithValue(rift ? _RiftProvider() : null),
         storageServiceProvider.overrideWithValue(storage),
         animeWitcherAccountServiceProvider.overrideWithValue(account),
         watchHistoryProvider.overrideWith(() => _History(history)),
@@ -142,6 +166,14 @@ Future<_LibraryStorage> _pump(
 }
 
 void main() {
+  testWidgets('phone library shows Rift entries instead of native entries', (tester) async {
+    await _pump(tester, size: const Size(400, 860), kind: 'anime', rift: true);
+    await tester.pump();
+    expect(find.text('RiftOnly'), findsWidgets);
+    expect(find.text('Frieren'), findsNothing);
+    expect(find.text('مكتبة Anime Rift محفوظة على هذا الجهاز ولا تتم مزامنتها.'), findsOneWidget);
+  });
+
   testWidgets('PC: menu appears top left and hides with the top bar', (
     tester,
   ) async {
@@ -437,6 +469,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+        activeProviderProvider.overrideWithValue(null),
           storageServiceProvider.overrideWithValue(storage),
           animeWitcherAccountServiceProvider.overrideWithValue(account),
           watchHistoryProvider.overrideWith(() => _History(const [])),

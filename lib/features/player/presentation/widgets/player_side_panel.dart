@@ -391,19 +391,19 @@ class _PlayerEpisodesPanelState extends ConsumerState<PlayerEpisodesPanel> {
         final isCurrent = ep.url == currentUrl;
         final isAnchor = isCurrent && !anchorAssigned;
         if (isAnchor) anchorAssigned = true;
-        final pos = historyRepo.getEpisodePosition(
-          ep.url,
-          mainUrl: widget.item.url,
+        final pos = historyPositionForItem(historyRepo,
+          widget.item,
+          episodeUrl: ep.url,
           season: ep.season,
           episode: ep.episode,
         );
-        final dur = historyRepo.getEpisodeDuration(
-          ep.url,
-          mainUrl: widget.item.url,
+        final dur = historyDurationForItem(historyRepo,
+          widget.item,
+          episodeUrl: ep.url,
           season: ep.season,
           episode: ep.episode,
         );
-        final isWatched = episodeWatchRepo.isWatched(widget.item.url, ep);
+        final isWatched = episodeIsWatchedFor(episodeWatchRepo, widget.item, ep);
         rows.add(
           _EpisodeRow(
             parentItem: widget.item,

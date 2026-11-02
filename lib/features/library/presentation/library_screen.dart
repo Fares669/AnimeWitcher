@@ -6,7 +6,6 @@ import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 
 import '../../../core/providers/device_info_provider.dart';
 import '../../../core/storage/library_category.dart';
-import '../../../core/storage/library_repository.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../../core/utils/layout_constants.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
@@ -90,18 +89,14 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   Widget _buildWide(BuildContext context) {
     final libraryState = ref.watch(libraryProvider);
     final history = ref.watch(watchHistoryProvider);
-    final repository = ref.read(libraryRepositoryProvider);
     final kind = libraryState.mediaKind;
     final category = libraryState.category;
     final counts = <LibraryMediaKind, Map<LibraryCategory, int>>{
       for (final listKind in LibraryMediaKind.values)
         listKind: <LibraryCategory, int>{
           for (final listCategory in LibraryCategory.values)
-            listCategory: libraryItemsFor(
-              repository,
-              listCategory,
-              listKind,
-            ).length,
+            listCategory: ref.read(libraryProvider.notifier)
+                .itemsForCategory(listKind, listCategory).length,
         },
     };
     final recentCount = libraryRecentFor(

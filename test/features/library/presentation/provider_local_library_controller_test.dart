@@ -9,6 +9,7 @@ import 'package:animewitcher/core/storage/secure_token_storage.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/library/presentation/library_provider.dart';
 import 'package:animewitcher/features/library/presentation/library_state.dart';
+import 'package:animewitcher/features/library/presentation/library_media_kind.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -33,6 +34,7 @@ class _Memory extends StorageService {
   @override
   List<MultimediaItem> getLibraryItems({String? category}) => [
     MultimediaItem(title: 'Native', url: 'id', posterUrl: ''),
+    MultimediaItem(title: 'Manga', url: 'manga', posterUrl: '', contentType: MultimediaContentType.manga),
   ];
 }
 
@@ -132,6 +134,8 @@ void main() {
       provider: animeRiftProviderId,
     );
     await library.addItem(item, category: LibraryCategory.watching);
+    expect(library.itemsForCategory(LibraryMediaKind.anime, LibraryCategory.watching).single.title, 'Rift');
+    expect(library.itemsForCategory(LibraryMediaKind.manga, LibraryCategory.watching).single.title, 'Manga');
     expect(
       (container.read(libraryProvider) as LibrarySuccess).items.single.title,
       'Rift',

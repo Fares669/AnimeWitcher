@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:animewitcher/core/account/account_providers.dart';
+import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/storage/provider_local_library.dart';
 
 import '../../../../core/storage/history_repository.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
@@ -15,29 +17,47 @@ class WatchHistory extends _$WatchHistory {
   List<HistoryItem> build() {
     ref.watch(accountDataRevisionProvider);
     final repository = ref.watch(historyRepositoryProvider);
-    return repository.getWatchHistory();
+    final id = ref.watch(activeProviderProvider)?.packageName;
+    return id == animeRiftProviderId
+        ? repository.getWatchHistoryFor(id)
+        : repository.getWatchHistory();
   }
 
   void refresh() {
     final repository = ref.read(historyRepositoryProvider);
-    state = repository.getWatchHistory();
+    final id = ref.read(activeProviderProvider)?.packageName;
+    state = id == animeRiftProviderId
+        ? repository.getWatchHistoryFor(id)
+        : repository.getWatchHistory();
   }
 
   Future<void> refreshFromServer() async {
     final repository = ref.read(historyRepositoryProvider);
-    await repository.syncRecentWatched();
+    if (ref.read(activeProviderProvider)?.packageName != animeRiftProviderId) {
+      await repository.syncRecentWatched();
+    }
     refresh();
   }
 
   Future<void> clearAllHistory() async {
     final repository = ref.read(historyRepositoryProvider);
-    await repository.clearAllHistory();
+    final id = ref.read(activeProviderProvider)?.packageName;
+    if (id == animeRiftProviderId) {
+      await repository.clearHistoryFor(id);
+    } else {
+      await repository.clearAllHistory();
+    }
     refresh();
   }
 
   Future<void> removeFromHistory(String url) async {
     final repository = ref.read(historyRepositoryProvider);
-    await repository.removeFromHistory(url);
+    final id = ref.read(activeProviderProvider)?.packageName;
+    if (id == animeRiftProviderId) {
+      await repository.removeHistoryFor(url, id);
+    } else {
+      await repository.removeFromHistory(url);
+    }
     refresh();
   }
 
@@ -85,25 +105,56 @@ class ContinueWatchingNotifier extends Notifier<List<HistoryItem>> {
   List<HistoryItem> build() {
     ref.watch(accountDataRevisionProvider);
     final repository = ref.watch(historyRepositoryProvider);
-    return repository.getContinueWatching();
+    final id = ref.watch(activeProviderProvider)?.packageName;
+    return id == animeRiftProviderId
+        ? repository.getContinueWatchingFor(id)
+        : repository.getContinueWatching();
   }
 
   void refresh() {
-    state = ref.read(historyRepositoryProvider).getContinueWatching();
+    final repository = ref.read(historyRepositoryProvider);
+    final id = ref.read(activeProviderProvider)?.packageName;
+    state = id == animeRiftProviderId
+        ? repository.getContinueWatchingFor(id)
+        : repository.getContinueWatching();
   }
 
   Future<void> refreshFromServer() async {
-    await ref.read(historyRepositoryProvider).syncContinueWatching();
+    if (ref.read(activeProviderProvider)?.packageName != animeRiftProviderId) {
+      await ref.read(historyRepositoryProvider).syncContinueWatching();
+    }
     refresh();
   }
 
   Future<void> clearAll() async {
-    await ref.read(historyRepositoryProvider).clearContinueWatching();
+    final repository = ref.read(historyRepositoryProvider);
+    final id = ref.read(activeProviderProvider)?.packageName;
+    if (id == animeRiftProviderId) {
+      await repository.clearContinueWatchingFor(id);
+    } else {
+      await repository.clearContinueWatching();
+    }
     refresh();
   }
 
   Future<void> remove(String url) async {
-    await ref.read(historyRepositoryProvider).removeContinueWatching(url);
+    final repository = ref.read(historyRepositoryProvider);
+    final id = ref.read(activeProviderProvider)?.packageName;
+    if (id == animeRiftProviderId) {
+      await repository.removeContinueWatchingFor(url, id);
+    } else {
+      await repository.removeContinueWatching(url);
+    }
+    refresh();
+  }
+
+  Future<void> removeForItem(MultimediaItem item) async {
+    final repository = ref.read(historyRepositoryProvider);
+    if (item.provider == animeRiftProviderId) {
+      await repository.removeContinueWatchingFor(item.url, item.provider);
+    } else {
+      await repository.removeContinueWatching(item.url);
+    }
     refresh();
   }
 
