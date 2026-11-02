@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/item_provider_resolution.dart';
 import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
 import 'package:animewitcher/core/services/anilist_franchise_service.dart';
 import 'package:animewitcher/core/services/anizip_service.dart';
@@ -532,9 +533,11 @@ class _DetailsSeasonsBarState extends ConsumerState<DetailsSeasonsBar> {
   @override
   void didUpdateWidget(covariant DetailsSeasonsBar oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.current.url != widget.current.url ||
+    if (oldWidget.current.provider != widget.current.provider ||
+        oldWidget.current.url != widget.current.url ||
         oldWidget.current.artworkLookupMalId !=
             widget.current.artworkLookupMalId) {
+      ++_loadGeneration;
       _walked = null;
       WidgetsBinding.instance.addPostFrameCallback((_) => _load());
     }
@@ -551,6 +554,17 @@ class _DetailsSeasonsBarState extends ConsumerState<DetailsSeasonsBar> {
     final generation = ++_loadGeneration;
     final malId = widget.current.artworkLookupMalId;
     if (malId == null) {
+      if (mounted && generation == _loadGeneration) {
+        setState(() => _walked = const <SeasonsBarEntry>[]);
+      }
+      return;
+    }
+    final provider = resolveItemProvider(
+      ref.read(extensionManagerProvider),
+      widget.current.provider,
+      ref.read(activeProviderProvider),
+    );
+    if (provider is! AnimeWitcherNativeProvider) {
       if (mounted && generation == _loadGeneration) {
         setState(() => _walked = const <SeasonsBarEntry>[]);
       }
@@ -600,14 +614,6 @@ class _DetailsSeasonsBarState extends ConsumerState<DetailsSeasonsBar> {
           if (pair != null) pair.url: pair.season,
       };
       graphEntries = applyAniZipSeasonNumbers(graphEntries, seasonNumbers);
-
-      final provider = ref.read(activeProviderProvider);
-      if (provider is! AnimeWitcherNativeProvider) {
-        if (mounted && generation == _loadGeneration) {
-          setState(() => _walked = const <SeasonsBarEntry>[]);
-        }
-        return;
-      }
 
       final ids = graphEntries
           .map((entry) => entry.item.artworkLookupMalId)
