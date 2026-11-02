@@ -21,6 +21,8 @@ import '../../../core/services/download_v2/download_manager_v2.dart';
 import '../../../core/services/download_v2/download_v2_identity.dart';
 import '../../../core/services/download_v2/download_v2_models.dart';
 import '../../../core/services/download_v2/download_v2_provider.dart';
+import '../../../core/storage/provider_local_library.dart'
+    show animeRiftProviderId;
 import '../../../core/storage/settings_repository.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../../shared/widgets/loading_dialog.dart';
@@ -73,6 +75,39 @@ String downloadFilenameV2({
   return '${sanitizedTitle.isEmpty ? 'video' : sanitizedTitle}$extension';
 }
 
+@visibleForTesting
+Set<String> existingBatchEpisodeKeysForProviderV2(
+  Iterable<LogicalDownloadRecordV2> records, {
+  required String mediaId,
+  required String providerId,
+}) {
+  final providerScope = downloadProviderScopeV2(providerId);
+  return <String>{
+    for (final record in records)
+      if (record.mediaKind == DownloadMediaKind.videoEpisode &&
+          record.mediaId == mediaId &&
+          _batchRecordBelongsToProvider(record, providerId, providerScope) &&
+          (record.completedAtMillis != null ||
+              record.intent == DownloadUserIntent.active ||
+              record.intent == DownloadUserIntent.paused))
+        record.unitKey.trim(),
+  };
+}
+
+bool _batchRecordBelongsToProvider(
+  LogicalDownloadRecordV2 record,
+  String providerId,
+  String? providerScope,
+) {
+  final recordedId = record.sourceDescriptor['providerId']?.toString().trim();
+  if (recordedId == null || recordedId.isEmpty) {
+    // Untagged V2 records retain historical deduplication. AnimeRift was
+    // introduced with explicit provider IDs and does not own legacy records.
+    return providerId != animeRiftProviderId;
+  }
+  return downloadProviderScopeV2(recordedId) == providerScope;
+}
+
 class DownloadLauncher {
   final Ref _ref;
   final Set<String> _launchingItems = <String>{};
@@ -95,15 +130,18 @@ class DownloadLauncher {
       final mediaId =
           item.tmdbId?.toString() ??
           (imdbId?.isNotEmpty == true ? imdbId! : item.url.trim());
-      final existingEpisodeKeys = <String>{
-        for (final record in records)
-          if (record.mediaKind == DownloadMediaKind.videoEpisode &&
-              record.mediaId == mediaId &&
-              (record.completedAtMillis != null ||
-                  record.intent == DownloadUserIntent.active ||
-                  record.intent == DownloadUserIntent.paused))
-            record.unitKey.trim(),
-      };
+      final provider = resolveItemProvider(
+        _ref.read(extensionManagerProvider.notifier).getAllProviders(),
+        item.provider,
+        _ref.read(activeProviderProvider),
+      );
+      final existingEpisodeKeys = provider == null
+          ? <String>{}
+          : existingBatchEpisodeKeysForProviderV2(
+              records,
+              mediaId: mediaId,
+              providerId: provider.packageName,
+            );
       final ordered = List<Episode>.of(selectedEpisodes)
         ..sort((a, b) {
           final season = a.season.compareTo(b.season);
