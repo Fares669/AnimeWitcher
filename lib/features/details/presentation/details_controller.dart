@@ -9,6 +9,7 @@ import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/utils/episode_label.dart';
 import '../../../core/account/account_providers.dart';
 import '../../../core/extensions/base_provider.dart';
+import '../../../core/extensions/item_provider_resolution.dart';
 import '../../../core/extensions/extension_manager.dart';
 
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
@@ -388,22 +389,9 @@ class DetailsController extends _$DetailsController {
         return;
       }
 
-      AnimeWitcherProvider? provider;
-      if (item.provider != null) {
-        try {
-          provider = manager.getAllProviders().firstWhere(
-            (candidate) =>
-                candidate.packageName == item.provider ||
-                candidate.name == item.provider,
-          );
-        } catch (error) {
-          if (kDebugMode) {
-            debugPrint('DetailsController.loadDetails: $error');
-          }
-        }
-      }
-
-      provider ??= active;
+      final provider = resolveItemProvider(
+        manager.getAllProviders(), item.provider, active,
+      );
       if (provider == null) {
         throw Exception('لم يتم العثور على مزود التشغيل.');
       }
@@ -459,21 +447,10 @@ class DetailsController extends _$DetailsController {
     if (item.provider == 'Local' || item.provider == 'Remote') return;
 
     final manager = ref.read(extensionManagerProvider.notifier);
-    AnimeWitcherProvider? provider;
-    if (item.provider != null) {
-      try {
-        provider = manager.getAllProviders().firstWhere(
-          (candidate) =>
-              candidate.packageName == item.provider ||
-              candidate.name == item.provider,
-        );
-      } catch (error) {
-        if (kDebugMode) {
-          debugPrint('DetailsController.refreshDetails: $error');
-        }
-      }
-    }
-    provider ??= _lastEpisodesProvider ?? ref.read(activeProviderProvider);
+    final provider = resolveItemProvider(
+      manager.getAllProviders(), item.provider,
+      _lastEpisodesProvider ?? ref.read(activeProviderProvider),
+    );
     if (provider == null) return;
 
     provider.prepareForNetworkRetry();

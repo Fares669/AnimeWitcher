@@ -11,7 +11,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/domain/stream_source_preferences.dart';
 import '../../../core/extensions/extension_manager.dart';
-import '../../../core/extensions/base_provider.dart';
+import '../../../core/extensions/item_provider_resolution.dart';
 import '../../../core/network/dio_client_provider.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/services/download_parallel.dart';
@@ -137,13 +137,11 @@ class DownloadLauncher {
     final l10n = AppLocalizations.of(context)!;
     final notifications = _ref.read(notificationServiceProvider);
     final manager = _ref.read(extensionManagerProvider.notifier);
-    AnimeWitcherProvider? provider;
-    if (item.provider != null) {
-      provider = manager.getAllProviders().firstWhereOrNull(
-        (p) => p.packageName == item.provider || p.name == item.provider,
-      );
-    }
-    provider ??= _ref.read(activeProviderProvider);
+    final provider = resolveItemProvider(
+      manager.getAllProviders(),
+      item.provider,
+      _ref.read(activeProviderProvider),
+    );
     if (provider == null) {
       notifications.showError('لا يوجد مزود تشغيل نشط');
       return;
@@ -179,7 +177,7 @@ class DownloadLauncher {
           final results = await Future.wait(
             chunk.map((index) async {
               try {
-                final sources = await provider!.loadStreamSources(
+                final sources = await provider.loadStreamSources(
                   episodes[index].url,
                 );
                 if (sources.where((s) => s.url.trim().isNotEmpty).isEmpty) {
@@ -289,7 +287,7 @@ class DownloadLauncher {
           final resolved = await resolveBatchStreamSources(
             candidates,
             resolveCandidate: (candidate) =>
-                provider!.loadStreams(candidate.url),
+                provider.loadStreams(candidate.url),
           );
           final prioritized = orderStreamSourcesByPreference(
             resolved
@@ -380,18 +378,11 @@ class DownloadLauncher {
         episode ?? item.episodes?.firstWhereOrNull((e) => e.url == resolveUrl);
 
     final manager = _ref.read(extensionManagerProvider.notifier);
-    AnimeWitcherProvider? provider;
-    if (item.provider != null) {
-      try {
-        final val = item.provider!;
-        provider = manager.getAllProviders().firstWhere(
-          (p) => p.packageName == val || p.name == val,
-        );
-      } catch (e) {
-        if (kDebugMode) debugPrint('DownloadLauncher.launch: $e');
-      }
-    }
-    provider ??= _ref.read(activeProviderProvider);
+    final provider = resolveItemProvider(
+      manager.getAllProviders(),
+      item.provider,
+      _ref.read(activeProviderProvider),
+    );
     if (provider == null) {
       _ref
           .read(notificationServiceProvider)
@@ -413,7 +404,7 @@ class DownloadLauncher {
           qualityPriority: preferences.streamQualityPriority,
           serverPriority: preferences.streamServerPriority,
           resolveCandidate: (StreamResult candidate) =>
-              provider!.loadStreams(candidate.url),
+              provider.loadStreams(candidate.url),
         );
         if (selected == null) {
           throw Exception('لم يتم العثور على مصادر تشغيل.');
