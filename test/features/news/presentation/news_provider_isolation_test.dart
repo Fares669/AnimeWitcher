@@ -14,7 +14,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _NativeSelection extends AnimeWitcherNativeProvider {
-  _NativeSelection() : super(Dio(), SettingsRepository(StorageService()));
+  _NativeSelection([this.loader])
+    : super(Dio(), SettingsRepository(StorageService()));
+  final Future<ProviderNewsPage> Function()? loader;
+
+  @override
+  Future<ProviderNewsPage> getNewsPage({int offset = 0, int limit = 20}) =>
+      loader?.call() ?? Future.value(_page());
 }
 
 class _Active extends ActiveProvider {
@@ -114,8 +120,18 @@ void main() {
     expect(find.text('هذه الميزة غير متاحة للمزود المختار'), findsOneWidget);
     await container
         .read(activeProviderProvider.notifier)
-        .set(_NativeSelection());
+        .set(
+          _NativeSelection(
+            () async => const ProviderNewsPage(
+              items: [NewsItem(id: 'new', title: 'خبر جديد', imageUrl: '')],
+              nextOffset: 1,
+              hasMore: false,
+            ),
+          ),
+        );
     await tester.pump();
+    await tester.pump();
+    expect(find.text('خبر جديد'), findsOneWidget);
     pending.complete(_page());
     await tester.pump();
     await tester.pump();

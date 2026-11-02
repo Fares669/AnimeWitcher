@@ -10,6 +10,7 @@ import '../../../core/domain/entity/multimedia_item.dart';
 import '../../home/presentation/widgets/news_card.dart';
 import '../../more/presentation/provider_unsupported_page.dart';
 import 'news_utils.dart';
+import 'open_news.dart' show openLinkedNewsAnime;
 
 class NewsListScreen extends ConsumerStatefulWidget {
   const NewsListScreen({
@@ -36,11 +37,10 @@ class _NewsListScreenState extends ConsumerState<NewsListScreen> {
   bool _isLoading = false;
   int _nextOffset = 0;
   bool _sourceInvalidated = false;
+  int _generation = 0;
 
   bool get _current =>
-      mounted &&
-      !_sourceInvalidated &&
-      ref.read(activeProviderProvider) is AnimeWitcherNativeProvider;
+      mounted && ref.read(activeProviderProvider) is AnimeWitcherNativeProvider;
 
   @override
   void initState() {
@@ -71,10 +71,11 @@ class _NewsListScreenState extends ConsumerState<NewsListScreen> {
 
   Future<void> _loadMore() async {
     if (!_current || _isLoading || !_hasMore) return;
+    final generation = _generation;
     setState(() => _isLoading = true);
     try {
-      final page = await widget.loadPage(_nextOffset, 20);
-      if (!_current) return;
+      final page = await _loadPage(_nextOffset);
+      if (!_current || generation != _generation) return;
       final merged = <String, NewsItem>{
         for (final item in _items) item.id: item,
         for (final item in page.items) item.id: item,
@@ -85,17 +86,27 @@ class _NewsListScreenState extends ConsumerState<NewsListScreen> {
         _hasMore = page.hasMore;
       });
     } catch (_) {
-      if (_current) setState(() => _hasMore = false);
+      if (_current && generation == _generation)
+        setState(() => _hasMore = false);
     } finally {
-      if (_current) setState(() => _isLoading = false);
+      if (_current && generation == _generation)
+        setState(() => _isLoading = false);
     }
+  }
+
+  Future<ProviderNewsPage> _loadPage(int offset) {
+    if (!_sourceInvalidated) return widget.loadPage(offset, 20);
+    return ref
+        .read(activeProviderProvider)!
+        .getNewsPage(offset: offset, limit: 20);
   }
 
   Future<void> _refresh() async {
     if (!_current) return;
+    final generation = _generation;
     try {
-      final page = await widget.loadPage(0, 20);
-      if (!_current) return;
+      final page = await _loadPage(0);
+      if (!_current || generation != _generation) return;
       setState(() {
         _items = page.items;
         _nextOffset = page.nextOffset;
@@ -110,13 +121,17 @@ class _NewsListScreenState extends ConsumerState<NewsListScreen> {
   Widget build(BuildContext context) {
     ref.listen(activeProviderProvider, (previous, next) {
       if (previous?.packageName == next?.packageName) return;
-      // The route's callbacks captured the original source. Reopen the route
-      // to fetch again after a source change, even when switching back.
+      ++_generation;
       _sourceInvalidated = true;
       _items = [];
-      _hasMore = false;
+      _hasMore = true;
       _isLoading = false;
       _nextOffset = 0;
+      if (next is AnimeWitcherNativeProvider) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_current) _loadMore();
+        });
+      }
     });
     if (ref.watch(activeProviderProvider) is! AnimeWitcherNativeProvider) {
       return const ProviderUnsupportedPage(title: 'الأخبار');
@@ -187,7 +202,13 @@ class _NewsListScreenState extends ConsumerState<NewsListScreen> {
             if (_current) openNewsUrl(item);
           }
         : () {
-            if (_current) widget.onOpen!(item);
+            if (_current) {
+              if (_sourceInvalidated) {
+                openNewsUrl(item);
+              } else {
+                widget.onOpen!(item);
+              }
+            }
           };
     return NewsCard(
       item: item,
@@ -197,7 +218,17 @@ class _NewsListScreenState extends ConsumerState<NewsListScreen> {
       onAnimeTap: widget.onAnimeTap == null
           ? null
           : () {
-              if (_current) widget.onAnimeTap!(item);
+              if (_current) {
+                if (_sourceInvalidated) {
+                  openLinkedNewsAnime(
+                    context,
+                    ref.read(activeProviderProvider)!,
+                    item,
+                  );
+                } else {
+                  widget.onAnimeTap!(item);
+                }
+              }
             },
     );
   }
