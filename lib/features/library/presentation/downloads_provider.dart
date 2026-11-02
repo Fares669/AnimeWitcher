@@ -255,6 +255,7 @@ List<List<DownloadItem>> groupDownloadsByEpisodeOrFile(
           : null;
       return jsonEncode([scope, value]);
     }
+
     unionKey(byTracking, scoped(items[i].trackingUrl.trim()), i);
     unionKey(byTracking, scoped(items[i].episode?.url.trim() ?? ''), i);
     unionKey(byFile, scoped(items[i].destinationPath.trim()), i);
@@ -372,13 +373,20 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     // Refresh live connection counts from memory, without polling disk or
     // changing the frequency of progress and speed measurements.
     _connectionRefreshTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-      if (ref.mounted &&
-          _records.any(
-            (record) =>
-                record.completedAtMillis == null &&
-                record.intent != DownloadUserIntent.canceled,
-          )) {
-        _refreshPresentationState();
+      if (!ref.mounted) return;
+      final visible = state.value;
+      if (visible == null) return;
+      for (final row in visible) {
+        final logicalId = row.logicalId;
+        if (logicalId == null) continue;
+        final observed = manager.snapshotFor(DownloadLogicalId(logicalId));
+        final connections = observed?.taskId == row.id
+            ? observed?.activeConnections ?? 0
+            : 0;
+        if (connections != row.activeConnections) {
+          _refreshPresentationState();
+          break;
+        }
       }
     });
     // Keep a much slower durable reconciliation as a lifecycle/race safety net.

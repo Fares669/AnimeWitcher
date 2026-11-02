@@ -21,6 +21,7 @@ import '../../details/presentation/downloaded_file_provider.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/extensions/base_provider.dart';
 import '../../../../core/extensions/extension_manager.dart';
+import '../../../../core/extensions/item_provider_resolution.dart';
 import '../../../../core/storage/history_repository.dart';
 import '../../../../core/storage/provider_local_library.dart';
 import '../../../../core/storage/episode_watch_repository.dart';
@@ -52,6 +53,14 @@ import '../data/anime4k_shader_library.dart';
 import '../data/anime4k_performance.dart';
 import '../data/anime4k_metal_bridge.dart';
 import '../data/anime4k_metal_ffi.dart';
+
+/// Resolve the provider saved with the playback item, including when a
+/// different source is currently selected in the app.
+AnimeWitcherProvider? resolvePlaybackItemProvider(
+  MultimediaItem item,
+  Iterable<AnimeWitcherProvider> providers,
+  AnimeWitcherProvider? activeProvider,
+) => resolveItemProvider(providers, item.provider, activeProvider);
 
 enum PlaybackUiPhaseKind {
   idle,
@@ -2568,22 +2577,11 @@ class PlayerController extends Notifier<PlayerState> {
     return _isCurrentSourceSession(sourceSessionId);
   }
 
-  AnimeWitcherProvider? _resolveProvider() {
-    final activeState = ref.read(activeProviderProvider);
-    final manager = ref.read(extensionManagerProvider.notifier);
-
-    if (_item.provider != null) {
-      try {
-        final val = _item.provider!;
-        return manager.getAllProviders().firstWhere(
-          (p) => p.packageName == val || p.name == val,
-        );
-      } catch (e) {
-        if (kDebugMode) debugPrint('PlayerController._resolveProvider: $e');
-      }
-    }
-    return activeState;
-  }
+  AnimeWitcherProvider? _resolveProvider() => resolvePlaybackItemProvider(
+    _item,
+    ref.read(extensionManagerProvider.notifier).getAllProviders(),
+    ref.read(activeProviderProvider),
+  );
 
   int _findSavedStreamIndex(List<StreamResult> streams) {
     try {
@@ -3838,7 +3836,7 @@ class PlayerController extends Notifier<PlayerState> {
           : next;
       if (target.url.trim().isEmpty) return;
 
-      final provider = ref.read(activeProviderProvider);
+      final provider = _resolveProvider();
       if (provider == null) return;
       ref.read(streamSourcePrefetchProvider).warm(provider, target.url);
     } catch (e) {

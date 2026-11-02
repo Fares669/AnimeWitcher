@@ -189,13 +189,19 @@ void main() {
     ]);
     try {
       await pumpUntilFuture(tester, manager.initialize(), 'paused writer transport startup');
-      container.listen(downloadsProvider, (_, __) {});
+      var publications = 0;
+      container.listen(downloadsProvider, (_, next) {
+        if (next.hasValue) publications++;
+      });
       await pumpUntilFuture(tester, container.read(downloadsProvider.future), 'paused writer downloads projection');
       await tester.pump();
       expect(manager.snapshotFor(logical)?.status, DownloadTransportStatus.running);
       expect(container.read(downloadsProvider).requireValue.single.status, TaskStatus.running);
       final reads = storage.metadataReads;
       final storeReads = store.allReads;
+      final before = publications;
+      await tester.pump(const Duration(seconds: 2));
+      expect(publications, before, reason: 'Stable live connections must not republish unchanged rows');
       handle.setProgress(.7);
       await tester.pump(const Duration(seconds: 1));
       expect(container.read(downloadsProvider).requireValue.single.progress, .7);

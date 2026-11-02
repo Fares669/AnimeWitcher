@@ -550,6 +550,7 @@ void main() {
             animeId: 'https://example.test/movie',
             episodeKey: 'https://example.test/movie',
             variantKey: 'default',
+            providerId: provider.packageName,
           ).value,
         );
         expect(tester.takeException(), isNull);
