@@ -12,6 +12,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../support/memory_storage_service.dart';
+
 class _MenuAccountService extends AnimeWitcherAccountService {
   _MenuAccountService()
     : super(
@@ -93,6 +95,7 @@ Future<_Harness> _pump(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
+        storageServiceProvider.overrideWithValue(MemoryStorageService()),
         animeWitcherAccountServiceProvider.overrideWithValue(
           _MenuAccountService(),
         ),

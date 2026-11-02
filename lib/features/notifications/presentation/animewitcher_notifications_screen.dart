@@ -228,7 +228,7 @@ class _NotificationsState
   @override
   Widget build(BuildContext context) {
     ref.listen(activeProviderProvider, (previous, next) {
-      if (previous?.packageName == next?.packageName) return;
+      if (identical(previous, next)) return;
       _generation.begin();
       _pending.clear();
       _items = [];

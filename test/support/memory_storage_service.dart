@@ -11,6 +11,14 @@ class MemoryStorageService extends StorageService {
   final Map<String, dynamic> settings = <String, dynamic>{};
 
   @override
+  String? getActiveProviderId() => settings['active_provider_id'] as String?;
+
+  @override
+  Future<void> setActiveProviderId(String? id) async {
+    settings['active_provider_id'] = id;
+  }
+
+  @override
   bool getDownloadDiagnosticLog() =>
       settings['download_diagnostic_log'] == true;
   @override

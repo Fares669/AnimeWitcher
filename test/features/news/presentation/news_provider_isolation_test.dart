@@ -171,4 +171,44 @@ void main() {
     await tester.pump();
     expect(find.text('خبر خاص بمصدر Witcher'), findsNothing);
   });
+
+  testWidgets('replacing native provider instance refreshes cached news', (
+    tester,
+  ) async {
+    var obsoleteLoaderCalls = 0;
+    final container = await _mount(
+      tester,
+      selected: _NativeSelection(),
+      initial: [_article()],
+      loadPage: (_, _) async {
+        obsoleteLoaderCalls++;
+        return _page();
+      },
+    );
+    expect(find.text('خبر خاص بمصدر Witcher'), findsOneWidget);
+
+    await container
+        .read(activeProviderProvider.notifier)
+        .set(
+          _NativeSelection(
+            () async => const ProviderNewsPage(
+              items: [
+                NewsItem(
+                  id: 'current',
+                  title: 'خبر من المزود الحالي',
+                  imageUrl: '',
+                ),
+              ],
+              nextOffset: 1,
+              hasMore: false,
+            ),
+          ),
+        );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('خبر خاص بمصدر Witcher'), findsNothing);
+    expect(find.text('خبر من المزود الحالي'), findsOneWidget);
+    expect(obsoleteLoaderCalls, 0);
+  });
 }

@@ -300,6 +300,29 @@ void main() {
     expect(find.textContaining('سارة'), findsOneWidget);
   });
 
+  testWidgets('replacing native provider instance reloads cached inbox', (
+    tester,
+  ) async {
+    final service = _Service()..items = [_item()];
+    await tester.pumpWidget(_app(service));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('سارة'), findsOneWidget);
+    final initialLoads = service.loads;
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(AnimeWitcherNotificationsScreen)),
+    );
+
+    service.items = [];
+    await container
+        .read(activeProviderProvider.notifier)
+        .set(_NativeSelection());
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('سارة'), findsNothing);
+    expect(find.text('لا يوجد إشعارات'), findsOneWidget);
+    expect(service.loads, initialLoads + 1);
+  });
+
   testWidgets('late Witcher response is discarded after Rift switch', (
     tester,
   ) async {

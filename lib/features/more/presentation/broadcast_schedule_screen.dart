@@ -71,7 +71,11 @@ class _BroadcastScheduleScreenState
       vsync: this,
       initialIndex: _selectedDay,
     )..addListener(_handleTabTick);
-    unawaited(_loadDay(animeWitcherBroadcastDays[_selectedDay], refresh: true));
+    if (ref.read(activeProviderProvider) is AnimeWitcherNativeProvider) {
+      unawaited(
+        _loadDay(animeWitcherBroadcastDays[_selectedDay], refresh: true),
+      );
+    }
   }
 
   @override
@@ -91,6 +95,9 @@ class _BroadcastScheduleScreenState
     final value = _tabController.index;
     if (value == _selectedDay) return;
     setState(() => _selectedDay = value);
+    if (ref.read(activeProviderProvider) is! AnimeWitcherNativeProvider) {
+      return;
+    }
     final day = animeWitcherBroadcastDays[value];
     final state = _dayStates[day] ?? const _BroadcastScheduleDayState();
     if (state.items.isEmpty && !state.loading && state.error == null) {
@@ -114,21 +121,8 @@ class _BroadcastScheduleScreenState
   Future<void> _loadDay(String day, {required bool refresh}) async {
     final previous = _dayStates[day] ?? const _BroadcastScheduleDayState();
     if (!refresh && (previous.loading || !previous.hasMore)) return;
-    final provider = (ref.read(activeProviderProvider) is AnimeWitcherNativeProvider
-        ? ref.read(activeProviderProvider) as AnimeWitcherNativeProvider
-        : null);
-    if (provider == null) {
-      if (!mounted) return;
-      setState(() {
-        _dayStates[day] = _BroadcastScheduleDayState(
-          items: previous.items,
-          nextOffset: previous.nextOffset,
-          hasMore: previous.hasMore,
-          error: StateError('AnimeWitcher Native provider is unavailable'),
-        );
-      });
-      return;
-    }
+    final provider = ref.read(activeProviderProvider);
+    if (provider is! AnimeWitcherNativeProvider) return;
 
     _requestTokens.remove(day)?.cancel('Superseded schedule request');
     final token = CancelToken();
@@ -170,7 +164,11 @@ class _BroadcastScheduleScreenState
         );
       });
     } on DioException catch (error) {
-      if (CancelToken.isCancel(error) || !mounted) return;
+      if (CancelToken.isCancel(error) ||
+          !mounted ||
+          !identical(_requestTokens[day], token)) {
+        return;
+      }
       setState(() {
         _dayStates[day] = _BroadcastScheduleDayState(
           items: previous.items,
@@ -181,7 +179,7 @@ class _BroadcastScheduleScreenState
         );
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || !identical(_requestTokens[day], token)) return;
       setState(() {
         _dayStates[day] = _BroadcastScheduleDayState(
           items: previous.items,
@@ -210,7 +208,9 @@ class _BroadcastScheduleScreenState
         _dayStates[day] = const _BroadcastScheduleDayState();
       }
       if (next is AnimeWitcherNativeProvider) {
-        unawaited(_loadDay(animeWitcherBroadcastDays[_selectedDay], refresh: true));
+        unawaited(
+          _loadDay(animeWitcherBroadcastDays[_selectedDay], refresh: true),
+        );
       }
     });
     if (ref.watch(activeProviderProvider) is! AnimeWitcherNativeProvider) {

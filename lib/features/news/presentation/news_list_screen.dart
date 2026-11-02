@@ -86,11 +86,13 @@ class _NewsListScreenState extends ConsumerState<NewsListScreen> {
         _hasMore = page.hasMore;
       });
     } catch (_) {
-      if (_current && generation == _generation)
+      if (_current && generation == _generation) {
         setState(() => _hasMore = false);
+      }
     } finally {
-      if (_current && generation == _generation)
+      if (_current && generation == _generation) {
         setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -120,7 +122,7 @@ class _NewsListScreenState extends ConsumerState<NewsListScreen> {
   @override
   Widget build(BuildContext context) {
     ref.listen(activeProviderProvider, (previous, next) {
-      if (previous?.packageName == next?.packageName) return;
+      if (identical(previous, next)) return;
       ++_generation;
       _sourceInvalidated = true;
       _items = [];
