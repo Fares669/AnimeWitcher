@@ -688,6 +688,7 @@ class DownloadLauncher {
       item,
       episode: episodeData,
       filename: filename,
+      providerId: providerId,
     );
     final imdbId = item.imdbId?.trim();
     final animeId =
@@ -707,6 +708,7 @@ class DownloadLauncher {
       animeId: animeId,
       episodeKey: episodeKey,
       variantKey: variantKey,
+      providerId: providerId,
     );
     final descriptor = DownloadUrlRefreshDescriptor(
       trackingUrl: resolveUrl,
@@ -739,7 +741,7 @@ class DownloadLauncher {
     if (!hasExistingMetadata) {
       await storage.saveDownloadMetadata(
         logicalId.value,
-        item,
+        item.copyWith(provider: providerId),
         episode: episodeData,
         trackingUrl: resolveUrl,
         filePath: absolutePath,
@@ -766,7 +768,7 @@ class DownloadLauncher {
       if (hasExistingMetadata) {
         await storage.saveDownloadMetadata(
           logicalId.value,
-          item,
+          item.copyWith(provider: providerId),
           episode: episodeData,
           trackingUrl: resolveUrl,
           filePath: absolutePath,

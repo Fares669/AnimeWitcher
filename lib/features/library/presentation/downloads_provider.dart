@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
@@ -64,8 +65,16 @@ class DownloadItem {
   String get id => task.taskId;
 }
 
+bool sameDownloadProvider(MultimediaItem a, MultimediaItem b) =>
+    downloadProviderScopeV2(a.provider) == downloadProviderScopeV2(b.provider);
+
 bool downloadsPointAtSameTarget(DownloadItem a, DownloadItem b) {
   if (identical(a, b) || a.id == b.id) return true;
+  if (a.mediaKind == DownloadMediaKind.videoEpisode &&
+      b.mediaKind == DownloadMediaKind.videoEpisode &&
+      !sameDownloadProvider(a.item, b.item)) {
+    return false;
+  }
   final logicalA = a.logicalId?.trim();
   final logicalB = b.logicalId?.trim();
   if (logicalA != null &&
@@ -162,6 +171,7 @@ DownloadItem? completedEpisodeDownload(
         item.mediaKind != DownloadMediaKind.videoEpisode) {
       continue;
     }
+    if (!sameDownloadProvider(item.item, parentItem)) continue;
     if (parentUrl.isNotEmpty && item.item.url.trim() != parentUrl) continue;
     if (episodeUrl.isNotEmpty &&
         (item.trackingUrl.trim() == episodeUrl ||
@@ -238,9 +248,16 @@ List<List<DownloadItem>> groupDownloadsByEpisodeOrFile(
       unionKey(byLogicalId, logicalId, i);
       continue;
     }
-    unionKey(byTracking, items[i].trackingUrl.trim(), i);
-    unionKey(byTracking, items[i].episode?.url.trim() ?? '', i);
-    unionKey(byFile, items[i].destinationPath.trim(), i);
+    String scoped(String value) {
+      if (value.isEmpty) return '';
+      final scope = items[i].mediaKind == DownloadMediaKind.videoEpisode
+          ? downloadProviderScopeV2(items[i].item.provider)
+          : null;
+      return jsonEncode([scope, value]);
+    }
+    unionKey(byTracking, scoped(items[i].trackingUrl.trim()), i);
+    unionKey(byTracking, scoped(items[i].episode?.url.trim() ?? ''), i);
+    unionKey(byFile, scoped(items[i].destinationPath.trim()), i);
   }
 
   final groups = <int, List<DownloadItem>>{};

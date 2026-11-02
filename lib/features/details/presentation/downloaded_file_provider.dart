@@ -1,13 +1,21 @@
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/services/download_v2/download_file_planner_v2.dart';
+import '../../../core/services/download_v2/download_v2_identity.dart';
 import '../../../core/services/download_v2/download_v2_models.dart';
 import '../../../core/services/download_v2/download_v2_provider.dart';
 
 part 'downloaded_file_provider.g.dart';
+
+String downloadedFileKey(MultimediaItem item, {Episode? episode}) {
+  final url = episode?.url ?? item.url;
+  final scope = downloadProviderScopeV2(item.provider);
+  return scope == null ? url : jsonEncode([scope, url]);
+}
 
 /// Tracks completed files from V2 logical records only.
 @Riverpod(keepAlive: true)
@@ -15,8 +23,16 @@ class DownloadedFiles extends _$DownloadedFiles {
   @override
   Map<String, File?> build() => const <String, File?>{};
 
-  Future<File?> resolveFile(MultimediaItem item, {Episode? episode, String? logicalId}) {
-    return _resolveFileForKey(episode?.url ?? item.url, logicalId: logicalId);
+  Future<File?> resolveFile(
+    MultimediaItem item, {
+    Episode? episode,
+    String? logicalId,
+  }) {
+    return _resolveFileForKey(
+      episode?.url ?? item.url,
+      logicalId: logicalId,
+      providerId: item.provider,
+    );
   }
 
   Future<File?> resolveFileForTrackingUrl(
@@ -27,10 +43,15 @@ class DownloadedFiles extends _$DownloadedFiles {
     final key = trackingUrl.trim();
     return _resolveFileForKey(
       key.isNotEmpty ? key : (episode?.url ?? item.url),
+      providerId: item.provider,
     );
   }
 
-  Future<File?> _resolveFileForKey(String key, {String? logicalId}) async {
+  Future<File?> _resolveFileForKey(
+    String key, {
+    String? logicalId,
+    String? providerId,
+  }) async {
     final selected = logicalId?.trim();
     if (selected != null && selected.isEmpty) return null;
     final unitKey = key.trim();
@@ -46,8 +67,14 @@ class DownloadedFiles extends _$DownloadedFiles {
             .where(
               (record) =>
                   record.mediaKind == DownloadMediaKind.videoEpisode &&
-                  record.completedAtMillis != null && record.unitKey == unitKey &&
-                  (selected == null || record.logicalId.value == selected),
+                  record.completedAtMillis != null &&
+                  record.unitKey == unitKey &&
+                  (selected != null
+                      ? record.logicalId.value == selected
+                      : downloadProviderScopeV2(
+                              record.sourceDescriptor['providerId']?.toString(),
+                            ) ==
+                            downloadProviderScopeV2(providerId)),
             )
             .toList(growable: false)
           ..sort((a, b) => b.updatedAtMillis.compareTo(a.updatedAtMillis));
@@ -60,8 +87,10 @@ class DownloadedFiles extends _$DownloadedFiles {
         record.destinationPath,
       );
       final file = File(path);
-      if ((await verifier.verify(file, expectedBytes: record.expectedBytes))
-          .isValid) {
+      if ((await verifier.verify(
+        file,
+        expectedBytes: record.expectedBytes,
+      )).isValid) {
         resolved = file;
         break;
       }
@@ -71,7 +100,7 @@ class DownloadedFiles extends _$DownloadedFiles {
   }
 
   Future<void> checkFile(MultimediaItem item, {Episode? episode}) async {
-    final key = episode?.url ?? item.url;
+    final key = downloadedFileKey(item, episode: episode);
     final resolved = await resolveFile(item, episode: episode);
     state = {...state, key: resolved};
   }

@@ -12,6 +12,20 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 void main() {
+  test('different providers never share episode destinations', () async {
+    final temp = await _useTestDownloads();
+    final item = MultimediaItem(title: 'Example', url: '/anime', posterUrl: '');
+    final legacy = await downloadDestinationPathV2(item, filename: 'episode.mp4');
+    final native = await downloadDestinationPathV2(item, filename: 'episode.mp4', providerId: 'com.fares669.animewitcher.native');
+    final rift = await downloadDestinationPathV2(item, filename: 'episode.mp4', providerId: 'animerift');
+    final other = await downloadDestinationPathV2(item, filename: 'episode.mp4', providerId: 'other');
+    expect(native, legacy);
+    expect(legacy, p.join(temp.path, 'anime', 'Example', 'episode.mp4'));
+    expect(rift, isNot(legacy));
+    expect(other, isNot(rift));
+    expect(p.isWithin(p.join(temp.path, 'anime'), rift), isTrue);
+  });
+
   test('new manga chapter folder contains only its readable number', () async {
     final temp = await _useTestDownloads();
     final destination = await mangaChapterDestinationDirectoryV2(

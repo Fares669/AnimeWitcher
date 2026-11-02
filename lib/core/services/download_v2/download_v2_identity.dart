@@ -30,14 +30,24 @@ final class DownloadLogicalId {
 /// download still owns the same destination. Keeping them out of identity
 /// prevents two server selections from becoming independent writers for one
 /// file.
-String downloadVariantKeyV2({
-  required String audioVariant,
-  String? quality,
-}) {
+String downloadVariantKeyV2({required String audioVariant, String? quality}) {
   final normalizedAudio = audioVariant.trim().toLowerCase();
   final audio = normalizedAudio.isEmpty ? 'default' : normalizedAudio;
   final normalizedQuality = quality?.trim().toLowerCase() ?? '';
   return normalizedQuality.isEmpty ? audio : '$audio|$normalizedQuality';
+}
+
+/// Native downloads keep their historical identity and path. New providers
+/// get a stable opaque scope without placing their IDs directly in paths.
+String? downloadProviderScopeV2(String? providerId) {
+  final id = providerId?.trim() ?? '';
+  if (id.isEmpty ||
+      id == 'com.fares669.animewitcher.native' ||
+      id == 'AnimeWitcher' ||
+      id == 'Local' ||
+      id == 'Remote')
+    return null;
+  return sha256.convert(utf8.encode(id)).toString();
 }
 
 /// Builds a compact deterministic ID from stable application identity only.
@@ -45,12 +55,23 @@ DownloadLogicalId logicalDownloadIdFor({
   required String animeId,
   required String episodeKey,
   required String variantKey,
+  String? providerId,
 }) {
-  final canonical = <String>[
+  final scope = downloadProviderScopeV2(providerId);
+  final legacyCanonical = <String>[
     animeId.trim(),
     episodeKey.trim(),
     variantKey.trim(),
   ].join('\u001f');
+  final canonical = scope == null
+      ? legacyCanonical
+      : jsonEncode([
+          'provider',
+          scope,
+          animeId.trim(),
+          episodeKey.trim(),
+          variantKey.trim(),
+        ]);
   final digest = sha256.convert(utf8.encode(canonical)).toString();
   return DownloadLogicalId('dl_${digest.substring(0, 32)}');
 }
@@ -99,7 +120,10 @@ parseDownloadTaskIdentityV2(String taskId) {
   final page = match.group(4);
   final pageNumber = page == null ? null : int.tryParse(page);
   if (generation == null ||
-      (page != null && (match.group(2) != 'manga' || pageNumber == null || pageNumber <= 0))) {
+      (page != null &&
+          (match.group(2) != 'manga' ||
+              pageNumber == null ||
+              pageNumber <= 0))) {
     return null;
   }
   return (

@@ -225,7 +225,7 @@ class EpisodeCard extends HookConsumerWidget {
       final matchesEpisode =
           item.trackingUrl.trim() == episodeTrackingUrl ||
           (item.episode?.url.trim() ?? '') == episodeTrackingUrl;
-      if (!matchesEpisode) return false;
+      if (!matchesEpisode || !sameDownloadProvider(item.item, parentItem)) return false;
       return item.status != TaskStatus.complete &&
           item.status != TaskStatus.canceled;
     });
@@ -248,7 +248,7 @@ class EpisodeCard extends HookConsumerWidget {
     final downloadProgress =
         downloadProgressData?.progress ?? activeDownload?.progress ?? 0.0;
 
-    final downloadedFile = ref.watch(downloadedFilesProvider)[episode.url];
+    final downloadedFile = ref.watch(downloadedFilesProvider)[downloadedFileKey(parentItem, episode: episode)];
 
     // Check for downloaded file on load
     useEffect(() {

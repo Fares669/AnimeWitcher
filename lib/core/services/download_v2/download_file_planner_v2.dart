@@ -290,6 +290,7 @@ Future<String> downloadDestinationPathV2(
   MultimediaItem item, {
   Episode? episode,
   required String filename,
+  String? providerId,
 }) async {
   if (filename.isEmpty ||
       filename == '.' ||
@@ -302,7 +303,10 @@ Future<String> downloadDestinationPathV2(
     throw ArgumentError.value(filename, 'filename', 'Expected one filename leaf');
   }
   final title = _downloadFolderName(item.title, fallback: 'Unknown');
-  final directory = await _downloadMediaDirectoryV2('anime', <String>[title]);
+  final scope = downloadProviderScopeV2(providerId);
+  final directory = await _downloadMediaDirectoryV2(
+    'anime', <String>[if (scope != null) ...['.providers', scope], title],
+  );
   return _pathBelowDownloadDirectoryV2(directory, <String>[filename]);
 }
 

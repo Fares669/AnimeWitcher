@@ -15,6 +15,39 @@ import 'package:flutter_test/flutter_test.dart';
 import 'download_v2_test_support.dart';
 
 void main() {
+  test('offline file lookup isolates records sharing an episode URL', () async {
+    final root = await Directory.systemTemp.createTemp('aw-source-files-');
+    final native = await File('${root.path}/native.mp4').writeAsBytes([1]);
+    final rift = await File('${root.path}/rift.mp4').writeAsBytes([2]);
+    final store = InMemoryLogicalDownloadStoreV2();
+    for (final entry in [(id: 'native', file: native, provider: 'com.fares669.animewitcher.native', stamp: 1), (id: 'rift', file: rift, provider: 'animerift', stamp: 2)]) {
+      await store.put(LogicalDownloadRecordV2(
+        schemaVersion: kLogicalDownloadSchemaVersionV2, logicalId: DownloadLogicalId(entry.id),
+        mediaId: 'same', unitKey: 'episode://same', variantKey: 'sub', generation: 1,
+        taskId: 'task-${entry.id}', intent: DownloadUserIntent.active, destinationPath: entry.file.path,
+        sourceDescriptor: {'providerId': entry.provider}, updatedAtMillis: entry.stamp, completedAtMillis: 1, expectedBytes: 1,
+      ));
+    }
+    final container = ProviderContainer(overrides: [logicalDownloadStoreV2Provider.overrideWithValue(store)]);
+    try {
+      final files = container.read(downloadedFilesProvider.notifier);
+      final episode = Episode(name: 'one', url: 'episode://same');
+      final nativeItem = MultimediaItem(title: 'x', url: '/same', posterUrl: '');
+      final riftItem = nativeItem.copyWith(provider: 'animerift');
+      expect((await files.resolveFile(nativeItem, episode: episode))?.path, native.path);
+      expect((await files.resolveFile(riftItem, episode: episode))?.path, rift.path);
+      expect((await files.resolveFile(nativeItem, episode: episode, logicalId: 'rift'))?.path, rift.path);
+      await files.checkFile(nativeItem, episode: episode);
+      await files.checkFile(riftItem, episode: episode);
+      final cached = container.read(downloadedFilesProvider);
+      expect(cached[downloadedFileKey(nativeItem, episode: episode)]?.path, native.path);
+      expect(cached[downloadedFileKey(riftItem, episode: episode)]?.path, rift.path);
+    } finally {
+      container.dispose();
+      await root.delete(recursive: true);
+    }
+  });
+
   for (final invalidSelected in [false, true]) {
     test('selected completed file is exact and never substituted invalid=$invalidSelected', () async {
       final root = await Directory.systemTemp.createTemp('aw-selected-file-');

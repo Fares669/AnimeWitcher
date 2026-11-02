@@ -44,13 +44,14 @@ const List<Shadow> _kGlassTextShadow = [
 DownloadItem? _activeEpisodeDownload(
   List<DownloadItem> downloads,
   String episodeUrl,
+  MultimediaItem parentItem,
 ) {
   final key = episodeUrl.trim();
   return downloads.firstWhereOrNull((item) {
     final matches =
         item.trackingUrl.trim() == key ||
         (item.episode?.url.trim() ?? '') == key;
-    if (!matches) return false;
+    if (!matches || !sameDownloadProvider(item.item, parentItem)) return false;
     return item.status != TaskStatus.complete &&
         item.status != TaskStatus.canceled;
   });
@@ -545,7 +546,7 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
       if (!mounted) return;
       final downloads =
           ref.read(downloadsProvider).value ?? const <DownloadItem>[];
-      if (_activeEpisodeDownload(downloads, widget.episode.url) != null) return;
+      if (_activeEpisodeDownload(downloads, widget.episode.url, widget.parentItem) != null) return;
       ref
           .read(downloadedFilesProvider.notifier)
           .checkFile(widget.parentItem, episode: widget.episode);
@@ -636,7 +637,7 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
       widget.parentItem,
       ep,
     );
-    final activeDownload = _activeEpisodeDownload(downloads, ep.url);
+    final activeDownload = _activeEpisodeDownload(downloads, ep.url, widget.parentItem);
     final isDownloading = activeDownload != null;
     final progressMap = ref.watch(downloadProgressProvider);
     final logicalId = activeDownload?.logicalId?.trim();
@@ -645,18 +646,20 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
         : progressMap[ep.url];
     final downloadProgress =
         progressData?.progress ?? activeDownload?.progress ?? 0.0;
-    final downloadedFile = ref.watch(downloadedFilesProvider)[ep.url];
+    final downloadedFile = ref.watch(downloadedFilesProvider)[downloadedFileKey(widget.parentItem, episode: ep)];
     ref.listen(downloadsProvider, (previous, next) {
       final wasDownloading =
           _activeEpisodeDownload(
             previous?.value ?? const <DownloadItem>[],
             ep.url,
+            widget.parentItem,
           ) !=
           null;
       final isStillDownloading =
           _activeEpisodeDownload(
             next.value ?? const <DownloadItem>[],
             ep.url,
+            widget.parentItem,
           ) !=
           null;
       if (wasDownloading && !isStillDownloading) {

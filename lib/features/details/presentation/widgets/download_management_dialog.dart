@@ -143,7 +143,7 @@ class DownloadManagementDialog extends HookConsumerWidget {
 
       ref
           .read(downloadedFilesProvider.notifier)
-          .removeFile(episode?.url ?? item.url);
+          .removeFile(downloadedFileKey(item, episode: episode));
       if (context.mounted) Navigator.pop(context);
     }
   }
