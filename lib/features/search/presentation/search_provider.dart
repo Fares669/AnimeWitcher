@@ -450,6 +450,12 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
       _reload(clearExisting: true);
     });
     ref.listen(accountDataRevisionProvider, (_, _) => _reload());
+    ref.listen(activeProviderProvider, (previous, next) {
+      if (previous?.packageName == next?.packageName) return;
+      if (_domain == SearchDomain.anime || _domain == SearchDomain.all) {
+        _reload(clearExisting: true);
+      }
+    });
     _query = ref.read(searchQueryProvider);
     _domain = ref.read(searchDomainProvider);
     _filters = ref.read(searchProviderFiltersProvider);
@@ -457,7 +463,11 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     return const SearchAggregateState(isLoading: true);
   }
 
-  AnimeWitcherProvider? _provider() {
+  AnimeWitcherProvider? _provider([SearchDomain? domain]) {
+    if ((domain ?? _domain) == SearchDomain.anime ||
+        (domain ?? _domain) == SearchDomain.all) {
+      return ref.read(activeProviderProvider);
+    }
     final providers = ref
         .read(extensionManagerProvider.notifier)
         .getAllProviders()
@@ -549,15 +559,24 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
       SearchDomain.manga,
     ];
     Future<ProviderMediaPage?> mediaPage(SearchDomain domain) =>
-        _loadPage(provider, 0, domain).then<ProviderMediaPage?>(
+        _loadPage(
+          domain == SearchDomain.anime
+              ? provider
+              : (_provider(domain) ?? provider),
+          0,
+          domain,
+        ).then<ProviderMediaPage?>(
           (page) => page,
           onError: (Object e) {
             debugPrint('[SEARCH ALL] ${domain.name} failed: $e');
             return null;
           },
         );
-    final characterPage = _loadCharacterPage(provider, 0)
-        .then<AnimeWitcherCharacterPage?>(
+    final characterPage =
+        _loadCharacterPage(
+          _provider(SearchDomain.characters) ?? provider,
+          0,
+        ).then<AnimeWitcherCharacterPage?>(
           (page) => page,
           onError: (Object e) {
             debugPrint('[SEARCH ALL] characters failed: $e');

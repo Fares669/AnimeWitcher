@@ -21,7 +21,7 @@ final class _TestStorageService extends StorageService {
   bool isEpisodeImagesFromAniZipEnabled() => false;
 }
 
-final class _DeferredSearchProvider extends AnimeWitcherNativeProvider {
+class _DeferredSearchProvider extends AnimeWitcherNativeProvider {
   _DeferredSearchProvider()
     : super(Dio(), SettingsRepository(_TestStorageService()));
 
@@ -87,6 +87,31 @@ final class _FakeExtensionManager extends ExtensionManager {
   List<AnimeWitcherProvider> build() => <AnimeWitcherProvider>[provider];
 }
 
+final class _NamedDeferredProvider extends _DeferredSearchProvider {
+  _NamedDeferredProvider(this.id);
+
+  final String id;
+  @override
+  String get packageName => id;
+}
+
+final class _TwoProviderManager extends ExtensionManager {
+  _TwoProviderManager(this.first, this.second);
+  final AnimeWitcherProvider first;
+  final AnimeWitcherProvider second;
+  @override
+  List<AnimeWitcherProvider> build() => [first, second];
+}
+
+final class _TestActiveProvider extends ActiveProvider {
+  _TestActiveProvider(this.initial);
+  final AnimeWitcherProvider initial;
+  @override
+  AnimeWitcherProvider? build() => initial;
+  @override
+  Future<void> set(AnimeWitcherProvider? provider) async => state = provider;
+}
+
 MultimediaItem _item(String title, MultimediaContentType type) =>
     MultimediaItem(
       title: title,
@@ -101,6 +126,61 @@ Future<void> _flush() async {
 }
 
 void main() {
+  test(
+    'switching anime provider drops stale results and keeps manga independent',
+    () async {
+      final original = _NamedDeferredProvider('original');
+      final alternate = _NamedDeferredProvider('alternate');
+      final container = ProviderContainer(
+        overrides: [
+          extensionManagerProvider.overrideWith(
+            () => _TwoProviderManager(original, alternate),
+          ),
+          activeProviderProvider.overrideWith(
+            () => _TestActiveProvider(original),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.read(searchPagedResultsProvider);
+      await _flush();
+      expect(original.animeCalls, 1);
+      await container.read(activeProviderProvider.notifier).set(alternate);
+      await _flush();
+      expect(alternate.animeCalls, 1);
+      alternate.anime.complete(
+        ProviderMediaPage(
+          items: [_item('alternate', MultimediaContentType.anime)],
+          nextOffset: 0,
+          hasMore: false,
+        ),
+      );
+      await _flush();
+      original.anime.complete(
+        ProviderMediaPage(
+          items: [_item('stale', MultimediaContentType.anime)],
+          nextOffset: 0,
+          hasMore: false,
+        ),
+      );
+      await _flush();
+      expect(
+        container
+            .read(searchPagedResultsProvider)
+            .results
+            .single
+            .results
+            .single
+            .title,
+        'alternate',
+      );
+      container.read(searchDomainProvider.notifier).set(SearchDomain.manga);
+      await _flush();
+      expect(original.mangaCalls, 1);
+      expect(alternate.mangaCalls, 0);
+    },
+  );
+
   test('late anime completion cannot overwrite a newer manga domain', () async {
     final fake = _DeferredSearchProvider();
     final container = ProviderContainer(
@@ -108,6 +188,7 @@ void main() {
         extensionManagerProvider.overrideWith(
           () => _FakeExtensionManager(fake),
         ),
+        activeProviderProvider.overrideWith(() => _TestActiveProvider(fake)),
       ],
     );
     addTearDown(container.dispose);
@@ -170,6 +251,7 @@ void main() {
           extensionManagerProvider.overrideWith(
             () => _FakeExtensionManager(fake),
           ),
+          activeProviderProvider.overrideWith(() => _TestActiveProvider(fake)),
         ],
       );
       addTearDown(container.dispose);
@@ -208,6 +290,7 @@ void main() {
         extensionManagerProvider.overrideWith(
           () => _FakeExtensionManager(fake),
         ),
+        activeProviderProvider.overrideWith(() => _TestActiveProvider(fake)),
       ],
     );
     addTearDown(container.dispose);
@@ -246,6 +329,7 @@ void main() {
         extensionManagerProvider.overrideWith(
           () => _FakeExtensionManager(fake),
         ),
+        activeProviderProvider.overrideWith(() => _TestActiveProvider(fake)),
       ],
     );
     addTearDown(container.dispose);
@@ -317,6 +401,7 @@ void main() {
         extensionManagerProvider.overrideWith(
           () => _FakeExtensionManager(fake),
         ),
+        activeProviderProvider.overrideWith(() => _TestActiveProvider(fake)),
       ],
     );
     addTearDown(container.dispose);
