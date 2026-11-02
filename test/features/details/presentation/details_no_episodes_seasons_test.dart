@@ -1,4 +1,10 @@
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
+import 'package:animewitcher/core/extensions/base_provider.dart';
+import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
+import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
+import 'package:animewitcher/core/storage/settings_repository.dart';
+import 'package:dio/dio.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/details/presentation/details_controller.dart';
@@ -62,7 +68,78 @@ final class _NoEpisodeDetailsController extends DetailsController {
   }) async {}
 }
 
+class _Native extends AnimeWitcherNativeProvider {
+  _Native(_Storage storage) : super(Dio(), SettingsRepository(storage));
+  int calls = 0;
+  @override
+  Future<ProviderMediaPage> searchPage(
+    String query,
+    ProviderSearchFilters filters, {
+    int offset = 0,
+    int limit = 30,
+    CancelToken? cancelToken,
+  }) async {
+    calls++;
+    return const ProviderMediaPage(items: [], nextOffset: 0, hasMore: false);
+  }
+}
+
+class _Registry extends ExtensionManager {
+  _Registry(this.native, this.rift);
+  final AnimeWitcherProvider native;
+  final AnimeWitcherProvider rift;
+  @override
+  List<AnimeWitcherProvider> build() => [native, rift];
+}
+
+class _Active extends ActiveProvider {
+  _Active(this.provider);
+  final AnimeWitcherProvider provider;
+  @override
+  AnimeWitcherProvider? build() => provider;
+}
+
 void main() {
+  testWidgets('genre navigation uses original item provider', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(590, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final storage = _Storage();
+    final native = _Native(storage);
+    final rift = AnimeRiftProvider();
+    final item = MultimediaItem(
+      title: 'Native',
+      url: 'native',
+      posterUrl: '',
+      provider: native.packageName,
+      contentType: MultimediaContentType.anime,
+      tags: ['Mystery'],
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          storageServiceProvider.overrideWithValue(storage),
+          extensionManagerProvider.overrideWith(() => _Registry(native, rift)),
+          activeProviderProvider.overrideWith(() => _Active(rift)),
+          libraryProvider.overrideWith(_EmptyLibrary.new),
+          detailsControllerProvider(item.url)
+              .overrideWith(() => _NoEpisodeDetailsController(item)),
+        ],
+        child: MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          theme: ThemeData.dark(),
+          home: DetailsScreen(item: item),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tap(find.text('Mystery').first);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(native.calls, 1);
+  });
+
   testWidgets('seasons stay visible when an anime has no episodes yet', (
     tester,
   ) async {
@@ -94,9 +171,8 @@ void main() {
         overrides: [
           storageServiceProvider.overrideWithValue(_Storage()),
           libraryProvider.overrideWith(_EmptyLibrary.new),
-          detailsControllerProvider(upcomingSeason.url).overrideWith(
-            () => _NoEpisodeDetailsController(upcomingSeason),
-          ),
+          detailsControllerProvider(upcomingSeason.url)
+              .overrideWith(() => _NoEpisodeDetailsController(upcomingSeason)),
         ],
         child: MaterialApp(
           localizationsDelegates: AppLocalizations.localizationsDelegates,

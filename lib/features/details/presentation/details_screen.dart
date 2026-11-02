@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/router/app_router.dart';
 import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/item_provider_resolution.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../home/presentation/view_all_screen.dart';
 
@@ -1656,9 +1657,22 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     return genres;
   }
 
-  void _openGenreResults(BuildContext context, String genre) {
-    final provider = ref.read(activeProviderProvider);
-    if (provider == null) return;
+  void _openGenreResults(
+    BuildContext context,
+    MultimediaItem item,
+    String genre,
+  ) {
+    final provider = resolveItemProvider(
+      ref.read(extensionManagerProvider),
+      item.provider,
+      ref.read(activeProviderProvider),
+    );
+    if (provider == null) {
+      ref
+          .read(notificationServiceProvider)
+          .showError('مزود هذا العمل غير متاح.');
+      return;
+    }
 
     final filters = ProviderSearchFilters(genres: <String>{genre});
     Navigator.of(context).push(
@@ -1726,7 +1740,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
                   ),
                   clipBehavior: Clip.antiAlias,
                   child: InkWell(
-                    onTap: () => _openGenreResults(context, genre),
+                    onTap: () => _openGenreResults(context, item, genre),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 14,
