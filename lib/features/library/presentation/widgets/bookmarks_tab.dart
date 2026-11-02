@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/account/account_providers.dart';
+import '../../../../core/extensions/extension_manager.dart';
+import '../../../../core/storage/provider_local_library.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/utils/localized_text.dart';
 import '../../../../core/router/app_router.dart';
@@ -37,7 +39,10 @@ class _BookmarksTabState extends ConsumerState<BookmarksTab>
   Widget build(BuildContext context) {
     super.build(context);
     final libraryState = ref.watch(libraryProvider);
-    return switch (libraryState) {
+    final localOnly =
+        libraryState.mediaKind == LibraryMediaKind.anime &&
+        ref.watch(activeProviderProvider)?.packageName == animeRiftProviderId;
+    final content = switch (libraryState) {
       LibraryLoading() => const Center(child: AppLoadingIndicator()),
       LibraryError(message: final msg) => Center(child: Text(msg)),
       LibraryEmpty() => LibraryEmptyState(mediaKind: libraryState.mediaKind),
@@ -47,6 +52,23 @@ class _BookmarksTabState extends ConsumerState<BookmarksTab>
             : sortLibraryItems(items, widget.sort!),
       ),
     };
+    if (!localOnly) return content;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: Text(
+            appText(
+              context,
+              english: 'Anime Rift library is stored on this device and is not synced.',
+              arabic:
+                  'مكتبة Anime Rift محفوظة على هذا الجهاز ولا تتم مزامنتها.',
+            ),
+          ),
+        ),
+        Expanded(child: content),
+      ],
+    );
   }
 }
 
@@ -171,8 +193,12 @@ class LibraryEmptyState extends ConsumerWidget {
     LibraryMediaKind mediaKind,
   ) {
     final isManga = mediaKind == LibraryMediaKind.manga;
+    final localOnly =
+        !isManga &&
+        ref.watch(activeProviderProvider)?.packageName == animeRiftProviderId;
     final signedIn =
         isManga ||
+        localOnly ||
         (ref
                 .watch(animeWitcherAccountControllerProvider)
                 .asData

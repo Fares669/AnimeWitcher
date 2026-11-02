@@ -1,9 +1,12 @@
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:animewitcher/core/account/account_providers.dart';
+
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/storage/library_category.dart';
 import '../../../../core/storage/library_repository.dart';
 import '../../../../core/storage/storage_service.dart';
+import '../../../../core/storage/provider_local_library.dart';
+import '../../../../core/extensions/extension_manager.dart';
 
 import './library_auth.dart';
 import './library_state.dart';
@@ -16,13 +19,17 @@ class Library extends _$Library {
   @override
   LibraryState build() {
     ref.watch(accountDataRevisionProvider);
+    final activeProvider = ref.watch(activeProviderProvider);
     final repository = ref.read(libraryRepositoryProvider);
     final category = repository.getSelectedCategory();
     final mediaKind = LibraryMediaKind.fromStorageKey(
       ref.read(storageServiceProvider).getString('library_media_kind'),
     );
     final items = filterLibraryItemsByKind(
-      repository.getLibraryItems(category: category),
+      activeProvider?.packageName == animeRiftProviderId &&
+              mediaKind == LibraryMediaKind.anime
+          ? _local().items(category)
+          : repository.getLibraryItems(category: category),
       mediaKind,
     );
     return items.isEmpty
@@ -41,7 +48,10 @@ class Library extends _$Library {
     final selected = category ?? state.category;
     final selectedKind = mediaKind ?? state.mediaKind;
     final items = filterLibraryItemsByKind(
-      repository.getLibraryItems(category: selected),
+      ref.read(activeProviderProvider)?.packageName == animeRiftProviderId &&
+              selectedKind == LibraryMediaKind.anime
+          ? _local().items(selected)
+          : repository.getLibraryItems(category: selected),
       selectedKind,
     );
     state = items.isEmpty
@@ -75,10 +85,22 @@ class Library extends _$Library {
     refresh(mediaKind: mediaKind);
   }
 
-  Future<void> addItem(
-    MultimediaItem item, {
-    LibraryCategory? category,
-  }) async {
+  Future<void> addItem(MultimediaItem item, {LibraryCategory? category}) async {
+    if (item.provider == animeRiftProviderId &&
+        item.contentType != MultimediaContentType.manga) {
+      final selected = category ?? state.category;
+      if (selected != LibraryCategory.favorite &&
+          !selected.isAssignableTo(item)) {
+        return;
+      }
+      if (selected == LibraryCategory.favorite) {
+        await _local().setFavorite(item, true);
+      } else {
+        await _local().setCategory(item, selected);
+      }
+      refresh();
+      return;
+    }
     _requireSignedIn();
     final repository = ref.read(libraryRepositoryProvider);
     await repository.addToLibrary(
@@ -89,24 +111,32 @@ class Library extends _$Library {
     refresh();
   }
 
-  Future<void> clearItemCategory(String url, {bool manga = false}) async {
+  Future<void> clearItemCategory(
+    String url, {
+    bool manga = false,
+    String? providerId,
+  }) async {
+    if (!manga && providerId == animeRiftProviderId) {
+      await _local().clearCategory(url);
+      refresh();
+      return;
+    }
     _requireSignedIn();
     final repository = ref.read(libraryRepositoryProvider);
-    await repository.clearCategory(
-      url,
-      onLocalChanged: refresh,
-    );
+    await repository.clearCategory(url, onLocalChanged: refresh);
     refresh();
   }
 
   Future<void> setFavorite(MultimediaItem item, bool favorite) async {
+    if (item.provider == animeRiftProviderId &&
+        item.contentType != MultimediaContentType.manga) {
+      await _local().setFavorite(item, favorite);
+      refresh();
+      return;
+    }
     _requireSignedIn();
     final repository = ref.read(libraryRepositoryProvider);
-    await repository.setFavorite(
-      item,
-      favorite,
-      onLocalChanged: refresh,
-    );
+    await repository.setFavorite(item, favorite, onLocalChanged: refresh);
     refresh();
   }
 
@@ -116,12 +146,19 @@ class Library extends _$Library {
     );
   }
 
-  bool isFavorite(String url) {
+  ProviderLocalLibrary _local() => ProviderLocalLibrary(
+    ref.read(storageServiceProvider),
+    animeRiftProviderId,
+  );
+
+  bool isFavorite(String url, {String? providerId}) {
+    if (providerId == animeRiftProviderId) return _local().isFavorite(url);
     final repository = ref.read(libraryRepositoryProvider);
     return repository.isFavorite(url);
   }
 
-  LibraryCategory? itemCategory(String url) {
+  LibraryCategory? itemCategory(String url, {String? providerId}) {
+    if (providerId == animeRiftProviderId) return _local().category(url);
     final repository = ref.read(libraryRepositoryProvider);
     return repository.getItemCategory(url);
   }

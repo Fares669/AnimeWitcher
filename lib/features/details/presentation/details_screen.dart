@@ -32,6 +32,7 @@ import 'package:animewitcher/shared/widgets/multimedia_card.dart';
 import '../../library/presentation/library_provider.dart';
 import '../../library/presentation/library_auth.dart';
 import '../../../core/storage/library_category.dart';
+import '../../../core/storage/provider_local_library.dart';
 import '../../../core/account/account_providers.dart';
 import '../../settings/presentation/account_screen.dart';
 
@@ -208,7 +209,9 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     final colors = Theme.of(context).colorScheme;
     final commentTarget = animeWitcherAnimeCommentTarget(item);
     final LibraryCategory? currentCategory =
-        libraryNotifier.itemCategory(item.url) as LibraryCategory?;
+        (item.provider == animeRiftProviderId
+            ? libraryNotifier.itemCategory(item.url, providerId: item.provider)
+            : libraryNotifier.itemCategory(item.url)) as LibraryCategory?;
 
     return <AppleLiquidGlassToolbarButton>[
       if (includeComments && commentTarget != null)
@@ -235,7 +238,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
             : Icons.favorite_border_rounded,
         color: isFavorite ? favoriteRed : foregroundColor,
         onPressed: () async {
-          if (!await _ensureSignedInForLibrary(context)) return;
+          if (!await _ensureSignedInForLibrary(context, item)) return;
           await libraryNotifier.setFavorite(item, !isFavorite);
         },
       ),
@@ -278,7 +281,9 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     Color? fallbackColor,
   }) {
     final LibraryCategory? category =
-        libraryNotifier.itemCategory(item.url) as LibraryCategory?;
+        (item.provider == animeRiftProviderId
+            ? libraryNotifier.itemCategory(item.url, providerId: item.provider)
+            : libraryNotifier.itemCategory(item.url)) as LibraryCategory?;
     return Wrap(
       spacing: 12,
       runSpacing: 12,
@@ -487,10 +492,10 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     MultimediaItem item,
     String value,
   ) async {
-    if (!await _ensureSignedInForLibrary(context)) return;
+    if (!await _ensureSignedInForLibrary(context, item)) return;
     final notifier = ref.read(libraryProvider.notifier);
     if (value == _removeLibraryAction) {
-      await notifier.clearItemCategory(item.url);
+      await notifier.clearItemCategory(item.url, providerId: item.provider);
       return;
     }
     LibraryCategory? category;
@@ -505,7 +510,8 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     }
   }
 
-  Future<bool> _ensureSignedInForLibrary(BuildContext context) async {
+  Future<bool> _ensureSignedInForLibrary(BuildContext context, MultimediaItem item) async {
+    if (item.provider == animeRiftProviderId) return true;
     if (ref.read(animeWitcherAccountServiceProvider).isSignedIn) {
       return true;
     }
@@ -805,7 +811,9 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     // membership globally instead of only inside the currently selected list.
     ref.watch(libraryProvider);
     final libraryNotifier = ref.read(libraryProvider.notifier);
-    final isFavorite = libraryNotifier.isFavorite(widget.item.url);
+    final isFavorite = widget.item.provider == animeRiftProviderId
+        ? libraryNotifier.isFavorite(widget.item.url, providerId: widget.item.provider)
+        : libraryNotifier.isFavorite(widget.item.url);
     final isLarge = context.isTabletOrLarger;
 
     final detailsAsync = ref.watch(
