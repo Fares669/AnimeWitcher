@@ -1,4 +1,5 @@
 import 'package:animewitcher/core/extensions/item_provider_resolution.dart';
+import 'package:animewitcher/core/storage/provider_local_library.dart';
 import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
 import 'package:animewitcher/core/storage/settings_repository.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
@@ -31,5 +32,13 @@ void main() {
     expect(resolveItemProvider(providers, '', active), same(active));
     expect(resolveItemProvider(providers, 'Remote', active), same(active));
     expect(resolveItemProvider(providers, 'Local', active), same(active));
+  });
+  test('legacy Witcher records resolve native even when Rift is selected', () {
+    final native = _Provider('com.fares669.animewitcher.native');
+    final rift = _Provider(animeRiftProviderId);
+    for (final id in [null, '', 'Local', 'Remote']) {
+      expect(resolveItemProvider([native, rift], id, rift), same(native));
+      expect(resolveItemProvider([rift], id, rift), isNull);
+    }
   });
 }
