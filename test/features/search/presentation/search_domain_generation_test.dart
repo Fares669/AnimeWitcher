@@ -36,6 +36,15 @@ class _DeferredSearchProvider extends AnimeWitcherNativeProvider {
   int characterCalls = 0;
 
   @override
+  Future<List<MultimediaItem>> search(
+    String query, {
+    CancelToken? cancelToken,
+  }) async {
+    animeCalls++;
+    return (await anime.future).items;
+  }
+
+  @override
   Future<ProviderMediaPage> searchPage(
     String query,
     ProviderSearchFilters filters, {
@@ -126,6 +135,58 @@ Future<void> _flush() async {
 }
 
 void main() {
+  test(
+    'suggestions follow provider switches and discard older responses',
+    () async {
+      final original = _NamedDeferredProvider('original');
+      final alternate = _NamedDeferredProvider('alternate');
+      final container = ProviderContainer(
+        overrides: [
+          extensionManagerProvider.overrideWith(
+            () => _TwoProviderManager(original, alternate),
+          ),
+          activeProviderProvider.overrideWith(
+            () => _TestActiveProvider(original),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      final subscription = container.listen(
+        searchSuggestionControllerProvider,
+        (_, _) {},
+      );
+      addTearDown(subscription.close);
+      container
+          .read(searchSuggestionControllerProvider.notifier)
+          .onQueryChanged('anime');
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      expect(original.animeCalls, 1);
+      await container.read(activeProviderProvider.notifier).set(alternate);
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      expect(alternate.animeCalls, 1);
+      alternate.anime.complete(
+        ProviderMediaPage(
+          items: [_item('new', MultimediaContentType.anime)],
+          nextOffset: 0,
+          hasMore: false,
+        ),
+      );
+      await _flush();
+      original.anime.complete(
+        ProviderMediaPage(
+          items: [_item('old', MultimediaContentType.anime)],
+          nextOffset: 0,
+          hasMore: false,
+        ),
+      );
+      await _flush();
+      expect(
+        container.read(searchSuggestionControllerProvider).items.single.title,
+        'new',
+      );
+    },
+  );
+
   test(
     'switching anime provider drops stale results and keeps manga independent',
     () async {

@@ -836,9 +836,18 @@ class SearchSuggestionState {
 @riverpod
 class SearchSuggestionController extends _$SearchSuggestionController {
   Timer? _debounce;
+  int _generation = 0;
 
   @override
   SearchSuggestionState build() {
+    ref.listen(activeProviderProvider, (previous, next) {
+      if (previous?.packageName == next?.packageName) return;
+      final domain = ref.read(searchDomainProvider);
+      if (domain != SearchDomain.anime && domain != SearchDomain.all) return;
+      final query = state.query;
+      state = const SearchSuggestionState();
+      onQueryChanged(query);
+    });
     ref.onDispose(() {
       _debounce?.cancel();
     });
@@ -848,6 +857,7 @@ class SearchSuggestionController extends _$SearchSuggestionController {
   void onQueryChanged(String query) {
     if (query == state.query) return;
 
+    final generation = ++_generation;
     final trimmed = query.trim();
     if (trimmed.length < 2) {
       _debounce?.cancel();
@@ -872,6 +882,7 @@ class SearchSuggestionController extends _$SearchSuggestionController {
         final providers = manager.getAllProviders();
         final domain = ref.read(searchDomainProvider);
         final provider = providers.isEmpty ? null : providers.first;
+        final animeProvider = ref.read(activeProviderProvider);
         const none = ProviderSearchFilters();
         Future<List<MultimediaItem>> quiet(
           Future<ProviderMediaPage> Function() request,
@@ -908,8 +919,9 @@ class SearchSuggestionController extends _$SearchSuggestionController {
                   .catchError((Object _) => const <AnimeWitcherCharacterHit>[])
             : Future.value(const <AnimeWitcherCharacterHit>[]);
         final animeFuture =
-            provider != null && (everything || domain == SearchDomain.anime)
-            ? provider.search(query)
+            animeProvider != null &&
+                (everything || domain == SearchDomain.anime)
+            ? animeProvider.search(query)
             : Future.value(const <MultimediaItem>[]);
         final anime = await animeFuture;
         final animation = await animationFuture;
@@ -931,7 +943,7 @@ class SearchSuggestionController extends _$SearchSuggestionController {
             .where((item) => item.title.trim().isNotEmpty && seen.add(item.url))
             .take(30)
             .toList(growable: false);
-        if (state.query == query) {
+        if (ref.mounted && generation == _generation && state.query == query) {
           state = state.copyWith(
             suggestions: suggestions,
             items: items,
@@ -942,7 +954,7 @@ class SearchSuggestionController extends _$SearchSuggestionController {
           );
         }
       } catch (_) {
-        if (state.query == query) {
+        if (ref.mounted && generation == _generation && state.query == query) {
           state = state.copyWith(
             suggestions: const [],
             items: const [],
@@ -957,6 +969,7 @@ class SearchSuggestionController extends _$SearchSuggestionController {
   }
 
   void clear() {
+    _generation++;
     _debounce?.cancel();
     state = const SearchSuggestionState();
   }
