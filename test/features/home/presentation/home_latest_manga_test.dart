@@ -70,8 +70,7 @@ final class _LatestMangaFailsProvider extends AnimeWitcherProvider {
 
 /// Answers the new manga chapters only when the test says so.
 final class _SlowMangaProvider extends _LatestMangaFailsProvider {
-  final Completer<MangaLatestChapterPage> manga =
-      Completer<MangaLatestChapterPage>();
+  Completer<MangaLatestChapterPage> manga = Completer<MangaLatestChapterPage>();
 
   @override
   Future<MangaLatestChapterPage> getLatestMangaPage({
@@ -80,11 +79,24 @@ final class _SlowMangaProvider extends _LatestMangaFailsProvider {
   }) => manga.future;
 }
 
+final class _DeferredHomeProvider extends _SlowMangaProvider {
+  final home = Completer<Map<String, List<MultimediaItem>>>();
+
+  @override
+  Future<Map<String, List<MultimediaItem>>> getHome() => home.future;
+}
+
 final class _AnimeOnlyProvider extends _LatestMangaFailsProvider {
   int mangaCalls = 0;
-  @override String get packageName => 'alternate.anime';
-  @override Set<ProviderType> get supportedTypes => const {ProviderType.anime};
-  @override Future<MangaLatestChapterPage> getLatestMangaPage({int offset = 0, int limit = 30}) async {
+  @override
+  String get packageName => 'alternate.anime';
+  @override
+  Set<ProviderType> get supportedTypes => const {ProviderType.anime};
+  @override
+  Future<MangaLatestChapterPage> getLatestMangaPage({
+    int offset = 0,
+    int limit = 30,
+  }) async {
     mangaCalls++;
     throw StateError('wrong manga provider');
   }
@@ -94,7 +106,8 @@ final class _Manager extends ExtensionManager {
   _Manager(this.manga, this.anime);
   final AnimeWitcherProvider manga;
   final AnimeWitcherProvider anime;
-  @override List<AnimeWitcherProvider> build() => [manga, anime];
+  @override
+  List<AnimeWitcherProvider> build() => [manga, anime];
 }
 
 Future<void> _flush() async {
@@ -102,44 +115,257 @@ Future<void> _flush() async {
   await Future<void>.delayed(Duration.zero);
 }
 
+MangaLatestChapterPage _mangaPage(String title) => MangaLatestChapterPage(
+  items: [
+    MangaLatestChapter(
+      manga: MultimediaItem(title: title, url: '/manga/$title', posterUrl: ''),
+      chapter: const MangaChapter(
+        id: '1',
+        mangaId: 'm1',
+        url: '/chapter',
+        name: '1',
+      ),
+    ),
+  ],
+  nextOffset: 1,
+  hasMore: false,
+);
+
 void main() {
-  test('manga chapters remain available while Rift connection is unavailable', () async {
-    final manga = _SlowMangaProvider();
-    final rift = AnimeRiftProvider();
-    final container = ProviderContainer(overrides: [
-      activeProviderProvider.overrideWithValue(rift),
-      extensionManagerProvider.overrideWith(() => _Manager(manga, rift)),
-    ]);
-    addTearDown(container.dispose);
-    container.listen<HomeState>(homeDataProvider, (_, __) {});
+  test(
+    'a failed refresh keeps manga visible while Rift is unavailable',
+    () async {
+      final manga = _SlowMangaProvider();
+      final rift = AnimeRiftProvider();
+      final container = ProviderContainer(
+        overrides: [
+          activeProviderProvider.overrideWithValue(rift),
+          extensionManagerProvider.overrideWith(() => _Manager(manga, rift)),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.listen<HomeState>(homeDataProvider, (_, _) {});
+      await _flush();
+      manga.manga.complete(_mangaPage('Kept manga'));
+      await _flush();
+
+      manga.manga = Completer<MangaLatestChapterPage>();
+      final refresh = container
+          .read(homeDataProvider.notifier)
+          .fetch(keepCurrent: true);
+      expect(container.read(homeDataProvider), isA<HomeProviderUnavailable>());
+      manga.manga.completeError(StateError('manga offline'));
+      await refresh;
+      await _flush();
+
+      final state = container.read(homeDataProvider) as HomeProviderUnavailable;
+      expect(state.latestManga.single.manga.title, 'Kept manga');
+    },
+  );
+
+  test(
+    'an empty manga refresh clears old chapters while Rift is unavailable',
+    () async {
+      final manga = _SlowMangaProvider();
+      final rift = AnimeRiftProvider();
+      final container = ProviderContainer(
+        overrides: [
+          activeProviderProvider.overrideWithValue(rift),
+          extensionManagerProvider.overrideWith(() => _Manager(manga, rift)),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.listen<HomeState>(homeDataProvider, (_, _) {});
+      await _flush();
+      manga.manga.complete(_mangaPage('Old manga'));
+      await _flush();
+
+      manga.manga = Completer<MangaLatestChapterPage>();
+      final refresh = container
+          .read(homeDataProvider.notifier)
+          .fetch(keepCurrent: true);
+      manga.manga.complete(
+        const MangaLatestChapterPage(items: [], nextOffset: 0, hasMore: false),
+      );
+      await refresh;
+      await _flush();
+      expect(
+        (container.read(
+          homeDataProvider,
+        ) as HomeProviderUnavailable).latestManga,
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'manga arriving before anime home is included in its final state',
+    () async {
+      final provider = _DeferredHomeProvider();
+      final container = ProviderContainer(
+        overrides: [activeProviderProvider.overrideWithValue(provider)],
+      );
+      addTearDown(container.dispose);
+      container.listen<HomeState>(homeDataProvider, (_, _) {});
+      await _flush();
+      provider.manga.complete(_mangaPage('Early manga'));
+      await _flush();
+      expect(container.read(homeDataProvider), isA<HomeLoading>());
+      provider.home.complete({'anime': []});
+      await _flush();
+      expect(
+        (container.read(
+          homeDataProvider,
+        ) as HomeSuccess).latestManga.single.manga.title,
+        'Early manga',
+      );
+    },
+  );
+
+  test('a manga response after home disposal is ignored', () async {
+    final provider = _SlowMangaProvider();
+    final container = ProviderContainer(
+      overrides: [activeProviderProvider.overrideWithValue(provider)],
+    );
+    container.listen<HomeState>(homeDataProvider, (_, _) {});
     await _flush();
-    expect(container.read(homeDataProvider), isA<HomeProviderUnavailable>());
-    manga.manga.complete(MangaLatestChapterPage(items: [
-      MangaLatestChapter(manga: MultimediaItem(title: 'Manga', url: '/manga', posterUrl: ''),
-        chapter: const MangaChapter(id: '1', mangaId: 'm1', url: '/chapter', name: '1')),
-    ], nextOffset: 1, hasMore: false));
+    container.dispose();
+    provider.manga.complete(_mangaPage('Late manga'));
     await _flush();
-    expect((container.read(homeDataProvider) as HomeProviderUnavailable).latestManga, hasLength(1));
   });
 
-  test('latest manga stays on its own source when anime provider changes', () async {
-    final manga = _SlowMangaProvider();
-    final anime = _AnimeOnlyProvider();
-    final container = ProviderContainer(overrides: [
-      activeProviderProvider.overrideWithValue(anime),
-      extensionManagerProvider.overrideWith(() => _Manager(manga, anime)),
-    ]);
+  test('early manga survives a later Rift unavailable response', () async {
+    final provider = _DeferredHomeProvider();
+    final container = ProviderContainer(
+      overrides: [activeProviderProvider.overrideWithValue(provider)],
+    );
     addTearDown(container.dispose);
-    container.listen<HomeState>(homeDataProvider, (_, __) {});
+    container.listen<HomeState>(homeDataProvider, (_, _) {});
     await _flush();
-    expect(anime.mangaCalls, 0);
-    manga.manga.complete(MangaLatestChapterPage(items: [
-      MangaLatestChapter(manga: MultimediaItem(title: 'Manga', url: '/manga', posterUrl: ''),
-        chapter: const MangaChapter(id: '1', mangaId: 'm1', url: '/chapter', name: '1')),
-    ], nextOffset: 1, hasMore: false));
+    provider.manga.complete(_mangaPage('Early manga'));
     await _flush();
-    expect((container.read(homeDataProvider) as HomeSuccess).latestManga, hasLength(1));
+    provider.home.completeError(const AnimeRiftAccessUnavailable());
+    await _flush();
+    expect(
+      (container.read(
+        homeDataProvider,
+      ) as HomeProviderUnavailable).latestManga.single.manga.title,
+      'Early manga',
+    );
   });
+
+  test('a late manga response cannot replace a newer fetch', () async {
+    final provider = _SlowMangaProvider();
+    final container = ProviderContainer(
+      overrides: [activeProviderProvider.overrideWithValue(provider)],
+    );
+    addTearDown(container.dispose);
+    container.listen<HomeState>(homeDataProvider, (_, _) {});
+    await _flush();
+    final oldManga = provider.manga;
+    provider.manga = Completer<MangaLatestChapterPage>();
+    await container.read(homeDataProvider.notifier).fetch(keepCurrent: true);
+    provider.manga.complete(_mangaPage('New manga'));
+    await _flush();
+    oldManga.complete(_mangaPage('Stale manga'));
+    await _flush();
+    expect(
+      (container.read(
+        homeDataProvider,
+      ) as HomeSuccess).latestManga.single.manga.title,
+      'New manga',
+    );
+  });
+
+  test(
+    'manga chapters remain available while Rift connection is unavailable',
+    () async {
+      final manga = _SlowMangaProvider();
+      final rift = AnimeRiftProvider();
+      final container = ProviderContainer(
+        overrides: [
+          activeProviderProvider.overrideWithValue(rift),
+          extensionManagerProvider.overrideWith(() => _Manager(manga, rift)),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.listen<HomeState>(homeDataProvider, (_, _) {});
+      await _flush();
+      expect(container.read(homeDataProvider), isA<HomeProviderUnavailable>());
+      manga.manga.complete(
+        MangaLatestChapterPage(
+          items: [
+            MangaLatestChapter(
+              manga: MultimediaItem(
+                title: 'Manga',
+                url: '/manga',
+                posterUrl: '',
+              ),
+              chapter: const MangaChapter(
+                id: '1',
+                mangaId: 'm1',
+                url: '/chapter',
+                name: '1',
+              ),
+            ),
+          ],
+          nextOffset: 1,
+          hasMore: false,
+        ),
+      );
+      await _flush();
+      expect(
+        (container.read(
+          homeDataProvider,
+        ) as HomeProviderUnavailable).latestManga,
+        hasLength(1),
+      );
+    },
+  );
+
+  test(
+    'latest manga stays on its own source when anime provider changes',
+    () async {
+      final manga = _SlowMangaProvider();
+      final anime = _AnimeOnlyProvider();
+      final container = ProviderContainer(
+        overrides: [
+          activeProviderProvider.overrideWithValue(anime),
+          extensionManagerProvider.overrideWith(() => _Manager(manga, anime)),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.listen<HomeState>(homeDataProvider, (_, _) {});
+      await _flush();
+      expect(anime.mangaCalls, 0);
+      manga.manga.complete(
+        MangaLatestChapterPage(
+          items: [
+            MangaLatestChapter(
+              manga: MultimediaItem(
+                title: 'Manga',
+                url: '/manga',
+                posterUrl: '',
+              ),
+              chapter: const MangaChapter(
+                id: '1',
+                mangaId: 'm1',
+                url: '/chapter',
+                name: '1',
+              ),
+            ),
+          ],
+          nextOffset: 1,
+          hasMore: false,
+        ),
+      );
+      await _flush();
+      expect(
+        (container.read(homeDataProvider) as HomeSuccess).latestManga,
+        hasLength(1),
+      );
+    },
+  );
 
   test('latest manga failure does not fail anime home', () async {
     final provider = _LatestMangaFailsProvider();
@@ -148,7 +374,7 @@ void main() {
     );
     addTearDown(container.dispose);
 
-    container.listen<HomeState>(homeDataProvider, (_, __) {});
+    container.listen<HomeState>(homeDataProvider, (_, _) {});
     await _flush();
 
     final state = container.read(homeDataProvider);
@@ -168,7 +394,7 @@ void main() {
     );
     addTearDown(container.dispose);
 
-    container.listen<HomeState>(homeDataProvider, (_, __) {});
+    container.listen<HomeState>(homeDataProvider, (_, _) {});
     await _flush();
 
     // The anime rows are on screen while the manga is still coming.

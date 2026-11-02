@@ -144,17 +144,29 @@ Future<void> _flush() async {
 }
 
 void main() {
-  test('Rift search explains that its official connection is unavailable', () async {
-    final provider = AnimeRiftProvider();
-    final container = ProviderContainer(overrides: [
-      extensionManagerProvider.overrideWith(() => _FakeExtensionManager(provider)),
-      activeProviderProvider.overrideWith(() => _TestActiveProvider(provider)),
-    ]);
-    addTearDown(container.dispose);
-    container.read(searchPagedResultsProvider);
-    await _flush();
-    expect(container.read(searchPagedResultsProvider).errorMessage, contains('الاتصال الرسمية'));
-  });
+  test(
+    'Rift search explains that its official connection is unavailable',
+    () async {
+      final provider = AnimeRiftProvider();
+      final container = ProviderContainer(
+        overrides: [
+          extensionManagerProvider.overrideWith(
+            () => _FakeExtensionManager(provider),
+          ),
+          activeProviderProvider.overrideWith(
+            () => _TestActiveProvider(provider),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.read(searchPagedResultsProvider);
+      await _flush();
+      expect(
+        container.read(searchPagedResultsProvider).errorMessage,
+        contains('الاتصال الرسمية'),
+      );
+    },
+  );
 
   test(
     'filter options follow anime selection without changing manga or animation',
@@ -237,6 +249,254 @@ void main() {
         container.read(searchSuggestionControllerProvider).items.single.title,
         'new',
       );
+    },
+  );
+
+  test(
+    'changing the search tab clears suggestions and loads that catalog',
+    () async {
+      final catalog = _DeferredSearchProvider();
+      final container = ProviderContainer(
+        overrides: [
+          extensionManagerProvider.overrideWith(
+            () => _FakeExtensionManager(catalog),
+          ),
+          activeProviderProvider.overrideWith(
+            () => _TestActiveProvider(catalog),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      final subscription = container.listen(
+        searchSuggestionControllerProvider,
+        (_, _) {},
+      );
+      addTearDown(subscription.close);
+      container
+          .read(searchSuggestionControllerProvider.notifier)
+          .onQueryChanged('hero');
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      catalog.anime.complete(
+        ProviderMediaPage(
+          items: [_item('Anime suggestion', MultimediaContentType.anime)],
+          nextOffset: 0,
+          hasMore: false,
+        ),
+      );
+      await _flush();
+      expect(
+        container.read(searchSuggestionControllerProvider).items.single.title,
+        'Anime suggestion',
+      );
+
+      container.read(searchDomainProvider.notifier).set(SearchDomain.manga);
+      final pending = container.read(searchSuggestionControllerProvider);
+      expect(pending.items, isEmpty);
+      expect(pending.suggestions, isEmpty);
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      expect(catalog.mangaCalls, 1);
+      catalog.manga.complete(
+        ProviderMediaPage(
+          items: [_item('Manga suggestion', MultimediaContentType.manga)],
+          nextOffset: 0,
+          hasMore: false,
+        ),
+      );
+      await _flush();
+      expect(
+        container.read(searchSuggestionControllerProvider).items.single.title,
+        'Manga suggestion',
+      );
+    },
+  );
+
+  test('a late anime suggestion cannot replace the manga tab', () async {
+    final catalog = _DeferredSearchProvider();
+    final container = ProviderContainer(
+      overrides: [
+        extensionManagerProvider.overrideWith(
+          () => _FakeExtensionManager(catalog),
+        ),
+        activeProviderProvider.overrideWith(() => _TestActiveProvider(catalog)),
+      ],
+    );
+    addTearDown(container.dispose);
+    final subscription = container.listen(
+      searchSuggestionControllerProvider,
+      (_, _) {},
+    );
+    addTearDown(subscription.close);
+    container
+        .read(searchSuggestionControllerProvider.notifier)
+        .onQueryChanged('hero');
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    expect(catalog.animeCalls, 1);
+
+    container.read(searchDomainProvider.notifier).set(SearchDomain.manga);
+    expect(container.read(searchSuggestionControllerProvider).items, isEmpty);
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    catalog.manga.complete(
+      ProviderMediaPage(
+        items: [_item('new manga', MultimediaContentType.manga)],
+        nextOffset: 0,
+        hasMore: false,
+      ),
+    );
+    await _flush();
+    catalog.anime.complete(
+      ProviderMediaPage(
+        items: [_item('old anime', MultimediaContentType.anime)],
+        nextOffset: 0,
+        hasMore: false,
+      ),
+    );
+    await _flush();
+    expect(
+      container.read(searchSuggestionControllerProvider).items.single.title,
+      'new manga',
+    );
+  });
+
+  test('Rift failure leaves independent all-tab suggestions visible', () async {
+    final catalog = _DeferredSearchProvider();
+    final rift = AnimeRiftProvider();
+    final container = ProviderContainer(
+      overrides: [
+        extensionManagerProvider.overrideWith(
+          () => _TwoProviderManager(rift, catalog),
+        ),
+        activeProviderProvider.overrideWith(() => _TestActiveProvider(rift)),
+      ],
+    );
+    addTearDown(container.dispose);
+    final subscription = container.listen(
+      searchSuggestionControllerProvider,
+      (_, _) {},
+    );
+    addTearDown(subscription.close);
+    container.read(searchDomainProvider.notifier).set(SearchDomain.all);
+    container
+        .read(searchSuggestionControllerProvider.notifier)
+        .onQueryChanged('hero');
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    catalog.manga.complete(
+      ProviderMediaPage(
+        items: [_item('manga', MultimediaContentType.manga)],
+        nextOffset: 0,
+        hasMore: false,
+      ),
+    );
+    catalog.animation.complete(
+      ProviderMediaPage(
+        items: [_item('animation', MultimediaContentType.other)],
+        nextOffset: 0,
+        hasMore: false,
+      ),
+    );
+    catalog.characters.complete(
+      const AnimeWitcherCharacterPage(items: [], page: 0, hasMore: false),
+    );
+    await _flush();
+    final result = container.read(searchSuggestionControllerProvider);
+    expect(result.isLoading, isFalse);
+    expect(result.manga.single.title, 'manga');
+    expect(result.animation.single.title, 'animation');
+    expect(result.items, isEmpty);
+  });
+
+  test(
+    'a Rift-first provider list still selects the native manga catalog',
+    () async {
+      final catalog = _DeferredSearchProvider();
+      final container = ProviderContainer(
+        overrides: [
+          extensionManagerProvider.overrideWith(
+            () => _TwoProviderManager(AnimeRiftProvider(), catalog),
+          ),
+          activeProviderProvider.overrideWith(
+            () => _TestActiveProvider(AnimeRiftProvider()),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.read(searchDomainProvider.notifier).set(SearchDomain.manga);
+      container.read(searchPagedResultsProvider);
+      await _flush();
+      expect(catalog.mangaCalls, 1);
+      catalog.manga.complete(
+        ProviderMediaPage(
+          items: [_item('Manga hit', MultimediaContentType.manga)],
+          nextOffset: 0,
+          hasMore: false,
+        ),
+      );
+      await _flush();
+      expect(
+        container
+            .read(searchPagedResultsProvider)
+            .results
+            .single
+            .results
+            .single
+            .title,
+        'Manga hit',
+      );
+    },
+  );
+
+  test(
+    'Rift failure leaves independent all-tab search results visible',
+    () async {
+      final catalog = _DeferredSearchProvider();
+      final rift = AnimeRiftProvider();
+      final container = ProviderContainer(
+        overrides: [
+          extensionManagerProvider.overrideWith(
+            () => _TwoProviderManager(rift, catalog),
+          ),
+          activeProviderProvider.overrideWith(() => _TestActiveProvider(rift)),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.read(searchDomainProvider.notifier).set(SearchDomain.all);
+      container.read(searchPagedResultsProvider);
+      await _flush();
+      catalog.manga.complete(
+        ProviderMediaPage(
+          items: [_item('Manga hit', MultimediaContentType.manga)],
+          nextOffset: 1,
+          hasMore: false,
+        ),
+      );
+      catalog.animation.complete(
+        ProviderMediaPage(
+          items: [_item('Animation hit', MultimediaContentType.other)],
+          nextOffset: 1,
+          hasMore: false,
+        ),
+      );
+      catalog.characters.complete(
+        const AnimeWitcherCharacterPage(
+          items: [AnimeWitcherCharacterHit(id: 'c1', name: 'Character One')],
+          page: 0,
+          hasMore: false,
+        ),
+      );
+      await _flush();
+      final state = container.read(searchPagedResultsProvider);
+      expect(state.isLoading, isFalse);
+      expect(state.errorMessage, isNull);
+      expect(state.results.map((group) => group.providerId), [
+        'animation',
+        'manga',
+      ]);
+      expect(
+        state.results
+            .expand((group) => group.results)
+            .map((item) => item.title),
+        ['Animation hit', 'Manga hit'],
+      );
+      expect(state.characters.single.name, 'Character One');
     },
   );
 

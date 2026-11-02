@@ -19,6 +19,29 @@ part 'search_provider.g.dart';
 
 enum SearchFilter { content, live }
 
+/// Non-anime tabs use their own catalog, independently of the selected anime
+/// provider and of extension registration order.
+AnimeWitcherProvider? searchCatalogProvider(
+  SearchDomain domain,
+  Iterable<AnimeWitcherProvider> providers,
+) {
+  if (domain == SearchDomain.anime || domain == SearchDomain.all) return null;
+  if (domain == SearchDomain.manga) {
+    for (final provider in providers) {
+      if (provider is AnimeWitcherNativeProvider) return provider;
+    }
+    for (final provider in providers) {
+      if (provider.supportedTypes.contains(ProviderType.manga)) return provider;
+    }
+    return null;
+  }
+  // Animation and characters are exposed by the native catalog API.
+  for (final provider in providers) {
+    if (provider is AnimeWitcherNativeProvider) return provider;
+  }
+  return null;
+}
+
 /// Filter options for anime follow the chosen provider; other catalogs keep
 /// their own provider regardless of the anime selection.
 Future<ProviderSearchFilterOptions> searchFilterOptionsFor(
@@ -503,19 +526,10 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
         (domain ?? _domain) == SearchDomain.all) {
       return ref.read(activeProviderProvider);
     }
-    final providers = ref
-        .read(extensionManagerProvider.notifier)
-        .getAllProviders()
-        .where((provider) {
-          final liveOnly =
-              provider.supportedTypes.isNotEmpty &&
-              provider.supportedTypes.every(
-                (type) => type == ProviderType.livestream,
-              );
-          return !liveOnly;
-        })
-        .toList(growable: false);
-    return providers.isEmpty ? null : providers.first;
+    return searchCatalogProvider(
+      domain ?? _domain,
+      ref.read(extensionManagerProvider.notifier).getAllProviders(),
+    );
   }
 
   Future<ProviderMediaPage> _loadPage(
@@ -593,31 +607,33 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
       SearchDomain.animation,
       SearchDomain.manga,
     ];
-    Future<ProviderMediaPage?> mediaPage(SearchDomain domain) =>
-        _loadPage(
-          domain == SearchDomain.anime
-              ? provider
-              : (_provider(domain) ?? provider),
-          0,
-          domain,
-        ).then<ProviderMediaPage?>(
-          (page) => page,
-          onError: (Object e) {
-            debugPrint('[SEARCH ALL] ${domain.name} failed: $e');
-            return null;
-          },
-        );
-    final characterPage =
-        _loadCharacterPage(
-          _provider(SearchDomain.characters) ?? provider,
-          0,
-        ).then<AnimeWitcherCharacterPage?>(
-          (page) => page,
-          onError: (Object e) {
-            debugPrint('[SEARCH ALL] characters failed: $e');
-            return null;
-          },
-        );
+    Future<ProviderMediaPage?> mediaPage(SearchDomain domain) {
+      final catalog = domain == SearchDomain.anime
+          ? provider
+          : _provider(domain);
+      if (catalog == null) return Future.value(null);
+      return _loadPage(catalog, 0, domain).then<ProviderMediaPage?>(
+        (page) => page,
+        onError: (Object e) {
+          debugPrint('[SEARCH ALL] ${domain.name} failed: $e');
+          return null;
+        },
+      );
+    }
+
+    final charactersProvider = _provider(SearchDomain.characters);
+    final characterPage = charactersProvider == null
+        ? Future<AnimeWitcherCharacterPage?>.value(null)
+        : _loadCharacterPage(
+            charactersProvider,
+            0,
+          ).then<AnimeWitcherCharacterPage?>(
+            (page) => page,
+            onError: (Object e) {
+              debugPrint('[SEARCH ALL] characters failed: $e');
+              return null;
+            },
+          );
     final pages = await Future.wait(media.map(mediaPage));
     final characters = await characterPage;
 
@@ -707,7 +723,11 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
           isLoading: false,
           isLoadingMore: false,
           hasMore: false,
-          errorMessage: hasCards ? null : (e is AnimeRiftAccessUnavailable ? e.toString() : 'Unable to load search results.'),
+          errorMessage: hasCards
+              ? null
+              : (e is AnimeRiftAccessUnavailable
+                    ? e.toString()
+                    : 'Unable to load search results.'),
           clearError: hasCards,
         );
       }
@@ -879,14 +899,19 @@ class SearchSuggestionController extends _$SearchSuggestionController {
       if (previous?.packageName == next?.packageName) return;
       final domain = ref.read(searchDomainProvider);
       if (domain != SearchDomain.anime && domain != SearchDomain.all) return;
-      final query = state.query;
-      state = const SearchSuggestionState();
-      onQueryChanged(query);
+      _restartForCatalogChange();
     });
+    ref.listen(searchDomainProvider, (_, _) => _restartForCatalogChange());
     ref.onDispose(() {
       _debounce?.cancel();
     });
     return const SearchSuggestionState();
+  }
+
+  void _restartForCatalogChange() {
+    final query = state.query;
+    clear();
+    onQueryChanged(query);
   }
 
   void onQueryChanged(String query) {
@@ -908,7 +933,7 @@ class SearchSuggestionController extends _$SearchSuggestionController {
       return;
     }
 
-    state = state.copyWith(query: query, isLoading: true);
+    state = SearchSuggestionState(query: query, isLoading: true);
 
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 350), () async {
@@ -916,7 +941,18 @@ class SearchSuggestionController extends _$SearchSuggestionController {
         final manager = ref.read(extensionManagerProvider.notifier);
         final providers = manager.getAllProviders();
         final domain = ref.read(searchDomainProvider);
-        final provider = providers.isEmpty ? null : providers.first;
+        final animationProvider = searchCatalogProvider(
+          SearchDomain.animation,
+          providers,
+        );
+        final mangaProvider = searchCatalogProvider(
+          SearchDomain.manga,
+          providers,
+        );
+        final charactersProvider = searchCatalogProvider(
+          SearchDomain.characters,
+          providers,
+        );
         final animeProvider = ref.read(activeProviderProvider);
         const none = ProviderSearchFilters();
         Future<List<MultimediaItem>> quiet(
@@ -928,9 +964,10 @@ class SearchSuggestionController extends _$SearchSuggestionController {
         // the full search does, and a category that fails is left out.
         final everything = domain == SearchDomain.all;
         final animationFuture =
-            provider != null && (everything || domain == SearchDomain.animation)
+            animationProvider != null &&
+                (everything || domain == SearchDomain.animation)
             ? quiet(
-                () => provider.searchAnimationPage(
+                () => animationProvider.searchAnimationPage(
                   query,
                   none,
                   offset: 0,
@@ -939,16 +976,21 @@ class SearchSuggestionController extends _$SearchSuggestionController {
               )
             : Future.value(const <MultimediaItem>[]);
         final mangaFuture =
-            provider != null && (everything || domain == SearchDomain.manga)
+            mangaProvider != null &&
+                (everything || domain == SearchDomain.manga)
             ? quiet(
-                () =>
-                    provider.searchMangaPage(query, none, offset: 0, limit: 20),
+                () => mangaProvider.searchMangaPage(
+                  query,
+                  none,
+                  offset: 0,
+                  limit: 20,
+                ),
               )
             : Future.value(const <MultimediaItem>[]);
         final charactersFuture =
             (everything || domain == SearchDomain.characters) &&
-                provider is AnimeWitcherNativeProvider
-            ? provider
+                charactersProvider is AnimeWitcherNativeProvider
+            ? charactersProvider
                   .searchCharacters(query)
                   .then((page) => page.items)
                   .catchError((Object _) => const <AnimeWitcherCharacterHit>[])
@@ -956,7 +998,9 @@ class SearchSuggestionController extends _$SearchSuggestionController {
         final animeFuture =
             animeProvider != null &&
                 (everything || domain == SearchDomain.anime)
-            ? animeProvider.search(query)
+            ? animeProvider
+                  .search(query)
+                  .catchError((Object _) => const <MultimediaItem>[])
             : Future.value(const <MultimediaItem>[]);
         final anime = await animeFuture;
         final animation = await animationFuture;

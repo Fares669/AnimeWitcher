@@ -5,7 +5,9 @@ import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
 import 'package:animewitcher/core/providers/device_info_provider.dart';
+import 'package:animewitcher/core/storage/settings_repository.dart';
 import 'package:animewitcher/features/home/presentation/home_screen.dart';
 import 'package:animewitcher/features/home/presentation/widgets/media_horizontal_list.dart';
 import 'package:animewitcher/features/library/presentation/history_provider.dart';
@@ -20,6 +22,7 @@ import 'package:visibility_detector/visibility_detector.dart';
 
 import '../../../support/test_fonts.dart';
 import '../../../support/debug_shots.dart';
+import '../../../support/memory_storage_service.dart';
 
 const _brokenChapterId = 'RxOiaLyVTBIUObsclHrw';
 
@@ -32,7 +35,9 @@ MultimediaItem _item(String title, {String? catalogType}) {
   );
 }
 
-class _FakeHomeSource extends AnimeWitcherProvider {
+class _FakeHomeSource extends AnimeWitcherNativeProvider {
+  _FakeHomeSource() : super(Dio(), SettingsRepository(MemoryStorageService()));
+
   @override
   String get packageName => 'fake.home';
 
@@ -53,6 +58,12 @@ class _FakeHomeSource extends AnimeWitcherProvider {
     ProviderType.anime,
     ProviderType.manga,
   };
+
+  @override
+  Future<ProviderNewsPage> getHomeNewsPage({
+    int offset = 0,
+    int limit = 10,
+  }) async => const ProviderNewsPage(items: [], nextOffset: 0, hasMore: false);
 
   @override
   Future<MangaLatestChapterPage> getLatestMangaPage({

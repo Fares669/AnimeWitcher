@@ -467,12 +467,28 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         isWidescreen: isWidescreen,
       ),
       HomeOffline() => _buildErrorState(context, ref),
-      HomeProviderUnavailable(:final message) => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(message, textAlign: TextAlign.center),
+      HomeProviderUnavailable(:final message, :final latestManga) =>
+        CustomScrollView(
+          controller: _scrollController,
+          slivers: [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(message, textAlign: TextAlign.center),
+              ),
+            ),
+            if (latestManga.isNotEmpty)
+              SliverToBoxAdapter(
+                child: LatestMangaChaptersSection(
+                  title: l10n.latestChapters,
+                  items: latestManga,
+                  onTap: (latest) => MangaDetailsRoute(
+                    $extra: MangaDetailsRouteExtra(item: latest.manga),
+                  ).push<void>(context),
+                ),
+              ),
+          ],
         ),
-      ),
       HomeError() => _buildErrorState(context, ref),
       HomeSuccess(:final data, news: final homeNews, :final latestManga) =>
         _withGradientEdgeHint(

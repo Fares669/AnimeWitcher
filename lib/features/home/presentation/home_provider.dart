@@ -31,6 +31,7 @@ class HomeData extends _$HomeData {
     ref.listen<AnimeWitcherProvider?>(activeProviderProvider, (previous, next) {
       if (previous?.packageName == next?.packageName) return;
       if (next == null) {
+        ++_fetchGeneration;
         state = const HomeNoProvider();
         return;
       }
@@ -112,7 +113,14 @@ class HomeData extends _$HomeData {
   /// its loading shimmer.
   Future<void> fetch({bool keepCurrent = false}) async {
     final generation = ++_fetchGeneration;
-    final preserveCurrent = keepCurrent && state is HomeSuccess;
+    final previous = keepCurrent ? state : null;
+    final preserveCurrent =
+        previous is HomeSuccess || previous is HomeProviderUnavailable;
+    final previousManga = switch (previous) {
+      HomeSuccess(:final latestManga) ||
+      HomeProviderUnavailable(:final latestManga) => latestManga,
+      _ => const <MangaLatestChapter>[],
+    };
     if (!preserveCurrent) {
       state = const HomeLoading();
     }
@@ -129,15 +137,43 @@ class HomeData extends _$HomeData {
     // rows are in, and the other two join it when they land. Held back, the
     // page opened only when the slowest of the three answered.
     final news = _orNull(() => activeProvider.getHomeNewsPage(limit: 10));
-    final mangaProvider = activeProvider.supportedTypes.contains(ProviderType.manga)
+    final mangaProvider =
+        activeProvider.supportedTypes.contains(ProviderType.manga)
         ? activeProvider
-        : ref.read(extensionManagerProvider).where(
-            (provider) => provider.supportedTypes.contains(ProviderType.manga),
-          ).firstOrNull;
+        : ref
+              .read(extensionManagerProvider)
+              .where(
+                (provider) =>
+                    provider.supportedTypes.contains(ProviderType.manga),
+              )
+              .firstOrNull;
     final manga = mangaProvider == null
         ? Future<MangaLatestChapterPage?>.value(null)
         : _orNull(() => mangaProvider.getLatestMangaPage(limit: 20));
-    final previous = state is HomeSuccess ? state as HomeSuccess : null;
+    MangaLatestChapterPage? mangaPage;
+    // Manga belongs to its own catalog. Its answer can arrive before or
+    // after the anime home request, including when Rift is unavailable.
+    unawaited(
+      manga.then((page) {
+        if (!ref.mounted || page == null || generation != _fetchGeneration) {
+          return;
+        }
+        mangaPage = page;
+        final current = state;
+        if (current is HomeSuccess) {
+          state = HomeSuccess(
+            current.data,
+            news: current.news,
+            latestManga: page.items,
+          );
+        } else if (current is HomeProviderUnavailable) {
+          state = HomeProviderUnavailable(
+            current.message,
+            latestManga: page.items,
+          );
+        }
+      }),
+    );
 
     try {
       final items = await activeProvider.getHome();
@@ -145,12 +181,15 @@ class HomeData extends _$HomeData {
       _saveSnapshot(activeProvider.packageName, items);
       state = HomeSuccess(
         items,
-        news: previous?.news ?? const <NewsItem>[],
-        latestManga: previous?.latestManga ?? const <MangaLatestChapter>[],
+        news: previous is HomeSuccess ? previous.news : const <NewsItem>[],
+        latestManga: mangaPage?.items ?? previousManga,
       );
     } on AnimeRiftAccessUnavailable catch (error) {
       if (generation != _fetchGeneration) return;
-      state = HomeProviderUnavailable(error.toString());
+      state = HomeProviderUnavailable(
+        error.toString(),
+        latestManga: mangaPage?.items ?? previousManga,
+      );
       return;
     } catch (e) {
       if (generation != _fetchGeneration) return;
@@ -172,21 +211,6 @@ class HomeData extends _$HomeData {
           current.data,
           news: page.items,
           latestManga: current.latestManga,
-        );
-      }),
-    );
-    unawaited(
-      manga.then((page) {
-        final current = state;
-        if (page == null ||
-            generation != _fetchGeneration ||
-            current is! HomeSuccess) {
-          return;
-        }
-        state = HomeSuccess(
-          current.data,
-          news: current.news,
-          latestManga: page.items,
         );
       }),
     );

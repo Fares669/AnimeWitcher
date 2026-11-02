@@ -205,12 +205,17 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       // All, anime, animation, manga and characters are the sheet's main
       // categories; only the ones that can be filtered bring their tabs.
       Future<ProviderSearchFilterOptions> optionsFor(SearchDomain domain) =>
-          searchFilterOptionsFor(domain, animeProvider, providers.first);
+          searchFilterOptionsFor(
+            domain,
+            animeProvider,
+            searchCatalogProvider(domain, providers),
+          );
 
       final domain = ref.read(searchDomainProvider);
       final options = await optionsFor(domain);
       if (!mounted ||
-          ref.read(activeProviderProvider)?.packageName != animeProvider?.packageName) {
+          ref.read(activeProviderProvider)?.packageName !=
+              animeProvider?.packageName) {
         return;
       }
 
@@ -261,8 +266,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       if (mounted) setState(() => _isLoadingProviderFilters = false);
     }
 
-    if (!mounted || selected == null ||
-        ref.read(activeProviderProvider)?.packageName != animeProvider?.packageName) {
+    if (!mounted ||
+        selected == null ||
+        ref.read(activeProviderProvider)?.packageName !=
+            animeProvider?.packageName) {
       return;
     }
     if (pickedDomain != null) _selectSearchDomain(pickedDomain!);
@@ -418,8 +425,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               right: 0,
               child: SizedBox(
                 height:
-                    _floatingHeaderExtent +
-                    MediaQuery.paddingOf(context).top,
+                    _floatingHeaderExtent + MediaQuery.paddingOf(context).top,
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
@@ -427,41 +433,41 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     Align(
                       alignment: Alignment.bottomCenter,
                       child: SearchHeaderBar(
-                    textController: _controller,
-                    searchFocusNode: _focusNode,
-                    clearButtonFocusNode: _clearButtonFocusNode,
-                    isCompact: false,
-                    onShowFilters: _showSearchFilters,
-                    onSortSelected: _applySearchSort,
-                    sortValue: ref.watch(searchProviderFiltersProvider).sort,
-                    sortItems: _searchSortMenuItems(context),
-                    sortIcon: _searchSortFallbackIcon(
-                      SearchSortOption.fromValue(
-                        ref.watch(searchProviderFiltersProvider).sort,
-                      ),
-                    ),
-                    sortSystemImage: _searchSortSystemImage(
-                      SearchSortOption.fromValue(
-                        ref.watch(searchProviderFiltersProvider).sort,
-                      ),
-                    ),
-                    sortTooltip:
-                        '${appText(context, english: 'Sort by', arabic: 'الترتيب حسب')}: '
-                        '${SearchSortOption.fromValue(ref.watch(searchProviderFiltersProvider).sort).label(context)}',
-                    activeFilterCount: domainCapabilities.showFilter
-                        ? ref.watch(searchProviderFiltersProvider).count
-                        : 0,
-                    isFilterLoading: _isLoadingProviderFilters,
-                    showSort: domainCapabilities.showSort,
-                    // Always there: the filter sheet is also where the category is
-                    // picked, anime or manga, so every category needs a way in.
-                    showFilter: true,
-                    onSubmitted: _submitSearch,
+                        textController: _controller,
+                        searchFocusNode: _focusNode,
+                        clearButtonFocusNode: _clearButtonFocusNode,
+                        isCompact: false,
+                        onShowFilters: _showSearchFilters,
+                        onSortSelected: _applySearchSort,
+                        sortValue: ref
+                            .watch(searchProviderFiltersProvider)
+                            .sort,
+                        sortItems: _searchSortMenuItems(context),
+                        sortIcon: _searchSortFallbackIcon(
+                          SearchSortOption.fromValue(
+                            ref.watch(searchProviderFiltersProvider).sort,
+                          ),
+                        ),
+                        sortSystemImage: _searchSortSystemImage(
+                          SearchSortOption.fromValue(
+                            ref.watch(searchProviderFiltersProvider).sort,
+                          ),
+                        ),
+                        sortTooltip:
+                            '${appText(context, english: 'Sort by', arabic: 'الترتيب حسب')}: '
+                            '${SearchSortOption.fromValue(ref.watch(searchProviderFiltersProvider).sort).label(context)}',
+                        activeFilterCount: domainCapabilities.showFilter
+                            ? ref.watch(searchProviderFiltersProvider).count
+                            : 0,
+                        isFilterLoading: _isLoadingProviderFilters,
+                        showSort: domainCapabilities.showSort,
+                        // Always there: the filter sheet is also where the category is
+                        // picked, anime or manga, so every category needs a way in.
+                        showFilter: true,
+                        onSubmitted: _submitSearch,
                         onChanged: (val) {
                           ref
-                              .read(
-                                searchSuggestionControllerProvider.notifier,
-                              )
+                              .read(searchSuggestionControllerProvider.notifier)
                               .onQueryChanged(val);
                         },
                       ),
@@ -861,10 +867,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     }
     if (allResults.isEmpty && state.errorMessage != null) {
       if (state.errorMessage == const AnimeRiftAccessUnavailable().toString()) {
-        return belowHeader(Center(child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(state.errorMessage!, textAlign: TextAlign.center),
-        )));
+        return belowHeader(
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(state.errorMessage!, textAlign: TextAlign.center),
+            ),
+          ),
+        );
       }
       return belowHeader(
         RecoverableNetworkState(
@@ -1351,5 +1361,3 @@ class _AllSearchHeading extends StatelessWidget {
     );
   }
 }
-
-

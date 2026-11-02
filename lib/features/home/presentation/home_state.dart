@@ -19,7 +19,11 @@ class HomeOffline extends HomeState {
 
 class HomeProviderUnavailable extends HomeState {
   final String message;
-  const HomeProviderUnavailable(this.message);
+  final List<MangaLatestChapter> latestManga;
+  const HomeProviderUnavailable(
+    this.message, {
+    this.latestManga = const <MangaLatestChapter>[],
+  });
 }
 
 class HomeError extends HomeState {
