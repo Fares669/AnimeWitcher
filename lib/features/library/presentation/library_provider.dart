@@ -16,15 +16,17 @@ part 'library_provider.g.dart';
 
 @Riverpod(keepAlive: true)
 class Library extends _$Library {
+  static const _riftAnimeCategoryKey = 'animerift_library_anime_category';
+
   @override
   LibraryState build() {
     ref.watch(accountDataRevisionProvider);
     final activeProvider = ref.watch(activeProviderProvider);
     final repository = ref.read(libraryRepositoryProvider);
-    final category = repository.getSelectedCategory();
     final mediaKind = LibraryMediaKind.fromStorageKey(
       ref.read(storageServiceProvider).getString('library_media_kind'),
     );
+    final category = _categoryFor(mediaKind);
     final items = filterLibraryItemsByKind(
       activeProvider?.packageName == animeRiftProviderId &&
               mediaKind == LibraryMediaKind.anime
@@ -37,10 +39,18 @@ class Library extends _$Library {
         : LibrarySuccess(items, category, mediaKind);
   }
 
-  List<MultimediaItem> itemsForCategory(LibraryMediaKind kind, LibraryCategory category) {
-    final local = ref.read(activeProviderProvider)?.packageName == animeRiftProviderId &&
+  List<MultimediaItem> itemsForCategory(
+    LibraryMediaKind kind,
+    LibraryCategory category,
+  ) {
+    final local =
+        ref.read(activeProviderProvider)?.packageName == animeRiftProviderId &&
         kind == LibraryMediaKind.anime;
-    final items = local ? _local().items(category) : ref.read(libraryRepositoryProvider).getLibraryItems(category: category);
+    final items = local
+        ? _local().items(category)
+        : ref
+              .read(libraryRepositoryProvider)
+              .getLibraryItems(category: category);
     return filterLibraryItemsByKind(items, kind);
   }
 
@@ -68,8 +78,7 @@ class Library extends _$Library {
   }
 
   Future<void> selectCategory(LibraryCategory category) async {
-    final repository = ref.read(libraryRepositoryProvider);
-    await repository.setSelectedCategory(category);
+    await _saveCategory(state.mediaKind, category);
     refresh(category: category);
   }
 
@@ -81,7 +90,7 @@ class Library extends _$Library {
     await ref
         .read(storageServiceProvider)
         .setString('library_media_kind', mediaKind.storageKey);
-    await ref.read(libraryRepositoryProvider).setSelectedCategory(category);
+    await _saveCategory(mediaKind, category);
     refresh(category: category, mediaKind: mediaKind);
   }
 
@@ -89,7 +98,36 @@ class Library extends _$Library {
     await ref
         .read(storageServiceProvider)
         .setString('library_media_kind', mediaKind.storageKey);
-    refresh(mediaKind: mediaKind);
+    refresh(category: _categoryFor(mediaKind), mediaKind: mediaKind);
+  }
+
+  bool _isRiftAnime(LibraryMediaKind kind) =>
+      kind == LibraryMediaKind.anime &&
+      ref.read(activeProviderProvider)?.packageName == animeRiftProviderId;
+
+  LibraryCategory _categoryFor(LibraryMediaKind kind) {
+    if (_isRiftAnime(kind)) {
+      final rift = ref
+          .read(storageServiceProvider)
+          .getString(_riftAnimeCategoryKey);
+      return LibraryCategory.fromStorageKey(
+        rift ?? LibraryCategory.watching.storageKey,
+      );
+    }
+    return ref.read(libraryRepositoryProvider).getSelectedCategory();
+  }
+
+  Future<void> _saveCategory(
+    LibraryMediaKind kind,
+    LibraryCategory category,
+  ) async {
+    if (_isRiftAnime(kind)) {
+      await ref
+          .read(storageServiceProvider)
+          .setString(_riftAnimeCategoryKey, category.storageKey);
+    } else {
+      await ref.read(libraryRepositoryProvider).setSelectedCategory(category);
+    }
   }
 
   Future<void> addItem(MultimediaItem item, {LibraryCategory? category}) async {
