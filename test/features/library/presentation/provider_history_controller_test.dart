@@ -14,6 +14,16 @@ import 'package:flutter_test/flutter_test.dart';
 class _Storage extends StorageService {
   final values = <String, String>{};
   final removedNativeUrls = <String>[];
+  final removedNativeHistoryUrls = <String>[];
+  int clearedNativeContinue = 0;
+  @override
+  Future<void> removeFromHistory(String url) async =>
+      removedNativeHistoryUrls.add(url);
+  @override
+  Future<void> clearAllContinueWatching() async {
+    clearedNativeContinue++;
+  }
+
   @override
   Future<void> removeFromContinueWatching(String url) async =>
       removedNativeUrls.add(url);
@@ -116,6 +126,19 @@ void main() {
           .read(continueWatchingProvider.notifier)
           .removeForItem(nativeItem);
       expect(storage.removedNativeUrls, ['same']);
+      expect(
+        container.read(continueWatchingProvider).single.item.title,
+        'Rift',
+      );
+      await container
+          .read(watchHistoryProvider.notifier)
+          .removeForItem(nativeItem);
+      expect(storage.removedNativeHistoryUrls, ['same']);
+      expect(container.read(watchHistoryProvider).single.item.title, 'Rift');
+      await container
+          .read(continueWatchingProvider.notifier)
+          .clearAllFor(native.packageName);
+      expect(storage.clearedNativeContinue, 1);
       expect(
         container.read(continueWatchingProvider).single.item.title,
         'Rift',

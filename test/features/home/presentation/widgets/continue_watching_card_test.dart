@@ -1,4 +1,14 @@
 import 'dart:io';
+
+import 'package:animewitcher/core/extensions/base_provider.dart';
+import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
+import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
+import 'package:animewitcher/core/storage/settings_repository.dart';
+import 'package:animewitcher/core/storage/storage_service.dart';
+import 'package:animewitcher/features/home/presentation/widgets/continue_watching_section.dart';
+import 'package:dio/dio.dart';
+
 import 'dart:ui' as ui;
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
@@ -55,9 +65,23 @@ class _FakeContinueWatching extends ContinueWatchingNotifier {
   List<HistoryItem> build() => const <HistoryItem>[];
 
   @override
-  Future<void> remove(String url) async {
-    removed.add(url);
+  Future<void> removeForItem(MultimediaItem item) async {
+    removed.add(item.url);
   }
+
+  String? clearedProvider;
+  @override
+  Future<void> clearAllFor(String? providerId) async {
+    clearedProvider = providerId;
+  }
+}
+
+class _SwitchSelection extends ActiveProvider {
+  @override
+  AnimeWitcherProvider? build() =>
+      AnimeWitcherNativeProvider(Dio(), SettingsRepository(StorageService()));
+  @override
+  Future<void> set(AnimeWitcherProvider? provider) async => state = provider;
 }
 
 Widget _shell({required Widget child, VoidCallback? onTaskbarTap}) {
@@ -116,35 +140,102 @@ Future<void> _writeShot(WidgetTester tester, String filename) async {
   );
   final image = await boundary.toImage(pixelRatio: 2);
   final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-  File(
-    '${artifacts.path}/$filename',
-  ).writeAsBytesSync(bytes!.buffer.asUint8List());
+  File('${artifacts.path}/$filename')
+      .writeAsBytesSync(bytes!.buffer.asUint8List());
 }
 
 void main() {
-  testWidgets('renders original decimal and special labels plus raw numeric fallback', (tester) async {
-    final item = _historyItem().item;
-    for (final metadata in [
-      (label: 'الحلقة ٢.٥', number: '٢.٥', expected: 'الحلقة ٢.٥'),
-      (label: '  Episode 0002.50  ', number: '2', expected: '  Episode 0002.50  '),
-      (label: 'الحلقة الخاصة: العودة / الجزء؟', number: null, expected: 'الحلقة الخاصة: العودة / الجزء؟'),
-      (label: '', number: '٢.٥', expected: '٢.٥'),
-    ]) {
-      final history = HistoryItem(
-        item: item, position: 40, duration: 100, timestamp: 0,
-        lastEpisodeUrl: 'abc|ep2', episode: 2,
-        episodeServerName: metadata.label, episodeServerNumber: metadata.number,
-      );
-      // Each nested Navigator owns its initial route builder and child.
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pumpWidget(ProviderScope(child: _shell(child: ContinueWatchingCard(historyItem: history))));
-      await tester.pumpAndSettle();
-      expect(find.text(metadata.expected), findsOneWidget);
-      expect(find.text('حلقة 2'), findsNothing);
-      expect(find.text('الحلقة 2'), findsNothing);
-    }
-    await tester.pumpWidget(const SizedBox.shrink());
+  testWidgets('clear confirmation retains provider when selection changes', (
+    tester,
+  ) async {
+    late _FakeContinueWatching history;
+    final container = ProviderContainer(
+      overrides: [
+        activeProviderProvider.overrideWith(_SwitchSelection.new),
+        continueWatchingProvider.overrideWith(
+          () => history = _FakeContinueWatching(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          locale: const Locale('ar'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: ContinueWatchingSection(
+                title: 'متابعة',
+                items: [_historyItem()],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final l10n = AppLocalizations.of(
+      tester.element(find.byType(ContinueWatchingSection)),
+    )!;
+    final source = container.read(activeProviderProvider)!.packageName;
+    await tester.tap(find.text(l10n.clearAll).first);
+    await tester.pumpAndSettle();
+    await container
+        .read(activeProviderProvider.notifier)
+        .set(AnimeRiftProvider());
+    await tester.pump();
+    await tester.tap(find.text(l10n.clearAll).last);
+    await tester.pump();
+    expect(history.clearedProvider, source);
+    await tester.pump(const Duration(seconds: 2));
   });
+
+  testWidgets(
+    'renders original decimal and special labels plus raw numeric fallback',
+    (tester) async {
+      final item = _historyItem().item;
+      for (final metadata in [
+        (label: 'الحلقة ٢.٥', number: '٢.٥', expected: 'الحلقة ٢.٥'),
+        (
+          label: '  Episode 0002.50  ',
+          number: '2',
+          expected: '  Episode 0002.50  ',
+        ),
+        (
+          label: 'الحلقة الخاصة: العودة / الجزء؟',
+          number: null,
+          expected: 'الحلقة الخاصة: العودة / الجزء؟',
+        ),
+        (label: '', number: '٢.٥', expected: '٢.٥'),
+      ]) {
+        final history = HistoryItem(
+          item: item,
+          position: 40,
+          duration: 100,
+          timestamp: 0,
+          lastEpisodeUrl: 'abc|ep2',
+          episode: 2,
+          episodeServerName: metadata.label,
+          episodeServerNumber: metadata.number,
+        );
+        // Each nested Navigator owns its initial route builder and child.
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pumpWidget(
+          ProviderScope(
+            child: _shell(child: ContinueWatchingCard(historyItem: history)),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text(metadata.expected), findsOneWidget);
+        expect(find.text('حلقة 2'), findsNothing);
+        expect(find.text('الحلقة 2'), findsNothing);
+      }
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 
   testWidgets('tap opens continue-watching playback without leaving home', (
     tester,

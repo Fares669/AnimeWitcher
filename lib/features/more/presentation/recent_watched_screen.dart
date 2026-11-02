@@ -90,15 +90,14 @@ class _RecentWatchedBodyState extends ConsumerState<RecentWatchedBody> {
           onLongPress: () {
             HapticFeedback.mediumImpact();
             unawaited(
-              ref
-                  .read(watchHistoryProvider.notifier)
-                  .removeFromHistory(item.url)
-                  .then((_) {
-                    if (!context.mounted) return;
-                    ref
-                        .read(notificationServiceProvider)
-                        .showSuccess('تم حذف ${item.title} من آخر المشاهدات');
-                  }),
+              ref.read(watchHistoryProvider.notifier).removeForItem(item).then((
+                _,
+              ) {
+                if (!context.mounted) return;
+                ref
+                    .read(notificationServiceProvider)
+                    .showSuccess('تم حذف ${item.title} من آخر المشاهدات');
+              }),
             );
           },
         );

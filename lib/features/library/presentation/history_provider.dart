@@ -61,6 +61,13 @@ class WatchHistory extends _$WatchHistory {
     refresh();
   }
 
+  Future<void> removeForItem(MultimediaItem item) async {
+    await ref
+        .read(historyRepositoryProvider)
+        .removeHistoryFor(item.url, item.provider);
+    refresh();
+  }
+
   Future<void> updateHistoryItemTimestampAndPosition(
     HistoryItem item,
     int timestamp,
@@ -126,14 +133,13 @@ class ContinueWatchingNotifier extends Notifier<List<HistoryItem>> {
     refresh();
   }
 
-  Future<void> clearAll() async {
-    final repository = ref.read(historyRepositoryProvider);
-    final id = ref.read(activeProviderProvider)?.packageName;
-    if (id == animeRiftProviderId) {
-      await repository.clearContinueWatchingFor(id);
-    } else {
-      await repository.clearContinueWatching();
-    }
+  Future<void> clearAll() =>
+      clearAllFor(ref.read(activeProviderProvider)?.packageName);
+
+  Future<void> clearAllFor(String? providerId) async {
+    await ref
+        .read(historyRepositoryProvider)
+        .clearContinueWatchingFor(providerId);
     refresh();
   }
 
