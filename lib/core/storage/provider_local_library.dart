@@ -80,6 +80,21 @@ class ProviderLocalLibrary {
         .toList(growable: false);
   }
 
+  List<MultimediaItem> allItems() => _read().values
+      .map((entry) {
+        final row = entry as Map;
+        return MultimediaItem.fromJson(
+          Map<String, dynamic>.from(row['item'] as Map),
+        );
+      })
+      .toList(growable: false);
+
+  Future<void> remove(String id) => _enqueue(() {
+    final entries = _read();
+    entries.remove(id);
+    return entries;
+  });
+
   Future<void> setFavorite(MultimediaItem item, bool favorite) =>
       _write(item, favorite: favorite);
 
@@ -98,9 +113,7 @@ class ProviderLocalLibrary {
   }) {
     final id = item.url.trim();
     if (id.isEmpty) throw ArgumentError.value(item.url, 'item.url');
-    final queues = _queues[_storage] ??= <String, Future<void>>{};
-    final previous = queues[storageKey] ?? Future<void>.value();
-    final next = previous.catchError((Object _) {}).then((_) async {
+    return _enqueue(() {
       final entries = _read();
       final existing = entries[id] as Map?;
       final savedFavorite = favorite ?? (existing?['favorite'] == true);
@@ -116,7 +129,15 @@ class ProviderLocalLibrary {
           'category': savedCategory,
         };
       }
-      await _storage.setString(storageKey, jsonEncode(entries));
+      return entries;
+    });
+  }
+
+  Future<void> _enqueue(Map<String, dynamic> Function() update) {
+    final queues = _queues[_storage] ??= <String, Future<void>>{};
+    final previous = queues[storageKey] ?? Future<void>.value();
+    final next = previous.catchError((Object _) {}).then((_) async {
+      await _storage.setString(storageKey, jsonEncode(update()));
     });
     queues[storageKey] = next;
     return next;

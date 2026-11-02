@@ -7,6 +7,7 @@ import '../account/account_providers.dart';
 import '../account/animewitcher_account_service.dart';
 import '../domain/entity/multimedia_item.dart';
 import 'library_category.dart';
+import 'provider_local_library.dart';
 import 'storage_service.dart';
 
 part 'library_repository.g.dart';
@@ -25,18 +26,29 @@ class LibraryRepository {
 
   LibraryRepository(this._storageService, this._accountService);
 
+  ProviderLocalLibrary _riftLibrary() =>
+      ProviderLocalLibrary(_storageService, animeRiftProviderId);
+
+  bool _isRiftItem(MultimediaItem item) => item.provider == animeRiftProviderId;
+
   Future<void> addToLibrary(
     MultimediaItem item, {
     LibraryCategory? category,
     VoidCallback? onLocalChanged,
   }) async {
     final target = category ?? getSelectedCategory();
+    if (_isRiftItem(item)) {
+      if (target == LibraryCategory.favorite) {
+        await _riftLibrary().setFavorite(item, true);
+      } else {
+        if (!target.isAssignableTo(item)) return;
+        await _riftLibrary().setCategory(item, target);
+      }
+      onLocalChanged?.call();
+      return;
+    }
     if (target == LibraryCategory.favorite) {
-      await setFavorite(
-        item,
-        true,
-        onLocalChanged: onLocalChanged,
-      );
+      await setFavorite(item, true, onLocalChanged: onLocalChanged);
       return;
     }
     final isManga = item.contentType == MultimediaContentType.manga;
@@ -45,9 +57,7 @@ class LibraryRepository {
         item.status != ShowStatus.completed) {
       return;
     }
-    if (!isManga &&
-        target == LibraryCategory.watching &&
-        item.isNotYetAired) {
+    if (!isManga && target == LibraryCategory.watching && item.isNotYetAired) {
       return;
     }
 
@@ -90,16 +100,25 @@ class LibraryRepository {
   Future<void> moveToCategory(
     String url,
     LibraryCategory category, {
+    String? providerId,
     VoidCallback? onLocalChanged,
   }) async {
+    if (providerId == animeRiftProviderId) {
+      final item = _riftLibrary().item(url);
+      if (item == null) return;
+      if (category == LibraryCategory.favorite) {
+        await _riftLibrary().setFavorite(item, true);
+      } else {
+        if (!category.isAssignableTo(item)) return;
+        await _riftLibrary().setCategory(item, category);
+      }
+      onLocalChanged?.call();
+      return;
+    }
     if (category == LibraryCategory.favorite) {
       final item = _findItem(url);
       if (item != null) {
-        await setFavorite(
-          item,
-          true,
-          onLocalChanged: onLocalChanged,
-        );
+        await setFavorite(item, true, onLocalChanged: onLocalChanged);
       }
       return;
     }
@@ -157,8 +176,14 @@ class LibraryRepository {
 
   Future<void> clearCategory(
     String url, {
+    String? providerId,
     VoidCallback? onLocalChanged,
   }) async {
+    if (providerId == animeRiftProviderId) {
+      await _riftLibrary().clearCategory(url);
+      onLocalChanged?.call();
+      return;
+    }
     final item = _findItem(url);
     final favorite = _storageService.isLibraryItemFavorite(url);
     final previousCategory = getItemCategory(url);
@@ -209,6 +234,11 @@ class LibraryRepository {
     bool favorite, {
     VoidCallback? onLocalChanged,
   }) async {
+    if (_isRiftItem(item)) {
+      await _riftLibrary().setFavorite(item, favorite);
+      onLocalChanged?.call();
+      return;
+    }
     final category = getItemCategory(item.url);
     final isManga = item.contentType == MultimediaContentType.manga;
     final previousItem = isManga ? _findItem(item.url) : null;
@@ -255,8 +285,14 @@ class LibraryRepository {
 
   Future<void> removeFromLibrary(
     String url, {
+    String? providerId,
     VoidCallback? onLocalChanged,
   }) async {
+    if (providerId == animeRiftProviderId) {
+      await _riftLibrary().remove(url);
+      onLocalChanged?.call();
+      return;
+    }
     final item = _findItem(url);
     final isManga = item?.contentType == MultimediaContentType.manga;
     final previousCategory = isManga ? getItemCategory(url) : null;
@@ -286,22 +322,39 @@ class LibraryRepository {
     );
   }
 
-  bool isInLibrary(String url) {
+  bool isInLibrary(String url, {String? providerId}) {
+    if (providerId == animeRiftProviderId) {
+      return _riftLibrary().item(url) != null;
+    }
     return _storageService.isInLibrary(url);
   }
 
-  bool isFavorite(String url) {
+  bool isFavorite(String url, {String? providerId}) {
+    if (providerId == animeRiftProviderId) {
+      return _riftLibrary().isFavorite(url);
+    }
     return _storageService.isLibraryItemFavorite(url);
   }
 
-  LibraryCategory? getItemCategory(String url) {
+  LibraryCategory? getItemCategory(String url, {String? providerId}) {
+    if (providerId == animeRiftProviderId) {
+      return _riftLibrary().category(url);
+    }
     final value = _storageService.getLibraryItemCategory(url);
     if (value == null) return null;
     final category = LibraryCategory.fromStorageKey(value);
     return category.isPrimary ? category : null;
   }
 
-  List<MultimediaItem> getLibraryItems({LibraryCategory? category}) {
+  List<MultimediaItem> getLibraryItems({
+    LibraryCategory? category,
+    String? providerId,
+  }) {
+    if (providerId == animeRiftProviderId) {
+      return category == null
+          ? _riftLibrary().allItems()
+          : _riftLibrary().items(category);
+    }
     return _storageService.getLibraryItems(category: category?.storageKey);
   }
 

@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../domain/entity/multimedia_item.dart';
 import '../extensions/providers/animewitcher_manga_mapping.dart';
 import '../storage/library_category.dart';
+import '../storage/provider_local_library.dart';
 import '../storage/secure_token_storage.dart';
 import '../storage/storage_service.dart';
 import '../utils/episode_label.dart';
@@ -868,7 +869,9 @@ class AnimeWitcherAccountService {
   ) {
     return _notificationRequest((profile, token) async {
       _checkNotificationPath(notification.path, profile);
-      final target = animeWitcherNotificationTargetPath(notification.targetPath);
+      final target = animeWitcherNotificationTargetPath(
+        notification.targetPath,
+      );
       if (target == null) {
         throw const AnimeWitcherAccountException(
           'notification-target-reference',
@@ -1809,6 +1812,7 @@ class AnimeWitcherAccountService {
   }
 
   Future<void> recordLastWatched({required MultimediaItem item}) async {
+    if (item.provider == animeRiftProviderId) return;
     if (!isSignedIn) return;
     final animeId = AnimeWitcherSyncIds.animeIdFromUrl(item.url);
     final profile = _profile;
@@ -2343,6 +2347,7 @@ class AnimeWitcherAccountService {
     final localItems = _storage.getLibraryItems();
     final localByAnimeId = <String, MultimediaItem>{};
     for (final item in localItems) {
+      if (item.provider == animeRiftProviderId) continue;
       final animeId = AnimeWitcherSyncIds.animeIdFromUrl(item.url);
       if (animeId != null) localByAnimeId[animeId] = item;
     }
@@ -2408,6 +2413,7 @@ class AnimeWitcherAccountService {
     }
 
     for (final item in localItems) {
+      if (item.provider == animeRiftProviderId) continue;
       if (!_isCurrentProfile(profile)) return;
       final animeId = AnimeWitcherSyncIds.animeIdFromUrl(item.url);
       if (animeId == null || remoteEntries.containsKey(animeId)) continue;
@@ -2483,7 +2489,11 @@ class AnimeWitcherAccountService {
 
     final localItems = _storage
         .getLibraryItems()
-        .where((item) => item.contentType == MultimediaContentType.manga)
+        .where(
+          (item) =>
+              item.contentType == MultimediaContentType.manga &&
+              item.provider != animeRiftProviderId,
+        )
         .toList(growable: false);
     final localByMangaId = <String, MultimediaItem>{};
     for (final item in localItems) {
@@ -2585,6 +2595,7 @@ class AnimeWitcherAccountService {
     bool? favorite,
     List<FirestoreDocument>? knownFavorites,
   }) async {
+    if (item.provider == animeRiftProviderId) return;
     if (!isSignedIn) return;
     final animeId = AnimeWitcherSyncIds.animeIdFromUrl(item.url);
     final profile = _profile;
@@ -2685,6 +2696,7 @@ class AnimeWitcherAccountService {
     LibraryCategory? category, {
     bool? favorite,
   }) async {
+    if (item.provider == animeRiftProviderId) return;
     final profile = _profile;
     final mangaId = _mangaIdFromItem(item);
     if (!isSignedIn || profile == null || mangaId.isEmpty) return;
@@ -3449,6 +3461,7 @@ class AnimeWitcherAccountService {
     String? episodeServerNumber,
     String? episodePosterUrl,
   }) async {
+    if (item.provider == animeRiftProviderId) return;
     if (!isSignedIn) return;
     final animeId = AnimeWitcherSyncIds.animeIdFromUrl(item.url);
     final episodeId = episodeUrl == null
@@ -3486,6 +3499,7 @@ class AnimeWitcherAccountService {
     String? episodeServerNumber,
     String? episodePosterUrl,
   }) async {
+    if (item.provider == animeRiftProviderId) return;
     if (!isSignedIn) return;
     final animeId = AnimeWitcherSyncIds.animeIdFromUrl(item.url);
     final episodeId = episodeUrl == null
