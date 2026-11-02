@@ -563,7 +563,9 @@ class PlaybackLauncher {
     // External players still need a concrete resolved stream before launch.
     if (baseItem.url.isNotEmpty) {
       _ref
-          .read(detailsControllerProvider(baseItem.url).notifier)
+          .read(
+            detailsControllerProvider(detailsControllerKey(baseItem)).notifier,
+          )
           .setLaunching(true);
     }
     try {
@@ -588,7 +590,10 @@ class PlaybackLauncher {
     } finally {
       if (baseItem.url.isNotEmpty) {
         _ref
-            .read(detailsControllerProvider(baseItem.url).notifier)
+            .read(
+              detailsControllerProvider(detailsControllerKey(baseItem))
+                  .notifier,
+            )
             .setLaunching(false);
       }
     }

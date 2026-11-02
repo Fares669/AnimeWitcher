@@ -1,15 +1,19 @@
 import 'dart:io';
+
 import '../../../../shared/widgets/confirm_dialog.dart';
+
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_provider.dart';
 import 'package:animewitcher/shared/widgets/custom_widgets.dart';
+
 import '../../../library/presentation/downloads_provider.dart';
 import '../playback_launcher.dart';
 import '../source_picker.dart';
 import '../details_controller.dart';
 import '../downloaded_file_provider.dart';
+
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 
 class DownloadManagementDialog extends HookConsumerWidget {
@@ -41,7 +45,9 @@ class DownloadManagementDialog extends HookConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context)!;
     // Try to get fresh details from the controller if available
-    final detailsState = ref.watch(detailsControllerProvider(item.url));
+    final detailsState = ref.watch(
+      detailsControllerProvider(detailsControllerKey(item)),
+    );
     final currentItem = detailsState.item ?? item;
 
     final episodeLabel = episodePickerTitle(episode) ?? '';
@@ -79,8 +85,7 @@ class DownloadManagementDialog extends HookConsumerWidget {
         CustomButton(
           isPrimary: false,
           isOutlined: true,
-          onPressed: () =>
-              _showDeleteConfirmation(context, ref, matchingItems),
+          onPressed: () => _showDeleteConfirmation(context, ref, matchingItems),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
@@ -135,8 +140,12 @@ class DownloadManagementDialog extends HookConsumerWidget {
 
     if (confirmed) {
       final deleted = matchingItems.isNotEmpty
-          ? await ref.read(downloadsProvider.notifier).removeDownloads(matchingItems)
-          : await ref.read(downloadManagerV2Provider).deleteLegacyDownloadedVideo(file);
+          ? await ref
+                .read(downloadsProvider.notifier)
+                .removeDownloads(matchingItems)
+          : await ref
+                .read(downloadManagerV2Provider)
+                .deleteLegacyDownloadedVideo(file);
       if (!deleted) {
         return;
       }
@@ -159,12 +168,14 @@ class DownloadManagementDialog extends HookConsumerWidget {
     final playbackIdentityUrl = episodeUrl.isNotEmpty
         ? episodeUrl
         : details.url;
-    ref.read(playbackLauncherProvider).play(
-      context,
-      playbackIdentityUrl,
-      baseItem: details,
-      detailedItem: details,
-      episode: episode,
-    );
+    ref
+        .read(playbackLauncherProvider)
+        .play(
+          context,
+          playbackIdentityUrl,
+          baseItem: details,
+          detailedItem: details,
+          episode: episode,
+        );
   }
 }

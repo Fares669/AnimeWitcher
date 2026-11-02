@@ -16,6 +16,7 @@ import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/storage/history_repository.dart';
 import '../../../../core/storage/episode_watch_repository.dart';
 import '../../../../core/account/account_providers.dart';
+import '../../../../core/services/download_v2/download_v2_models.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../../../core/utils/download_progress_data.dart'
     show DownloadProgressData;
@@ -47,11 +48,17 @@ DownloadItem? _activeEpisodeDownload(
   MultimediaItem parentItem,
 ) {
   final key = episodeUrl.trim();
+  final parentUrl = parentItem.url.trim();
   return downloads.firstWhereOrNull((item) {
     final matches =
         item.trackingUrl.trim() == key ||
         (item.episode?.url.trim() ?? '') == key;
-    if (!matches || !sameDownloadProvider(item.item, parentItem)) return false;
+    if (item.mediaKind != DownloadMediaKind.videoEpisode ||
+        !matches ||
+        !sameDownloadProvider(item.item, parentItem) ||
+        (parentUrl.isNotEmpty && item.item.url.trim() != parentUrl)) {
+      return false;
+    }
     return item.status != TaskStatus.complete &&
         item.status != TaskStatus.canceled;
   });
@@ -66,6 +73,62 @@ String _playerEpisodeDownloadTitle(MultimediaItem item, Episode episode) {
   );
   // The dialog names the episode only ("الحلقة X"), like manga chapters.
   return label.isEmpty ? item.title : label;
+}
+
+void _showPendingEpisodeDownloadProgress(
+  BuildContext context,
+  DownloadItem download,
+  MultimediaItem parentItem,
+  Episode episode,
+  String logicalId,
+) {
+  final taskId = download.id;
+  showDialog<void>(
+    context: context,
+    builder: (dialogContext) => Consumer(
+      builder: (context, ref, _) {
+        final downloads =
+            ref.watch(downloadsProvider).value ?? const <DownloadItem>[];
+        final current = downloads.firstWhereOrNull(
+          (item) =>
+              item.id == taskId &&
+              item.mediaKind == DownloadMediaKind.videoEpisode &&
+              item.logicalId?.trim() == logicalId &&
+              sameDownloadProvider(item.item, parentItem) &&
+              item.item.url.trim() == parentItem.url.trim() &&
+              (item.trackingUrl.trim() == episode.url.trim() ||
+                  item.episode?.url.trim() == episode.url.trim()) &&
+              item.status != TaskStatus.complete &&
+              item.status != TaskStatus.canceled,
+        );
+        final observed = ref.watch(downloadProgressProvider)[logicalId];
+        final snapshot = current == null
+            ? null
+            : observed?.taskId == taskId
+            ? observed
+            : DownloadProgressData(
+                taskId: taskId,
+                progress: current.progress,
+                status: current.status,
+                totalSize: current.totalBytes ?? -1,
+              );
+
+        // The V2 task can exist before its first progress projection. Supply
+        // only this task's exact logical key until the live snapshot arrives.
+        return ProviderScope(
+          overrides: [
+            downloadProgressProvider.overrideWithValue({
+              if (snapshot != null) logicalId: snapshot,
+            }),
+          ],
+          child: DownloadProgressDialog(
+            title: _playerEpisodeDownloadTitle(parentItem, episode),
+            trackingUrl: logicalId,
+          ),
+        );
+      },
+    ),
+  );
 }
 
 /// A reusable right-anchored drawer shell for the player.
@@ -347,7 +410,7 @@ class _PlayerEpisodesPanelState extends ConsumerState<PlayerEpisodesPanel> {
 
     final l10n = AppLocalizations.of(context)!;
 
-    final panelDirection = TextDirection.rtl;
+    const panelDirection = TextDirection.rtl;
     final currentUrl =
         ref.watch(playerControllerProvider.select((s) => s.activeEpisodeUrl)) ??
         ref.read(playerControllerProvider.notifier).currentEpisodeUrl;
@@ -368,7 +431,7 @@ class _PlayerEpisodesPanelState extends ConsumerState<PlayerEpisodesPanel> {
     episodes = episodesInDisplayOrder(
       episodes,
       ascending: ref.watch(
-        detailsControllerProvider(widget.item.url)
+        detailsControllerProvider(detailsControllerKey(widget.item))
             .select((state) => state.isAscending),
       ),
     );
@@ -391,19 +454,25 @@ class _PlayerEpisodesPanelState extends ConsumerState<PlayerEpisodesPanel> {
         final isCurrent = ep.url == currentUrl;
         final isAnchor = isCurrent && !anchorAssigned;
         if (isAnchor) anchorAssigned = true;
-        final pos = historyPositionForItem(historyRepo,
+        final pos = historyPositionForItem(
+          historyRepo,
           widget.item,
           episodeUrl: ep.url,
           season: ep.season,
           episode: ep.episode,
         );
-        final dur = historyDurationForItem(historyRepo,
+        final dur = historyDurationForItem(
+          historyRepo,
           widget.item,
           episodeUrl: ep.url,
           season: ep.season,
           episode: ep.episode,
         );
-        final isWatched = episodeIsWatchedFor(episodeWatchRepo, widget.item, ep);
+        final isWatched = episodeIsWatchedFor(
+          episodeWatchRepo,
+          widget.item,
+          ep,
+        );
         rows.add(
           _EpisodeRow(
             parentItem: widget.item,
@@ -536,7 +605,8 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
   void didUpdateWidget(covariant _EpisodeRow oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.episode.url != widget.episode.url ||
-        oldWidget.parentItem.url != widget.parentItem.url) {
+        oldWidget.parentItem.url != widget.parentItem.url ||
+        !sameDownloadProvider(oldWidget.parentItem, widget.parentItem)) {
       _queueDownloadedFileCheck();
     }
   }
@@ -546,7 +616,14 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
       if (!mounted) return;
       final downloads =
           ref.read(downloadsProvider).value ?? const <DownloadItem>[];
-      if (_activeEpisodeDownload(downloads, widget.episode.url, widget.parentItem) != null) return;
+      if (_activeEpisodeDownload(
+            downloads,
+            widget.episode.url,
+            widget.parentItem,
+          ) !=
+          null) {
+        return;
+      }
       ref
           .read(downloadedFilesProvider.notifier)
           .checkFile(widget.parentItem, episode: widget.episode);
@@ -637,16 +714,35 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
       widget.parentItem,
       ep,
     );
-    final activeDownload = _activeEpisodeDownload(downloads, ep.url, widget.parentItem);
+    final activeDownload = _activeEpisodeDownload(
+      downloads,
+      ep.url,
+      widget.parentItem,
+    );
     final isDownloading = activeDownload != null;
     final progressMap = ref.watch(downloadProgressProvider);
     final logicalId = activeDownload?.logicalId?.trim();
-    final progressData = logicalId != null && logicalId.isNotEmpty
+    final legacyAliasConflicts = downloads.any(
+      (item) =>
+          item.mediaKind == DownloadMediaKind.videoEpisode &&
+          (item.trackingUrl.trim() == ep.url.trim() ||
+              item.episode?.url.trim() == ep.url.trim()) &&
+          (!sameDownloadProvider(item.item, widget.parentItem) ||
+              item.item.url.trim() != widget.parentItem.url.trim()),
+    );
+    final candidateProgress = logicalId != null && logicalId.isNotEmpty
         ? progressMap[logicalId]
+        : legacyAliasConflicts
+        ? null
         : progressMap[ep.url];
+    final progressData = candidateProgress?.taskId == activeDownload?.id
+        ? candidateProgress
+        : null;
     final downloadProgress =
         progressData?.progress ?? activeDownload?.progress ?? 0.0;
-    final downloadedFile = ref.watch(downloadedFilesProvider)[downloadedFileKey(widget.parentItem, episode: ep)];
+    final downloadedFile = ref.watch(
+      downloadedFilesProvider,
+    )[downloadedFileKey(widget.parentItem, episode: ep)];
     ref.listen(downloadsProvider, (previous, next) {
       final wasDownloading =
           _activeEpisodeDownload(
@@ -679,11 +775,21 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
           episode: ep,
         );
       } else if (isDownloading) {
-        DownloadProgressDialog.show(
-          context,
-          _playerEpisodeDownloadTitle(widget.parentItem, ep),
-          logicalId != null && logicalId.isNotEmpty ? logicalId : ep.url,
-        );
+        if (logicalId != null && logicalId.isNotEmpty) {
+          _showPendingEpisodeDownloadProgress(
+            context,
+            activeDownload,
+            widget.parentItem,
+            ep,
+            logicalId,
+          );
+        } else if (progressData != null) {
+          DownloadProgressDialog.show(
+            context,
+            _playerEpisodeDownloadTitle(widget.parentItem, ep),
+            ep.url,
+          );
+        }
       } else {
         ref
             .read(downloadLauncherProvider)
@@ -700,7 +806,7 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
     final ring = _focused && widget.isTv;
     final accent = Theme.of(context).colorScheme.primary;
 
-    final rowDirection = TextDirection.rtl;
+    const rowDirection = TextDirection.rtl;
     return Semantics(
       button: true,
       selected: widget.isCurrent,
@@ -850,9 +956,9 @@ class _FillerBadge extends StatelessWidget {
         color: const Color(0xFFD32F2F),
         borderRadius: BorderRadius.circular(4),
       ),
-      child: Text(
+      child: const Text(
         'فلر',
-        style: const TextStyle(
+        style: TextStyle(
           color: Colors.white,
           fontSize: 9,
           fontWeight: FontWeight.w800,

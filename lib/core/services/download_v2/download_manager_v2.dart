@@ -125,9 +125,11 @@ final class DownloadManagerV2 {
   _subscriptionsByTaskId =
       <String, StreamSubscription<DownloadTransportSnapshot>>{};
   final Set<DownloadLogicalId> _parallelPausePending = <DownloadLogicalId>{};
-  final Map<String, Future<bool>> _unsettledResumeAcks = <String, Future<bool>>{};
+  final Map<String, Future<bool>> _unsettledResumeAcks =
+      <String, Future<bool>>{};
   final _sourceResolutionStops = <DownloadLogicalId, Completer<void>>{};
-  final Map<DownloadLogicalId, int> _pendingStopControls = <DownloadLogicalId, int>{};
+  final Map<DownloadLogicalId, int> _pendingStopControls =
+      <DownloadLogicalId, int>{};
   final Map<DownloadLogicalId, int> _lastPositiveSpeedAtMillis =
       <DownloadLogicalId, int>{};
   final Map<String, int> _lastNativeSpeedProjectionAtMillis = <String, int>{};
@@ -143,11 +145,18 @@ final class DownloadManagerV2 {
   /// chapter wait ~10s for its slot to actually start, and serialized the
   /// starts of chapters behind it. Promotion reuses a fresh prefetch and
   /// only pays the chain when none exists or it went stale.
-  final Map<DownloadLogicalId, ({Future<List<MangaPage>> pages, int startedAtMillis})>
-      _mangaPagePrefetches =
-      <DownloadLogicalId, ({Future<List<MangaPage>> pages, int startedAtMillis})>{};
+  final Map<
+    DownloadLogicalId,
+    ({Future<List<MangaPage>> pages, int startedAtMillis})
+  >
+  _mangaPagePrefetches =
+      <
+        DownloadLogicalId,
+        ({Future<List<MangaPage>> pages, int startedAtMillis})
+      >{};
   final Map<DownloadLogicalId, DownloadTransportSnapshot>
-      _firstRenewedPositiveSample = <DownloadLogicalId, DownloadTransportSnapshot>{};
+  _firstRenewedPositiveSample =
+      <DownloadLogicalId, DownloadTransportSnapshot>{};
   final StreamController<List<LogicalDownloadRecordV2>> _recordChanges =
       StreamController<List<LogicalDownloadRecordV2>>.broadcast();
   final StreamController<void> _presentationChanges =
@@ -258,8 +267,12 @@ final class DownloadManagerV2 {
     }
     final recoveries = <Future<void> Function()>[];
     for (final record in [
-      ...records.where((record) => record.mediaKind == DownloadMediaKind.videoEpisode),
-      ...records.where((record) => record.mediaKind == DownloadMediaKind.mangaChapter),
+      ...records.where(
+        (record) => record.mediaKind == DownloadMediaKind.videoEpisode,
+      ),
+      ...records.where(
+        (record) => record.mediaKind == DownloadMediaKind.mangaChapter,
+      ),
     ]) {
       if (record.mediaKind == DownloadMediaKind.mangaChapter) {
         // An unrelated chapter's deep verification must not gate local video controls.
@@ -281,28 +294,40 @@ final class DownloadManagerV2 {
         final olderParents = <int, String>{};
         for (final recovered in rehydrated) {
           final identity = parseDownloadTaskIdentityV2(recovered.taskId);
-          if (identity == null || identity.logicalId != record.logicalId ||
-              identity.generation >= record.generation) continue;
+          if (identity == null ||
+              identity.logicalId != record.logicalId ||
+              identity.generation >= record.generation)
+            continue;
           olderParents[identity.generation] = taskIdForGeneration(
-            identity.logicalId, identity.generation,
+            identity.logicalId,
+            identity.generation,
           );
         }
         for (final generation in olderParents.keys.toList()..sort()) {
           final id = olderParents[generation]!;
           startupOwnership = await _exactHandle(id);
           if (startupOwnership == null) continue;
-          await _settleObsoleteHandle(startupOwnership, cancelEvenIfFinal: false);
+          await _settleObsoleteHandle(
+            startupOwnership,
+            cancelEvenIfFinal: false,
+          );
           await _gateway.removeTracking(id);
           _forgetHandle(id);
           startupOwnership = null;
         }
-        startupOwnership = record.mediaKind == DownloadMediaKind.mangaChapter
-            ? await _exactHandle(record.taskId)
-            : _handlesByTaskId[record.taskId];
+        // A persisted row can retain an old foreign task ID. Never adopt or
+        // control another provider's native transport during rehydration.
+        startupOwnership =
+            _taskBelongsToLogicalId(record.logicalId, record.taskId)
+            ? (record.mediaKind == DownloadMediaKind.mangaChapter
+                  ? await _exactHandle(record.taskId)
+                  : _handlesByTaskId[record.taskId])
+            : null;
         final indexingError = indexingErrors[record.logicalId];
         if (indexingError != null) throw indexingError;
         final destinationKey = startupDestinationKeys[record.logicalId];
-        final duplicateStartupDestination = destinationKey != null &&
+        final duplicateStartupDestination =
+            destinationKey != null &&
             startupDestinationOwners[destinationKey] != record.logicalId;
         if (record.completedAtMillis != null) {
           final result = await _verifyRecordDestination(
@@ -325,15 +350,17 @@ final class DownloadManagerV2 {
               snapshot,
               integrityResult: DownloadV2IntegrityResult.valid,
             );
-            await _forgetCompletedTransport(record.taskId);
+            if (_taskBelongsToLogicalId(record.logicalId, record.taskId)) {
+              await _forgetCompletedTransport(record.taskId);
+            }
             continue;
           }
 
           if (record.mediaKind != DownloadMediaKind.mangaChapter) {
             await _deleteDestination(
-            record.destinationPath,
-            ownerLogicalId: record.logicalId,
-          );
+              record.destinationPath,
+              ownerLogicalId: record.logicalId,
+            );
           }
           final invalidRecord = record.copyWith(
             intent: DownloadUserIntent.failed,
@@ -365,16 +392,25 @@ final class DownloadManagerV2 {
         }
 
         final exactHandle = startupOwnership;
-        final pages = record.mediaKind == DownloadMediaKind.mangaChapter && record.intent != DownloadUserIntent.canceled
+        final pages =
+            record.mediaKind == DownloadMediaKind.mangaChapter &&
+                record.intent != DownloadUserIntent.canceled
             ? await _verifyRecordDestination(record, repairManga: false)
             : null;
-        final startupSnapshot = pages == null ? exactHandle?.current : _snapshotWithPages(
-          exactHandle?.current ?? DownloadTransportSnapshot(
-            taskId: record.taskId, status: DownloadTransportStatus.queued, progress: 0,
-          ),
-          pages.completedPages ?? 0, pages.totalPages,
-        );
-        if (startupSnapshot != null) _snapshots[record.logicalId] = startupSnapshot;
+        final startupSnapshot = pages == null
+            ? exactHandle?.current
+            : _snapshotWithPages(
+                exactHandle?.current ??
+                    DownloadTransportSnapshot(
+                      taskId: record.taskId,
+                      status: DownloadTransportStatus.queued,
+                      progress: 0,
+                    ),
+                pages.completedPages ?? 0,
+                pages.totalPages,
+              );
+        if (startupSnapshot != null)
+          _snapshots[record.logicalId] = startupSnapshot;
         if (duplicateStartupDestination &&
             record.intent == DownloadUserIntent.active) {
           final pausedRecord = record.copyWith(
@@ -406,9 +442,13 @@ final class DownloadManagerV2 {
                 totalBytes: pausedRecord.expectedBytes,
               );
 
-          final pauseBase = pages == null ? rawPauseBase : _snapshotWithPages(
-            rawPauseBase, pages.completedPages ?? 0, pages.totalPages,
-          );
+          final pauseBase = pages == null
+              ? rawPauseBase
+              : _snapshotWithPages(
+                  rawPauseBase,
+                  pages.completedPages ?? 0,
+                  pages.totalPages,
+                );
           if (exactHandle != null &&
               pauseBase.status != DownloadTransportStatus.paused) {
             // Startup found two logical records targeting the same canonical
@@ -417,7 +457,10 @@ final class DownloadManagerV2 {
             // owner's destination. Canonical-writer safety wins here: settle that
             // duplicate transport destructively and expose the resulting truth.
             try {
-              await _settleObsoleteHandle(exactHandle, cancelEvenIfFinal: false);
+              await _settleObsoleteHandle(
+                exactHandle,
+                cancelEvenIfFinal: false,
+              );
             } catch (_) {
               // If even cancel is rejected, the writer remains authoritative.
               // Preserve paused user intent but expose its running transport so
@@ -425,9 +468,13 @@ final class DownloadManagerV2 {
               _activateHandle(pausedRecord.logicalId, exactHandle);
               continue;
             }
-            final settledTruth = pages == null ? exactHandle.current : _snapshotWithPages(
-              exactHandle.current, pages.completedPages ?? 0, pages.totalPages,
-            );
+            final settledTruth = pages == null
+                ? exactHandle.current
+                : _snapshotWithPages(
+                    exactHandle.current,
+                    pages.completedPages ?? 0,
+                    pages.totalPages,
+                  );
             _snapshots[pausedRecord.logicalId] = settledTruth;
             _recordDiagnostic(pausedRecord.logicalId, settledTruth);
             continue;
@@ -473,7 +520,11 @@ final class DownloadManagerV2 {
                 );
             final withPages = pauseBase.completedPages != null || pages == null
                 ? pauseBase
-                : _snapshotWithPages(pauseBase, pages.completedPages ?? 0, pages.totalPages);
+                : _snapshotWithPages(
+                    pauseBase,
+                    pages.completedPages ?? 0,
+                    pages.totalPages,
+                  );
             final projected =
                 exactHandle != null &&
                     pauseBase.status != DownloadTransportStatus.paused
@@ -539,9 +590,13 @@ final class DownloadManagerV2 {
                 );
                 await _store.put(admitted);
                 _rememberRecord(admitted);
-                if (exactHandle is MangaChapterTransportHandleV2 && exactHandle.recoveryOnly) {
+                if (exactHandle is MangaChapterTransportHandleV2 &&
+                    exactHandle.recoveryOnly) {
                   recoverAfterLocalIndex(() async {
-                    await _startExistingMangaGenerationUnsafe(request, admitted);
+                    await _startExistingMangaGenerationUnsafe(
+                      request,
+                      admitted,
+                    );
                   });
                 } else {
                   _activateHandle(admitted.logicalId, exactHandle);
@@ -567,7 +622,8 @@ final class DownloadManagerV2 {
               }
             } else if (exactHandle != null &&
                 _isRecoverable(exactHandle.current)) {
-              if (exactHandle is MangaChapterTransportHandleV2 && exactHandle.recoveryOnly) {
+              if (exactHandle is MangaChapterTransportHandleV2 &&
+                  exactHandle.recoveryOnly) {
                 recoverAfterLocalIndex(() async {
                   await _resumeRecordUnsafe(record, request);
                 });
@@ -577,7 +633,10 @@ final class DownloadManagerV2 {
                   DownloadTransportStatus.paused) {
                 var resumed = false;
                 try {
-                  resumed = await _resumeHandleAndAwaitAcknowledgement(record.logicalId, exactHandle);
+                  resumed = await _resumeHandleAndAwaitAcknowledgement(
+                    record.logicalId,
+                    exactHandle,
+                  );
                 } catch (_) {
                   // Preserve the exact generation if native resume throws.
                 }
@@ -650,7 +709,8 @@ final class DownloadManagerV2 {
     );
     await _store.put(failedRecord);
     _rememberRecord(failedRecord);
-    if (startupOwnership != null && _hasLiveOwnership(startupOwnership.current)) {
+    if (startupOwnership != null &&
+        _hasLiveOwnership(startupOwnership.current)) {
       _activateHandle(record.logicalId, startupOwnership);
       return;
     }
@@ -671,17 +731,25 @@ final class DownloadManagerV2 {
   /// Starts a logical download, coalescing concurrent duplicate starts into
   /// the same exact package writer. With [enqueueOnly], persist its FIFO slot
   /// and return before resolving sources or starting transport.
-  Future<DownloadTransportSnapshot> start(DownloadStartRequestV2 request, {bool enqueueOnly = false}) {
-    final providerId = request.sourceDescriptor['providerId']?.toString().trim();
+  Future<DownloadTransportSnapshot> start(
+    DownloadStartRequestV2 request, {
+    bool enqueueOnly = false,
+  }) {
+    final providerId = request.sourceDescriptor['providerId']
+        ?.toString()
+        .trim();
     if (request.mediaKind == DownloadMediaKind.videoEpisode &&
         providerId == animeRiftProviderId &&
-        request.logicalId != logicalDownloadIdFor(
-          animeId: request.mediaId,
-          episodeKey: request.unitKey,
-          variantKey: request.variantKey,
-          providerId: providerId,
-        )) {
-      return Future.error(StateError('Invalid provider-scoped download identity'));
+        request.logicalId !=
+            logicalDownloadIdFor(
+              animeId: request.mediaId,
+              episodeKey: request.unitKey,
+              variantKey: request.variantKey,
+              providerId: providerId,
+            )) {
+      return Future.error(
+        StateError('Invalid provider-scoped download identity'),
+      );
     }
     return _runControlCommand(request.logicalId, 'start', () async {
       await initialize();
@@ -690,14 +758,17 @@ final class DownloadManagerV2 {
       if (currentRecord != null) {
         if (currentRecord.completedAtMillis != null &&
             await hasCompletedDownload(request.logicalId)) {
-          final completed = (currentRecord.mediaKind == DownloadMediaKind.mangaChapter
-              ? _snapshots[request.logicalId] : null) ?? DownloadTransportSnapshot(
-            taskId: currentRecord.taskId,
-            status: DownloadTransportStatus.complete,
-            progress: 1.0,
-            totalBytes: currentRecord.expectedBytes,
-            transferredBytes: currentRecord.expectedBytes,
-          );
+          final completed =
+              (currentRecord.mediaKind == DownloadMediaKind.mangaChapter
+                  ? _snapshots[request.logicalId]
+                  : null) ??
+              DownloadTransportSnapshot(
+                taskId: currentRecord.taskId,
+                status: DownloadTransportStatus.complete,
+                progress: 1.0,
+                totalBytes: currentRecord.expectedBytes,
+                transferredBytes: currentRecord.expectedBytes,
+              );
           _snapshots[request.logicalId] = completed;
           return completed;
         }
@@ -733,13 +804,18 @@ final class DownloadManagerV2 {
 
           final existing = await _recordHandle(currentRecord);
           if (existing != null && _isRecoverable(existing.current)) {
-            if (existing is MangaChapterTransportHandleV2 && existing.recoveryOnly) {
-              return _resumeRecordUnsafe(currentRecord, _requestFromRecord(currentRecord));
+            if (existing is MangaChapterTransportHandleV2 &&
+                existing.recoveryOnly) {
+              return _resumeRecordUnsafe(
+                currentRecord,
+                _requestFromRecord(currentRecord),
+              );
             }
             _activateHandle(request.logicalId, existing);
             await _publishRecords();
             return request.mediaKind == DownloadMediaKind.mangaChapter
-                ? (_snapshots[request.logicalId] ?? existing.current) : existing.current;
+                ? (_snapshots[request.logicalId] ?? existing.current)
+                : existing.current;
           }
         }
       }
@@ -748,7 +824,11 @@ final class DownloadManagerV2 {
       _mangaSourceRefreshVerifiedPages.remove(request.logicalId);
 
       _firstRenewedPositiveSample.remove(request.logicalId);
-      return _startFreshGeneration(request, currentRecord, enqueueOnly: enqueueOnly);
+      return _startFreshGeneration(
+        request,
+        currentRecord,
+        enqueueOnly: enqueueOnly,
+      );
     });
   }
 
@@ -776,8 +856,10 @@ final class DownloadManagerV2 {
       if (record == null) return null;
       final existingHandle = await _recordHandle(record);
       final existingSnapshot = existingHandle?.current ?? _snapshots[logicalId];
-      if (record.completedAtMillis != null || existingSnapshot?.isFinal == true ||
-          record.intent == DownloadUserIntent.failed || record.intent == DownloadUserIntent.canceled) {
+      if (record.completedAtMillis != null ||
+          existingSnapshot?.isFinal == true ||
+          record.intent == DownloadUserIntent.failed ||
+          record.intent == DownloadUserIntent.canceled) {
         return existingSnapshot;
       }
       final reservesWhilePausing =
@@ -830,10 +912,12 @@ final class DownloadManagerV2 {
         } catch (error) {
           // A timeout is ambiguous: a late native pause must not be resumed on
           // startup. Keep paused intent and expose live transport truth.
-          final restored = _isControlTimeout(error) ||
+          final restored =
+              _isControlTimeout(error) ||
                   error is DownloadPauseCheckpointException ||
                   handle?.current.status == DownloadTransportStatus.paused
-              ? pausedRecord : record;
+              ? pausedRecord
+              : record;
           await _store.put(restored);
           _rememberRecord(restored);
           final current = handle?.current;
@@ -874,8 +958,10 @@ final class DownloadManagerV2 {
           _snapshots[logicalId] = base;
           _recordDiagnostic(logicalId, base);
           _scheduleAdmissionPromotion();
-          if (base.status == DownloadTransportStatus.complete) return record.mediaKind == DownloadMediaKind.mangaChapter
-              ? (_snapshots[logicalId] ?? base) : base;
+          if (base.status == DownloadTransportStatus.complete)
+            return record.mediaKind == DownloadMediaKind.mangaChapter
+                ? (_snapshots[logicalId] ?? base)
+                : base;
           throw StateError(
             'Download did not pause safely; existing progress was preserved',
           );
@@ -1000,8 +1086,10 @@ final class DownloadManagerV2 {
         (handle.current.status == DownloadTransportStatus.paused ||
             (record.intent == DownloadUserIntent.paused &&
                 handle is PauseFencedDownloadTransportHandleV2 &&
-                {DownloadTransportStatus.running, DownloadTransportStatus.held}
-                    .contains(handle.current.status)))) {
+                {
+                  DownloadTransportStatus.running,
+                  DownloadTransportStatus.held,
+                }.contains(handle.current.status)))) {
       if (Platform.isIOS &&
           record.mediaKind != DownloadMediaKind.mangaChapter &&
           record.parallelChunks > 1 &&
@@ -1063,7 +1151,10 @@ final class DownloadManagerV2 {
             }
           }
 
-          final resumed = await _resumeHandleAndAwaitAcknowledgement(logicalId, handle);
+          final resumed = await _resumeHandleAndAwaitAcknowledgement(
+            logicalId,
+            handle,
+          );
           if (resumed) {
             final activeRecord = record.copyWith(
               intent: DownloadUserIntent.active,
@@ -1076,7 +1167,8 @@ final class DownloadManagerV2 {
             await _publishRecords();
             _activateHandle(logicalId, handle);
             return record.mediaKind == DownloadMediaKind.mangaChapter
-                ? (_snapshots[logicalId] ?? handle.current) : handle.current;
+                ? (_snapshots[logicalId] ?? handle.current)
+                : handle.current;
           }
 
           // A failed explicit resume must never silently destroy
@@ -1218,14 +1310,22 @@ final class DownloadManagerV2 {
         try {
           if (deleting.completedAtMillis != null) {
             // Keep the completed item retryable until its bytes are deleted.
-            final handle = deleting.mediaKind == DownloadMediaKind.videoEpisode
+            final ownsTask = _taskBelongsToLogicalId(
+              deleting.logicalId,
+              deleting.taskId,
+            );
+            final handle = !ownsTask
+                ? null
+                : deleting.mediaKind == DownloadMediaKind.videoEpisode
                 ? _handlesByTaskId[deleting.taskId]
                 : await _recordHandle(deleting);
             if (handle != null) {
               await _settleObsoleteHandle(handle, cancelEvenIfFinal: false);
             }
-            await _gateway.removeTracking(deleting.taskId);
-            _forgetHandle(deleting.taskId);
+            if (ownsTask) {
+              await _gateway.removeTracking(deleting.taskId);
+              _forgetHandle(deleting.taskId);
+            }
           } else {
             await _cancelRecord(deleting);
           }
@@ -1236,7 +1336,10 @@ final class DownloadManagerV2 {
             mangaRecord: deleting,
           );
           if (deleting.mediaKind == DownloadMediaKind.videoEpisode) {
-            await deleteDownloadArtworkV2(deleting.logicalId.value, legacyTaskId: deleting.taskId);
+            await deleteDownloadArtworkV2(
+              deleting.logicalId.value,
+              legacyTaskId: deleting.taskId,
+            );
           }
           await _store.remove(logicalId);
           _currentTaskIds.remove(logicalId);
@@ -1347,11 +1450,13 @@ final class DownloadManagerV2 {
 
     final speedMBps = bytesPerSecond / 1000000.0;
     final totalBytes = current.totalBytes;
-    final transferredBytes = current.completedPages != null ? current.transferredBytes : _presentationTransferredBytes(
-      transferredBytes: current.transferredBytes,
-      totalBytes: totalBytes,
-      progress: current.progress,
-    );
+    final transferredBytes = current.completedPages != null
+        ? current.transferredBytes
+        : _presentationTransferredBytes(
+            transferredBytes: current.transferredBytes,
+            totalBytes: totalBytes,
+            progress: current.progress,
+          );
     final remainingBytes =
         totalBytes != null &&
             transferredBytes != null &&
@@ -1473,9 +1578,7 @@ final class DownloadManagerV2 {
     final obsoleteHandle = previous == null
         ? null
         : previousHandle ??
-              (lookUpPreviousHandle
-                  ? await _recordHandle(previous)
-                  : null);
+              (lookUpPreviousHandle ? await _recordHandle(previous) : null);
     if (obsoleteHandle != null) {
       await _settleObsoleteHandle(
         obsoleteHandle,
@@ -1483,7 +1586,9 @@ final class DownloadManagerV2 {
       );
     }
 
-    if (previous != null && previous.mediaKind == DownloadMediaKind.mangaChapter) {
+    if (previous != null &&
+        previous.mediaKind == DownloadMediaKind.mangaChapter &&
+        _taskBelongsToLogicalId(previous.logicalId, previous.taskId)) {
       final oldId = obsoleteHandle?.taskId ?? previous.taskId;
       await _gateway.removeTracking(oldId);
       _forgetHandle(oldId);
@@ -1494,7 +1599,10 @@ final class DownloadManagerV2 {
     final isManga = request.mediaKind == DownloadMediaKind.mangaChapter;
     final parallelChunks = isManga
         ? mangaChapterPageConnectionsFromPreference(request.parallelChunks)
-        : effectivePackageParallelChunksV2(request.parallelChunks, sourceName: request.sourceDescriptor['source']?.toString());
+        : effectivePackageParallelChunksV2(
+            request.parallelChunks,
+            sourceName: request.sourceDescriptor['source']?.toString(),
+          );
     final queuedRecord = LogicalDownloadRecordV2(
       schemaVersion: kLogicalDownloadSchemaVersionV2,
       logicalId: request.logicalId,
@@ -1523,7 +1631,9 @@ final class DownloadManagerV2 {
       taskId: taskId,
       status: DownloadTransportStatus.queued,
       progress: 0,
-      completedPages: isManga ? (_snapshots[request.logicalId]?.completedPages ?? 0) : null,
+      completedPages: isManga
+          ? (_snapshots[request.logicalId]?.completedPages ?? 0)
+          : null,
       totalPages: isManga ? _snapshots[request.logicalId]?.totalPages : null,
       totalBytes: request.expectedBytes,
       transferredBytes: request.expectedBytes == null ? null : 0,
@@ -1549,7 +1659,8 @@ final class DownloadManagerV2 {
     final resolver = _mangaChapterPageResolver;
     // Keep only near-term provider resolutions in flight. Deep queues may
     // contain hundreds of chapters; they resolve fresh at promotion.
-    final limit = clampDownloadConcurrency(_maxConcurrentDownloads()).clamp(1, 4);
+    final limit = clampDownloadConcurrency(_maxConcurrentDownloads())
+        .clamp(1, 4);
     if (resolver == null || _mangaPagePrefetches.length >= limit) return;
     final pages = resolver.resolve(
       Map<String, Object?>.from(request.sourceDescriptor),
@@ -1592,10 +1703,17 @@ final class DownloadManagerV2 {
       }
 
       final snapshot = _snapshots[record.logicalId];
-      final transport = _handlesByTaskId[_currentTaskIds[record.logicalId] ?? record.taskId]?.current;
-      final ownsWorkingTransport = transport != null &&
-          {DownloadTransportStatus.queued, DownloadTransportStatus.running,
-            DownloadTransportStatus.held}.contains(transport.status);
+      final taskId = _currentTaskIds[record.logicalId] ?? record.taskId;
+      final transport = _taskBelongsToLogicalId(record.logicalId, taskId)
+          ? _handlesByTaskId[taskId]?.current
+          : null;
+      final ownsWorkingTransport =
+          transport != null &&
+          {
+            DownloadTransportStatus.queued,
+            DownloadTransportStatus.running,
+            DownloadTransportStatus.held,
+          }.contains(transport.status);
       final pausedWriterIsLive =
           (record.intent == DownloadUserIntent.paused ||
               record.intent == DownloadUserIntent.canceled ||
@@ -1603,13 +1721,15 @@ final class DownloadManagerV2 {
           (snapshot?.status == DownloadTransportStatus.queued ||
               snapshot?.status == DownloadTransportStatus.running ||
               snapshot?.status == DownloadTransportStatus.held);
-      if (!ownsWorkingTransport && !pausedWriterIsLive &&
+      if (!ownsWorkingTransport &&
+          !pausedWriterIsLive &&
           (record.intent != DownloadUserIntent.active ||
               record.awaitingAdmission)) {
         continue;
       }
       final reservesSlot =
-          ownsWorkingTransport || snapshot == null ||
+          ownsWorkingTransport ||
+          snapshot == null ||
           snapshot.status == DownloadTransportStatus.queued ||
           snapshot.status == DownloadTransportStatus.running ||
           snapshot.status == DownloadTransportStatus.held ||
@@ -1766,9 +1886,8 @@ final class DownloadManagerV2 {
             // download paused and resumed, a new one enqueued). Promoting
             // past the true head is what started queued chapters out of
             // order on device.
-            final head = _queueOrder(
-              await _store.all(),
-            ).where((record) => !skipped.contains(record.logicalId));
+            final head = _queueOrder(await _store.all())
+                .where((record) => !skipped.contains(record.logicalId));
             if (head.isNotEmpty && head.first.logicalId != latest.logicalId) {
               return _AdmissionAttempt.superseded;
             }
@@ -1800,7 +1919,8 @@ final class DownloadManagerV2 {
                 taskId: failedRecord.taskId,
                 status: DownloadTransportStatus.failed,
                 progress: 0,
-                completedPages: _snapshots[failedRecord.logicalId]?.completedPages,
+                completedPages:
+                    _snapshots[failedRecord.logicalId]?.completedPages,
                 totalPages: _snapshots[failedRecord.logicalId]?.totalPages,
                 totalBytes: failedRecord.expectedBytes,
                 failureCategory: DownloadFailureCategory.unknown,
@@ -1863,7 +1983,10 @@ final class DownloadManagerV2 {
               return;
             }
           }
-          resumed = await _resumeHandleAndAwaitAcknowledgement(record.logicalId, existing);
+          resumed = await _resumeHandleAndAwaitAcknowledgement(
+            record.logicalId,
+            existing,
+          );
         } catch (_) {
           // A thrown resume is no proof the progress is gone. Keep it paused
           // rather than failed, whose Retry would start from byte zero.
@@ -1916,12 +2039,18 @@ final class DownloadManagerV2 {
     final isManga = request.mediaKind == DownloadMediaKind.mangaChapter;
     final source = isManga
         ? null
-        : await _resolveUntilStop<ResolvedDownloadSourceV2>(request.logicalId, () => _sourceResolver.resolve(request.sourceDescriptor));
+        : await _resolveUntilStop<ResolvedDownloadSourceV2>(
+            request.logicalId,
+            () => _sourceResolver.resolve(request.sourceDescriptor),
+          );
     final admitted = record.copyWith(
       awaitingAdmission: false,
       parallelChunks: isManga
           ? mangaChapterPageConnectionsFromPreference(request.parallelChunks)
-          : effectivePackageParallelChunksV2(record.parallelChunks, sourceName: record.sourceDescriptor['source']?.toString()),
+          : effectivePackageParallelChunksV2(
+              record.parallelChunks,
+              sourceName: record.sourceDescriptor['source']?.toString(),
+            ),
       expectedBytes: source?.expectedBytes ?? record.expectedBytes,
       clearFailure: true,
       updatedAtMillis: _nowMillis(),
@@ -1934,7 +2063,9 @@ final class DownloadManagerV2 {
       taskId: admitted.taskId,
       status: DownloadTransportStatus.queued,
       progress: 0,
-      completedPages: isManga ? (_snapshots[request.logicalId]?.completedPages ?? 0) : null,
+      completedPages: isManga
+          ? (_snapshots[request.logicalId]?.completedPages ?? 0)
+          : null,
       totalPages: isManga ? _snapshots[request.logicalId]?.totalPages : null,
       totalBytes: admitted.expectedBytes,
       transferredBytes: admitted.expectedBytes == null ? null : 0,
@@ -2023,7 +2154,10 @@ final class DownloadManagerV2 {
     }
   }
 
-  Future<T> _resolveUntilStop<T>(DownloadLogicalId logicalId, Future<T> Function() resolve) async {
+  Future<T> _resolveUntilStop<T>(
+    DownloadLogicalId logicalId,
+    Future<T> Function() resolve,
+  ) async {
     if (_pendingStopControls.containsKey(logicalId)) {
       throw StateError('Download startup interrupted by stop request');
     }
@@ -2032,7 +2166,10 @@ final class DownloadManagerV2 {
     try {
       final result = await Future.any([
         resolve(),
-        stop.future.then<T>((_) => throw StateError('Download startup interrupted by stop request')),
+        stop.future.then<T>(
+          (_) =>
+              throw StateError('Download startup interrupted by stop request'),
+        ),
       ]);
       if (_pendingStopControls.containsKey(logicalId)) {
         throw StateError('Download startup interrupted by stop request');
@@ -2060,8 +2197,10 @@ final class DownloadManagerV2 {
           throw StateError('Manga chapter transport is unavailable.');
         }
         final mangaGateway = gateway as MangaChapterGatewayV2;
-        final pages = await _resolveUntilStop(request.logicalId,
-          () => _resolveMangaPages(request));
+        final pages = await _resolveUntilStop(
+          request.logicalId,
+          () => _resolveMangaPages(request),
+        );
         return await mangaGateway.startMangaChapter(
           MangaChapterTransportSpecV2(
             taskId: taskId,
@@ -2078,7 +2217,11 @@ final class DownloadManagerV2 {
       }
 
       final source =
-          videoSource ?? await _resolveUntilStop<ResolvedDownloadSourceV2>(request.logicalId, () => _sourceResolver.resolve(request.sourceDescriptor));
+          videoSource ??
+          await _resolveUntilStop<ResolvedDownloadSourceV2>(
+            request.logicalId,
+            () => _sourceResolver.resolve(request.sourceDescriptor),
+          );
       return await _gateway.start(
         DownloadTaskSpecV2(
           taskId: taskId,
@@ -2126,7 +2269,8 @@ final class DownloadManagerV2 {
     _snapshots[record.logicalId] = truth;
     _recordDiagnostic(record.logicalId, truth);
     await _publishRecords();
-    if (!truth.isFinal && truth.status != DownloadTransportStatus.paused &&
+    if (!truth.isFinal &&
+        truth.status != DownloadTransportStatus.paused &&
         truth.status != DownloadTransportStatus.missing) {
       _activateHandle(record.logicalId, handle);
     }
@@ -2142,9 +2286,7 @@ final class DownloadManagerV2 {
     final obsoleteHandle = previous == null
         ? null
         : previousHandle ??
-              (lookUpPreviousHandle
-                  ? await _recordHandle(previous)
-                  : null);
+              (lookUpPreviousHandle ? await _recordHandle(previous) : null);
 
     if (obsoleteHandle != null) {
       await _settleObsoleteHandle(
@@ -2158,9 +2300,13 @@ final class DownloadManagerV2 {
     try {
       source = isManga
           ? null
-          : await _resolveUntilStop<ResolvedDownloadSourceV2>(request.logicalId, () => _sourceResolver.resolve(request.sourceDescriptor));
+          : await _resolveUntilStop<ResolvedDownloadSourceV2>(
+              request.logicalId,
+              () => _sourceResolver.resolve(request.sourceDescriptor),
+            );
     } catch (error) {
-      if (!_recordChanges.isClosed && previous != null &&
+      if (!_recordChanges.isClosed &&
+          previous != null &&
           previous.intent != DownloadUserIntent.canceled) {
         await _persistFailure(
           previous,
@@ -2181,7 +2327,9 @@ final class DownloadManagerV2 {
     if (_recordChanges.isClosed) {
       throw StateError('Download manager disposed during source recovery');
     }
-    if (previous != null && previous.mediaKind == DownloadMediaKind.mangaChapter) {
+    if (previous != null &&
+        previous.mediaKind == DownloadMediaKind.mangaChapter &&
+        _taskBelongsToLogicalId(previous.logicalId, previous.taskId)) {
       final oldId = obsoleteHandle?.taskId ?? previous.taskId;
       await _gateway.removeTracking(oldId);
       _forgetHandle(oldId);
@@ -2193,7 +2341,10 @@ final class DownloadManagerV2 {
     final expectedBytes = source?.expectedBytes ?? request.expectedBytes;
     final parallelChunks = isManga
         ? mangaChapterPageConnectionsFromPreference(request.parallelChunks)
-        : effectivePackageParallelChunksV2(request.parallelChunks, sourceName: request.sourceDescriptor['source']?.toString());
+        : effectivePackageParallelChunksV2(
+            request.parallelChunks,
+            sourceName: request.sourceDescriptor['source']?.toString(),
+          );
 
     final nextRecord = LogicalDownloadRecordV2(
       schemaVersion: kLogicalDownloadSchemaVersionV2,
@@ -2222,7 +2373,9 @@ final class DownloadManagerV2 {
       taskId: taskId,
       status: DownloadTransportStatus.queued,
       progress: 0,
-      completedPages: isManga ? (_snapshots[request.logicalId]?.completedPages ?? 0) : null,
+      completedPages: isManga
+          ? (_snapshots[request.logicalId]?.completedPages ?? 0)
+          : null,
       totalPages: isManga ? _snapshots[request.logicalId]?.totalPages : null,
       totalBytes: expectedBytes,
       transferredBytes: expectedBytes == null ? null : 0,
@@ -2240,7 +2393,8 @@ final class DownloadManagerV2 {
       );
       _activateHandle(request.logicalId, handle);
       return request.mediaKind == DownloadMediaKind.mangaChapter
-          ? (_snapshots[request.logicalId] ?? handle.current) : handle.current;
+          ? (_snapshots[request.logicalId] ?? handle.current)
+          : handle.current;
     } catch (e) {
       final failedRecord = nextRecord.copyWith(
         intent: DownloadUserIntent.failed,
@@ -2256,7 +2410,9 @@ final class DownloadManagerV2 {
         taskId: taskId,
         status: DownloadTransportStatus.failed,
         progress: 0,
-        completedPages: isManga ? (_snapshots[request.logicalId]?.completedPages ?? 0) : null,
+        completedPages: isManga
+            ? (_snapshots[request.logicalId]?.completedPages ?? 0)
+            : null,
         totalPages: isManga ? _snapshots[request.logicalId]?.totalPages : null,
         totalBytes: expectedBytes,
         failureCategory: DownloadFailureCategory.unknown,
@@ -2277,12 +2433,21 @@ final class DownloadManagerV2 {
     final elapsed = Stopwatch()..start();
     final stops = action == 'pause' || action == 'cancel' || action == 'delete';
     if (stops) {
-      _pendingStopControls.update(logicalId, (count) => count + 1, ifAbsent: () => 1);
+      _pendingStopControls.update(
+        logicalId,
+        (count) => count + 1,
+        ifAbsent: () => 1,
+      );
       final resolving = _sourceResolutionStops[logicalId];
       if (resolving != null && !resolving.isCompleted) resolving.complete();
-      final handle = _handlesByTaskId[_currentTaskIds[logicalId]];
+      final taskId = _currentTaskIds[logicalId];
+      final handle =
+          taskId != null && _taskBelongsToLogicalId(logicalId, taskId)
+          ? _handlesByTaskId[taskId]
+          : null;
       if (handle is SourceRenewingDownloadTransportHandleV2) {
-        (handle as SourceRenewingDownloadTransportHandleV2).interruptSourceRenewal();
+        (handle as SourceRenewingDownloadTransportHandleV2)
+            .interruptSourceRenewal();
       }
     }
     var taskId = _currentTaskIds[logicalId];
@@ -2312,7 +2477,8 @@ final class DownloadManagerV2 {
             record(_isControlTimeout(error) ? 'timedOut' : 'rejected', error);
             Error.throwWithStackTrace(error, stack);
           },
-        ).whenComplete(() {
+        )
+        .whenComplete(() {
           if (!stops) return;
           final pending = _pendingStopControls[logicalId] ?? 0;
           if (pending <= 1) {
@@ -2378,7 +2544,8 @@ final class DownloadManagerV2 {
 
     try {
       final accepted = await _awaitControlAcknowledgement(
-        'pause', handle.pause(),
+        'pause',
+        handle.pause(),
       );
       if (!accepted) {
         // On iOS a failed pause can mean URLSession could not produce resume
@@ -2424,11 +2591,13 @@ final class DownloadManagerV2 {
       return;
     }
 
-    final settlement = StreamIterator(handle.settlement(
-      // A completed result from before an unresolved resume cannot prove that
-      // the resumed writer has stopped. Retain the fresh-observation barrier.
-      requireNewSnapshot: initiallySettled && unresolvedResume != null,
-    ));
+    final settlement = StreamIterator(
+      handle.settlement(
+        // A completed result from before an unresolved resume cannot prove that
+        // the resumed writer has stopped. Retain the fresh-observation barrier.
+        requireNewSnapshot: initiallySettled && unresolvedResume != null,
+      ),
+    );
     final settled = settlement.moveNext()..ignore();
 
     try {
@@ -2440,7 +2609,8 @@ final class DownloadManagerV2 {
         throw StateError('Could not stop obsolete transport ${handle.taskId}');
       }
       if (handle.isSettled &&
-          (unresolvedResume == null || !initiallySettled ||
+          (unresolvedResume == null ||
+              !initiallySettled ||
               handle is SelfSettlingParallelDownloadTransportHandleV2)) {
         _unsettledResumeAcks.remove(handle.taskId)?.ignore();
         return;
@@ -2448,7 +2618,9 @@ final class DownloadManagerV2 {
 
       try {
         if (!await settled.timeout(const Duration(seconds: 10))) {
-          throw StateError('Obsolete transport ${handle.taskId} closed before settling');
+          throw StateError(
+            'Obsolete transport ${handle.taskId} closed before settling',
+          );
         }
         _unsettledResumeAcks.remove(handle.taskId)?.ignore();
       } on TimeoutException {
@@ -2502,20 +2674,24 @@ final class DownloadManagerV2 {
     // requires proof the exact writer has stopped.
     _snapshots[logicalId] = snapshot;
     _recordDiagnostic(logicalId, snapshot);
-    try {
-      await _gateway.removeTracking(obsoleteTaskId);
-    } catch (_) {
-      await _markCanceledCleanupFailure(canceledRecord);
-      rethrow;
+    if (_taskBelongsToLogicalId(logicalId, obsoleteTaskId)) {
+      try {
+        await _gateway.removeTracking(obsoleteTaskId);
+      } catch (_) {
+        await _markCanceledCleanupFailure(canceledRecord);
+        rethrow;
+      }
+      _forgetHandle(obsoleteTaskId);
     }
-    _forgetHandle(obsoleteTaskId);
     _sourceRefreshAttempts.remove(logicalId);
     _mangaSourceRefreshVerifiedPages.remove(logicalId);
     _firstRenewedPositiveSample.remove(logicalId);
     _scheduleAdmissionPromotion();
   }
 
-  Future<void> _markCanceledCleanupFailure(LogicalDownloadRecordV2 record) async {
+  Future<void> _markCanceledCleanupFailure(
+    LogicalDownloadRecordV2 record,
+  ) async {
     // Cleanup failure must remain retryable without reviving a stopped writer.
     const message = 'Download cleanup could not finish; delete again to retry';
     final failedRecord = record.copyWith(
@@ -2559,7 +2735,10 @@ final class DownloadManagerV2 {
         }
         final parent = p.dirname(ancestor);
         if (parent == ancestor) {
-          throw FileSystemException('No existing destination ancestor', destinationPath);
+          throw FileSystemException(
+            'No existing destination ancestor',
+            destinationPath,
+          );
         }
         missing.insert(0, p.basename(ancestor));
         ancestor = parent;
@@ -2601,9 +2780,13 @@ final class DownloadManagerV2 {
         continue;
       }
       final identity = parseDownloadTaskIdentityV2(handle.taskId);
-      final owner = identity == null ? null : _recordsByLogicalId[identity.logicalId];
-      if (identity == null || owner == null ||
-          owner.generation != identity.generation || owner.taskId != handle.taskId) {
+      final owner = identity == null
+          ? null
+          : _recordsByLogicalId[identity.logicalId];
+      if (identity == null ||
+          owner == null ||
+          owner.generation != identity.generation ||
+          owner.taskId != handle.taskId) {
         return true;
       }
     }
@@ -2788,40 +2971,58 @@ final class DownloadManagerV2 {
     final destination = await _destinationFile(record.destinationPath);
     final directory = Directory(destination.path);
     if (!await directory.exists()) {
-      return const DownloadIntegrityResult.invalid('missing', completedPages: 0);
+      return const DownloadIntegrityResult.invalid(
+        'missing',
+        completedPages: 0,
+      );
     }
-    var result = const DownloadIntegrityResult.invalid('manifest-incomplete', completedPages: 0);
+    var result = const DownloadIntegrityResult.invalid(
+      'manifest-incomplete',
+      completedPages: 0,
+    );
     for (var attempt = 0; attempt < (repairManga ? 3 : 1); attempt++) {
       final manifest = await MangaChapterManifestV2.readFrom(directory);
-      if (manifest == null || manifest.mangaId != record.mediaId ||
-          manifest.chapterId != record.unitKey || manifest.pageCount <= 0) {
+      if (manifest == null ||
+          manifest.mangaId != record.mediaId ||
+          manifest.chapterId != record.unitKey ||
+          manifest.pageCount <= 0) {
         return result;
       }
-      final files = await _verifiedMangaPageFiles(directory, manifest, checkpointOnly: !repairManga);
+      final files = await _verifiedMangaPageFiles(
+        directory,
+        manifest,
+        checkpointOnly: !repairManga,
+      );
       final complete = files.length == manifest.pageCount;
-      final checkpointComplete = manifest.isComplete &&
+      final checkpointComplete =
+          manifest.isComplete &&
           manifest.completedIndexes.length == manifest.pageCount;
       if (complete && (checkpointComplete || repairManga)) {
         if (!checkpointComplete) {
-          await manifest.copyWith(completedIndexes: files.keys.toSet(), isComplete: true)
+          await manifest
+              .copyWith(completedIndexes: files.keys.toSet(), isComplete: true)
               .writeTo(directory);
         }
         var bytes = 0;
         for (final file in files.values) {
           bytes += await file.length();
         }
-        return DownloadIntegrityResult.valid(bytes,
-          completedPages: files.length, totalPages: manifest.pageCount);
+        return DownloadIntegrityResult.valid(
+          bytes,
+          completedPages: files.length,
+          totalPages: manifest.pageCount,
+        );
       }
       result = DownloadIntegrityResult.invalid(
         checkpointComplete ? 'corrupt-page' : 'manifest-incomplete',
-        completedPages: files.length, totalPages: manifest.pageCount,
+        completedPages: files.length,
+        totalPages: manifest.pageCount,
       );
       if (!repairManga) return result;
       // Retain rejected digest provenance independently of the completed set.
-      await manifest.copyWith(
-        completedIndexes: files.keys.toSet(), isComplete: false,
-      ).writeTo(directory);
+      await manifest
+          .copyWith(completedIndexes: files.keys.toSet(), isComplete: false)
+          .writeTo(directory);
       if (attempt < 2) {
         await Future<void>.delayed(const Duration(milliseconds: 60));
       }
@@ -2830,21 +3031,29 @@ final class DownloadManagerV2 {
   }
 
   Future<Map<int, File>> _verifiedMangaPageFiles(
-    Directory directory, MangaChapterManifestV2 manifest, {
+    Directory directory,
+    MangaChapterManifestV2 manifest, {
     bool checkpointOnly = false,
   }) async {
     final valid = <int, File>{};
     await for (final entity in directory.list(followLinks: false)) {
       if (entity is! File) continue;
-      final match = RegExp(r'^([0-9]+)\.[^.]+$').firstMatch(p.basename(entity.path));
+      final match = RegExp(r'^([0-9]+)\.[^.]+$')
+          .firstMatch(p.basename(entity.path));
       final page = match == null ? null : int.tryParse(match.group(1)!);
-      if (page == null || page <= 0 || page > manifest.pageCount ||
-          valid.containsKey(page - 1)) continue;
+      if (page == null ||
+          page <= 0 ||
+          page > manifest.pageCount ||
+          valid.containsKey(page - 1))
+        continue;
       final index = page - 1;
-      if (checkpointOnly && !manifest.completedIndexes.contains(index)) continue;
+      if (checkpointOnly && !manifest.completedIndexes.contains(index))
+        continue;
       if (await manifest.isPageValid(index, entity)) {
         valid[index] = entity;
-      } else if (!checkpointOnly && await entity.exists() && await entity.length() == 0) {
+      } else if (!checkpointOnly &&
+          await entity.exists() &&
+          await entity.length() == 0) {
         try {
           await entity.delete();
         } catch (_) {}
@@ -2879,27 +3088,48 @@ final class DownloadManagerV2 {
     _currentIntents[record.logicalId] = record.intent;
   }
 
-  Future<DownloadTransportHandle?> _recordHandle(LogicalDownloadRecordV2 record) async {
+  bool _taskBelongsToLogicalId(DownloadLogicalId logicalId, String taskId) {
+    final identity = parseDownloadTaskIdentityV2(taskId);
+    if (identity != null) {
+      return identity.logicalId == logicalId && identity.pageIndex == null;
+    }
+    // Preserve unambiguous legacy opaque IDs, but never let two persisted
+    // records control the same transport when its owner cannot be determined.
+    return !_recordsByLogicalId.values.any(
+      (other) => other.logicalId != logicalId && other.taskId == taskId,
+    );
+  }
+
+  Future<DownloadTransportHandle?> _recordHandle(
+    LogicalDownloadRecordV2 record,
+  ) async {
     final ownedId = _currentTaskIds[record.logicalId];
     if (ownedId != null && ownedId != record.taskId) {
       final identity = parseDownloadTaskIdentityV2(ownedId);
-      if (identity != null && identity.logicalId == record.logicalId &&
+      if (identity != null &&
+          identity.logicalId == record.logicalId &&
           identity.generation <= record.generation) {
         final owned = await _exactHandle(ownedId);
         if (owned != null && _hasLiveOwnership(owned.current)) return owned;
       }
     }
-    return _exactHandle(record.taskId);
+    return _taskBelongsToLogicalId(record.logicalId, record.taskId)
+        ? _exactHandle(record.taskId)
+        : null;
   }
 
   void _forgetHandle(String taskId) {
     final parent = parseDownloadTaskIdentityV2(taskId);
     final ids = <String>[taskId];
-    if (parent != null && parent.pageIndex == null && parent.logicalId.value.startsWith('manga_')) {
+    if (parent != null &&
+        parent.pageIndex == null &&
+        parent.logicalId.value.startsWith('manga_')) {
       for (final id in _handlesByTaskId.keys) {
         final child = parseDownloadTaskIdentityV2(id);
-        if (child != null && child.pageIndex != null &&
-            child.logicalId == parent.logicalId && child.generation == parent.generation) {
+        if (child != null &&
+            child.pageIndex != null &&
+            child.logicalId == parent.logicalId &&
+            child.generation == parent.generation) {
           ids.add(id);
         }
       }
@@ -2918,12 +3148,17 @@ final class DownloadManagerV2 {
     var attached = await _gateway.attach(taskId);
     final identity = parseDownloadTaskIdentityV2(taskId);
     final gateway = _gateway;
-    if (attached == null && gateway is MangaChapterGatewayV2 &&
-        identity != null && identity.pageIndex == null &&
+    if (attached == null &&
+        gateway is MangaChapterGatewayV2 &&
+        identity != null &&
+        identity.pageIndex == null &&
         identity.logicalId.value.startsWith('manga_')) {
-      attached = await (gateway as MangaChapterGatewayV2).attachMangaChapterOwnershipV2(
-        taskId, configuredConnections: _recordsByLogicalId[identity.logicalId]?.parallelChunks ?? 4,
-      );
+      attached = await (gateway as MangaChapterGatewayV2)
+          .attachMangaChapterOwnershipV2(
+            taskId,
+            configuredConnections:
+                _recordsByLogicalId[identity.logicalId]?.parallelChunks ?? 4,
+          );
     }
     if (attached != null) _handlesByTaskId[taskId] = attached;
     return attached;
@@ -2943,7 +3178,8 @@ final class DownloadManagerV2 {
     late final StreamSubscription<DownloadTransportSnapshot> subscription;
     subscription = handle.snapshots.listen((snapshot) {
       _consumeSnapshot(logicalId, snapshot);
-      if (snapshot.isFinal && !_unsettledResumeAcks.containsKey(snapshot.taskId)) {
+      if (snapshot.isFinal &&
+          !_unsettledResumeAcks.containsKey(snapshot.taskId)) {
         final registered = _subscriptionsByTaskId[snapshot.taskId];
         if (identical(registered, subscription)) {
           _subscriptionsByTaskId.remove(snapshot.taskId);
@@ -2965,11 +3201,16 @@ final class DownloadManagerV2 {
       snapshot = _snapshotWithStatus(snapshot, DownloadTransportStatus.held);
     }
     final intent = _currentIntents[logicalId];
-    if (intent == DownloadUserIntent.failed || intent == DownloadUserIntent.canceled) {
+    if (intent == DownloadUserIntent.failed ||
+        intent == DownloadUserIntent.canceled) {
       final truth = _hasLiveOwnership(snapshot)
           ? snapshot
-          : _snapshotWithStatus(snapshot, intent == DownloadUserIntent.canceled
-              ? DownloadTransportStatus.canceled : DownloadTransportStatus.failed);
+          : _snapshotWithStatus(
+              snapshot,
+              intent == DownloadUserIntent.canceled
+                  ? DownloadTransportStatus.canceled
+                  : DownloadTransportStatus.failed,
+            );
       _acceptSnapshot(logicalId, truth);
       if (!_hasLiveOwnership(truth)) _scheduleAdmissionPromotion();
       return;
@@ -2991,7 +3232,8 @@ final class DownloadManagerV2 {
     // A resumed transfer may initially report *old* positive progress.
     // For video, progress beyond the first sample proves new source bytes.
     // Manga replenishes only from validated page checkpoints after settlement.
-    if (_recordsByLogicalId[logicalId]?.mediaKind != DownloadMediaKind.mangaChapter &&
+    if (_recordsByLogicalId[logicalId]?.mediaKind !=
+            DownloadMediaKind.mangaChapter &&
         _sourceRefreshAttempts.containsKey(logicalId) &&
         snapshot.status == DownloadTransportStatus.running &&
         (snapshot.progress > 0 || (snapshot.transferredBytes ?? 0) > 0)) {
@@ -2999,7 +3241,8 @@ final class DownloadManagerV2 {
         logicalId,
         () => snapshot,
       );
-      final newBytes = snapshot.transferredBytes != null &&
+      final newBytes =
+          snapshot.transferredBytes != null &&
           baseline.transferredBytes != null &&
           snapshot.transferredBytes! > baseline.transferredBytes!;
       if (newBytes || snapshot.progress > baseline.progress) {
@@ -3059,9 +3302,14 @@ final class DownloadManagerV2 {
     }
 
     final previous = _snapshots[logicalId];
-    if (snapshot.completedPages == null && previous?.completedPages != null &&
+    if (snapshot.completedPages == null &&
+        previous?.completedPages != null &&
         previous?.taskId == snapshot.taskId) {
-      snapshot = _snapshotWithPages(snapshot, previous!.completedPages!, previous.totalPages);
+      snapshot = _snapshotWithPages(
+        snapshot,
+        previous!.completedPages!,
+        previous.totalPages,
+      );
     }
     var accepted = snapshot;
     final record = _recordsByLogicalId[logicalId];
@@ -3283,17 +3531,26 @@ final class DownloadManagerV2 {
     );
   }
 
-  Future<Set<int>> _verifiedMangaCheckpointIndexes(LogicalDownloadRecordV2 record) async {
+  Future<Set<int>> _verifiedMangaCheckpointIndexes(
+    LogicalDownloadRecordV2 record,
+  ) async {
     try {
-      final directory = Directory((await _destinationFile(record.destinationPath)).path);
+      final directory = Directory(
+        (await _destinationFile(record.destinationPath)).path,
+      );
       if (!await directory.exists()) return {};
       final manifest = await MangaChapterManifestV2.readFrom(directory);
-      if (manifest == null || manifest.mangaId != record.mediaId ||
-          manifest.chapterId != record.unitKey || manifest.pageCount <= 0) return {};
+      if (manifest == null ||
+          manifest.mangaId != record.mediaId ||
+          manifest.chapterId != record.unitKey ||
+          manifest.pageCount <= 0)
+        return {};
       final files = await _verifiedMangaPageFiles(directory, manifest);
       return {
         for (final index in files.keys)
-          if (manifest.completedIndexes.contains(index) && manifest.pageDigests.containsKey(index)) index,
+          if (manifest.completedIndexes.contains(index) &&
+              manifest.pageDigests.containsKey(index))
+            index,
       };
     } on FileSystemException {
       // An unreadable checkpoint supplies no new verified renewal evidence.
@@ -3327,11 +3584,15 @@ final class DownloadManagerV2 {
             record.taskId != failedTaskId) {
           return;
         }
-        final renewableHandle = record.mediaKind == DownloadMediaKind.videoEpisode
-            ? await _recordHandle(record) : null;
+        final renewableHandle =
+            record.mediaKind == DownloadMediaKind.videoEpisode
+            ? await _recordHandle(record)
+            : null;
         if (renewableHandle is SourceRenewingDownloadTransportHandleV2 &&
-            (renewableHandle!.current.status != DownloadTransportStatus.failed ||
-                renewableHandle.current.failureCategory != DownloadFailureCategory.sourceExpired)) {
+            (renewableHandle!.current.status !=
+                    DownloadTransportStatus.failed ||
+                renewableHandle.current.failureCategory !=
+                    DownloadFailureCategory.sourceExpired)) {
           // In-place renewal retains the task ID; old duplicate failures must
           // not renew an already replaced source or spend its retry budget.
           return;
@@ -3340,7 +3601,8 @@ final class DownloadManagerV2 {
           // Source-expiry callbacks arrive after all page writers settle.
           final verified = await _verifiedMangaCheckpointIndexes(record);
           final previous = _mangaSourceRefreshVerifiedPages.putIfAbsent(
-            logicalId, () => <int>{},
+            logicalId,
+            () => <int>{},
           );
           if (verified.any((index) => !previous.contains(index))) {
             _sourceRefreshAttempts.remove(logicalId);
@@ -3373,20 +3635,34 @@ final class DownloadManagerV2 {
         final request = _requestFromRecord(record);
         try {
           if (renewableHandle is SourceRenewingDownloadTransportHandleV2) {
-            final source = await _sourceResolver.resolve(record.sourceDescriptor);
+            final source = await _sourceResolver.resolve(
+              record.sourceDescriptor,
+            );
             if (_recordChanges.isClosed) return;
-            if (await _yieldSourceRenewalToStop(record, renewableHandle!)) return;
-            final renewed = await (renewableHandle as SourceRenewingDownloadTransportHandleV2)
-                .replaceSource(url: source.url, headers: source.headers,
-                    expectedBytes: source.expectedBytes);
-            if (await _yieldSourceRenewalToStop(record, renewableHandle)) return;
+            if (await _yieldSourceRenewalToStop(record, renewableHandle!))
+              return;
+            final renewed =
+                await (renewableHandle
+                        as SourceRenewingDownloadTransportHandleV2)
+                    .replaceSource(
+                      url: source.url,
+                      headers: source.headers,
+                      expectedBytes: source.expectedBytes,
+                    );
+            if (await _yieldSourceRenewalToStop(record, renewableHandle))
+              return;
             if (!renewed) {
-              throw StateError('Renewed source could not safely retain downloaded ranges');
+              throw StateError(
+                'Renewed source could not safely retain downloaded ranges',
+              );
             }
             if (_recordChanges.isClosed) return;
-            await _resumeRecordUnsafe(record.copyWith(
-              expectedBytes: source.expectedBytes ?? record.expectedBytes,
-            ), request);
+            await _resumeRecordUnsafe(
+              record.copyWith(
+                expectedBytes: source.expectedBytes ?? record.expectedBytes,
+              ),
+              request,
+            );
             return;
           }
           await _startFreshGeneration(
@@ -3396,7 +3672,8 @@ final class DownloadManagerV2 {
           );
         } catch (error) {
           if (renewableHandle is SourceRenewingDownloadTransportHandleV2 &&
-              await _yieldSourceRenewalToStop(record, renewableHandle!)) return;
+              await _yieldSourceRenewalToStop(record, renewableHandle!))
+            return;
           final current = await _store.get(logicalId);
           // The fresh start may already have saved this as an unknown failure;
           // it is the expired source that failed, and the UI says so.
@@ -3459,7 +3736,8 @@ final class DownloadManagerV2 {
         record?.completedAtMillis == null &&
         snapshot.status == DownloadTransportStatus.complete) {
       snapshot = _snapshotWithStatus(snapshot, DownloadTransportStatus.held);
-      if (snapshot.completedPages == null) snapshot = _snapshotWithPages(snapshot, 0, null);
+      if (snapshot.completedPages == null)
+        snapshot = _snapshotWithPages(snapshot, 0, null);
       _snapshots[logicalId] = snapshot;
     }
     _diagnostics.record(
@@ -3596,7 +3874,8 @@ int? _presentationTransferredBytes({
 }
 
 bool _hasLiveOwnership(DownloadTransportSnapshot? snapshot) =>
-    snapshot != null && !snapshot.isFinal &&
+    snapshot != null &&
+    !snapshot.isFinal &&
     snapshot.status != DownloadTransportStatus.missing;
 
 bool _isRecoverable(DownloadTransportSnapshot snapshot) {
@@ -3606,14 +3885,23 @@ bool _isRecoverable(DownloadTransportSnapshot snapshot) {
 }
 
 DownloadTransportSnapshot _snapshotWithPages(
-  DownloadTransportSnapshot snapshot, int completedPages, int? totalPages,
+  DownloadTransportSnapshot snapshot,
+  int completedPages,
+  int? totalPages,
 ) => DownloadTransportSnapshot(
-  taskId: snapshot.taskId, status: snapshot.status, progress: snapshot.progress,
-  completedPages: completedPages, totalPages: totalPages,
-  transferredBytes: snapshot.transferredBytes, totalBytes: snapshot.totalBytes,
-  networkSpeedMBps: snapshot.networkSpeedMBps, timeRemaining: snapshot.timeRemaining,
-  configuredConnections: snapshot.configuredConnections, activeConnections: snapshot.activeConnections,
-  failureCategory: snapshot.failureCategory, failureMessage: snapshot.failureMessage,
+  taskId: snapshot.taskId,
+  status: snapshot.status,
+  progress: snapshot.progress,
+  completedPages: completedPages,
+  totalPages: totalPages,
+  transferredBytes: snapshot.transferredBytes,
+  totalBytes: snapshot.totalBytes,
+  networkSpeedMBps: snapshot.networkSpeedMBps,
+  timeRemaining: snapshot.timeRemaining,
+  configuredConnections: snapshot.configuredConnections,
+  activeConnections: snapshot.activeConnections,
+  failureCategory: snapshot.failureCategory,
+  failureMessage: snapshot.failureMessage,
 );
 
 DownloadTransportSnapshot _snapshotWithPresentationBytes(
@@ -3653,11 +3941,13 @@ DownloadTransportSnapshot _snapshotWithStatus(
     progress: snapshot.progress,
     completedPages: snapshot.completedPages,
     totalPages: snapshot.totalPages,
-    transferredBytes: snapshot.completedPages != null ? snapshot.transferredBytes : _presentationTransferredBytes(
-      transferredBytes: snapshot.transferredBytes,
-      totalBytes: snapshot.totalBytes,
-      progress: snapshot.progress,
-    ),
+    transferredBytes: snapshot.completedPages != null
+        ? snapshot.transferredBytes
+        : _presentationTransferredBytes(
+            transferredBytes: snapshot.transferredBytes,
+            totalBytes: snapshot.totalBytes,
+            progress: snapshot.progress,
+          ),
     totalBytes: snapshot.totalBytes,
     networkSpeedMBps: snapshot.networkSpeedMBps,
     timeRemaining: snapshot.timeRemaining,

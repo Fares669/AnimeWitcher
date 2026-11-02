@@ -100,6 +100,49 @@ class _Active extends ActiveProvider {
 }
 
 void main() {
+  testWidgets('same URL details use source-scoped controller', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(590, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final storage = _Storage();
+    final native = MultimediaItem(
+      title: 'Native',
+      url: 'same',
+      posterUrl: '',
+      contentType: MultimediaContentType.anime,
+      description: 'Native-only synopsis',
+    );
+    final rift = MultimediaItem(
+      title: 'Rift',
+      url: 'same',
+      posterUrl: '',
+      provider: 'com.animerift.provider',
+      contentType: MultimediaContentType.anime,
+      description: 'Rift-only synopsis',
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          storageServiceProvider.overrideWithValue(storage),
+          libraryProvider.overrideWith(_EmptyLibrary.new),
+          detailsControllerProvider(native.url)
+              .overrideWith(() => _NoEpisodeDetailsController(native)),
+          detailsControllerProvider(detailsControllerKey(rift))
+              .overrideWith(() => _NoEpisodeDetailsController(rift)),
+        ],
+        child: MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          theme: ThemeData.dark(),
+          home: DetailsScreen(item: rift),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.text('Rift-only synopsis'), findsOneWidget);
+    expect(find.text('Native-only synopsis'), findsNothing);
+  });
+
   testWidgets('genre navigation uses original item provider', (tester) async {
     await tester.binding.setSurfaceSize(const Size(590, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));

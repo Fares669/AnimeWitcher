@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:collection/collection.dart';
 import 'package:background_downloader/background_downloader.dart';
+
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/utils/episode_label.dart';
 import '../../../core/account/account_providers.dart';
@@ -13,18 +14,50 @@ import '../../../core/extensions/item_provider_resolution.dart';
 import '../../../core/extensions/extension_manager.dart';
 
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
+import 'package:animewitcher/core/storage/provider_local_library.dart'
+    show animeRiftProviderId;
+
 import '../../library/presentation/history_provider.dart';
 import 'playback_launcher.dart';
 import '../../library/presentation/downloads_provider.dart';
 import '../../../core/providers/anime_data_source_settings_provider.dart';
 import '../../../core/providers/episode_sort_provider.dart';
 import '../../../core/services/anizip_service.dart';
+import '../../../core/services/download_v2/download_v2_models.dart';
 import 'downloaded_file_provider.dart';
 import 'details_item_merge.dart';
 import '../../../core/network/next_airing_timeout.dart';
 import '../../../core/utils/app_utils.dart';
 
 part 'details_controller.g.dart';
+
+/// In-memory controller scope; native URLs remain compatible with legacy views.
+String detailsControllerKey(MultimediaItem item) =>
+    item.provider == animeRiftProviderId
+    ? '\u0000animerift:${item.url}'
+    : item.url;
+
+/// Download notifications must only refresh cards owned by the same provider.
+Set<String> activeVideoDownloadUrlsForItem(
+  List<DownloadItem> downloads,
+  MultimediaItem details,
+) {
+  final urls = <String>{};
+  for (final download in downloads) {
+    if (download.mediaKind != DownloadMediaKind.videoEpisode ||
+        !sameDownloadProvider(download.item, details) ||
+        download.item.url.trim() != details.url.trim() ||
+        download.status == TaskStatus.complete ||
+        download.status == TaskStatus.canceled) {
+      continue;
+    }
+    final trackingUrl = download.trackingUrl.trim();
+    if (trackingUrl.isNotEmpty) urls.add(trackingUrl);
+    final episodeUrl = download.episode?.url.trim() ?? '';
+    if (episodeUrl.isNotEmpty) urls.add(episodeUrl);
+  }
+  return urls;
+}
 
 String episodeSelectionKey(Episode episode) {
   return [
@@ -151,26 +184,13 @@ class DetailsController extends _$DetailsController {
       final details = state.details.asData?.value;
       if (details == null) return;
 
-      Set<String> activeTrackingUrls(List<DownloadItem> items) {
-        final result = <String>{};
-        for (final item in items) {
-          if (item.status == TaskStatus.complete ||
-              item.status == TaskStatus.canceled) {
-            continue;
-          }
-          final trackingUrl = item.trackingUrl.trim();
-          if (trackingUrl.isNotEmpty) result.add(trackingUrl);
-          final episodeUrl = item.episode?.url.trim() ?? '';
-          if (episodeUrl.isNotEmpty) result.add(episodeUrl);
-        }
-        return result;
-      }
-
-      final previousSet = activeTrackingUrls(
+      final previousSet = activeVideoDownloadUrlsForItem(
         prev?.value ?? const <DownloadItem>[],
+        details,
       );
-      final currentSet = activeTrackingUrls(
+      final currentSet = activeVideoDownloadUrlsForItem(
         next.value ?? const <DownloadItem>[],
+        details,
       );
       final finishingUrls = previousSet.difference(currentSet);
 
@@ -241,9 +261,7 @@ class DetailsController extends _$DetailsController {
     final nextAscending = !state.isAscending;
     state = state.copyWith(isAscending: nextAscending);
 
-    ref
-        .read(episodeSortAscendingProvider.notifier)
-        .setAscending(nextAscending);
+    ref.read(episodeSortAscendingProvider.notifier).setAscending(nextAscending);
   }
 
   void toggleEpisodeSelection(Episode episode) {
@@ -301,8 +319,15 @@ class DetailsController extends _$DetailsController {
       await watchRepo.setManyWatched(mainUrl, selectedEpisodes, watched);
       await ref.read(continueWatchingProvider.notifier).remove(mainUrl);
     } else {
-      await setEpisodesWatchedFor(watchRepo, contextItem, selectedEpisodes, watched);
-      await ref.read(continueWatchingProvider.notifier).removeForItem(contextItem);
+      await setEpisodesWatchedFor(
+        watchRepo,
+        contextItem,
+        selectedEpisodes,
+        watched,
+      );
+      await ref
+          .read(continueWatchingProvider.notifier)
+          .removeForItem(contextItem);
     }
 
     if (!ref.mounted) {
@@ -315,11 +340,7 @@ class DetailsController extends _$DetailsController {
     if (currentDetails != null) {
       final currentEpisodes =
           state.episodes.asData?.value ?? currentDetails.episodes;
-      _processEpisodes(
-        currentEpisodes,
-        currentDetails,
-        isInitial: false,
-      );
+      _processEpisodes(currentEpisodes, currentDetails, isInitial: false);
     }
   }
 
@@ -392,7 +413,9 @@ class DetailsController extends _$DetailsController {
       }
 
       final provider = resolveItemProvider(
-        manager.getAllProviders(), item.provider, active,
+        manager.getAllProviders(),
+        item.provider,
+        active,
       );
       if (provider == null) {
         throw Exception('لم يتم العثور على مزود التشغيل.');
@@ -417,12 +440,7 @@ class DetailsController extends _$DetailsController {
           _loadTrailersInBackground(provider, item.url, item, generation),
         );
         unawaited(
-          _loadNextAiringInBackground(
-            provider,
-            item.url,
-            item,
-            generation,
-          ),
+          _loadNextAiringInBackground(provider, item.url, item, generation),
         );
       }
     } catch (error, stackTrace) {
@@ -450,7 +468,8 @@ class DetailsController extends _$DetailsController {
 
     final manager = ref.read(extensionManagerProvider.notifier);
     final provider = resolveItemProvider(
-      manager.getAllProviders(), item.provider,
+      manager.getAllProviders(),
+      item.provider,
       _lastEpisodesProvider ?? ref.read(activeProviderProvider),
     );
     if (provider == null) return;
@@ -562,9 +581,7 @@ class DetailsController extends _$DetailsController {
         details: AsyncData(rendered),
         basicDetailsResolved: true,
         item: rendered,
-        cast: independent
-            ? null
-            : AsyncData(rendered.cast ?? const <Actor>[]),
+        cast: independent ? null : AsyncData(rendered.cast ?? const <Actor>[]),
         trailers: independent
             ? null
             : AsyncData(rendered.trailers ?? const <Trailer>[]),
@@ -573,9 +590,7 @@ class DetailsController extends _$DetailsController {
             : AsyncData(rendered.related ?? const <MultimediaItem>[]),
         recommendations: independent
             ? null
-            : AsyncData(
-                rendered.recommendations ?? const <MultimediaItem>[],
-              ),
+            : AsyncData(rendered.recommendations ?? const <MultimediaItem>[]),
       );
 
       final inlineEpisodes = fetchedItem.episodes ?? const <Episode>[];
@@ -590,7 +605,6 @@ class DetailsController extends _$DetailsController {
           generation,
         );
       }
-
     } catch (error, stackTrace) {
       if (!ref.mounted || generation != _loadGeneration) return;
       state = state.copyWith(
@@ -635,29 +649,20 @@ class DetailsController extends _$DetailsController {
       item: merged,
     );
     unawaited(
-      reconcileEpisodeWatchFor(ref.read(episodeWatchRepositoryProvider), current, sorted)
-          .catchError((Object error) {
-            if (kDebugMode) {
-              debugPrint(
-                '[DetailsController] Watched-state sync deferred: $error',
-              );
-            }
-          }),
+      reconcileEpisodeWatchFor(
+        ref.read(episodeWatchRepositoryProvider),
+        current,
+        sorted,
+      ).catchError((Object error) {
+        if (kDebugMode) {
+          debugPrint('[DetailsController] Watched-state sync deferred: $error');
+        }
+      }),
     );
     unawaited(
-      _loadEpisodeMetadataInBackground(
-        provider,
-        url,
-        merged,
-        generation,
-      ),
+      _loadEpisodeMetadataInBackground(provider, url, merged, generation),
     );
-    unawaited(
-      _enrichEpisodesWithAniZip(
-        merged,
-        generation,
-      ),
-    );
+    unawaited(_enrichEpisodesWithAniZip(merged, generation));
   }
 
   Future<void> _loadEpisodesInBackground(
@@ -670,13 +675,7 @@ class DetailsController extends _$DetailsController {
       final fetchedEpisodes = await provider.getEpisodes(url);
       if (!ref.mounted || generation != _loadGeneration) return;
       _episodesFetched = true;
-      _applyEpisodes(
-        provider,
-        url,
-        contextItem,
-        fetchedEpisodes,
-        generation,
-      );
+      _applyEpisodes(provider, url, contextItem, fetchedEpisodes, generation);
     } catch (error, stackTrace) {
       if (!ref.mounted || generation != _loadGeneration) return;
       state = state.copyWith(
@@ -961,15 +960,21 @@ class DetailsController extends _$DetailsController {
       _processEpisodes(enriched, merged, isInitial: false);
 
       unawaited(
-        reconcileEpisodeWatchFor(ref.read(episodeWatchRepositoryProvider), contextItem, enriched)
-            .catchError((Object error) {
-              if (kDebugMode) {
-                debugPrint('[DetailsController] AniZip watch sync deferred: $error');
-              }
-            }),
+        reconcileEpisodeWatchFor(
+          ref.read(episodeWatchRepositoryProvider),
+          contextItem,
+          enriched,
+        ).catchError((Object error) {
+          if (kDebugMode) {
+            debugPrint(
+              '[DetailsController] AniZip watch sync deferred: $error',
+            );
+          }
+        }),
       );
     } catch (error) {
-      if (kDebugMode) debugPrint('[DetailsController] AniZip enrichment skipped: $error');
+      if (kDebugMode)
+        debugPrint('[DetailsController] AniZip enrichment skipped: $error');
     }
   }
 
@@ -1002,15 +1007,17 @@ class DetailsController extends _$DetailsController {
       }
 
       var changed = false;
-      final enriched = currentEpisodes.map((episode) {
-        final match = byUrl[episode.url];
-        if (match == null) return episode;
-        final merged = _mergeEpisodeMetadata(episode, match);
-        if (merged.posterUrl != episode.posterUrl) {
-          changed = true;
-        }
-        return merged;
-      }).toList(growable: false);
+      final enriched = currentEpisodes
+          .map((episode) {
+            final match = byUrl[episode.url];
+            if (match == null) return episode;
+            final merged = _mergeEpisodeMetadata(episode, match);
+            if (merged.posterUrl != episode.posterUrl) {
+              changed = true;
+            }
+            return merged;
+          })
+          .toList(growable: false);
       if (!changed || !ref.mounted) return;
 
       final canPreserveSelectedSeason = enriched.any(
@@ -1057,8 +1064,7 @@ class DetailsController extends _$DetailsController {
     if (provider == null || url == null || currentItem == null) return;
 
     final keepExistingEpisodes =
-        forceReload &&
-        (state.episodes.asData?.value.isNotEmpty ?? false);
+        forceReload && (state.episodes.asData?.value.isNotEmpty ?? false);
     if (!keepExistingEpisodes) {
       state = state.copyWith(episodes: const AsyncLoading());
     }
@@ -1118,11 +1124,13 @@ class DetailsController extends _$DetailsController {
     // Normalize at the controller boundary so display, playback, downloads,
     // watch history, and selection all use the same Season 1 identity.
     var normalizedEpisodesChanged = false;
-    final normalizedEpisodes = episodes.map((episode) {
-      if (episode.season == 1) return episode;
-      normalizedEpisodesChanged = true;
-      return episode.copyWith(season: 1);
-    }).toList(growable: false);
+    final normalizedEpisodes = episodes
+        .map((episode) {
+          if (episode.season == 1) return episode;
+          normalizedEpisodesChanged = true;
+          return episode.copyWith(season: 1);
+        })
+        .toList(growable: false);
 
     final Map<int, List<Episode>> seasonMap = {1: normalizedEpisodes};
     Episode? targetEpisode;
@@ -1158,10 +1166,12 @@ class DetailsController extends _$DetailsController {
         for (final episode in normalizedEpisodes)
           (serverName: episode.serverName, name: episode.name),
       ]);
-      final hasSub =
-          normalizedEpisodes.any((e) => e.dubStatus == DubStatus.subbed);
-      final hasDub =
-          normalizedEpisodes.any((e) => e.dubStatus == DubStatus.dubbed);
+      final hasSub = normalizedEpisodes.any(
+        (e) => e.dubStatus == DubStatus.subbed,
+      );
+      final hasDub = normalizedEpisodes.any(
+        (e) => e.dubStatus == DubStatus.dubbed,
+      );
       // Keep مترجم/مدبلج movie-style catalogs unfiltered so both rows show.
       if (hasSub && hasDub && !isStandaloneCatalog) {
         selectedDubStatus = DubStatus.subbed;
@@ -1203,12 +1213,14 @@ class DetailsController extends _$DetailsController {
   }) async {
     if (specificEpisode != null && overrideUrl == null) {
       // A known episode can resolve its saved file before optional catalog IO.
-      await ref.read(playbackLauncherProvider).play(
-        context,
-        specificEpisode.url,
-        baseItem: state.details.asData?.value ?? details,
-        episode: specificEpisode,
-      );
+      await ref
+          .read(playbackLauncherProvider)
+          .play(
+            context,
+            specificEpisode.url,
+            baseItem: state.details.asData?.value ?? details,
+            episode: specificEpisode,
+          );
       return;
     }
     final playLocalWithoutCatalog = await _canPlayDownloadedWithoutCatalog(
