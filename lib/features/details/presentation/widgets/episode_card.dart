@@ -160,23 +160,20 @@ class EpisodeCard extends HookConsumerWidget {
     final hasPrimaryLabel = episodeNumberLabel.isNotEmpty;
     final hasServerName = episodeTitle.isNotEmpty;
     final historyRepo = ref.watch(historyRepositoryProvider);
-    final historyItem = ref.watch(
-      watchHistoryProvider.select(
-        (list) => list.whereType<HistoryItem>().firstWhereOrNull(
-          (h) => h.item.url == parentItem.url,
-        ),
-      ),
+    ref.watch(watchHistoryProvider);
+    final historyItem = historyForItem(historyRepo, parentItem).firstWhereOrNull(
+      (h) => h.item.url == parentItem.url && sameDownloadProvider(h.item, parentItem),
     );
 
-    final epPos = historyRepo.getEpisodePosition(
-      episode.url,
-      mainUrl: parentItem.url,
+    final epPos = historyPositionForItem(historyRepo,
+      parentItem,
+      episodeUrl: episode.url,
       season: episode.season,
       episode: episode.episode,
     );
-    final epDur = historyRepo.getEpisodeDuration(
-      episode.url,
-      mainUrl: parentItem.url,
+    final epDur = historyDurationForItem(historyRepo,
+      parentItem,
+      episodeUrl: episode.url,
       season: episode.season,
       episode: episode.episode,
     );
@@ -186,11 +183,8 @@ class EpisodeCard extends HookConsumerWidget {
     final episodeWatchRepo = ref.watch(episodeWatchRepositoryProvider);
 
     final double progress = epDur > 0 ? (epPos / epDur).clamp(0.0, 1.0) : 0.0;
-    final explicitWatchState = episodeWatchRepo.getExplicitState(
-      parentItem.url,
-      episode,
-    );
-    final isWatched = episodeWatchRepo.isWatched(parentItem.url, episode);
+    final explicitWatchState = episodeExplicitStateFor(episodeWatchRepo, parentItem, episode);
+    final isWatched = episodeIsWatchedFor(episodeWatchRepo, parentItem, episode);
     final displayedProgress = isWatched ? 1.0 : progress;
 
     String? statusBadge;

@@ -4,6 +4,7 @@ import 'package:animewitcher/core/account/animewitcher_character_models.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
 import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
 import 'package:animewitcher/core/storage/settings_repository.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
@@ -143,6 +144,18 @@ Future<void> _flush() async {
 }
 
 void main() {
+  test('Rift search explains that its official connection is unavailable', () async {
+    final provider = AnimeRiftProvider();
+    final container = ProviderContainer(overrides: [
+      extensionManagerProvider.overrideWith(() => _FakeExtensionManager(provider)),
+      activeProviderProvider.overrideWith(() => _TestActiveProvider(provider)),
+    ]);
+    addTearDown(container.dispose);
+    container.read(searchPagedResultsProvider);
+    await _flush();
+    expect(container.read(searchPagedResultsProvider).errorMessage, contains('الاتصال الرسمية'));
+  });
+
   test(
     'filter options follow anime selection without changing manga or animation',
     () async {

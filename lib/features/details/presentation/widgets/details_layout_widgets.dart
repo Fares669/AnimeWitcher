@@ -72,13 +72,13 @@ String detailsPlayActionLabel(
   );
 
   final position = targetEpisode != null
-      ? historyRepo.getEpisodePosition(
-          targetEpisode.url,
-          mainUrl: item.url,
+      ? historyPositionForItem(historyRepo,
+          item,
+          episodeUrl: targetEpisode.url,
           season: targetEpisode.season,
           episode: targetEpisode.episode,
         )
-      : historyRepo.getPosition(item.url);
+      : historyPositionForItem(historyRepo, item);
 
   final label = position > 5000 ? l10n.resume : l10n.play;
   if (targetEpisode == null || isMovie) return label;
@@ -181,21 +181,21 @@ class DetailsActionButtons extends HookConsumerWidget {
     );
 
     final pos = targetEpisode != null
-        ? historyRepo.getEpisodePosition(
-            targetEpisode.url,
-            mainUrl: item.url,
+        ? historyPositionForItem(historyRepo,
+            item,
+            episodeUrl: targetEpisode.url,
             season: targetEpisode.season,
             episode: targetEpisode.episode,
           )
-        : historyRepo.getPosition(item.url);
+        : historyPositionForItem(historyRepo, item);
     final dur = targetEpisode != null
-        ? historyRepo.getEpisodeDuration(
-            targetEpisode.url,
-            mainUrl: item.url,
+        ? historyDurationForItem(historyRepo,
+            item,
+            episodeUrl: targetEpisode.url,
             season: targetEpisode.season,
             episode: targetEpisode.episode,
           )
-        : historyRepo.getDuration(item.url);
+        : historyDurationForItem(historyRepo, item);
 
     final playLabel = detailsPlayActionLabel(
       context,

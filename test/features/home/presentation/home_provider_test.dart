@@ -1,6 +1,7 @@
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/features/home/presentation/home_provider.dart';
 import 'package:animewitcher/features/home/presentation/home_state.dart';
@@ -79,6 +80,19 @@ Future<void> _flush() async {
 }
 
 void main() {
+  test('Rift displays a specific unavailable state when official access is not configured', () async {
+    final container = ProviderContainer(overrides: [
+      activeProviderProvider.overrideWithValue(AnimeRiftProvider()),
+      extensionManagerProvider.overrideWith(_EmptyManager.new),
+    ]);
+    addTearDown(container.dispose);
+    container.listen<HomeState>(homeDataProvider, (_, __) {});
+    await _flush();
+    final state = container.read(homeDataProvider);
+    expect(state, isA<HomeProviderUnavailable>());
+    expect((state as HomeProviderUnavailable).message, contains('الاتصال الرسمية'));
+  });
+
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test('keeps loaded home data when the account revision bumps', () async {

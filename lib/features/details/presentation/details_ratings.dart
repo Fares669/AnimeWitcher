@@ -77,6 +77,7 @@ class AnimeDetailsRatings {
 
   factory AnimeDetailsRatings.fromItem(MultimediaItem item) {
     final data = item.syncData ?? const <String, String>{};
+    final isWitcherItem = isAnimeWitcherAccountItem(item);
     final malId = _firstNonEmpty(<String?>[
       data['malId'],
       data['mal_id'],
@@ -90,8 +91,10 @@ class AnimeDetailsRatings {
     ]);
     return AnimeDetailsRatings(
       animeId: animeWitcherAnimeIdFromItem(item),
-      witcherScore: _positiveScore(data['awScore']),
-      witcherVoteCount: _positiveInt(data['awScoreCount']),
+      witcherScore: isWitcherItem ? _positiveScore(data['awScore']) : null,
+      witcherVoteCount: isWitcherItem
+          ? _positiveInt(data['awScoreCount'])
+          : null,
       malMean: _positiveScore(data['awMalScore']),
       malScoringUsers: _nonNegativeInt(data['awMalScoringUsers']),
       malId: malId,
@@ -100,7 +103,7 @@ class AnimeDetailsRatings {
         data['awImdbScore'] ?? data['imdbRate'] ?? data['imdb_rate'],
       ),
       isUnaired: _isUnaired(item, data),
-      reviewsClosed: _isTruthy(data['awReviewsClosed']),
+      reviewsClosed: isWitcherItem && _isTruthy(data['awReviewsClosed']),
     );
   }
 }

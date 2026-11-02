@@ -9,6 +9,7 @@ import '../../../../core/storage/storage_service.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/domain/entity/manga.dart';
 import '../../../../core/extensions/base_provider.dart';
+import '../../../../core/extensions/providers/anime_rift_provider.dart';
 
 import './home_state.dart';
 
@@ -147,6 +148,10 @@ class HomeData extends _$HomeData {
         news: previous?.news ?? const <NewsItem>[],
         latestManga: previous?.latestManga ?? const <MangaLatestChapter>[],
       );
+    } on AnimeRiftAccessUnavailable catch (error) {
+      if (generation != _fetchGeneration) return;
+      state = HomeProviderUnavailable(error.toString());
+      return;
     } catch (e) {
       if (generation != _fetchGeneration) return;
       if (preserveCurrent) return;

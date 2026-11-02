@@ -11,6 +11,7 @@ import '../../../../core/account/animewitcher_character_models.dart';
 import '../../../../core/extensions/extension_manager.dart';
 import '../../../../core/extensions/base_provider.dart';
 import '../../../../core/extensions/providers/animewitcher_native_provider.dart';
+import '../../../../core/extensions/providers/anime_rift_provider.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import 'search_domain.dart';
 
@@ -706,7 +707,7 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
           isLoading: false,
           isLoadingMore: false,
           hasMore: false,
-          errorMessage: hasCards ? null : 'Unable to load search results.',
+          errorMessage: hasCards ? null : (e is AnimeRiftAccessUnavailable ? e.toString() : 'Unable to load search results.'),
           clearError: hasCards,
         );
       }

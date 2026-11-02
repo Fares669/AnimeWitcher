@@ -17,6 +17,11 @@ class HomeOffline extends HomeState {
   const HomeOffline();
 }
 
+class HomeProviderUnavailable extends HomeState {
+  final String message;
+  const HomeProviderUnavailable(this.message);
+}
+
 class HomeError extends HomeState {
   final String message;
   const HomeError(this.message);

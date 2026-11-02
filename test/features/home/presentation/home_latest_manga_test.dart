@@ -4,6 +4,7 @@ import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
 import 'package:animewitcher/features/home/presentation/home_provider.dart';
 import 'package:animewitcher/features/home/presentation/home_state.dart';
 import 'package:dio/dio.dart';
@@ -102,6 +103,25 @@ Future<void> _flush() async {
 }
 
 void main() {
+  test('manga chapters remain available while Rift connection is unavailable', () async {
+    final manga = _SlowMangaProvider();
+    final rift = AnimeRiftProvider();
+    final container = ProviderContainer(overrides: [
+      activeProviderProvider.overrideWithValue(rift),
+      extensionManagerProvider.overrideWith(() => _Manager(manga, rift)),
+    ]);
+    addTearDown(container.dispose);
+    container.listen<HomeState>(homeDataProvider, (_, __) {});
+    await _flush();
+    expect(container.read(homeDataProvider), isA<HomeProviderUnavailable>());
+    manga.manga.complete(MangaLatestChapterPage(items: [
+      MangaLatestChapter(manga: MultimediaItem(title: 'Manga', url: '/manga', posterUrl: ''),
+        chapter: const MangaChapter(id: '1', mangaId: 'm1', url: '/chapter', name: '1')),
+    ], nextOffset: 1, hasMore: false));
+    await _flush();
+    expect((container.read(homeDataProvider) as HomeProviderUnavailable).latestManga, hasLength(1));
+  });
+
   test('latest manga stays on its own source when anime provider changes', () async {
     final manga = _SlowMangaProvider();
     final anime = _AnimeOnlyProvider();

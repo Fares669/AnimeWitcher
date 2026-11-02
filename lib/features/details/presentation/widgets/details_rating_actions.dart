@@ -51,13 +51,12 @@ Future<AnimeRatingOutcome> openAnimeRatingDialog(
   required AnimeDetailsRatings ratings,
   int initialRating = 0,
 }) async {
+  if (!ratings.canRate) return _unchanged;
   final service = ref.read(animeWitcherAccountServiceProvider);
   if (!service.isSignedIn) {
     _toast(ref, kRateLoginRequiredToast);
     return _unchanged;
   }
-  if (!ratings.canRate) return _unchanged;
-
   final selected = await showAnimeRatingDialog(
     context,
     initialRating: initialRating,
@@ -93,15 +92,17 @@ Future<void> openAnimeReviews(
   required MultimediaItem item,
   required AnimeDetailsRatings ratings,
 }) async {
+  final target = animeWitcherAnimeReviewTarget(item);
+  if (target == null) return;
   if (ratings.reviewsClosed) {
     _toast(ref, kReviewsClosedToast);
     return;
   }
 
   final service = ref.read(animeWitcherAccountServiceProvider);
-  if (service.isSignedIn && ratings.animeId.isNotEmpty) {
+  if (service.isSignedIn && target.animeId?.isNotEmpty == true) {
     try {
-      final closed = await service.isAnimeReviewsClosed(ratings.animeId);
+      final closed = await service.isAnimeReviewsClosed(target.animeId!);
       if (!context.mounted) return;
       if (closed) {
         _toast(ref, kReviewsClosedToast);
@@ -112,8 +113,7 @@ Future<void> openAnimeReviews(
     }
   }
 
-  final target = animeWitcherAnimeReviewTarget(item);
-  if (target == null || !context.mounted) return;
+  if (!context.mounted) return;
   await Navigator.of(context).push(
     MaterialPageRoute<void>(
       builder: (_) => AnimeWitcherCommentsScreen(target: target),
@@ -196,17 +196,15 @@ Widget _ratingDialogBody(
         Text(
           'قيّم',
           textAlign: TextAlign.center,
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+          style: Theme.of(context).textTheme.titleMedium
+              ?.copyWith(fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 10),
         Text(
           '$rating /10',
           textAlign: TextAlign.center,
-          style: Theme.of(
-            context,
-          ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+          style: Theme.of(context).textTheme.headlineSmall
+              ?.copyWith(fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 12),
         FittedBox(

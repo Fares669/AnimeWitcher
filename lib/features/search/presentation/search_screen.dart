@@ -13,6 +13,7 @@ import '../../../core/router/app_router.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/providers/anime_rift_provider.dart';
 import '../../home/presentation/widgets/provider_search_filter_dialog.dart';
 import '../../characters/presentation/character_card.dart';
 import '../../characters/presentation/character_details_screen.dart';
@@ -859,6 +860,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       return belowHeader(_buildLoadingIndicator(context));
     }
     if (allResults.isEmpty && state.errorMessage != null) {
+      if (state.errorMessage == const AnimeRiftAccessUnavailable().toString()) {
+        return belowHeader(Center(child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(state.errorMessage!, textAlign: TextAlign.center),
+        )));
+      }
       return belowHeader(
         RecoverableNetworkState(
           onRetry: _retrySearch,

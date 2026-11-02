@@ -467,6 +467,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         isWidescreen: isWidescreen,
       ),
       HomeOffline() => _buildErrorState(context, ref),
+      HomeProviderUnavailable(:final message) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(message, textAlign: TextAlign.center),
+        ),
+      ),
       HomeError() => _buildErrorState(context, ref),
       HomeSuccess(:final data, news: final homeNews, :final latestManga) =>
         _withGradientEdgeHint(

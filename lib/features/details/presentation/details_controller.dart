@@ -13,6 +13,7 @@ import '../../../core/extensions/item_provider_resolution.dart';
 import '../../../core/extensions/extension_manager.dart';
 
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
+import 'package:animewitcher/core/storage/provider_local_library.dart';
 import '../../library/presentation/history_provider.dart';
 import 'playback_launcher.dart';
 import '../../library/presentation/downloads_provider.dart';
@@ -295,13 +296,19 @@ class DetailsController extends _$DetailsController {
       return;
     }
 
-    await ref
-        .read(episodeWatchRepositoryProvider)
-        .setManyWatched(mainUrl, selectedEpisodes, watched);
-
-    await ref
-        .read(continueWatchingProvider.notifier)
-        .remove(mainUrl);
+    final contextItem = state.item;
+    final watchRepo = ref.read(episodeWatchRepositoryProvider);
+    if (contextItem == null) {
+      await watchRepo.setManyWatched(mainUrl, selectedEpisodes, watched);
+      await ref.read(continueWatchingProvider.notifier).remove(mainUrl);
+    } else {
+      await setEpisodesWatchedFor(watchRepo, contextItem, selectedEpisodes, watched);
+      if (contextItem.provider == animeRiftProviderId) {
+        await ref.read(continueWatchingProvider.notifier).removeForItem(contextItem);
+      } else {
+        await ref.read(continueWatchingProvider.notifier).remove(mainUrl);
+      }
+    }
 
     if (!ref.mounted) {
       return;
@@ -633,9 +640,7 @@ class DetailsController extends _$DetailsController {
       item: merged,
     );
     unawaited(
-      ref
-          .read(episodeWatchRepositoryProvider)
-          .reconcileWithCloud(url, sorted)
+      reconcileEpisodeWatchFor(ref.read(episodeWatchRepositoryProvider), current, sorted)
           .catchError((Object error) {
             if (kDebugMode) {
               debugPrint(
@@ -961,9 +966,7 @@ class DetailsController extends _$DetailsController {
       _processEpisodes(enriched, merged, isInitial: false);
 
       unawaited(
-        ref
-            .read(episodeWatchRepositoryProvider)
-            .reconcileWithCloud(contextItem.url, enriched)
+        reconcileEpisodeWatchFor(ref.read(episodeWatchRepositoryProvider), contextItem, enriched)
             .catchError((Object error) {
               if (kDebugMode) {
                 debugPrint('[DetailsController] AniZip watch sync deferred: $error');
@@ -1147,10 +1150,10 @@ class DetailsController extends _$DetailsController {
     // Prefer the smallest unwatched episode. If everything is watched, keep
     // the play button on the highest watched episode instead of jumping back.
     targetEpisode = orderedEpisodes.firstWhereOrNull(
-      (episode) => !episodeWatchRepo.isWatched(contextItem.url, episode),
+      (episode) => !episodeIsWatchedFor(episodeWatchRepo, contextItem, episode),
     );
     targetEpisode ??= orderedEpisodes.lastWhereOrNull(
-      (episode) => episodeWatchRepo.isWatched(contextItem.url, episode),
+      (episode) => episodeIsWatchedFor(episodeWatchRepo, contextItem, episode),
     );
     targetEpisode ??= orderedEpisodes.first;
 
