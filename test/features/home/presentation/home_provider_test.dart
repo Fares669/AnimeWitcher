@@ -68,6 +68,11 @@ class _FakeHomeSource extends AnimeWitcherProvider {
   }
 }
 
+class _EmptyManager extends ExtensionManager {
+  @override
+  List<AnimeWitcherProvider> build() => [];
+}
+
 Future<void> _flush() async {
   await Future<void>.delayed(Duration.zero);
   await Future<void>.delayed(Duration.zero);
@@ -79,7 +84,7 @@ void main() {
   test('keeps loaded home data when the account revision bumps', () async {
     final source = _FakeHomeSource();
     final container = ProviderContainer(
-      overrides: [activeProviderProvider.overrideWithValue(source)],
+      overrides: [activeProviderProvider.overrideWithValue(source), extensionManagerProvider.overrideWith(_EmptyManager.new)],
     );
     addTearDown(container.dispose);
 
@@ -104,7 +109,7 @@ void main() {
   test('pull-to-refresh does not flash the home loading shimmer', () async {
     final source = _FakeHomeSource(homeDelay: const Duration(milliseconds: 20));
     final container = ProviderContainer(
-      overrides: [activeProviderProvider.overrideWithValue(source)],
+      overrides: [activeProviderProvider.overrideWithValue(source), extensionManagerProvider.overrideWith(_EmptyManager.new)],
     );
     addTearDown(container.dispose);
 
@@ -125,7 +130,7 @@ void main() {
   test('home data stays cached after the home tab unsubscribes', () async {
     final source = _FakeHomeSource();
     final container = ProviderContainer(
-      overrides: [activeProviderProvider.overrideWithValue(source)],
+      overrides: [activeProviderProvider.overrideWithValue(source), extensionManagerProvider.overrideWith(_EmptyManager.new)],
     );
     addTearDown(container.dispose);
 

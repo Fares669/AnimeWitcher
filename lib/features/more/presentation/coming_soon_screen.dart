@@ -1,4 +1,6 @@
 import 'more_sidebar_shell.dart';
+import 'provider_unsupported_page.dart';
+import '../../../core/extensions/extension_manager.dart';
 
 import 'dart:async';
 
@@ -42,7 +44,9 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
 
   Future<void> _loadNext() async {
     if (_pager.loading || !_pager.hasMore) return;
-    final provider = _provider ??= ref.nativeProvider;
+    final provider = _provider ??= (ref.read(activeProviderProvider) is AnimeWitcherNativeProvider
+        ? ref.read(activeProviderProvider) as AnimeWitcherNativeProvider
+        : null);
     if (provider == null) {
       if (mounted) {
         setState(() => _pager.error = nativeProviderUnavailable());
@@ -80,6 +84,15 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(activeProviderProvider, (previous, next) {
+      if (previous?.packageName == next?.packageName) return;
+      _provider = null;
+      if (next is AnimeWitcherNativeProvider) unawaited(_refresh());
+    });
+    if (ref.watch(activeProviderProvider) is! AnimeWitcherNativeProvider) {
+      return const ProviderUnsupportedPage(title: 'القادم قريبًا');
+    }
+
     ref.listen<int>(accountDataRevisionProvider, (previous, next) {
       if (previous == next) return;
       unawaited(_refresh());

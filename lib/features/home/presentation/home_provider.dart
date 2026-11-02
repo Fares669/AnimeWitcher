@@ -128,7 +128,14 @@ class HomeData extends _$HomeData {
     // rows are in, and the other two join it when they land. Held back, the
     // page opened only when the slowest of the three answered.
     final news = _orNull(() => activeProvider.getHomeNewsPage(limit: 10));
-    final manga = _orNull(() => activeProvider.getLatestMangaPage(limit: 20));
+    final mangaProvider = activeProvider.supportedTypes.contains(ProviderType.manga)
+        ? activeProvider
+        : ref.read(extensionManagerProvider).where(
+            (provider) => provider.supportedTypes.contains(ProviderType.manga),
+          ).firstOrNull;
+    final manga = mangaProvider == null
+        ? Future<MangaLatestChapterPage?>.value(null)
+        : _orNull(() => mangaProvider.getLatestMangaPage(limit: 20));
     final previous = state is HomeSuccess ? state as HomeSuccess : null;
 
     try {

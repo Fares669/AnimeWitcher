@@ -1,6 +1,8 @@
 /// V1.4.8 schedule integration: each broadcast day loads independently with
 /// bounded pages, pull-to-refresh, request cancellation, and safe tab cleanup.
 import 'more_sidebar_shell.dart';
+import 'provider_unsupported_page.dart';
+import '../../../core/extensions/extension_manager.dart';
 
 import 'dart:async';
 
@@ -13,7 +15,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
-import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
@@ -113,7 +114,9 @@ class _BroadcastScheduleScreenState
   Future<void> _loadDay(String day, {required bool refresh}) async {
     final previous = _dayStates[day] ?? const _BroadcastScheduleDayState();
     if (!refresh && (previous.loading || !previous.hasMore)) return;
-    final provider = ref.nativeProvider;
+    final provider = (ref.read(activeProviderProvider) is AnimeWitcherNativeProvider
+        ? ref.read(activeProviderProvider) as AnimeWitcherNativeProvider
+        : null);
     if (provider == null) {
       if (!mounted) return;
       setState(() {
@@ -197,6 +200,23 @@ class _BroadcastScheduleScreenState
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(activeProviderProvider, (previous, next) {
+      if (previous?.packageName == next?.packageName) return;
+      for (final token in _requestTokens.values) {
+        token.cancel('Anime provider changed');
+      }
+      _requestTokens.clear();
+      for (final day in animeWitcherBroadcastDays) {
+        _dayStates[day] = const _BroadcastScheduleDayState();
+      }
+      if (next is AnimeWitcherNativeProvider) {
+        unawaited(_loadDay(animeWitcherBroadcastDays[_selectedDay], refresh: true));
+      }
+    });
+    if (ref.watch(activeProviderProvider) is! AnimeWitcherNativeProvider) {
+      return const ProviderUnsupportedPage(title: 'جدول البث');
+    }
+
     ref.listen<int>(accountDataRevisionProvider, (previous, next) {
       if (previous == next) return;
       for (final token in List<CancelToken>.from(_requestTokens.values)) {

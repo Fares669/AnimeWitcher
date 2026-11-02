@@ -1,4 +1,6 @@
 import 'more_sidebar_shell.dart';
+import 'provider_unsupported_page.dart';
+import '../../../core/extensions/extension_manager.dart';
 
 import 'dart:async';
 
@@ -10,7 +12,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
-import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/offset_pager.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
@@ -43,6 +44,7 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
       initialIndex: _selectedTab,
     )..addListener(_handleTabTick);
     _bootstrapFuture = _loadBootstrap();
+    _bootstrapFuture.ignore();
   }
 
   @override
@@ -61,7 +63,9 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
   }
 
   Future<_SeasonsBootstrap> _loadBootstrap() async {
-    final provider = ref.nativeProvider;
+    final provider = (ref.read(activeProviderProvider) is AnimeWitcherNativeProvider
+        ? ref.read(activeProviderProvider) as AnimeWitcherNativeProvider
+        : null);
     if (provider == null) {
       throw StateError('AnimeWitcher Native provider is unavailable');
     }
@@ -85,6 +89,15 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(activeProviderProvider, (previous, next) {
+      if (previous is! AnimeWitcherNativeProvider && next is AnimeWitcherNativeProvider) {
+        unawaited(_refreshSeasons().catchError((Object _) {}));
+      }
+    });
+    if (ref.watch(activeProviderProvider) is! AnimeWitcherNativeProvider) {
+      return const ProviderUnsupportedPage(title: 'المواسم');
+    }
+
     ref.listen<int>(accountDataRevisionProvider, (previous, next) {
       if (previous == next) return;
       unawaited(_refreshSeasons());

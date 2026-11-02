@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
 import 'package:animewitcher/core/network/dio_client_provider.dart';
 import 'package:animewitcher/core/storage/settings_repository.dart';
@@ -49,6 +50,26 @@ class _Catalogue extends AnimeWitcherNativeProvider {
   }
 }
 
+class _Alternate extends AnimeWitcherProvider {
+  @override String get packageName => 'alternate';
+  @override String get name => 'Alternate';
+  @override String get mainUrl => 'https://example.test';
+  @override String get version => '1';
+  @override List<String> get languages => ['ar'];
+  @override Set<ProviderType> get supportedTypes => {ProviderType.anime};
+  @override Future<List<MultimediaItem>> search(String query, {CancelToken? cancelToken}) async => [];
+  @override Future<Map<String, List<MultimediaItem>>> getHome() async => {};
+  @override Future<MultimediaItem> getDetails(String url) => throw UnimplementedError();
+  @override Future<List<StreamResult>> loadStreams(String url) async => [];
+}
+
+class _Manager extends ExtensionManager {
+  _Manager(this.native, this.alternate);
+  final AnimeWitcherProvider native;
+  final AnimeWitcherProvider alternate;
+  @override List<AnimeWitcherProvider> build() => [native, alternate];
+}
+
 class _RankingsAdapter implements HttpClientAdapter {
   _RankingsAdapter(this.respond);
 
@@ -87,6 +108,23 @@ Map<String, dynamic> _rankingPage(List<int> ids, {required bool hasMore}) => {
 };
 
 void main() {
+  test('native ranking is hidden when another anime provider is active', () async {
+    final native = _Catalogue({1});
+    final alternate = _Alternate();
+    final adapter = _RankingsAdapter((_) => _rankingPage([1], hasMore: false));
+    final container = ProviderContainer(overrides: [
+      extensionManagerProvider.overrideWith(() => _Manager(native, alternate)),
+      activeProviderProvider.overrideWithValue(alternate),
+      storageServiceProvider.overrideWithValue(_Storage()),
+      dioClientProvider.overrideWithValue(Dio()..httpClientAdapter = adapter),
+    ]);
+    addTearDown(container.dispose);
+    final page = await container.read(homeMalRankingPageProvider(MalRanking.top).future);
+    expect(page.items, isEmpty);
+    expect(adapter.requests, isEmpty);
+    expect(native.requestedIds, isEmpty);
+  });
+
   test(
     'an empty first ten discovers rank eleven and keeps its source cursor',
     () async {

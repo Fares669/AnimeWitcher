@@ -1,4 +1,6 @@
 import 'more_sidebar_shell.dart';
+import 'provider_unsupported_page.dart';
+import '../../../core/extensions/extension_manager.dart';
 
 import 'dart:async';
 
@@ -11,7 +13,6 @@ import 'package:animewitcher/shared/widgets/underline_segment_tabs.dart';
 import '../../../core/account/account_providers.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
-import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
@@ -57,7 +58,9 @@ class _GlobalStatisticsScreenState extends ConsumerState<GlobalStatisticsScreen>
     required int offset,
     required int limit,
   }) {
-    final provider = ref.nativeProvider;
+    final provider = (ref.read(activeProviderProvider) is AnimeWitcherNativeProvider
+        ? ref.read(activeProviderProvider) as AnimeWitcherNativeProvider
+        : null);
     if (provider == null) {
       return Future<ProviderMediaPage>.error(
         StateError('AnimeWitcher Native provider is unavailable'),
@@ -68,6 +71,10 @@ class _GlobalStatisticsScreenState extends ConsumerState<GlobalStatisticsScreen>
 
   @override
   Widget build(BuildContext context) {
+    if (ref.watch(activeProviderProvider) is! AnimeWitcherNativeProvider) {
+      return const ProviderUnsupportedPage(title: 'الإحصائيات العالمية');
+    }
+
     final accountRevision = ref.watch(accountDataRevisionProvider);
 
     final embedded = MorePaneScope.of(context);
