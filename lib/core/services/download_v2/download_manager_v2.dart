@@ -9,6 +9,8 @@ import '../download_concurrency.dart';
 import '../download_parallel.dart';
 import '../../utils/download_cleanup.dart';
 import '../../utils/local_file_io.dart';
+import '../../storage/provider_local_library.dart' show animeRiftProviderId;
+
 import 'background_downloader_gateway.dart';
 import 'download_continued_processing_v2.dart';
 import 'download_artwork_store_v2.dart';
@@ -670,6 +672,17 @@ final class DownloadManagerV2 {
   /// the same exact package writer. With [enqueueOnly], persist its FIFO slot
   /// and return before resolving sources or starting transport.
   Future<DownloadTransportSnapshot> start(DownloadStartRequestV2 request, {bool enqueueOnly = false}) {
+    final providerId = request.sourceDescriptor['providerId']?.toString().trim();
+    if (request.mediaKind == DownloadMediaKind.videoEpisode &&
+        providerId == animeRiftProviderId &&
+        request.logicalId != logicalDownloadIdFor(
+          animeId: request.mediaId,
+          episodeKey: request.unitKey,
+          variantKey: request.variantKey,
+          providerId: providerId,
+        )) {
+      return Future.error(StateError('Invalid provider-scoped download identity'));
+    }
     return _runControlCommand(request.logicalId, 'start', () async {
       await initialize();
       final currentRecord = await _store.get(request.logicalId);
