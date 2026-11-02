@@ -36,6 +36,14 @@ class _DeferredSearchProvider extends AnimeWitcherNativeProvider {
   int characterCalls = 0;
 
   @override
+  Future<ProviderSearchFilterOptions> getSearchFilterOptions() async =>
+      ProviderSearchFilterOptions(genres: [packageName]);
+
+  @override
+  Future<ProviderSearchFilterOptions> getMangaSearchFilterOptions() async =>
+      ProviderSearchFilterOptions(genres: ['manga-$packageName']);
+
+  @override
   Future<List<MultimediaItem>> search(
     String query, {
     CancelToken? cancelToken,
@@ -135,6 +143,38 @@ Future<void> _flush() async {
 }
 
 void main() {
+  test(
+    'filter options follow anime selection without changing manga or animation',
+    () async {
+      final original = _NamedDeferredProvider('original');
+      final selected = _NamedDeferredProvider('selected');
+      expect(
+        (await searchFilterOptionsFor(
+          SearchDomain.anime,
+          selected,
+          original,
+        )).genres,
+        ['selected'],
+      );
+      expect(
+        (await searchFilterOptionsFor(
+          SearchDomain.animation,
+          selected,
+          original,
+        )).genres,
+        ['original'],
+      );
+      expect(
+        (await searchFilterOptionsFor(
+          SearchDomain.manga,
+          selected,
+          original,
+        )).genres,
+        ['manga-original'],
+      );
+    },
+  );
+
   test(
     'suggestions follow provider switches and discard older responses',
     () async {

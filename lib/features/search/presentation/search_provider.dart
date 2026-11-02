@@ -18,6 +18,40 @@ part 'search_provider.g.dart';
 
 enum SearchFilter { content, live }
 
+/// Filter options for anime follow the chosen provider; other catalogs keep
+/// their own provider regardless of the anime selection.
+Future<ProviderSearchFilterOptions> searchFilterOptionsFor(
+  SearchDomain domain,
+  AnimeWitcherProvider? animeProvider,
+  AnimeWitcherProvider? catalogProvider,
+) async {
+  if (!domain.capabilities.showFilter) {
+    return const ProviderSearchFilterOptions();
+  }
+  if (domain == SearchDomain.anime) {
+    return await animeProvider?.getSearchFilterOptions() ??
+        const ProviderSearchFilterOptions();
+  }
+  if (domain == SearchDomain.manga) {
+    return await catalogProvider?.getMangaSearchFilterOptions() ??
+        const ProviderSearchFilterOptions();
+  }
+  if (domain == SearchDomain.animation && catalogProvider != null) {
+    final options = await catalogProvider.getSearchFilterOptions();
+    return ProviderSearchFilterOptions(
+      statuses: options.statuses,
+      types: options.types,
+      ageRatings: options.ageRatings,
+      years: options.years,
+      seasons: options.seasons,
+      genres: options.genres
+          .where((genre) => genre != 'انميشن')
+          .toList(growable: false),
+    );
+  }
+  return const ProviderSearchFilterOptions();
+}
+
 class ProviderSearchResult {
   final String providerId;
   final String providerName;

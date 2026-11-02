@@ -199,39 +199,19 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     setState(() => _isLoadingProviderFilters = true);
     ProviderSearchFilters? selected;
     SearchDomain? pickedDomain;
+    final animeProvider = ref.read(activeProviderProvider);
     try {
-      final provider = providers.first;
       // All, anime, animation, manga and characters are the sheet's main
       // categories; only the ones that can be filtered bring their tabs.
-      Future<ProviderSearchFilterOptions> optionsFor(SearchDomain domain) {
-        if (!domain.capabilities.showFilter) {
-          return Future.value(const ProviderSearchFilterOptions());
-        }
-        return switch (domain) {
-          SearchDomain.anime => provider.getSearchFilterOptions(),
-          // The anime filters, less the tag every animation result has.
-          SearchDomain.animation => provider.getSearchFilterOptions().then(
-            (options) => ProviderSearchFilterOptions(
-              statuses: options.statuses,
-              types: options.types,
-              ageRatings: options.ageRatings,
-              years: options.years,
-              seasons: options.seasons,
-              genres: options.genres
-                  .where((genre) => genre != 'انميشن')
-                  .toList(growable: false),
-            ),
-          ),
-          SearchDomain.manga => provider.getMangaSearchFilterOptions(),
-          SearchDomain.all || SearchDomain.characters => Future.value(
-            const ProviderSearchFilterOptions(),
-          ),
-        };
-      }
+      Future<ProviderSearchFilterOptions> optionsFor(SearchDomain domain) =>
+          searchFilterOptionsFor(domain, animeProvider, providers.first);
 
       final domain = ref.read(searchDomainProvider);
       final options = await optionsFor(domain);
-      if (!mounted) return;
+      if (!mounted ||
+          ref.read(activeProviderProvider)?.packageName != animeProvider?.packageName) {
+        return;
+      }
 
       // Use the exact same filter surface as the Home page so both entry
       // points have identical tabs, spacing, selection behavior, and glass.
@@ -280,7 +260,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       if (mounted) setState(() => _isLoadingProviderFilters = false);
     }
 
-    if (!mounted || selected == null) return;
+    if (!mounted || selected == null ||
+        ref.read(activeProviderProvider)?.packageName != animeProvider?.packageName) {
+      return;
+    }
     if (pickedDomain != null) _selectSearchDomain(pickedDomain!);
     _resetResultsScrollPosition();
     ref.read(searchProviderFiltersProvider.notifier).set(selected);
