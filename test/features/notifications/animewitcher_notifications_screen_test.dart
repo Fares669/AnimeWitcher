@@ -5,6 +5,12 @@ import 'package:animewitcher/core/account/animewitcher_account_models.dart';
 import 'package:animewitcher/core/account/animewitcher_account_service.dart';
 import 'package:animewitcher/core/account/animewitcher_notification_models.dart';
 import 'package:animewitcher/core/account/animewitcher_comment_models.dart';
+import 'package:animewitcher/core/extensions/base_provider.dart';
+import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
+import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
+import 'package:animewitcher/core/storage/settings_repository.dart';
+import 'package:dio/dio.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:animewitcher/core/account/firestore_rest_client.dart';
 import 'package:animewitcher/core/storage/secure_token_storage.dart';
@@ -32,6 +38,9 @@ class _Service extends AnimeWitcherAccountService {
   int loads = 0;
   int deleted = 0;
   int clicked = 0;
+  int counts = 0;
+  Completer<int>? countPending;
+  Completer<AnimeWitcherComment?>? targetPending;
   Completer<void>? deleting;
   AnimeWitcherComment? target;
   AnimeWitcherAccountException? targetError;
@@ -47,7 +56,11 @@ class _Service extends AnimeWitcherAccountService {
     ),
   );
   @override
-  Future<int> loadNotificationCount() async => 7;
+  Future<int> loadNotificationCount() async {
+    counts++;
+    return countPending?.future ?? Future.value(7);
+  }
+
   @override
   Future<AnimeWitcherNotificationPage> loadNotifications({
     FirestoreDocument? cursor,
@@ -91,6 +104,7 @@ class _Service extends AnimeWitcherAccountService {
     AnimeWitcherNotification notification,
   ) async {
     if (targetError != null) throw targetError!;
+    if (targetPending != null) return targetPending!.future;
     return target;
   }
 
@@ -110,6 +124,20 @@ class _Account extends AnimeWitcherAccountController {
       ref.read(animeWitcherAccountServiceProvider).snapshot;
 }
 
+class _NativeSelection extends AnimeWitcherNativeProvider {
+  _NativeSelection() : super(Dio(), SettingsRepository(StorageService()));
+}
+
+class _Selection extends ActiveProvider {
+  _Selection([this.initial]);
+  final AnimeWitcherProvider? initial;
+  @override
+  AnimeWitcherProvider? build() => initial ?? _NativeSelection();
+
+  @override
+  Future<void> set(AnimeWitcherProvider? provider) async => state = provider;
+}
+
 AnimeWitcherNotification _item() => AnimeWitcherNotification.fromDocument(
   const FirestoreDocument(
     id: 'n',
@@ -124,8 +152,10 @@ Widget _app(
   _Service service, {
   Widget home = const AnimeWitcherNotificationsScreen(),
   NotificationService? toasts,
+  AnimeWitcherProvider? selected,
 }) => ProviderScope(
   overrides: [
+    activeProviderProvider.overrideWith(() => _Selection(selected)),
     animeWitcherAccountServiceProvider.overrideWithValue(service),
     animeWitcherAccountControllerProvider.overrideWith(_Account.new),
     if (toasts != null) notificationServiceProvider.overrideWithValue(toasts),
@@ -133,6 +163,169 @@ Widget _app(
   child: MaterialApp(theme: ThemeData.dark(), home: home),
 );
 void main() {
+  testWidgets('opening the inbox under Rift never loads or marks seen', (
+    tester,
+  ) async {
+    final service = _Service()..items = [_item()];
+    await tester.pumpWidget(_app(service, selected: AnimeRiftProvider()));
+    await tester.pumpAndSettle();
+    expect(find.text('هذه الميزة غير متاحة للمزود المختار'), findsOneWidget);
+    expect(find.textContaining('سارة'), findsNothing);
+    expect(service.loads, 0);
+    expect(service.seen, 0);
+  });
+
+  testWidgets(
+    'Rift count stays zero after a late native count and invalidation',
+    (tester) async {
+      final service = _Service()..countPending = Completer<int>();
+      await tester.pumpWidget(
+        _app(service, home: const Scaffold(body: AccountNotificationsButton())),
+      );
+      await tester.pump();
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(AccountNotificationsButton)),
+      );
+      final subscription = container.listen(
+        accountNotificationCountProvider,
+        (_, _) {},
+      );
+      addTearDown(subscription.close);
+      expect(service.counts, 1);
+      await container
+          .read(activeProviderProvider.notifier)
+          .set(AnimeRiftProvider());
+      await tester.pump();
+      service.countPending!.complete(7);
+      await tester.pumpAndSettle();
+      expect(await container.read(accountNotificationCountProvider.future), 0);
+      container.invalidate(accountNotificationCountProvider);
+      expect(await container.read(accountNotificationCountProvider.future), 0);
+      expect(service.counts, 1);
+      expect(
+        find.byKey(const ValueKey('account-notifications-button')),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets('late target cannot mark clicked or navigate after Rift switch', (
+    tester,
+  ) async {
+    final service = _Service()
+      ..items = [_item()]
+      ..targetPending = Completer<AnimeWitcherComment?>();
+    await tester.pumpWidget(_app(service));
+    await tester.pumpAndSettle();
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(AnimeWitcherNotificationsScreen)),
+    );
+    await tester.tap(find.textContaining('سارة'));
+    await tester.pump();
+    await container
+        .read(activeProviderProvider.notifier)
+        .set(AnimeRiftProvider());
+    await tester.pump();
+    service.targetPending!.complete(
+      const AnimeWitcherComment(
+        id: 'c',
+        path: 'anime_list/a/comments/c',
+        text: 'هدف متأخر',
+        userId: 'actor',
+        userName: 'الكاتب',
+        likes: 0,
+        replies: 0,
+        spoiler: false,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(service.clicked, 0);
+    expect(find.text('هدف متأخر'), findsNothing);
+  });
+
+  testWidgets('Rift hides the Witcher badge without changing the account', (
+    tester,
+  ) async {
+    final service = _Service();
+    await tester.pumpWidget(
+      _app(service, home: const Scaffold(body: AccountNotificationsButton())),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('7'), findsOneWidget);
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(AccountNotificationsButton)),
+    );
+    await container
+        .read(activeProviderProvider.notifier)
+        .set(AnimeRiftProvider());
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('account-notifications-button')),
+      findsNothing,
+    );
+    expect(
+      container.read(animeWitcherAccountControllerProvider).value!.profile,
+      isNotNull,
+    );
+    await container
+        .read(activeProviderProvider.notifier)
+        .set(_NativeSelection());
+    await tester.pumpAndSettle();
+    expect(find.text('7'), findsOneWidget);
+  });
+
+  testWidgets('Rift inbox is unsupported and never loads Witcher rows', (
+    tester,
+  ) async {
+    final service = _Service()..items = [_item()];
+    await tester.pumpWidget(_app(service));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('سارة'), findsOneWidget);
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(AnimeWitcherNotificationsScreen)),
+    );
+    await container
+        .read(activeProviderProvider.notifier)
+        .set(AnimeRiftProvider());
+    await tester.pump();
+    expect(find.textContaining('سارة'), findsNothing);
+    expect(find.text('هذه الميزة غير متاحة للمزود المختار'), findsOneWidget);
+    final loads = service.loads;
+    await tester.pump(const Duration(milliseconds: 10));
+    expect(service.loads, loads);
+    await container
+        .read(activeProviderProvider.notifier)
+        .set(_NativeSelection());
+    await tester.pumpAndSettle();
+    expect(find.textContaining('سارة'), findsOneWidget);
+  });
+
+  testWidgets('late Witcher response is discarded after Rift switch', (
+    tester,
+  ) async {
+    final service = _Service()
+      ..pending = Completer<AnimeWitcherNotificationPage>();
+    await tester.pumpWidget(_app(service));
+    await tester.pump();
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(AnimeWitcherNotificationsScreen)),
+    );
+    await container
+        .read(activeProviderProvider.notifier)
+        .set(AnimeRiftProvider());
+    await tester.pump();
+    service.pending!.complete(
+      AnimeWitcherNotificationPage(
+        items: [_item()],
+        cursor: null,
+        hasMore: false,
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(find.textContaining('سارة'), findsNothing);
+    expect(service.seen, 0);
+  });
   testWidgets('unavailable target uses the shared error pill, not a SnackBar', (
     tester,
   ) async {

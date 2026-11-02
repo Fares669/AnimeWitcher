@@ -2,9 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/account/account_providers.dart';
+import '../../core/extensions/extension_manager.dart';
+import '../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../features/notifications/presentation/animewitcher_notifications_screen.dart';
 
 final accountNotificationCountProvider = FutureProvider.autoDispose<int>((ref) {
+  if (ref.watch(activeProviderProvider) is! AnimeWitcherNativeProvider) {
+    return 0;
+  }
   final lifecycle = AppLifecycleListener(onResume: ref.invalidateSelf);
   ref.onDispose(lifecycle.dispose);
   final account = ref
@@ -27,6 +32,9 @@ class AccountNotificationsButton extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    if (ref.watch(activeProviderProvider) is! AnimeWitcherNativeProvider) {
+      return const SizedBox.shrink();
+    }
     final profile = ref
         .watch(animeWitcherAccountControllerProvider)
         .asData
