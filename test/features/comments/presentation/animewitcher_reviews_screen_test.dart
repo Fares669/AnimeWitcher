@@ -1,3 +1,9 @@
+import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
+import 'package:animewitcher/core/storage/settings_repository.dart';
+import 'package:dio/dio.dart';
+import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/base_provider.dart';
+
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -28,6 +34,12 @@ import '../../../support/test_fonts.dart';
 import 'package:animewitcher/core/utils/window_controls_inset.dart';
 
 import '../../../support/debug_shots.dart';
+
+class _NativeSelection extends ActiveProvider {
+  @override
+  AnimeWitcherProvider? build() =>
+      AnimeWitcherNativeProvider(Dio(), SettingsRepository(StorageService()));
+}
 
 class _FakeAccountService extends AnimeWitcherAccountService {
   _FakeAccountService({required this.reviews})
@@ -201,6 +213,7 @@ Widget _app({
   }
   return ProviderScope(
     overrides: [
+      activeProviderProvider.overrideWith(_NativeSelection.new),
       animeWitcherAccountServiceProvider.overrideWithValue(service),
       animeWitcherAccountControllerProvider.overrideWith(
         _FixedAccountController.new,
