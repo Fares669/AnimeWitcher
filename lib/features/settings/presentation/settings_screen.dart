@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 
 import 'widgets/download_log_dialog.dart';
+import 'widgets/anime_provider_picker.dart';
 
 import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:flutter/foundation.dart';
@@ -146,6 +147,7 @@ class SettingsScreen extends ConsumerWidget {
                   ref.read(appThemeStyleProvider.notifier).select(style),
             ),
           ),
+          const AnimeProviderSettingsTile(),
           SettingsTile(
             icon: Icons.view_carousel_rounded,
             title: 'شريط المواسم',

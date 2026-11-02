@@ -4,6 +4,7 @@ import '../account/account_providers.dart';
 import '../network/dio_client_provider.dart';
 import '../storage/settings_repository.dart';
 import 'base_provider.dart';
+import 'providers/anime_rift_provider.dart';
 import 'providers/animewitcher_native_provider.dart';
 
 part 'extension_manager.g.dart';
@@ -29,6 +30,7 @@ class ExtensionManager extends _$ExtensionManager {
                 .hideEcchiAnime ??
             false,
       ),
+      AnimeRiftProvider(),
     ];
   }
 
@@ -58,6 +60,17 @@ class ProviderResolutionLoading extends _$ProviderResolutionLoading {
 /// AnimeWitcher Native is the built-in provider and is selected automatically.
 @Riverpod(keepAlive: true)
 class ActiveProvider extends _$ActiveProvider {
+  Future<void> _pendingSave = Future<void>.value();
+
+  Future<void> _saveSelection(String? id) {
+    final storage = ref.read(settingsRepositoryProvider);
+    final next = _pendingSave
+        .catchError((Object _) {})
+        .then((_) => storage.setActiveProviderId(id));
+    _pendingSave = next;
+    return next;
+  }
+
   @override
   AnimeWitcherProvider? build() {
     final providers = ref.watch(extensionManagerProvider);
@@ -68,10 +81,14 @@ class ActiveProvider extends _$ActiveProvider {
     final selected = storedId == null
         ? providers.first
         : (ref.read(extensionManagerProvider.notifier).getProvider(storedId) ??
-            providers.first);
+              providers.first);
 
     if (storedId != selected.packageName) {
-      Future.microtask(() => storage.setActiveProviderId(selected.packageName));
+      Future.microtask(() {
+        if (ref.mounted && state?.packageName == selected.packageName) {
+          _saveSelection(selected.packageName);
+        }
+      });
     }
     return selected;
   }
@@ -81,8 +98,6 @@ class ActiveProvider extends _$ActiveProvider {
     final next = provider ?? (providers.isEmpty ? null : providers.first);
     state = next;
     ref.read(providerResolutionLoadingProvider.notifier).set(false);
-    await ref
-        .read(settingsRepositoryProvider)
-        .setActiveProviderId(next?.packageName);
+    await _saveSelection(next?.packageName);
   }
 }
