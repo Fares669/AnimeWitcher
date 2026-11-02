@@ -17,9 +17,11 @@ part 'library_provider.g.dart';
 @Riverpod(keepAlive: true)
 class Library extends _$Library {
   static const _riftAnimeCategoryKey = 'animerift_library_anime_category';
+  int _selectionGeneration = 0;
 
   @override
   LibraryState build() {
+    ++_selectionGeneration;
     ref.watch(accountDataRevisionProvider);
     final activeProvider = ref.watch(activeProviderProvider);
     final repository = ref.read(libraryRepositoryProvider);
@@ -78,8 +80,15 @@ class Library extends _$Library {
   }
 
   Future<void> selectCategory(LibraryCategory category) async {
-    await _saveCategory(state.mediaKind, category);
-    refresh(category: category);
+    final generation = ++_selectionGeneration;
+    final kind = state.mediaKind;
+    final providerId = ref.read(activeProviderProvider)?.packageName;
+    await _saveCategory(kind, category, providerId);
+    if (ref.mounted &&
+        generation == _selectionGeneration &&
+        ref.read(activeProviderProvider)?.packageName == providerId) {
+      refresh(category: category);
+    }
   }
 
   /// Picks [category] of the [mediaKind] half at once, as the side list does.
@@ -87,18 +96,30 @@ class Library extends _$Library {
     LibraryMediaKind mediaKind,
     LibraryCategory category,
   ) async {
+    final generation = ++_selectionGeneration;
+    final providerId = ref.read(activeProviderProvider)?.packageName;
     await ref
         .read(storageServiceProvider)
         .setString('library_media_kind', mediaKind.storageKey);
-    await _saveCategory(mediaKind, category);
-    refresh(category: category, mediaKind: mediaKind);
+    await _saveCategory(mediaKind, category, providerId);
+    if (ref.mounted &&
+        generation == _selectionGeneration &&
+        ref.read(activeProviderProvider)?.packageName == providerId) {
+      refresh(category: category, mediaKind: mediaKind);
+    }
   }
 
   Future<void> selectMediaKind(LibraryMediaKind mediaKind) async {
+    final generation = ++_selectionGeneration;
+    final providerId = ref.read(activeProviderProvider)?.packageName;
     await ref
         .read(storageServiceProvider)
         .setString('library_media_kind', mediaKind.storageKey);
-    refresh(category: _categoryFor(mediaKind), mediaKind: mediaKind);
+    if (ref.mounted &&
+        generation == _selectionGeneration &&
+        ref.read(activeProviderProvider)?.packageName == providerId) {
+      refresh(category: _categoryFor(mediaKind), mediaKind: mediaKind);
+    }
   }
 
   bool _isRiftAnime(LibraryMediaKind kind) =>
@@ -120,8 +141,9 @@ class Library extends _$Library {
   Future<void> _saveCategory(
     LibraryMediaKind kind,
     LibraryCategory category,
+    String? providerId,
   ) async {
-    if (_isRiftAnime(kind)) {
+    if (kind == LibraryMediaKind.anime && providerId == animeRiftProviderId) {
       await ref
           .read(storageServiceProvider)
           .setString(_riftAnimeCategoryKey, category.storageKey);

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_account_service.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
@@ -17,12 +19,17 @@ import 'package:flutter_test/flutter_test.dart';
 class _Storage extends StorageService {
   final values = <String, String>{};
   String nativeSelectedCategory = 'completed';
+  Completer<void>? mediaWriteGate;
+  Completer<void>? nativeWriteGate;
 
   @override
   String? getString(String key) => values[key];
 
   @override
   Future<void> setString(String key, String? value) async {
+    if (key == 'library_media_kind' && mediaWriteGate != null) {
+      await mediaWriteGate!.future;
+    }
     if (value == null) {
       values.remove(key);
     } else {
@@ -35,6 +42,7 @@ class _Storage extends StorageService {
 
   @override
   Future<void> setSelectedLibraryCategory(String category) async {
+    if (nativeWriteGate != null) await nativeWriteGate!.future;
     nativeSelectedCategory = category;
   }
 
@@ -87,6 +95,83 @@ class _Active extends ActiveProvider {
 }
 
 void main() {
+  test(
+    'delayed selection stays on its original provider after switching',
+    () async {
+      final storage = _Storage();
+      final account = AnimeWitcherAccountService(
+        storage: storage,
+        secureStorage: SecureTokenStorage(storage),
+      );
+      final native = _Source('com.fares669.animewitcher.native');
+      final rift = _Source(animeRiftProviderId);
+      final container = ProviderContainer(
+        overrides: [
+          storageServiceProvider.overrideWithValue(storage),
+          animeWitcherAccountServiceProvider.overrideWithValue(account),
+          activeProviderProvider.overrideWith(() => _Active(native)),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.read(libraryProvider);
+      storage.mediaWriteGate = Completer<void>();
+      final selection = container
+          .read(libraryProvider.notifier)
+          .select(LibraryMediaKind.anime, LibraryCategory.planToWatch);
+      await container.read(activeProviderProvider.notifier).set(rift);
+      expect(
+        container.read(libraryProvider).category,
+        LibraryCategory.watching,
+      );
+      storage.mediaWriteGate!.complete();
+      await selection;
+      expect(storage.nativeSelectedCategory, 'pinned');
+      expect(storage.getString('animerift_library_anime_category'), isNull);
+      expect(
+        container.read(libraryProvider).category,
+        LibraryCategory.watching,
+      );
+    },
+  );
+
+  test(
+    'late category save cannot replace newly selected provider view',
+    () async {
+      final storage = _Storage();
+      final account = AnimeWitcherAccountService(
+        storage: storage,
+        secureStorage: SecureTokenStorage(storage),
+      );
+      final native = _Source('com.fares669.animewitcher.native');
+      final rift = _Source(animeRiftProviderId);
+      final container = ProviderContainer(
+        overrides: [
+          storageServiceProvider.overrideWithValue(storage),
+          animeWitcherAccountServiceProvider.overrideWithValue(account),
+          activeProviderProvider.overrideWith(() => _Active(native)),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.read(libraryProvider);
+      storage.nativeWriteGate = Completer<void>();
+      final selection = container
+          .read(libraryProvider.notifier)
+          .selectCategory(LibraryCategory.planToWatch);
+      await container.read(activeProviderProvider.notifier).set(rift);
+      expect(
+        container.read(libraryProvider).category,
+        LibraryCategory.watching,
+      );
+      storage.nativeWriteGate!.complete();
+      await selection;
+      expect(storage.nativeSelectedCategory, 'pinned');
+      expect(
+        container.read(libraryProvider).category,
+        LibraryCategory.watching,
+      );
+    },
+  );
+
   test(
     'first Rift visit ignores category previously selected in Native',
     () async {
