@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/extensions/item_provider_resolution.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
 import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
 import 'package:animewitcher/core/services/anilist_franchise_service.dart';
 import 'package:animewitcher/core/services/anizip_service.dart';
@@ -552,6 +553,33 @@ class _DetailsSeasonsBarState extends ConsumerState<DetailsSeasonsBar> {
 
   Future<void> _load() async {
     final generation = ++_loadGeneration;
+    final provider = resolveItemProvider(
+      ref.read(extensionManagerProvider),
+      widget.current.provider,
+      ref.read(activeProviderProvider),
+    );
+
+    if (provider is AnimeRiftProvider) {
+      try {
+        final related = await provider.getRelated(widget.current.url);
+        final entries = await walkSeasonsBar(
+          current: widget.current,
+          related: related,
+          fetchRelated: provider.getRelated,
+        );
+        if (!mounted || generation != _loadGeneration) return;
+        setState(
+          () => _walked = entries.length < 2
+              ? const <SeasonsBarEntry>[]
+              : entries,
+        );
+      } catch (_) {
+        if (!mounted || generation != _loadGeneration) return;
+        setState(() => _walked = const <SeasonsBarEntry>[]);
+      }
+      return;
+    }
+
     final malId = widget.current.artworkLookupMalId;
     if (malId == null) {
       if (mounted && generation == _loadGeneration) {
@@ -559,11 +587,6 @@ class _DetailsSeasonsBarState extends ConsumerState<DetailsSeasonsBar> {
       }
       return;
     }
-    final provider = resolveItemProvider(
-      ref.read(extensionManagerProvider),
-      widget.current.provider,
-      ref.read(activeProviderProvider),
-    );
     if (provider is! AnimeWitcherNativeProvider) {
       if (mounted && generation == _loadGeneration) {
         setState(() => _walked = const <SeasonsBarEntry>[]);

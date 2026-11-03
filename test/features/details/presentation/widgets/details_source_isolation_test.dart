@@ -35,6 +35,44 @@ class _RiftActive extends ActiveProvider {
   AnimeWitcherProvider? build() => _rift;
 }
 
+class _RiftFranchise extends AnimeRiftProvider {
+  int calls = 0;
+
+  MultimediaItem item(String id, String title, {String? relationType}) =>
+      MultimediaItem(
+        title: title,
+        url: 'https://anime-rift.com/anime/$id',
+        posterUrl: '',
+        contentType: MultimediaContentType.anime,
+        provider: packageName,
+        relationType: relationType,
+      );
+
+  @override
+  Future<List<MultimediaItem>> getRelated(String url) async {
+    calls++;
+    if (url.endsWith('/season-1')) {
+      return <MultimediaItem>[
+        item('season-2', 'Rift 2nd Season', relationType: 'SEQUEL'),
+      ];
+    }
+    if (url.endsWith('/season-2')) {
+      return <MultimediaItem>[
+        item('season-1', 'Rift', relationType: 'PREQUEL'),
+      ];
+    }
+    return const <MultimediaItem>[];
+  }
+}
+
+class _RiftFranchiseRegistry extends ExtensionManager {
+  _RiftFranchiseRegistry(this.rift);
+  final _RiftFranchise rift;
+
+  @override
+  List<AnimeWitcherProvider> build() => [_native, rift];
+}
+
 class _Franchise extends AniListFranchiseService {
   _Franchise() : super(Dio());
   int calls = 0;
@@ -46,6 +84,41 @@ class _Franchise extends AniListFranchiseService {
 }
 
 void main() {
+  testWidgets(
+    'Rift seasons bar walks Rift relations without requiring a MAL id',
+    (tester) async {
+      final rift = _RiftFranchise();
+      final franchise = _Franchise();
+      final item = rift.item('season-1', 'Rift');
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            extensionManagerProvider.overrideWith(
+              () => _RiftFranchiseRegistry(rift),
+            ),
+            activeProviderProvider.overrideWith(_Active.new),
+            aniListFranchiseServiceProvider.overrideWithValue(franchise),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: DetailsSeasonsBar(
+                itemUrl: item.url,
+                current: item,
+                onOpen: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(rift.calls, greaterThanOrEqualTo(2));
+      expect(franchise.calls, 0);
+      expect(find.text('الموسم 1'), findsOneWidget);
+      expect(find.text('الموسم 2'), findsOneWidget);
+    },
+  );
+
   testWidgets(
     'Rift item does not fetch Witcher franchise when Witcher is selected',
     (tester) async {
