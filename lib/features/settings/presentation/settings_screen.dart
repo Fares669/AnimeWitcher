@@ -148,6 +148,7 @@ class SettingsScreen extends ConsumerWidget {
             ),
           ),
           const AnimeProviderSettingsTile(),
+          const AnimeRiftAccountSettingsTile(),
           SettingsTile(
             icon: Icons.view_carousel_rounded,
             title: 'شريط المواسم',

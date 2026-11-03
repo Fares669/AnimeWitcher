@@ -48,6 +48,11 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
   @override
   Set<ProviderType> get supportedTypes => const {ProviderType.anime};
 
+  bool get isAccountLinked => _api.isAccountLinked;
+  Future<bool> restoreAccountSession() => _api.restoreAccountSession();
+  Future<void> signInWithCode(String code) => _api.signInWithCode(code);
+  Future<void> signOut() => _api.signOut();
+
   @override
   Future<Map<String, List<MultimediaItem>>> getHome() async {
     if (!_api.isConfigured) throw const AnimeRiftAccessUnavailable();

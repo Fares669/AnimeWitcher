@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart';
 import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
 import 'package:animewitcher/core/storage/provider_local_library.dart';
 import 'package:animewitcher/core/storage/settings_repository.dart';
@@ -77,17 +78,50 @@ class _DelayedSettings extends _SavedSettings {
   }
 }
 
+class _RiftAccountFixture extends AnimeRiftApiClient {
+  _RiftAccountFixture({this.linked = false});
+
+  bool linked;
+  final codes = <String>[];
+  var signOuts = 0;
+
+  @override
+  bool get isAccountLinked => linked;
+
+  @override
+  Future<bool> restoreAccountSession() async => linked;
+
+  @override
+  Future<void> signInWithCode(String code) async {
+    codes.add(code);
+    linked = true;
+  }
+
+  @override
+  Future<void> signOut() async {
+    signOuts++;
+    linked = false;
+  }
+}
+
 Widget _app(List<AnimeWitcherProvider> registered, _SavedSettings settings) {
   return ProviderScope(
     overrides: [
       extensionManagerProvider.overrideWith(() => _TestManager(registered)),
       settingsRepositoryProvider.overrideWithValue(settings),
     ],
-    child: const MaterialApp(
-      locale: Locale('ar'),
+    child: MaterialApp(
+      locale: const Locale('ar'),
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
-      home: Scaffold(body: AnimeProviderSettingsTile()),
+      home: Scaffold(
+        body: ListView(
+          children: const [
+            AnimeProviderSettingsTile(),
+            AnimeRiftAccountSettingsTile(),
+          ],
+        ),
+      ),
     ),
   );
 }
@@ -226,6 +260,53 @@ void main() {
     expect(find.text('Anime Rift'), findsOneWidget);
   });
 
+  testWidgets(
+    'Rift account links and signs out without changing the selected provider',
+    (tester) async {
+      final settings = _SavedSettings('native');
+      final account = _RiftAccountFixture();
+      final rift = AnimeRiftProvider(client: account);
+      await tester.pumpWidget(_app([native, rift, manga], settings));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('settings-animerift-account')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('غير مربوط'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey('settings-animerift-account')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('ربط حساب Anime Rift'), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const ValueKey('animerift-code-field')),
+        '  owner-issued-code  ',
+      );
+      await tester.tap(find.byKey(const ValueKey('animerift-account-submit')));
+      await tester.pumpAndSettle();
+
+      expect(account.codes, ['owner-issued-code']);
+      expect(settings.savedId, 'native');
+      expect(find.textContaining('مربوط'), findsOneWidget);
+
+      await tester.tap(
+        find.byKey(const ValueKey('settings-animerift-account')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('إلغاء ربط حساب Anime Rift؟'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey('animerift-account-signout-confirm')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(account.signOuts, 1);
+      expect(settings.savedId, 'native');
+      expect(find.textContaining('غير مربوط'), findsOneWidget);
+    },
+  );
+
   testWidgets('shows only registered anime providers, without placeholders', (
     tester,
   ) async {
@@ -257,6 +338,10 @@ void main() {
     await tester.pumpWidget(_app([manga], _SavedSettings(null)));
     await tester.pumpAndSettle();
     expect(find.text('لا يوجد مزود أنمي متاح'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('settings-animerift-account')),
+      findsNothing,
+    );
     await tester.tap(find.byKey(const ValueKey('settings-anime-provider')));
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsNothing);
