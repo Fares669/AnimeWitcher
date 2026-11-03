@@ -219,6 +219,28 @@ void main() {
       print(
         'Live character schema: response=$characterResponseKeys item=$characterKeys',
       );
+      final characterId = firstCharacter['_id'];
+      expect(characterId, isA<String>());
+      final characterDetailsResponse = await api.request(
+        'character/details/$characterId',
+        'CHARACTERS.DETAILS',
+      );
+      final characterDetailsResponseKeys =
+          characterDetailsResponse.keys.toList()..sort();
+      final characterDetailsNestedKeys = <String, List<String>>{};
+      for (final entry in characterDetailsResponse.entries) {
+        final value = entry.value;
+        if (value is Map<dynamic, dynamic>) {
+          characterDetailsNestedKeys[entry.key] =
+              value.keys.map((key) => key.toString()).toList(growable: false)
+                ..sort();
+        }
+      }
+      // Schema names are safe diagnostics; never log row values or headers.
+      print(
+        'Live character details schema: response=$characterDetailsResponseKeys nested=$characterDetailsNestedKeys',
+      );
+      expect(characterDetailsResponse, isNotEmpty);
       final filtered = await provider.searchPage(
         '',
         const ProviderSearchFilters(years: {'2024'}),
