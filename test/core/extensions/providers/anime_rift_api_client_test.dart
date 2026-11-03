@@ -43,18 +43,24 @@ void main() {
   final secureValues = <String, String>{};
   final secureCalls = <MethodCall>[];
   var rejectSecureWrites = false;
+  var rejectNextSecureRead = false;
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     secureValues.clear();
     secureCalls.clear();
     rejectSecureWrites = false;
+    rejectNextSecureRead = false;
     messenger.setMockMethodCallHandler(secureChannel, (call) async {
       secureCalls.add(call);
       final arguments = Map<Object?, Object?>.from(call.arguments as Map);
       final key = arguments['key'] as String?;
       switch (call.method) {
         case 'read':
+          if (rejectNextSecureRead) {
+            rejectNextSecureRead = false;
+            throw PlatformException(code: 'SECURE_READ_FAILED');
+          }
           return secureValues[key];
         case 'write':
           if (rejectSecureWrites) {
@@ -338,6 +344,13 @@ void main() {
       ]) {
         await expectLater(client.signInWithCode(code), throwsArgumentError);
       }
+      const privateCode = 'private\n-code';
+      try {
+        await client.signInWithCode(privateCode);
+        fail('invalid code must be rejected');
+      } on ArgumentError catch (error) {
+        expect(error.toString(), isNot(contains('private-code')));
+      }
       expect(calls, 0);
       expect(secureValues, isEmpty);
     },
@@ -431,5 +444,33 @@ void main() {
       secureCalls.single.arguments as Map,
     );
     expect(arguments['key'], 'animerift.user.session.v1');
+  });
+
+  test('a transient secure read failure can be retried explicitly', () async {
+    final dio = fixtureDio((o) {
+      if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+      if (o.uri.path.endsWith('/auth/register/device')) {
+        return reply(o, {}, 201);
+      }
+      return reply(o, {
+        'items': {
+          'profile': {'_id': 'rift-user-1'},
+          'token': 'fixture-user-token',
+        },
+      });
+    });
+    await AnimeRiftApiClient(
+      config: fixtureConfig,
+      dio: dio,
+    ).signInWithCode('valid-code');
+    final restarted = AnimeRiftApiClient(config: fixtureConfig, dio: dio);
+    rejectNextSecureRead = true;
+
+    await expectLater(
+      restarted.restoreAccountSession(),
+      throwsA(isA<AnimeRiftSecureStorageUnavailable>()),
+    );
+    expect(await restarted.restoreAccountSession(), isTrue);
+    expect(restarted.isAccountLinked, isTrue);
   });
 }

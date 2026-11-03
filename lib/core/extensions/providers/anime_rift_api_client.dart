@@ -353,10 +353,11 @@ class AnimeRiftApiClient {
   Future<bool> restoreAccountSession() async {
     await _loadIdentity();
     if (_sessionRestoreAttempted) {
-      if (_sessionRestoreError != null) {
-        throw const AnimeRiftSecureStorageUnavailable();
+      if (_sessionRestoreError == null) {
+        return isAccountLinked;
       }
-      return isAccountLinked;
+      _sessionRestoreAttempted = false;
+      _sessionRestoreError = null;
     }
     _sessionRestoreAttempted = true;
     try {
