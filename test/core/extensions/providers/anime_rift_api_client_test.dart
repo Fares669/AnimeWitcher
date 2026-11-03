@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart';
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -34,7 +35,45 @@ Response<dynamic> reply(RequestOptions o, dynamic data, [int status = 200]) =>
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  setUp(() => SharedPreferences.setMockInitialValues({}));
+  const secureChannel = MethodChannel(
+    'plugins.it_nomads.com/flutter_secure_storage',
+  );
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  final secureValues = <String, String>{};
+  final secureCalls = <MethodCall>[];
+  var rejectSecureWrites = false;
+
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+    secureValues.clear();
+    secureCalls.clear();
+    rejectSecureWrites = false;
+    messenger.setMockMethodCallHandler(secureChannel, (call) async {
+      secureCalls.add(call);
+      final arguments = Map<Object?, Object?>.from(call.arguments as Map);
+      final key = arguments['key'] as String?;
+      switch (call.method) {
+        case 'read':
+          return secureValues[key];
+        case 'write':
+          if (rejectSecureWrites) {
+            throw PlatformException(code: 'SECURE_WRITE_FAILED');
+          }
+          secureValues[key!] = arguments['value']! as String;
+          return null;
+        case 'delete':
+          secureValues.remove(key);
+          return null;
+        case 'deleteAll':
+          secureValues.clear();
+          return null;
+      }
+      return null;
+    });
+  });
+
+  tearDown(() => messenger.setMockMethodCallHandler(secureChannel, null));
 
   test(
     'concurrent catalog calls share registration and scoped signing',
@@ -214,4 +253,183 @@ void main() {
       expect(calls, 0);
     },
   );
+
+  test('code sign-in persists securely and authenticates download requests after restart', () async {
+    var signIns = 0;
+    var authenticatedDownloads = 0;
+    final dio = fixtureDio((o) {
+      if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+      if (o.uri.path.endsWith('/auth/register/device')) {
+        return reply(o, {'sessionKey': 'fixture'}, 201);
+      }
+      final jwt = (o.headers['integrity'] as String).substring(7).split('.');
+      final payload = jsonDecode(
+        utf8.decode(base64Url.decode(base64Url.normalize(jwt[1]))),
+      ) as Map;
+      if (o.uri.path.endsWith('/auth/sign-in/with-code')) {
+        signIns++;
+        expect(o.method, 'POST');
+        expect(o.data, {'code': 'owner-issued-code'});
+        expect(payload['scope'], 'USER.AUTH.SIGN_IN_WITH_CODE');
+        expect(o.headers['authorization'], 'Bearer null');
+        return reply(o, {
+          'items': {
+            'profile': {'_id': 'rift-user-1'},
+            'token': 'fixture-user-token',
+          },
+        });
+      }
+      expect(o.uri.path, endsWith('/library/episode/source/can_play'));
+      expect(o.method, 'POST');
+      expect((o.data as Map)['is_download'], isTrue);
+      expect(o.headers['authorization'], 'Bearer fixture-user-token');
+      authenticatedDownloads++;
+      return reply(o, {'sessionId': 'download-session'});
+    });
+
+    final first = AnimeRiftApiClient(config: fixtureConfig, dio: dio);
+    await first.signInWithCode('  owner-issued-code  ');
+    expect(first.isAccountLinked, isTrue);
+    await first.request(
+      'library/episode/source/can_play',
+      'ANIME.LIBRARY.EPISODES.SOURCES.CHECK_AVAILABILITY',
+      method: 'POST',
+      body: {'is_download': true},
+    );
+
+    final restarted = AnimeRiftApiClient(config: fixtureConfig, dio: dio);
+    expect(restarted.isAccountLinked, isFalse);
+    expect(await restarted.restoreAccountSession(), isTrue);
+    await restarted.request(
+      'library/episode/source/can_play',
+      'ANIME.LIBRARY.EPISODES.SOURCES.CHECK_AVAILABILITY',
+      method: 'POST',
+      body: {'is_download': true},
+    );
+
+    expect(signIns, 1);
+    expect(authenticatedDownloads, 2);
+    expect(secureValues.values.single, contains('fixture-user-token'));
+    final prefs = await SharedPreferences.getInstance();
+    final plainValues = prefs
+        .getKeys()
+        .map((key) => prefs.get(key).toString())
+        .join();
+    expect(plainValues, isNot(contains('fixture-user-token')));
+  });
+
+  test(
+    'invalid sign-in input is rejected before any network request',
+    () async {
+      var calls = 0;
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: fixtureDio((o) {
+          calls++;
+          return reply(o, {});
+        }),
+      );
+
+      for (final code in [
+        '',
+        '   ',
+        'bad\ncode',
+        List.filled(257, 'x').join(),
+      ]) {
+        await expectLater(client.signInWithCode(code), throwsArgumentError);
+      }
+      expect(calls, 0);
+      expect(secureValues, isEmpty);
+    },
+  );
+
+  test(
+    'malformed sign-in response never persists or activates a token',
+    () async {
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: fixtureDio((o) {
+          if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+          if (o.uri.path.endsWith('/auth/register/device')) {
+            return reply(o, {}, 201);
+          }
+          return reply(o, {
+            'items': {'profile': <String, dynamic>{}},
+          });
+        }),
+      );
+
+      await expectLater(
+        client.signInWithCode('valid-code'),
+        throwsA(isA<AnimeRiftAccessUnavailable>()),
+      );
+      expect(client.isAccountLinked, isFalse);
+      expect(secureValues, isEmpty);
+      expect(secureCalls.where((call) => call.method == 'write'), isEmpty);
+    },
+  );
+
+  test(
+    'secure write failure does not leave an in-memory or plaintext session',
+    () async {
+      rejectSecureWrites = true;
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: fixtureDio((o) {
+          if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+          if (o.uri.path.endsWith('/auth/register/device')) {
+            return reply(o, {}, 201);
+          }
+          return reply(o, {
+            'items': {
+              'profile': {'_id': 'rift-user-1'},
+              'token': 'must-not-survive',
+            },
+          });
+        }),
+      );
+
+      await expectLater(
+        client.signInWithCode('valid-code'),
+        throwsA(isA<AnimeRiftSecureStorageUnavailable>()),
+      );
+      expect(client.isAccountLinked, isFalse);
+      expect(secureValues, isEmpty);
+      final prefs = await SharedPreferences.getInstance();
+      expect(
+        prefs.getKeys().map((key) => prefs.get(key).toString()).join(),
+        isNot(contains('must-not-survive')),
+      );
+    },
+  );
+
+  test('sign-out deletes only the Rift credential key', () async {
+    final client = AnimeRiftApiClient(
+      config: fixtureConfig,
+      dio: fixtureDio((o) {
+        if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+        if (o.uri.path.endsWith('/auth/register/device')) {
+          return reply(o, {}, 201);
+        }
+        return reply(o, {
+          'items': {
+            'profile': {'_id': 'rift-user-1'},
+            'token': 'fixture-user-token',
+          },
+        });
+      }),
+    );
+    await client.signInWithCode('valid-code');
+    secureCalls.clear();
+
+    await client.signOut();
+
+    expect(client.isAccountLinked, isFalse);
+    expect(secureValues, isEmpty);
+    expect(secureCalls.map((call) => call.method), ['delete']);
+    final arguments = Map<Object?, Object?>.from(
+      secureCalls.single.arguments as Map,
+    );
+    expect(arguments['key'], 'animerift.user.session.v1');
+  });
 }

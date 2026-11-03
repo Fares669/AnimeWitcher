@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../network/stale_connection_retry.dart';
@@ -39,23 +40,65 @@ class AnimeRiftAccessUnavailable implements Exception {
       'تعذر الاتصال بخدمة Anime Rift. تحقق من إعدادات المزوّد ثم أعد المحاولة.';
 }
 
+class AnimeRiftAuthenticationRequired extends AnimeRiftAccessUnavailable {
+  const AnimeRiftAuthenticationRequired({super.statusCode});
+
+  @override
+  String toString() =>
+      'يتطلب هذا الإجراء تسجيل الدخول إلى حساب Anime Rift. حساب AnimeWitcher مستقل عنه.';
+}
+
+class AnimeRiftSecureStorageUnavailable extends AnimeRiftAccessUnavailable {
+  const AnimeRiftSecureStorageUnavailable();
+
+  @override
+  String toString() =>
+      'تعذر الوصول إلى التخزين الآمن لجلسة Anime Rift. لم يتم حفظ رمز الدخول.';
+}
+
 /// Isolated, experimental catalog transport. Never inherits account credentials.
 /// The embedded compatibility signing configuration is extractable from binaries;
 /// it must not be treated as a server-side secret or used for account privileges.
 class AnimeRiftApiClient {
-  AnimeRiftApiClient({this.config = const AnimeRiftConfig(), Dio? dio})
-    : _dio = dio ?? createAnimeWitcherDio();
+  AnimeRiftApiClient({
+    this.config = const AnimeRiftConfig(),
+    Dio? dio,
+    FlutterSecureStorage? secureStorage,
+  }) : _dio = dio ?? createAnimeWitcherDio(),
+       _secureStorage = secureStorage ?? _defaultSecureStorage;
 
   final AnimeRiftConfig config;
   final Dio _dio;
+  final FlutterSecureStorage _secureStorage;
   static const _identityKey = 'animerift.api.installation.v1';
+  static const _sessionKey = 'animerift.user.session.v1';
   static const _defaultBase = 'https://gateway.embrassme.top/api/v4';
+  static const _defaultSecureStorage = FlutterSecureStorage(
+    aOptions: AndroidOptions(
+      storageNamespace: 'animerift_auth',
+      resetOnError: false,
+    ),
+    iOptions: IOSOptions(
+      accountName: 'com.animewitcher.animerift.auth',
+      accessibility: KeychainAccessibility.first_unlock_this_device,
+      synchronizable: false,
+    ),
+    mOptions: MacOsOptions(
+      accountName: 'com.animewitcher.animerift.auth',
+      accessibility: KeychainAccessibility.first_unlock_this_device,
+      synchronizable: false,
+    ),
+  );
   static final _random = Random.secure();
   String _base = _defaultBase;
   Map<String, String>? _identity;
+  String? _accessToken;
+  Object? _sessionRestoreError;
+  bool _sessionRestoreAttempted = false;
   Future<void>? _initializing;
   bool _registered = false;
   bool get isConfigured => config.isConfigured;
+  bool get isAccountLinked => _accessToken != null;
 
   static String _randomText(int length) {
     const alphabet =
@@ -205,7 +248,7 @@ class AnimeRiftApiClient {
     }
   }
 
-  Map<String, String> _headers(String scope) {
+  Map<String, String> _headers(String scope, {bool includeUserToken = true}) {
     String encode(Object value) =>
         base64Url.encode(utf8.encode(jsonEncode(value))).replaceAll('=', '');
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -224,7 +267,7 @@ class AnimeRiftApiClient {
       'user-agent': 'Dart/3.10 (dart:io)',
       'x-device-release-version': '3.13.5',
       'x-firebase-app-check': 'null',
-      'authorization': 'Bearer null',
+      'authorization': 'Bearer ${includeUserToken ? _accessToken : null}',
       'content-type': 'application/json; charset=UTF-8',
       'x-installation-source': 'IS_INSTALLED_FROM_PLAY_PACKAGE_INSTALLER',
       'integrity': 'Bearer $unsigned.$signature',
@@ -240,6 +283,12 @@ class AnimeRiftApiClient {
 
   Future<void> _initialize() async {
     await _loadIdentity();
+    try {
+      await restoreAccountSession();
+    } on AnimeRiftSecureStorageUnavailable {
+      // Public catalogue access remains available as a guest. Explicit account
+      // actions still surface the secure-storage failure to the user.
+    }
     await _firebaseConfiguration();
     final build = _identity!['buildId']!;
     // Legacy gateway protocol descriptor, not a claim about the host platform.
@@ -296,6 +345,90 @@ class AnimeRiftApiClient {
     }
   }
 
+  static bool _validAccessToken(String value) =>
+      value.isNotEmpty &&
+      value.length <= 8192 &&
+      !value.contains(RegExp(r'[\x00-\x20\x7f]'));
+
+  Future<bool> restoreAccountSession() async {
+    await _loadIdentity();
+    if (_sessionRestoreAttempted) {
+      if (_sessionRestoreError != null) {
+        throw const AnimeRiftSecureStorageUnavailable();
+      }
+      return isAccountLinked;
+    }
+    _sessionRestoreAttempted = true;
+    try {
+      final raw = await _secureStorage.read(key: _sessionKey);
+      if (raw == null || raw.isEmpty) return false;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map ||
+          decoded['version'] != 1 ||
+          decoded['deviceId'] != _identity!['deviceId'] ||
+          decoded['token'] is! String ||
+          !_validAccessToken(decoded['token'] as String)) {
+        await _secureStorage.delete(key: _sessionKey);
+        return false;
+      }
+      _accessToken = decoded['token'] as String;
+      return true;
+    } catch (error) {
+      _sessionRestoreError = error;
+      throw const AnimeRiftSecureStorageUnavailable();
+    }
+  }
+
+  Future<void> signInWithCode(String code) async {
+    final value = code.trim();
+    if (value.isEmpty ||
+        value.length > 256 ||
+        value.contains(RegExp(r'[\x00-\x1f\x7f]'))) {
+      throw ArgumentError.value(
+        code,
+        'code',
+        'Invalid Anime Rift sign-in code',
+      );
+    }
+    await _ensureReady();
+    final response = await _send(
+      '$_base/auth/sign-in/with-code',
+      headers: _headers('USER.AUTH.SIGN_IN_WITH_CODE', includeUserToken: false),
+      method: 'POST',
+      body: {'code': value},
+    );
+    final items = response['items'];
+    final profile = items is Map ? items['profile'] : null;
+    final token = items is Map ? items['token'] : null;
+    if (profile is! Map || token is! String || !_validAccessToken(token)) {
+      throw const AnimeRiftAccessUnavailable();
+    }
+    final stored = jsonEncode({
+      'version': 1,
+      'deviceId': _identity!['deviceId'],
+      'token': token,
+    });
+    try {
+      await _secureStorage.write(key: _sessionKey, value: stored);
+    } catch (_) {
+      throw const AnimeRiftSecureStorageUnavailable();
+    }
+    _accessToken = token;
+    _sessionRestoreAttempted = true;
+    _sessionRestoreError = null;
+  }
+
+  Future<void> signOut() async {
+    try {
+      await _secureStorage.delete(key: _sessionKey);
+    } catch (_) {
+      throw const AnimeRiftSecureStorageUnavailable();
+    }
+    _accessToken = null;
+    _sessionRestoreAttempted = true;
+    _sessionRestoreError = null;
+  }
+
   Future<Map<String, dynamic>> request(
     String path,
     String scope, {
@@ -325,14 +458,24 @@ class AnimeRiftApiClient {
       _registered = false;
       await _ensureReady();
       if (cancelToken?.isCancelled == true) throw cancelToken!.cancelError!;
-      return _send(
-        '$_base/$path',
-        headers: _headers(scope),
-        method: method,
-        body: body,
-        query: query,
-        cancelToken: cancelToken,
-      );
+      try {
+        return await _send(
+          '$_base/$path',
+          headers: _headers(scope),
+          method: method,
+          body: body,
+          query: query,
+          cancelToken: cancelToken,
+        );
+      } on AnimeRiftAccessUnavailable catch (retryError) {
+        if (_accessToken != null &&
+            (retryError.statusCode == 401 || retryError.statusCode == 403)) {
+          throw AnimeRiftAuthenticationRequired(
+            statusCode: retryError.statusCode,
+          );
+        }
+        rethrow;
+      }
     }
   }
 }

@@ -6,6 +6,7 @@ import '../../domain/entity/multimedia_item.dart';
 import '../../network/stale_connection_retry.dart';
 import '../../utils/anime_rift_stream_identity.dart';
 import 'anime_rift_api_client.dart';
+export 'anime_rift_api_client.dart' show AnimeRiftAuthenticationRequired;
 
 typedef _SourceIdentity = AnimeRiftSourceIdentity;
 
@@ -13,13 +14,6 @@ class AnimeRiftPlaybackUnavailable extends AnimeRiftAccessUnavailable {
   const AnimeRiftPlaybackUnavailable();
   @override
   String toString() => 'تعذر تشغيل هذا المصدر من Anime Rift. جرّب سيرفرًا آخر.';
-}
-
-class AnimeRiftAuthenticationRequired extends AnimeRiftAccessUnavailable {
-  const AnimeRiftAuthenticationRequired();
-  @override
-  String toString() =>
-      'يتطلب هذا الإجراء تسجيل الدخول إلى حساب Anime Rift. حساب AnimeWitcher مستقل عنه.';
 }
 
 class AnimeRiftStreams {
