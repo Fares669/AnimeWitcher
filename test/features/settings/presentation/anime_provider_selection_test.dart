@@ -79,9 +79,7 @@ class _DelayedSettings extends _SavedSettings {
 }
 
 class _RiftAccountFixture extends AnimeRiftApiClient {
-  _RiftAccountFixture({this.linked = false});
-
-  bool linked;
+  bool linked = false;
   final codes = <String>[];
   var signOuts = 0;
 

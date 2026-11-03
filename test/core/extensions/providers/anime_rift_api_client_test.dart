@@ -263,6 +263,7 @@ void main() {
   test('code sign-in persists securely and authenticates download requests after restart', () async {
     var signIns = 0;
     var authenticatedDownloads = 0;
+    var guestDownloads = 0;
     final dio = fixtureDio((o) {
       if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
       if (o.uri.path.endsWith('/auth/register/device')) {
@@ -288,8 +289,13 @@ void main() {
       expect(o.uri.path, endsWith('/library/episode/source/can_play'));
       expect(o.method, 'POST');
       expect((o.data as Map)['is_download'], isTrue);
-      expect(o.headers['authorization'], 'Bearer fixture-user-token');
-      authenticatedDownloads++;
+      if (o.headers['authorization'] == 'Bearer fixture-user-token') {
+        authenticatedDownloads++;
+      } else if (o.headers['authorization'] == 'Bearer null') {
+        guestDownloads++;
+      } else {
+        fail('unexpected Rift authorization header');
+      }
       return reply(o, {'sessionId': 'download-session'});
     });
 
@@ -312,10 +318,20 @@ void main() {
       method: 'POST',
       body: {'is_download': true},
     );
+    expect(secureValues.values.single, contains('fixture-user-token'));
+
+    await restarted.signOut();
+    await restarted.request(
+      'library/episode/source/can_play',
+      'ANIME.LIBRARY.EPISODES.SOURCES.CHECK_AVAILABILITY',
+      method: 'POST',
+      body: {'is_download': true},
+    );
 
     expect(signIns, 1);
     expect(authenticatedDownloads, 2);
-    expect(secureValues.values.single, contains('fixture-user-token'));
+    expect(guestDownloads, 1);
+    expect(secureValues, isEmpty);
     final prefs = await SharedPreferences.getInstance();
     final plainValues = prefs
         .getKeys()
