@@ -20,6 +20,10 @@ import '../../shared/widgets/app_scaffold.dart';
 import '../storage/settings_repository.dart';
 import '../extensions/base_provider.dart';
 import '../navigation/taskbar_destination.dart';
+import '../account/animewitcher_comment_models.dart'
+    show animeWitcherNativeProviderId;
+import '../storage/provider_local_library.dart' show animeRiftProviderId;
+import '../utils/anime_rift_identity.dart';
 
 part 'app_router.g.dart';
 
@@ -156,7 +160,8 @@ class SettingsBranchData extends StatefulShellBranchData {
 class SettingsRoute extends _AppGoRouteData with $SettingsRoute {
   const SettingsRoute();
   @override
-  Widget build(BuildContext context, GoRouterState state) => const SettingsScreen();
+  Widget build(BuildContext context, GoRouterState state) =>
+      const SettingsScreen();
 }
 
 class MangaBranchData extends StatefulShellBranchData {
@@ -285,27 +290,105 @@ Future<T?> _pushDetailsOnce<T>(
 
 @TypedGoRoute<DetailsRoute>(path: '/details')
 class DetailsRoute extends _AppGoRouteData with $DetailsRoute {
-  const DetailsRoute({required this.$extra});
-  final DetailsRouteExtra $extra;
+  const DetailsRoute({
+    this.provider,
+    this.url,
+    this.title,
+    this.poster,
+    this.$extra,
+  });
+
+  /// Optional public query representation used only by explicit cold deep
+  /// links. In-app navigation keeps the richer [$extra] object in memory and
+  /// deliberately does not copy item URLs/posters into the route location.
+  ///
+  /// Callers constructing a cold link must pass a stable catalog identity here,
+  /// never a signed stream URL, bearer token, or other credential.
+  final String? provider;
+  final String? url;
+  final String? title;
+  final String? poster;
+  final DetailsRouteExtra? $extra;
+
+  String? _canonicalNativeCatalogUrl(String rawUrl) {
+    final parsed = Uri.tryParse(rawUrl.trim());
+    if (parsed == null) return null;
+    final resolved = parsed.hasScheme || parsed.hasAuthority
+        ? parsed
+        : Uri.parse('https://animewitcher.com').resolveUri(parsed);
+    if (resolved.scheme != 'https' ||
+        resolved.userInfo.isNotEmpty ||
+        (resolved.host != 'animewitcher.com' &&
+            resolved.host != 'www.animewitcher.com') ||
+        resolved.pathSegments.isEmpty) {
+      return null;
+    }
+    return 'https://animewitcher.com${resolved.path}';
+  }
+
+  @visibleForTesting
+  DetailsRouteExtra? get resolvedExtra {
+    final extra = $extra;
+    if (extra != null) return extra;
+    final itemUrl = url?.trim() ?? '';
+    if (itemUrl.isEmpty) return null;
+    final providerId = provider?.trim() ?? '';
+    final resolvedProvider = providerId.isEmpty
+        ? animeWitcherNativeProviderId
+        : providerId;
+    if (resolvedProvider != animeWitcherNativeProviderId &&
+        resolvedProvider != animeRiftProviderId) {
+      return null;
+    }
+    final resolvedUrl = resolvedProvider == animeRiftProviderId
+        ? canonicalAnimeRiftCatalogUrl(itemUrl)
+        : _canonicalNativeCatalogUrl(itemUrl);
+    if (resolvedUrl == null) return null;
+    final itemTitle = title?.trim() ?? '';
+    return DetailsRouteExtra(
+      item: MultimediaItem(
+        title: itemTitle.isEmpty ? resolvedUrl : itemTitle,
+        url: resolvedUrl,
+        // Cold-link metadata is untrusted and details loading supplies the
+        // authoritative artwork. In-app navigation uses $extra instead.
+        posterUrl: '',
+        provider: resolvedProvider,
+        contentType: MultimediaContentType.anime,
+      ),
+    );
+  }
 
   @override
-  Future<T?> push<T>(BuildContext context) => _pushDetailsOnce<T>(
-    context,
-    location: location,
-    extra: $extra,
-    builder: (_) => _screen(),
-  );
+  Future<T?> push<T>(BuildContext context) {
+    final extra = $extra;
+    if (extra == null) return super.push<T>(context);
+    return _pushDetailsOnce<T>(
+      context,
+      location: location,
+      extra: extra,
+      builder: (_) => _screen(),
+    );
+  }
 
   @override
   Widget build(BuildContext context, GoRouterState state) => _screen();
 
   Widget _screen() {
+    final extra = resolvedExtra;
+    if (extra == null) {
+      return const Scaffold(
+        body: Center(child: Text('Invalid anime details link')),
+      );
+    }
     return DetailsScreen(
-      item: $extra.item,
-      autoPlay: $extra.autoPlay,
-      resumeEpisodeUrl: $extra.resumeEpisodeUrl,
-      resumeEpisodeNumber: $extra.resumeEpisodeNumber,
-      resumeSeason: $extra.resumeSeason,
+      key: ValueKey<String>(
+        '${extra.item.provider?.trim() ?? ''}\u0000${extra.item.url.trim()}',
+      ),
+      item: extra.item,
+      autoPlay: extra.autoPlay,
+      resumeEpisodeUrl: extra.resumeEpisodeUrl,
+      resumeEpisodeNumber: extra.resumeEpisodeNumber,
+      resumeSeason: extra.resumeSeason,
     );
   }
 }

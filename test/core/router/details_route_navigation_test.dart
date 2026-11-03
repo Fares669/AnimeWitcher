@@ -1,12 +1,243 @@
 import 'dart:async';
 
+import 'package:animewitcher/core/account/animewitcher_comment_models.dart'
+    show animeWitcherNativeProviderId;
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/router/app_router.dart';
+import 'package:animewitcher/core/storage/provider_local_library.dart'
+    show animeRiftProviderId;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
+  test('cold Rift details links preserve source-qualified identity', () {
+    const itemUrl = 'https://anime-rift.com/anime/42';
+    final route = DetailsRoute(
+      provider: animeRiftProviderId,
+      url: itemUrl,
+      title: 'Rift title',
+    );
+
+    final uri = Uri.parse(route.location);
+    expect(uri.path, '/details');
+    expect(uri.queryParameters['provider'], animeRiftProviderId);
+    expect(uri.queryParameters['url'], itemUrl);
+    expect(uri.queryParameters['title'], 'Rift title');
+
+    final item = route.resolvedExtra!.item;
+    expect(item.provider, animeRiftProviderId);
+    expect(item.url, itemUrl);
+    expect(item.title, 'Rift title');
+    expect(item.contentType, MultimediaContentType.anime);
+  });
+
+  test('cold Rift links canonicalize www identity and ignore poster input', () {
+    final route = DetailsRoute(
+      provider: animeRiftProviderId,
+      url: 'https://www.anime-rift.com/anime/42',
+      poster: 'https://attacker.example/pixel.png',
+    );
+
+    final item = route.resolvedExtra!.item;
+    expect(item.url, 'https://anime-rift.com/anime/42');
+    expect(item.posterUrl, isEmpty);
+  });
+
+  test('legacy cold details links default to the native provider', () {
+    final route = DetailsRoute(url: '/anime/legacy-42', title: 'Legacy');
+
+    expect(route.resolvedExtra!.item.provider, animeWitcherNativeProviderId);
+    expect(
+      route.resolvedExtra!.item.url,
+      'https://animewitcher.com/anime/legacy-42',
+    );
+  });
+
+  test('native cold links strip query metadata and canonicalize the host', () {
+    final route = DetailsRoute(
+      provider: animeWitcherNativeProviderId,
+      url: 'https://www.animewitcher.com/watch/42?aw_data=%7B%22name%22%3A%22Injected%22%7D&token=secret#private',
+    );
+
+    expect(route.resolvedExtra!.item.url, 'https://animewitcher.com/watch/42');
+  });
+
+  test('explicit native cold links reject non-native URL identities', () {
+    for (final url in <String>[
+      'file:///tmp/private-video.mp4',
+      'https://foreign.example/watch/42',
+      'https://anime-rift.com/anime/42',
+    ]) {
+      expect(
+        DetailsRoute(
+          provider: animeWitcherNativeProviderId,
+          url: url,
+        ).resolvedExtra,
+        isNull,
+        reason: url,
+      );
+    }
+  });
+
+  test('explicit native relative links become canonical public URLs', () {
+    final route = DetailsRoute(
+      provider: animeWitcherNativeProviderId,
+      url: '/watch/relative-42?aw_data=ignored',
+    );
+
+    expect(
+      route.resolvedExtra!.item.url,
+      'https://animewitcher.com/watch/relative-42',
+    );
+  });
+
+  test('providerless absolute links cannot cross provider boundaries', () {
+    expect(
+      DetailsRoute(url: 'https://anime-rift.com/anime/42').resolvedExtra,
+      isNull,
+    );
+    expect(
+      DetailsRoute(url: 'https://foreign.example/watch/42').resolvedExtra,
+      isNull,
+    );
+    expect(
+      DetailsRoute(url: 'https://animewitcher.com/watch/42').resolvedExtra,
+      isNotNull,
+    );
+  });
+
+  test('cold details links reject internal and unknown providers', () {
+    for (final provider in <String>['Local', 'Remote', 'unknown.provider']) {
+      final route = DetailsRoute(
+        provider: provider,
+        url: '/tmp/private-video.mp4',
+      );
+      expect(route.resolvedExtra, isNull, reason: provider);
+    }
+  });
+
+  test('cold Rift details links accept only the public HTTPS catalog host', () {
+    for (final url in <String>[
+      'file:///tmp/private-video.mp4',
+      'data:text/plain,secret',
+      'http://anime-rift.com/anime/42',
+      'https://video.example/anime/42',
+      'https://user:secret@anime-rift.com/anime/42',
+      'https://anime-rift.com/anime/42?token=secret',
+      'https://anime-rift.com/anime/42#signature=private',
+      'https://anime-rift.com/video/opaque-stream-token',
+      'https://anime-rift.com/anime/42/private/stream',
+      'https://anime-rift.com/anime/42%2Fprivate-stream',
+      'rift://movie/42',
+    ]) {
+      expect(
+        DetailsRoute(provider: animeRiftProviderId, url: url).resolvedExtra,
+        isNull,
+        reason: url,
+      );
+    }
+    expect(
+      DetailsRoute(
+        provider: animeRiftProviderId,
+        url: 'https://www.anime-rift.com/anime/42',
+      ).resolvedExtra,
+      isNotNull,
+    );
+  });
+
+  test('internal extras may still carry offline provider identities', () {
+    final item = MultimediaItem(
+      title: 'Offline',
+      url: '/tmp/offline.mp4',
+      posterUrl: '',
+      provider: 'Local',
+    );
+    final extra = DetailsRouteExtra(item: item);
+
+    expect(DetailsRoute($extra: extra).resolvedExtra, same(extra));
+  });
+
+  test('in-app details extras remain authoritative', () {
+    final item = MultimediaItem(
+      title: 'In-app item',
+      url: '/anime/in-app',
+      posterUrl: '',
+      provider: animeRiftProviderId,
+    );
+    final extra = DetailsRouteExtra(item: item, autoPlay: true);
+    final route = DetailsRoute(
+      provider: animeWitcherNativeProviderId,
+      url: '/wrong',
+      $extra: extra,
+    );
+
+    expect(route.resolvedExtra, same(extra));
+    expect(route.resolvedExtra!.item, same(item));
+    final uri = Uri.parse(route.location);
+    expect(uri.queryParameters['provider'], animeWitcherNativeProviderId);
+    expect(uri.queryParameters['url'], '/wrong');
+  });
+
+  test('in-app extra-only details routes do not serialize item data', () {
+    final item = MultimediaItem(
+      title: 'Private in-app item',
+      url: 'https://catalog.invalid/anime/42?opaque=value',
+      posterUrl: 'https://cdn.invalid/poster.jpg',
+      provider: animeRiftProviderId,
+    );
+    final route = DetailsRoute($extra: DetailsRouteExtra(item: item));
+
+    expect(route.resolvedExtra!.item, same(item));
+    final uri = Uri.parse(route.location);
+    expect(uri.path, '/details');
+    expect(uri.queryParameters, isEmpty);
+  });
+
+  testWidgets(
+    'details route keys screens by provider-qualified item identity',
+    (tester) async {
+      final first = MultimediaItem(
+        title: 'First',
+        url: 'https://animewitcher.com/watch/first',
+        posterUrl: '',
+        provider: animeWitcherNativeProviderId,
+      );
+      final second = MultimediaItem(
+        title: 'Second',
+        url: 'https://animewitcher.com/watch/second',
+        posterUrl: '',
+        provider: animeWitcherNativeProviderId,
+      );
+      Widget? built;
+      final router = GoRouter(
+        initialLocation: '/a',
+        routes: [
+          GoRoute(
+            path: '/:id',
+            builder: (context, state) {
+              final item = state.pathParameters['id'] == 'a' ? first : second;
+              built = DetailsRoute($extra: DetailsRouteExtra(item: item))
+                  .build(context, state);
+              return const SizedBox.shrink();
+            },
+          ),
+        ],
+      );
+      addTearDown(router.dispose);
+
+      await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+      await tester.pumpAndSettle();
+      final firstKey = built!.key;
+      expect(firstKey, isNotNull);
+
+      router.go('/b');
+      await tester.pumpAndSettle();
+      expect(built!.key, isNotNull);
+      expect(built!.key, isNot(firstKey));
+    },
+  );
+
   for (final manga in <bool>[false, true]) {
     testWidgets(
       'idle taps schedule navigation and only open one ${manga ? 'manga' : 'anime'}',

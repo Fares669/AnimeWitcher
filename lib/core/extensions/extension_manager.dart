@@ -83,7 +83,10 @@ class ActiveProvider extends _$ActiveProvider {
         : (ref.read(extensionManagerProvider.notifier).getProvider(storedId) ??
               providers.first);
 
-    if (storedId != selected.packageName) {
+    // A missing preference can safely initialize to the built-in default.
+    // An unknown persisted ID may belong to a temporarily unavailable or
+    // future provider, so fall back for this session without destroying it.
+    if (storedId == null) {
       Future.microtask(() {
         if (ref.mounted && state?.packageName == selected.packageName) {
           _saveSelection(selected.packageName);

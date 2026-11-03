@@ -22,10 +22,15 @@ class _MemoryBackend implements DownloadUrlRefreshBackend {
 }
 
 class _FakeProvider extends AnimeWitcherProvider {
-  _FakeProvider({this.sources = const [], this.resolved = const []});
+  _FakeProvider({
+    this.sources = const [],
+    this.resolved = const [],
+    this.resolvedByUrl = const {},
+  });
 
   List<StreamResult> sources;
   List<StreamResult> resolved;
+  Map<String, List<StreamResult>> resolvedByUrl;
   String? lastResolvedUrl;
   String? lastSourcesUrl;
   var prepared = false;
@@ -68,7 +73,7 @@ class _FakeProvider extends AnimeWitcherProvider {
   @override
   Future<List<StreamResult>> loadStreams(String url) async {
     lastResolvedUrl = url;
-    return resolved;
+    return resolvedByUrl[url] ?? resolved;
   }
 
   @override
@@ -247,6 +252,35 @@ void main() {
     expect(provider.lastResolvedUrl, descriptor.refreshUrl);
     expect(result?.url, contains('token=new'));
     expect(result?.headers['Referer'], 'https://provider.test/');
+  });
+
+  test('fresh source list wins over a stale direct refresh token', () async {
+    const stale = 'https://cdn.test/video.mp4?token=old';
+    const fresh = 'https://cdn.test/video.mp4?token=new';
+    final provider = _FakeProvider(
+      sources: const [
+        StreamResult(url: fresh, source: 'Server A', quality: '1080p'),
+      ],
+      resolvedByUrl: const {
+        'stale-source': [
+          StreamResult(url: stale, source: 'Server A', quality: '1080p'),
+        ],
+      },
+    );
+    final refresher = DownloadUrlRefresher(providerForId: (_) => provider);
+    const descriptor = DownloadUrlRefreshDescriptor(
+      trackingUrl: 'episode',
+      providerId: 'fake.provider',
+      source: 'Server A',
+      quality: '1080p',
+      refreshUrl: 'stale-source',
+      updatedAtMillis: 1,
+    );
+
+    final result = await refresher.refresh(descriptor, currentUrl: stale);
+
+    expect(provider.lastSourcesUrl, descriptor.trackingUrl);
+    expect(result?.url, fresh);
   });
 
   test('fallback source reload preserves source and quality', () async {

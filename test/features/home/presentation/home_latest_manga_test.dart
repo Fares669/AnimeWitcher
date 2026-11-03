@@ -102,6 +102,19 @@ final class _AnimeOnlyProvider extends _LatestMangaFailsProvider {
   }
 }
 
+final class _AnimeAndMangaProvider extends _AnimeOnlyProvider {
+  @override
+  Set<ProviderType> get supportedTypes => const {
+    ProviderType.anime,
+    ProviderType.manga,
+  };
+}
+
+final class _NativeMangaProvider extends _SlowMangaProvider {
+  @override
+  String get packageName => 'com.fares669.animewitcher.native';
+}
+
 final class _Manager extends ExtensionManager {
   _Manager(this.manga, this.anime);
   final AnimeWitcherProvider manga;
@@ -203,7 +216,12 @@ void main() {
     () async {
       final provider = _DeferredHomeProvider();
       final container = ProviderContainer(
-        overrides: [activeProviderProvider.overrideWithValue(provider)],
+        overrides: [
+          activeProviderProvider.overrideWithValue(provider),
+          extensionManagerProvider.overrideWith(
+            () => _Manager(provider, provider),
+          ),
+        ],
       );
       addTearDown(container.dispose);
       container.listen<HomeState>(homeDataProvider, (_, _) {});
@@ -225,7 +243,12 @@ void main() {
   test('a manga response after home disposal is ignored', () async {
     final provider = _SlowMangaProvider();
     final container = ProviderContainer(
-      overrides: [activeProviderProvider.overrideWithValue(provider)],
+      overrides: [
+        activeProviderProvider.overrideWithValue(provider),
+        extensionManagerProvider.overrideWith(
+          () => _Manager(provider, provider),
+        ),
+      ],
     );
     container.listen<HomeState>(homeDataProvider, (_, _) {});
     await _flush();
@@ -237,7 +260,12 @@ void main() {
   test('early manga survives a later Rift unavailable response', () async {
     final provider = _DeferredHomeProvider();
     final container = ProviderContainer(
-      overrides: [activeProviderProvider.overrideWithValue(provider)],
+      overrides: [
+        activeProviderProvider.overrideWithValue(provider),
+        extensionManagerProvider.overrideWith(
+          () => _Manager(provider, provider),
+        ),
+      ],
     );
     addTearDown(container.dispose);
     container.listen<HomeState>(homeDataProvider, (_, _) {});
@@ -257,7 +285,12 @@ void main() {
   test('a late manga response cannot replace a newer fetch', () async {
     final provider = _SlowMangaProvider();
     final container = ProviderContainer(
-      overrides: [activeProviderProvider.overrideWithValue(provider)],
+      overrides: [
+        activeProviderProvider.overrideWithValue(provider),
+        extensionManagerProvider.overrideWith(
+          () => _Manager(provider, provider),
+        ),
+      ],
     );
     addTearDown(container.dispose);
     container.listen<HomeState>(homeDataProvider, (_, _) {});
@@ -367,10 +400,41 @@ void main() {
     },
   );
 
+  test(
+    'active anime provider cannot replace the independent native manga source',
+    () async {
+      final manga = _NativeMangaProvider();
+      final anime = _AnimeAndMangaProvider();
+      final container = ProviderContainer(
+        overrides: [
+          activeProviderProvider.overrideWithValue(anime),
+          extensionManagerProvider.overrideWith(() => _Manager(manga, anime)),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.listen<HomeState>(homeDataProvider, (_, _) {});
+      await _flush();
+      expect(anime.mangaCalls, 0);
+      manga.manga.complete(_mangaPage('Native manga'));
+      await _flush();
+      expect(
+        (container.read(
+          homeDataProvider,
+        ) as HomeSuccess).latestManga.single.manga.title,
+        'Native manga',
+      );
+    },
+  );
+
   test('latest manga failure does not fail anime home', () async {
     final provider = _LatestMangaFailsProvider();
     final container = ProviderContainer(
-      overrides: [activeProviderProvider.overrideWithValue(provider)],
+      overrides: [
+        activeProviderProvider.overrideWithValue(provider),
+        extensionManagerProvider.overrideWith(
+          () => _Manager(provider, provider),
+        ),
+      ],
     );
     addTearDown(container.dispose);
 
@@ -390,7 +454,12 @@ void main() {
   test('home shows before a slow manga answer, which joins it later', () async {
     final provider = _SlowMangaProvider();
     final container = ProviderContainer(
-      overrides: [activeProviderProvider.overrideWithValue(provider)],
+      overrides: [
+        activeProviderProvider.overrideWithValue(provider),
+        extensionManagerProvider.overrideWith(
+          () => _Manager(provider, provider),
+        ),
+      ],
     );
     addTearDown(container.dispose);
 

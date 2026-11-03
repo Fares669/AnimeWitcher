@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../../core/account/account_providers.dart';
+import '../../../../core/account/animewitcher_comment_models.dart'
+    show animeWitcherNativeProviderId;
 import '../../../../core/extensions/extension_manager.dart';
 import '../../../../core/storage/storage_service.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
@@ -137,16 +139,19 @@ class HomeData extends _$HomeData {
     // rows are in, and the other two join it when they land. Held back, the
     // page opened only when the slowest of the three answered.
     final news = _orNull(() => activeProvider.getHomeNewsPage(limit: 10));
+    final mangaProviders = ref
+        .read(extensionManagerProvider)
+        .where(
+          (provider) => provider.supportedTypes.contains(ProviderType.manga),
+        );
     final mangaProvider =
-        activeProvider.supportedTypes.contains(ProviderType.manga)
-        ? activeProvider
-        : ref
-              .read(extensionManagerProvider)
-              .where(
-                (provider) =>
-                    provider.supportedTypes.contains(ProviderType.manga),
-              )
-              .firstOrNull;
+        mangaProviders
+            .where(
+              (provider) =>
+                  provider.packageName == animeWitcherNativeProviderId,
+            )
+            .firstOrNull ??
+        mangaProviders.firstOrNull;
     final manga = mangaProvider == null
         ? Future<MangaLatestChapterPage?>.value(null)
         : _orNull(() => mangaProvider.getLatestMangaPage(limit: 20));

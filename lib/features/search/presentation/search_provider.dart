@@ -76,6 +76,14 @@ Future<ProviderSearchFilterOptions> searchFilterOptionsFor(
   return const ProviderSearchFilterOptions();
 }
 
+bool searchFilterRequestIsStale(
+  SearchDomain domain,
+  String? initialAnimeProviderId,
+  String? currentAnimeProviderId,
+) =>
+    domain == SearchDomain.anime &&
+    initialAnimeProviderId != currentAnimeProviderId;
+
 class ProviderSearchResult {
   final String providerId;
   final String providerName;
@@ -177,7 +185,7 @@ Stream<SearchAggregateState> searchAllProviders(
     return filter == SearchFilter.live ? isLiveOnly : !isLiveOnly;
   }).toList();
   debugPrint(
-    '[SEARCH DBG] searchAllProviders called: query="$query", providers=${providers.length}, cancelled=${isCancelled()}',
+    '[SEARCH DBG] searchAllProviders called: queryLength=${query.runes.length}, providers=${providers.length}, cancelled=${isCancelled()}',
   );
 
   if (providers.isEmpty) {
@@ -819,11 +827,15 @@ Stream<SearchAggregateState> searchResults(Ref ref) {
   final providerFilters = ref.watch(searchProviderFiltersProvider);
   final manager = ref.read(extensionManagerProvider.notifier);
 
-  debugPrint('[SEARCH DBG] searchResults PROVIDER BUILT — query="$query"');
+  debugPrint(
+    '[SEARCH DBG] searchResults PROVIDER BUILT — queryLength=${query.runes.length}',
+  );
 
   var cancelled = false;
   ref.onDispose(() {
-    debugPrint('[SEARCH DBG] searchResults DISPOSED — query="$query"');
+    debugPrint(
+      '[SEARCH DBG] searchResults DISPOSED — queryLength=${query.runes.length}',
+    );
     cancelled = true;
   });
 

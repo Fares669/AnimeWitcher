@@ -89,7 +89,7 @@ void main() {
         lastEpisodeUrl: 'episode',
       );
       expect(history.getWatchHistory().single.item.title, 'Native');
-    expect(historyForItem(history, item).single.item.title, 'Rift');
+      expect(historyForItem(history, item).single.item.title, 'Rift');
       expect(
         history.getWatchHistoryFor(animeRiftProviderId).single.item.title,
         'Rift',
@@ -102,6 +102,172 @@ void main() {
       await history.clearContinueWatchingFor(animeRiftProviderId);
       expect(history.getContinueWatchingFor(animeRiftProviderId), isEmpty);
       expect(history.getWatchHistory().single.item.title, 'Native');
+    },
+  );
+
+  test(
+    'Rift history survives repository recreation with source identity',
+    () async {
+      final storage = _Memory();
+      final account = AnimeWitcherAccountService(
+        storage: storage,
+        secureStorage: SecureTokenStorage(storage),
+      );
+      final history = HistoryRepository(storage, account);
+      final item = MultimediaItem(
+        title: 'Rift persisted',
+        url: 'same',
+        posterUrl: 'poster',
+        provider: animeRiftProviderId,
+        contentType: MultimediaContentType.anime,
+      );
+      await history.recordOpened(item, lastEpisodeUrl: 'episode/7');
+      await history.saveContinueWatchingProgress(
+        item,
+        70,
+        100,
+        lastEpisodeUrl: 'episode/7',
+      );
+
+      final restarted = HistoryRepository(storage, account);
+      final restoredHistory = restarted.getWatchHistoryFor(animeRiftProviderId);
+      final restoredContinue = restarted.getContinueWatchingFor(
+        animeRiftProviderId,
+      );
+
+      expect(restoredHistory, hasLength(1));
+      expect(restoredHistory.single.item.provider, animeRiftProviderId);
+      expect(restoredHistory.single.item.url, item.url);
+      expect(restoredHistory.single.lastEpisodeUrl, 'episode/7');
+      expect(restoredContinue, hasLength(1));
+      expect(restoredContinue.single.item.provider, animeRiftProviderId);
+      expect(restoredContinue.single.position, 70);
+      expect(restarted.getWatchHistory().single.item.title, 'Native');
+    },
+  );
+
+  test(
+    'completed Rift movie clears resume position but keeps history',
+    () async {
+      final storage = _Memory();
+      final account = AnimeWitcherAccountService(
+        storage: storage,
+        secureStorage: SecureTokenStorage(storage),
+      );
+      final history = HistoryRepository(storage, account);
+      final item = MultimediaItem(
+        title: 'Rift movie',
+        url: 'rift://movie/42',
+        posterUrl: '',
+        provider: animeRiftProviderId,
+        contentType: MultimediaContentType.movie,
+      );
+      await history.saveContinueWatchingProgress(item, 50, 100);
+      expect(history.positionForItem(item), 50);
+
+      await history.completeItemFor(item);
+
+      expect(history.positionForItem(item), 0);
+      expect(history.durationForItem(item), 0);
+      expect(history.getContinueWatchingFor(animeRiftProviderId), isEmpty);
+      final record = history.getWatchHistoryFor(animeRiftProviderId).single;
+      expect(record.item.url, item.url);
+      expect(record.position, 0);
+      expect(record.duration, 0);
+    },
+  );
+
+  test('Rift history never persists signed stream URLs', () async {
+    final storage = _Memory();
+    final account = AnimeWitcherAccountService(
+      storage: storage,
+      secureStorage: SecureTokenStorage(storage),
+    );
+    final history = HistoryRepository(storage, account);
+    final item = MultimediaItem(
+      title: 'Rift',
+      url: 'https://anime-rift.com/anime/42',
+      posterUrl: '',
+      provider: animeRiftProviderId,
+      contentType: MultimediaContentType.movie,
+    );
+    const signed =
+        'https://video.test/movie.mp4?token=secret&signature=private';
+
+    await history.saveContinueWatchingProgress(
+      item,
+      50,
+      100,
+      lastStreamUrl: signed,
+    );
+
+    expect(
+      history.getContinueWatchingFor(animeRiftProviderId).single.lastStreamUrl,
+      isNull,
+    );
+    expect(storage.values.values.join('\n'), isNot(contains('secret')));
+    expect(storage.values.values.join('\n'), isNot(contains('signature')));
+  });
+
+  test('Rift www and canonical catalog URLs share playback identity', () async {
+    final storage = _Memory();
+    final account = AnimeWitcherAccountService(
+      storage: storage,
+      secureStorage: SecureTokenStorage(storage),
+    );
+    final history = HistoryRepository(storage, account);
+    final wwwItem = MultimediaItem(
+      title: 'Rift',
+      url: 'https://www.anime-rift.com/anime/42',
+      posterUrl: '',
+      provider: animeRiftProviderId,
+    );
+    final canonicalItem = wwwItem.copyWith(
+      url: 'https://anime-rift.com/anime/42',
+    );
+
+    await history.saveContinueWatchingProgress(
+      wwwItem,
+      33,
+      100,
+      lastEpisodeUrl: 'episode-1',
+    );
+
+    expect(history.positionForItem(canonicalItem, episodeUrl: 'episode-1'), 33);
+    expect(
+      history.getWatchHistoryFor(animeRiftProviderId).single.item.url,
+      canonicalItem.url,
+    );
+  });
+
+  test(
+    'Rift playback position disappears after both visible records are removed',
+    () async {
+      final storage = _Memory();
+      final account = AnimeWitcherAccountService(
+        storage: storage,
+        secureStorage: SecureTokenStorage(storage),
+      );
+      final history = HistoryRepository(storage, account);
+      final item = MultimediaItem(
+        title: 'Rift',
+        url: 'https://anime-rift.com/anime/42',
+        posterUrl: '',
+        provider: animeRiftProviderId,
+      );
+
+      await history.saveContinueWatchingProgress(
+        item,
+        55,
+        100,
+        lastEpisodeUrl: 'episode-1',
+      );
+      await history.removeContinueWatchingFor(item.url, animeRiftProviderId);
+      expect(history.positionForItem(item, episodeUrl: 'episode-1'), 55);
+
+      await history.removeHistoryFor(item.url, animeRiftProviderId);
+      expect(history.positionForItem(item, episodeUrl: 'episode-1'), 0);
+      expect(history.durationForItem(item, episodeUrl: 'episode-1'), 0);
     },
   );
 }

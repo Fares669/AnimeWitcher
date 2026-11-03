@@ -8,12 +8,15 @@ import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/providers/anime_data_source_settings_provider.dart';
 import 'package:animewitcher/core/storage/history_repository.dart';
+import 'package:animewitcher/core/storage/provider_local_library.dart'
+    show animeRiftProviderId;
 import 'package:animewitcher/core/storage/settings_repository.dart';
 import 'package:animewitcher/features/details/presentation/downloaded_file_provider.dart';
 import 'package:animewitcher/features/library/presentation/history_provider.dart';
 import 'package:animewitcher/features/player/presentation/player_controller_base.dart';
 import 'package:animewitcher/features/settings/presentation/player_settings_provider.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -24,6 +27,7 @@ class _Player extends Fake implements media.Player {
   final durations = StreamController<Duration>.broadcast(sync: true);
   final errors = StreamController<String>.broadcast(sync: true);
   final buffers = StreamController<bool>.broadcast(sync: true);
+  final logs = StreamController<media.PlayerLog>.broadcast(sync: true);
   bool seekThrows = false;
   final opened = <String>[];
   Completer<void>? pendingPause;
@@ -39,8 +43,13 @@ class _Player extends Fake implements media.Player {
   @override
   media.PlayerState get state => value;
   @override
-  media.PlayerStream get stream =>
-      _Streams(positions.stream, durations.stream, errors.stream, buffers.stream);
+  media.PlayerStream get stream => _Streams(
+    positions.stream,
+    durations.stream,
+    errors.stream,
+    buffers.stream,
+    logs.stream,
+  );
   @override
   media.PlatformPlayer? get platform => native;
   @override
@@ -59,11 +68,13 @@ class _Player extends Fake implements media.Player {
     await pendingPause?.future;
     value = value.copyWith(playing: false);
   }
+
   @override
   Future<void> play() async {
     await native?.play();
     value = value.copyWith(playing: true);
   }
+
   @override
   Future<void> seek(Duration position) async {
     seeks.add(position);
@@ -82,6 +93,7 @@ class _Player extends Fake implements media.Player {
     await durations.close();
     await errors.close();
     await buffers.close();
+    await logs.close();
   }
 }
 
@@ -107,6 +119,7 @@ class _ReadinessNative extends Fake implements media.NativePlayer {
   void _reachedReadiness() {
     if (!readinessReached.isCompleted) readinessReached.complete();
   }
+
   @override
   Future<void> get waitForVideoControllerInitializationIfAttached =>
       renderer.future;
@@ -148,11 +161,10 @@ class _ReadinessNative extends Fake implements media.NativePlayer {
         _reachedReadiness();
         await renderer.future;
       });
-
 }
 
 class _Streams extends Fake implements media.PlayerStream {
-  _Streams(this.position, this.duration, this.error, this.buffering);
+  _Streams(this.position, this.duration, this.error, this.buffering, this.log);
   @override
   final Stream<Duration> position;
   @override
@@ -168,7 +180,7 @@ class _Streams extends Fake implements media.PlayerStream {
   @override
   final Stream<String> error;
   @override
-  Stream<media.PlayerLog> get log => const Stream.empty();
+  final Stream<media.PlayerLog> log;
   @override
   Stream<media.Track> get track => const Stream.empty();
 }
@@ -217,6 +229,7 @@ class _Catalog extends AnimeWitcherProvider {
     return pendingStreams?.future ??
         Future.error(StateError('Local playback must not resolve sources'));
   }
+
   @override
   Future<List<Episode>> getEpisodes(String url) {
     final request = Completer<List<Episode>>();
@@ -303,16 +316,26 @@ class _History extends WatchHistory {
 
 class _ContinueWatching extends ContinueWatchingNotifier {
   MultimediaItem? saved;
+  String? savedLastStreamUrl;
+  String? savedLastEpisodeUrl;
   MultimediaItem? removedItem;
+  MultimediaItem? completedItem;
   int unqualifiedRemovals = 0;
   @override
   Future<void> remove(String url) async {
     unqualifiedRemovals++;
   }
+
   @override
   Future<void> removeForItem(MultimediaItem item) async {
     removedItem = item;
   }
+
+  @override
+  Future<void> completeForItem(MultimediaItem item) async {
+    completedItem = item;
+  }
+
   @override
   List<HistoryItem> build() => const [];
   @override
@@ -330,6 +353,8 @@ class _ContinueWatching extends ContinueWatchingNotifier {
     String? episodePosterUrl,
   }) async {
     saved = item;
+    savedLastStreamUrl = lastStreamUrl;
+    savedLastEpisodeUrl = lastEpisodeUrl;
   }
 }
 
@@ -374,9 +399,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late Directory testDirectory;
   setUpAll(() async {
-    testDirectory = await Directory.systemTemp.createTemp(
-      'player-startup-',
-    );
+    testDirectory = await Directory.systemTemp.createTemp('player-startup-');
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
           const MethodChannel('plugins.flutter.io/path_provider'),
@@ -459,7 +482,9 @@ void main() {
 
   Future<void> startSource({bool local = false, bool live = false}) async {
     final episode = _episode(1);
-    final url = local ? '/saved/episode.mp4' : 'https://video.test/original.mp4';
+    final url = local
+        ? '/saved/episode.mp4'
+        : 'https://video.test/original.mp4';
     await controller.init(
       player: player,
       item: _item([episode, _episode(2)]),
@@ -476,6 +501,117 @@ void main() {
     player.advance(const Duration(seconds: 5));
     await flush();
   }
+
+  test('debug output redacts stream, header, DRM and license values', () async {
+    final messages = <String>[];
+    final previous = debugPrint;
+    debugPrint = (String? message, {int? wrapWidth}) {
+      if (message != null) messages.add(message);
+    };
+    addTearDown(() => debugPrint = previous);
+    const url =
+        'https://user:password@video.test/private-path?token=stream-secret';
+    final native = _ReadinessNative()..renderer.complete();
+    player.native = native;
+    await controller.init(
+      player: player,
+      item: _item([_episode(1)]),
+      videoUrl: url,
+      episode: _episode(1),
+      selectedSource: const StreamResult(
+        url: url,
+        source: 'Selected',
+        headers: {
+          'Authorization': 'Bearer auth-secret',
+          'Cookie': 'session=cookie-secret',
+          'X-Custom': 'custom-secret',
+        },
+        drmKid: '0123456789abcdef0123456789abcdef',
+        drmKey: 'abcdef0123456789abcdef0123456789',
+        licenseUrl: 'https://license.test/private-license?token=license-secret',
+      ),
+    );
+    player.logs.add(
+      const media.PlayerLog(
+        prefix: 'ffmpeg',
+        level: 'error',
+        text: 'Opening https://video.test/engine-path?token=engine-secret',
+      ),
+    );
+    player.logs.add(
+      const media.PlayerLog(
+        prefix: 'ffmpeg',
+        level: 'error',
+        text: 'server rejected custom-secret',
+      ),
+    );
+    player.logs.add(
+      const media.PlayerLog(
+        prefix: 'ffmpeg',
+        level: 'error',
+        text: 'X-Unknown: engine-header-secret',
+      ),
+    );
+    await flush();
+    final output = messages.join('\n');
+    for (final secret in [
+      'password',
+      'private-path',
+      'stream-secret',
+      'auth-secret',
+      'cookie-secret',
+      'custom-secret',
+      '0123456789abcdef0123456789abcdef',
+      'abcdef0123456789abcdef0123456789',
+      'private-license',
+      'license-secret',
+      'engine-path',
+      'engine-secret',
+      'engine-header-secret',
+    ]) {
+      expect(output, isNot(contains(secret)), reason: secret);
+    }
+    expect(output, contains('redacted'));
+    expect(output, contains('[MPV/error]'));
+    // Only logging changes: playback still receives the original credentials.
+    expect(player.opened, [url]);
+    expect(
+      native.properties['http-header-fields'],
+      contains('Bearer auth-secret'),
+    );
+    expect(
+      native.properties['demuxer-lavf-o'],
+      contains('abcdef0123456789abcdef0123456789'),
+    );
+    expect(
+      native.properties['tls-verify'],
+      isNot('no'),
+      reason: 'Native playback must keep TLS certificate verification enabled',
+    );
+  });
+
+  test(
+    'native live playback keeps TLS certificate verification enabled',
+    () async {
+      final native = _ReadinessNative()..renderer.complete();
+      player.native = native;
+      final episode = _episode(1, url: 'https://video.test/live/channel');
+
+      await controller.init(
+        player: player,
+        item: _item(<Episode>[episode], type: MultimediaContentType.livestream),
+        videoUrl: episode.url,
+        episode: episode,
+        selectedSource: StreamResult(url: episode.url, source: 'Live'),
+      );
+
+      expect(
+        native.properties['tls-verify'],
+        isNot('no'),
+        reason: 'Live playback must not disable certificate validation',
+      );
+    },
+  );
 
   for (final next in [false, true]) {
     test(
@@ -752,12 +888,16 @@ void main() {
 
   test('completed native movie removes progress using item identity', () async {
     final item = MultimediaItem(
-      title: 'native', url: 'same', posterUrl: '',
+      title: 'native',
+      url: 'same',
+      posterUrl: '',
       provider: 'com.fares669.animewitcher.native',
       contentType: MultimediaContentType.movie,
     );
     await controller.init(
-      player: player, item: item, videoUrl: 'https://video.test/movie.mp4',
+      player: player,
+      item: item,
+      videoUrl: 'https://video.test/movie.mp4',
     );
     player.value = player.value.copyWith(
       position: const Duration(seconds: 95),
@@ -771,25 +911,95 @@ void main() {
     expect(history.unqualifiedRemovals, 0);
   });
 
-  test('legacy untagged playback progress preserves its original identity', () async {
-    final item = MultimediaItem(
-      title: 'legacy', url: 'same', posterUrl: '',
-      contentType: MultimediaContentType.movie,
-    );
-    await controller.init(
-      player: player, item: item, videoUrl: 'https://video.test/movie.mp4',
-    );
-    player.value = player.value.copyWith(
-      position: const Duration(seconds: 50),
-      duration: const Duration(seconds: 100),
-    );
-    controller.saveProgress();
-    await flush();
-    final history =
-        container.read(continueWatchingProvider.notifier) as _ContinueWatching;
-    expect(history.saved?.provider, isNull);
-    expect(history.saved?.url, item.url);
-  });
+  test(
+    'legacy untagged playback progress preserves its original identity',
+    () async {
+      final item = MultimediaItem(
+        title: 'legacy',
+        url: 'same',
+        posterUrl: '',
+        contentType: MultimediaContentType.movie,
+      );
+      await controller.init(
+        player: player,
+        item: item,
+        videoUrl: 'https://video.test/movie.mp4',
+      );
+      player.value = player.value.copyWith(
+        position: const Duration(seconds: 50),
+        duration: const Duration(seconds: 100),
+      );
+      controller.saveProgress();
+      await flush();
+      final history = container.read(
+        continueWatchingProvider.notifier,
+      ) as _ContinueWatching;
+      expect(history.saved?.provider, isNull);
+      expect(history.saved?.url, item.url);
+    },
+  );
+
+  test(
+    'Rift movie progress uses the movie identity instead of a stream key',
+    () async {
+      const signedUrl =
+          'https://video.test/movie.mp4?token=secret&signature=private';
+      final item = MultimediaItem(
+        title: 'rift movie',
+        url: 'rift://movie/42',
+        posterUrl: '',
+        provider: animeRiftProviderId,
+        contentType: MultimediaContentType.movie,
+      );
+      await controller.init(
+        player: player,
+        item: item,
+        videoUrl: signedUrl,
+        selectedSource: const StreamResult(url: signedUrl, source: 'Selected'),
+      );
+      player.value = player.value.copyWith(
+        position: const Duration(seconds: 50),
+        duration: const Duration(seconds: 100),
+      );
+      controller.saveProgress();
+      await flush();
+      final history = container.read(
+        continueWatchingProvider.notifier,
+      ) as _ContinueWatching;
+      expect(history.saved, same(item));
+      expect(history.savedLastEpisodeUrl, isNull);
+      expect(history.savedLastStreamUrl, isNull);
+    },
+  );
+
+  test(
+    'completed Rift movie uses completion cleanup for its provider',
+    () async {
+      final item = MultimediaItem(
+        title: 'rift movie',
+        url: 'rift://movie/42',
+        posterUrl: '',
+        provider: animeRiftProviderId,
+        contentType: MultimediaContentType.movie,
+      );
+      await controller.init(
+        player: player,
+        item: item,
+        videoUrl: 'https://video.test/movie.mp4',
+      );
+      player.value = player.value.copyWith(
+        position: const Duration(seconds: 95),
+        duration: const Duration(seconds: 100),
+      );
+      controller.saveProgress();
+      await flush();
+      final history = container.read(
+        continueWatchingProvider.notifier,
+      ) as _ContinueWatching;
+      expect(history.completedItem, same(item));
+      expect(history.removedItem, isNull);
+    },
+  );
 
   test('transient error waits for progress before refreshing source', () async {
     await startSource();
@@ -805,56 +1015,72 @@ void main() {
     expect(connectivityChecks, 0);
   });
 
-  test('recovery regression: reopen error at zero respects in-flight guard', () async {
-    await startSource(live: true);
-    player.value = player.value.copyWith(duration: const Duration(minutes: 24));
-    player.advance(const Duration(seconds: 90));
-    final pending = Completer<void>();
-    player.pendingPause = pending;
-    player.errors.add('Network stalled');
-    await Future<void>.delayed(const Duration(milliseconds: 2100));
-    await flush();
-    expect(player.opened, hasLength(2));
-    expect(player.state.position, Duration.zero);
-    player.errors.add('Network stalled while reopen is preparing');
-    await flush();
-    expect(controller.currentState.sourceAttempts.first.status.name, isNot('failed'));
-    expect(controller.currentState.uiPhase.kind.name, isNot('error'));
-    pending.complete();
-    await flush();
-  });
+  test(
+    'recovery regression: reopen error at zero respects in-flight guard',
+    () async {
+      await startSource(live: true);
+      player.value = player.value.copyWith(
+        duration: const Duration(minutes: 24),
+      );
+      player.advance(const Duration(seconds: 90));
+      final pending = Completer<void>();
+      player.pendingPause = pending;
+      player.errors.add('Network stalled');
+      await Future<void>.delayed(const Duration(milliseconds: 2100));
+      await flush();
+      expect(player.opened, hasLength(2));
+      expect(player.state.position, Duration.zero);
+      player.errors.add('Network stalled while reopen is preparing');
+      await flush();
+      expect(
+        controller.currentState.sourceAttempts.first.status.name,
+        isNot('failed'),
+      );
+      expect(controller.currentState.uiPhase.kind.name, isNot('error'));
+      pending.complete();
+      await flush();
+    },
+  );
 
-  test('recovery regression: old position callback cannot unlock in-flight check', () async {
-    await startSource(live: true);
-    pendingConnectivity = Completer<List<String>>();
-    player.errors.add('Network stalled');
-    await Future<void>.delayed(const Duration(milliseconds: 2100));
-    await flush();
-    expect(connectivityChecks, 1);
-    player.advance(const Duration(seconds: 6));
-    player.errors.add('Network stalled again');
-    await flush();
-    expect(connectivityChecks, 1);
-    pendingConnectivity!.complete(<String>['none']);
-    await flush();
-  });
+  test(
+    'recovery regression: old position callback cannot unlock in-flight check',
+    () async {
+      await startSource(live: true);
+      pendingConnectivity = Completer<List<String>>();
+      player.errors.add('Network stalled');
+      await Future<void>.delayed(const Duration(milliseconds: 2100));
+      await flush();
+      expect(connectivityChecks, 1);
+      player.advance(const Duration(seconds: 6));
+      player.errors.add('Network stalled again');
+      await flush();
+      expect(connectivityChecks, 1);
+      pendingConnectivity!.complete(<String>['none']);
+      await flush();
+    },
+  );
 
-  test('recovery regression: reconnect retains checkpoint across engine reset', () async {
-    await startSource(live: true);
-    player.value = player.value.copyWith(duration: const Duration(minutes: 24));
-    player.advance(const Duration(seconds: 90));
-    pendingConnectivity = Completer<List<String>>();
-    player.errors.add('Network stalled');
-    await Future<void>.delayed(const Duration(milliseconds: 2100));
-    await flush();
-    player.value = player.value.copyWith(position: Duration.zero);
-    pendingConnectivity!.complete(<String>['wifi']);
-    await flush();
-    expect(player.opened, hasLength(2));
-    expect(player.seeks, [const Duration(seconds: 90)]);
-    expect(player.state.position, const Duration(seconds: 90));
-    expect(player.state.playing, isTrue);
-  });
+  test(
+    'recovery regression: reconnect retains checkpoint across engine reset',
+    () async {
+      await startSource(live: true);
+      player.value = player.value.copyWith(
+        duration: const Duration(minutes: 24),
+      );
+      player.advance(const Duration(seconds: 90));
+      pendingConnectivity = Completer<List<String>>();
+      player.errors.add('Network stalled');
+      await Future<void>.delayed(const Duration(milliseconds: 2100));
+      await flush();
+      player.value = player.value.copyWith(position: Duration.zero);
+      pendingConnectivity!.complete(<String>['wifi']);
+      await flush();
+      expect(player.opened, hasLength(2));
+      expect(player.seeks, [const Duration(seconds: 90)]);
+      expect(player.state.position, const Duration(seconds: 90));
+      expect(player.state.playing, isTrue);
+    },
+  );
 
   test('engine reset to zero is not mistaken for recovery progress', () async {
     await startSource(live: true);
@@ -878,7 +1104,10 @@ void main() {
       item: _item([episode]),
       videoUrl: 'https://video.test/episode/stream.m3u8',
       episode: episode,
-      selectedSource: StreamResult(url: 'https://video.test/episode/stream.m3u8', source: 'Selected'),
+      selectedSource: StreamResult(
+        url: 'https://video.test/episode/stream.m3u8',
+        source: 'Selected',
+      ),
     );
     expect(controller.currentState.isLive, isFalse);
     expect(player.seeks, [const Duration(seconds: 90)]);
@@ -901,50 +1130,59 @@ void main() {
     controller.disposeController(player: player);
     await flush();
   });
-  test('connected network notification during brief buffering does not reopen', () async {
-    await startSource();
-    player.buffers.add(true);
-    await Future<void>.delayed(const Duration(milliseconds: 450));
-    final delivered = Completer<void>();
-    await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .handlePlatformMessage(
-          'dev.fluttercommunity.plus/connectivity_status',
-          const StandardMethodCodec().encodeSuccessEnvelope(['wifi']),
-          (_) => delivered.complete(),
-        );
-    await delivered.future;
-    await flush();
-    expect(connectivityChecks, 0);
-    expect(catalog.streamCalls, 0);
-    expect(player.opened, hasLength(1));
-  });
+  test(
+    'connected network notification during brief buffering does not reopen',
+    () async {
+      await startSource();
+      player.buffers.add(true);
+      await Future<void>.delayed(const Duration(milliseconds: 450));
+      final delivered = Completer<void>();
+      await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .handlePlatformMessage(
+            'dev.fluttercommunity.plus/connectivity_status',
+            const StandardMethodCodec().encodeSuccessEnvelope(['wifi']),
+            (_) => delivered.complete(),
+          );
+      await delivered.future;
+      await flush();
+      expect(connectivityChecks, 0);
+      expect(catalog.streamCalls, 0);
+      expect(player.opened, hasLength(1));
+    },
+  );
 
-  test('pausing during the error observation window cancels recovery', () async {
-    await startSource();
-    player.errors.add('Connection reset by peer');
-    await controller.pause();
-    await Future<void>.delayed(const Duration(milliseconds: 2100));
-    expect(connectivityChecks, 0);
-    expect(catalog.streamCalls, 0);
-    expect(player.opened, hasLength(1));
-    expect(player.state.playing, isFalse);
-  });
+  test(
+    'pausing during the error observation window cancels recovery',
+    () async {
+      await startSource();
+      player.errors.add('Connection reset by peer');
+      await controller.pause();
+      await Future<void>.delayed(const Duration(milliseconds: 2100));
+      expect(connectivityChecks, 0);
+      expect(catalog.streamCalls, 0);
+      expect(player.opened, hasLength(1));
+      expect(player.state.playing, isFalse);
+    },
+  );
 
-  test('offline recovery checkpoint clears when original playback advances', () async {
-    await startSource(live: true);
-    pendingConnectivity = Completer<List<String>>();
-    player.errors.add('Connection reset by peer');
-    await Future<void>.delayed(const Duration(milliseconds: 2100));
-    pendingConnectivity!.complete(['none']);
-    await flush();
-    player.advance(const Duration(seconds: 20));
-    await controller.pause();
-    await controller.play();
-    await flush();
-    expect(player.opened, hasLength(1));
-    expect(connectivityChecks, 1);
-    expect(player.state.position, const Duration(seconds: 20));
-  });
+  test(
+    'offline recovery checkpoint clears when original playback advances',
+    () async {
+      await startSource(live: true);
+      pendingConnectivity = Completer<List<String>>();
+      player.errors.add('Connection reset by peer');
+      await Future<void>.delayed(const Duration(milliseconds: 2100));
+      pendingConnectivity!.complete(['none']);
+      await flush();
+      player.advance(const Duration(seconds: 20));
+      await controller.pause();
+      await controller.play();
+      await flush();
+      expect(player.opened, hasLength(1));
+      expect(connectivityChecks, 1);
+      expect(player.state.position, const Duration(seconds: 20));
+    },
+  );
 
   test('local playback recovery never checks a router connection', () async {
     await startSource(local: true);
@@ -956,22 +1194,32 @@ void main() {
     expect(player.opened, ['/saved/episode.mp4']);
   });
 
-  test('late signed URL recovery cannot reopen a replacement download', () async {
-    await startSource();
-    final pending = Completer<List<StreamResult>>();
-    catalog.pendingStreams = pending;
-    player.errors.add('Connection reset by peer');
-    await Future<void>.delayed(const Duration(milliseconds: 2100));
-    await flush();
-    expect(catalog.streamCalls, 1, reason: 'Recovery must reach the pending resolver');
-    final replacement = await replaceRoute();
-    pending.complete([
-      StreamResult(url: 'https://video.test/stale.mp4', source: 'Resolved'),
-    ]);
-    await flush();
-    expect(controller.currentState.currentStream?.url, '/saved/replacement.mp4');
-    expect(replacement.opened, ['/saved/replacement.mp4']);
-  });
+  test(
+    'late signed URL recovery cannot reopen a replacement download',
+    () async {
+      await startSource();
+      final pending = Completer<List<StreamResult>>();
+      catalog.pendingStreams = pending;
+      player.errors.add('Connection reset by peer');
+      await Future<void>.delayed(const Duration(milliseconds: 2100));
+      await flush();
+      expect(
+        catalog.streamCalls,
+        1,
+        reason: 'Recovery must reach the pending resolver',
+      );
+      final replacement = await replaceRoute();
+      pending.complete([
+        StreamResult(url: 'https://video.test/stale.mp4', source: 'Resolved'),
+      ]);
+      await flush();
+      expect(
+        controller.currentState.currentStream?.url,
+        '/saved/replacement.mp4',
+      );
+      expect(replacement.opened, ['/saved/replacement.mp4']);
+    },
+  );
 
   test('late Wi-Fi check cannot reopen a replacement download', () async {
     await startSource();
@@ -988,43 +1236,49 @@ void main() {
     expect(catalog.streamCalls, 0);
   });
 
-  test('late manual source resolution cannot hijack a replacement route', () async {
-    await startSource(local: true);
-    final pending = Completer<List<StreamResult>>();
-    catalog.pendingStreams = pending;
-    final switching = controller.switchToSource(
-      StreamResult(
-        url: 'https://video.test/provider-page',
-        source: 'Provider',
-        requiresResolution: true,
-      ),
-    );
-    await flush();
-    expect(catalog.streamCalls, 1);
-    final replacement = await replaceRoute();
-    pending.complete([
-      StreamResult(url: 'https://video.test/stale.mp4', source: 'Resolved'),
-    ]);
-    expect(await switching, isFalse);
-    expect(replacement.opened, ['/saved/replacement.mp4']);
-  });
+  test(
+    'late manual source resolution cannot hijack a replacement route',
+    () async {
+      await startSource(local: true);
+      final pending = Completer<List<StreamResult>>();
+      catalog.pendingStreams = pending;
+      final switching = controller.switchToSource(
+        StreamResult(
+          url: 'https://video.test/provider-page',
+          source: 'Provider',
+          requiresResolution: true,
+        ),
+      );
+      await flush();
+      expect(catalog.streamCalls, 1);
+      final replacement = await replaceRoute();
+      pending.complete([
+        StreamResult(url: 'https://video.test/stale.mp4', source: 'Resolved'),
+      ]);
+      expect(await switching, isFalse);
+      expect(replacement.opened, ['/saved/replacement.mp4']);
+    },
+  );
 
   for (final next in [false, true]) {
-    test('late ${next ? 'next' : 'selected'} episode pause cannot reopen a replacement route', () async {
-      await startSource(local: true);
-      final pending = Completer<void>();
-      player.pendingPause = pending;
-      final transition = next
-          ? controller.playNextEpisode()
-          : controller.loadEpisode(_episode(2));
-      await flush();
-      final replacement = await replaceRoute();
-      pending.complete();
-      await transition;
-      await flush();
-      expect(controller.currentEpisode?.url, 'episode-4');
-      expect(replacement.opened, ['/saved/replacement.mp4']);
-    });
+    test(
+      'late ${next ? 'next' : 'selected'} episode pause cannot reopen a replacement route',
+      () async {
+        await startSource(local: true);
+        final pending = Completer<void>();
+        player.pendingPause = pending;
+        final transition = next
+            ? controller.playNextEpisode()
+            : controller.loadEpisode(_episode(2));
+        await flush();
+        final replacement = await replaceRoute();
+        pending.complete();
+        await transition;
+        await flush();
+        expect(controller.currentEpisode?.url, 'episode-4');
+        expect(replacement.opened, ['/saved/replacement.mp4']);
+      },
+    );
   }
 
   Future<void> startLive() async {
@@ -1034,7 +1288,10 @@ void main() {
       item: _item([episode], type: MultimediaContentType.livestream),
       videoUrl: 'https://video.test/live.m3u8',
       episode: episode,
-      selectedSource: StreamResult(url: 'https://video.test/live.m3u8', source: 'Live'),
+      selectedSource: StreamResult(
+        url: 'https://video.test/live.m3u8',
+        source: 'Live',
+      ),
     );
     player.advance(const Duration(seconds: 5));
     await flush();
@@ -1063,112 +1320,126 @@ void main() {
     await flush();
   });
 
-  test('old stall completion cannot clear the replacement recovery guard', () async {
-    await startLive();
-    final oldPending = Completer<void>();
-    player.pendingOpen = oldPending;
-    player.errors.add('Network stalled');
-    await flush();
-    expect(player.opened, hasLength(2));
-    final replacement = await replaceRoute(live: true);
-    final newPending = Completer<void>();
-    replacement.pendingOpen = newPending;
-    replacement.errors.add('Network stalled');
-    await flush();
-    expect(replacement.opened, hasLength(2));
-    oldPending.complete();
-    await flush();
-    replacement.advance(const Duration(seconds: 5));
-    replacement.errors.add('Network stalled');
-    await flush();
-    expect(replacement.opened, hasLength(2));
-    newPending.complete();
-    await flush();
-  });
+  test(
+    'old stall completion cannot clear the replacement recovery guard',
+    () async {
+      await startLive();
+      final oldPending = Completer<void>();
+      player.pendingOpen = oldPending;
+      player.errors.add('Network stalled');
+      await flush();
+      expect(player.opened, hasLength(2));
+      final replacement = await replaceRoute(live: true);
+      final newPending = Completer<void>();
+      replacement.pendingOpen = newPending;
+      replacement.errors.add('Network stalled');
+      await flush();
+      expect(replacement.opened, hasLength(2));
+      oldPending.complete();
+      await flush();
+      replacement.advance(const Duration(seconds: 5));
+      replacement.errors.add('Network stalled');
+      await flush();
+      expect(replacement.opened, hasLength(2));
+      newPending.complete();
+      await flush();
+    },
+  );
 
-  test('local startup skips network cookie and cache directory preparation', () async {
-    final pendingDirectory = Completer<String>();
-    var temporaryLookups = 0;
-    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    messenger.setMockMethodCallHandler(
-      const MethodChannel('plugins.flutter.io/path_provider'),
-      (call) async {
-        if (call.method == 'getTemporaryDirectory') {
-          temporaryLookups++;
-          return pendingDirectory.future;
-        }
-        return testDirectory.path;
-      },
-    );
-    final native = _ReadinessNative()..renderer.complete();
-    player.native = native;
-    final startup = startSource(local: true);
-    try {
-      await player.openedSignal.future.timeout(const Duration(seconds: 2));
-      expect(temporaryLookups, 0);
-      expect(native.properties, isNot(contains('cookies-file')));
-      expect(native.properties, isNot(contains('cache-dir')));
-    } finally {
-      pendingDirectory.complete(testDirectory.path);
-      await startup;
+  test(
+    'local startup skips network cookie and cache directory preparation',
+    () async {
+      final pendingDirectory = Completer<String>();
+      var temporaryLookups = 0;
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
       messenger.setMockMethodCallHandler(
         const MethodChannel('plugins.flutter.io/path_provider'),
-        (call) async => call.method == 'getApplicationSupportDirectory'
-            ? testDirectory.path
-            : '/nonexistent/player-tests',
+        (call) async {
+          if (call.method == 'getTemporaryDirectory') {
+            temporaryLookups++;
+            return pendingDirectory.future;
+          }
+          return testDirectory.path;
+        },
       );
-    }
-  });
+      final native = _ReadinessNative()..renderer.complete();
+      player.native = native;
+      final startup = startSource(local: true);
+      try {
+        await player.openedSignal.future.timeout(const Duration(seconds: 2));
+        expect(temporaryLookups, 0);
+        expect(native.properties, isNot(contains('cookies-file')));
+        expect(native.properties, isNot(contains('cache-dir')));
+      } finally {
+        pendingDirectory.complete(testDirectory.path);
+        await startup;
+        messenger.setMockMethodCallHandler(
+          const MethodChannel('plugins.flutter.io/path_provider'),
+          (call) async => call.method == 'getApplicationSupportDirectory'
+              ? testDirectory.path
+              : '/nonexistent/player-tests',
+        );
+      }
+    },
+  );
 
-  test('remote startup preserves network cookie and cache properties', () async {
-    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    messenger.setMockMethodCallHandler(
-      const MethodChannel('plugins.flutter.io/path_provider'),
-      (_) async => testDirectory.path,
-    );
-    final native = _ReadinessNative()..renderer.complete();
-    player.native = native;
-    try {
-      await startSource();
-      expect(native.properties['cookies-file'], endsWith('mpv_cookies.txt'));
-      expect(native.properties['cache-dir'], testDirectory.path);
-    } finally {
+  test(
+    'remote startup preserves network cookie and cache properties',
+    () async {
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
       messenger.setMockMethodCallHandler(
         const MethodChannel('plugins.flutter.io/path_provider'),
-        (call) async => call.method == 'getApplicationSupportDirectory'
-            ? testDirectory.path
-            : '/nonexistent/player-tests',
+        (_) async => testDirectory.path,
       );
-    }
-  });
+      final native = _ReadinessNative()..renderer.complete();
+      player.native = native;
+      try {
+        await startSource();
+        expect(native.properties['cookies-file'], endsWith('mpv_cookies.txt'));
+        expect(native.properties['cache-dir'], testDirectory.path);
+      } finally {
+        messenger.setMockMethodCallHandler(
+          const MethodChannel('plugins.flutter.io/path_provider'),
+          (call) async => call.method == 'getApplicationSupportDirectory'
+              ? testDirectory.path
+              : '/nonexistent/player-tests',
+        );
+      }
+    },
+  );
 
-  test('startup waits for native properties before renderer readiness', () async {
-
-    final pending = Completer<void>();
-    final native = _ReadinessNative()..pendingProperties = pending;
-    player.native = native;
-    final episode = _episode(1);
-    final startup = controller.init(
-      player: player,
-      item: _item([episode]),
-      videoUrl: '/saved/episode.mp4',
-      episode: episode,
-    );
-    try {
-      await native.firstPropertyWrite.future.timeout(const Duration(seconds: 2));
-      expect(native.propertyWrites, 1);
-      expect(native.openEntered, isFalse);
-    } finally {
-      pending.complete();
-      native.renderer.complete();
-      await startup;
-    }
-  });
+  test(
+    'startup waits for native properties before renderer readiness',
+    () async {
+      final pending = Completer<void>();
+      final native = _ReadinessNative()..pendingProperties = pending;
+      player.native = native;
+      final episode = _episode(1);
+      final startup = controller.init(
+        player: player,
+        item: _item([episode]),
+        videoUrl: '/saved/episode.mp4',
+        episode: episode,
+      );
+      try {
+        await native.firstPropertyWrite.future.timeout(
+          const Duration(seconds: 2),
+        );
+        expect(native.propertyWrites, 1);
+        expect(native.openEntered, isFalse);
+      } finally {
+        pending.complete();
+        native.renderer.complete();
+        await startup;
+      }
+    },
+  );
 
   test(
     'startup waits for native renderer before taking the shared open lock',
     () async {
-
       final native = _ReadinessNative();
       player.native = native;
       final episode = _episode(1);
@@ -1195,14 +1466,12 @@ void main() {
       }
       expect(native.openEntered, isTrue);
       expect(player.opened, ['/saved/episode.mp4']);
-
     },
   );
 
   test(
     'late renderer readiness cannot enter an abandoned native open',
     () async {
-
       final native = _ReadinessNative();
       player.native = native;
       final episode = _episode(1);
@@ -1221,64 +1490,78 @@ void main() {
       expect(native.openEntered, isFalse);
       expect(player.opened, isEmpty);
       expect(replacement.opened, ['/saved/replacement.mp4']);
-
     },
   );
 
   for (final pausing in [true, false]) {
-    test('${pausing ? 'pause' : 'play'} waits for renderer outside the shared native lock', () async {
-      await startSource(local: true);
-      final native = _ReadinessNative();
-      player.native = native;
-      final operation = pausing ? controller.pause() : controller.play();
-      await native.readinessReached.future.timeout(const Duration(seconds: 1));
-      await flush();
-      var nextEngineCanStart = false;
-      final nextEngine = media.NativePlayer.lock.synchronized(
-        () => nextEngineCanStart = true,
-      );
-      try {
+    test(
+      '${pausing ? 'pause' : 'play'} waits for renderer outside the shared native lock',
+      () async {
+        await startSource(local: true);
+        final native = _ReadinessNative();
+        player.native = native;
+        final operation = pausing ? controller.pause() : controller.play();
+        await native.readinessReached.future.timeout(
+          const Duration(seconds: 1),
+        );
         await flush();
-        expect(nextEngineCanStart, isTrue);
-        expect(pausing ? native.pauseEntered : native.playEntered, isFalse);
-      } finally {
+        var nextEngineCanStart = false;
+        final nextEngine = media.NativePlayer.lock.synchronized(
+          () => nextEngineCanStart = true,
+        );
+        try {
+          await flush();
+          expect(nextEngineCanStart, isTrue);
+          expect(pausing ? native.pauseEntered : native.playEntered, isFalse);
+        } finally {
+          native.renderer.complete();
+          await operation;
+          await nextEngine;
+        }
+        expect(pausing ? native.pauseEntered : native.playEntered, isTrue);
+      },
+    );
+
+    test(
+      'late renderer cannot ${pausing ? 'pause' : 'play'} an abandoned player',
+      () async {
+        await startSource(local: true);
+        final native = _ReadinessNative();
+        player.native = native;
+        final operation = pausing ? controller.pause() : controller.play();
+        await native.readinessReached.future.timeout(
+          const Duration(seconds: 1),
+        );
+        await flush();
+        final replacement = await replaceRoute();
         native.renderer.complete();
         await operation;
-        await nextEngine;
-      }
-      expect(pausing ? native.pauseEntered : native.playEntered, isTrue);
-    });
-
-    test('late renderer cannot ${pausing ? 'pause' : 'play'} an abandoned player', () async {
-      await startSource(local: true);
-      final native = _ReadinessNative();
-      player.native = native;
-      final operation = pausing ? controller.pause() : controller.play();
-      await native.readinessReached.future.timeout(const Duration(seconds: 1));
-      await flush();
-      final replacement = await replaceRoute();
-      native.renderer.complete();
-      await operation;
-      expect(pausing ? native.pauseEntered : native.playEntered, isFalse);
-      expect(replacement.opened, ['/saved/replacement.mp4']);
-    });
+        expect(pausing ? native.pauseEntered : native.playEntered, isFalse);
+        expect(replacement.opened, ['/saved/replacement.mp4']);
+      },
+    );
   }
 
   for (final resumeBeforeReady in [true, false]) {
-    test('lifecycle pause ${resumeBeforeReady ? 'is cancelled on foreground' : 'dispatches while backgrounded'} after renderer readiness', () async {
-      await startSource(local: true);
-      final native = _ReadinessNative();
-      player.native = native;
-      controller.setAppBackgrounded(true);
-      final pausing = controller.pause(onlyWhileBackgrounded: true);
-      await native.readinessReached.future.timeout(const Duration(seconds: 1));
-      await flush();
-      if (resumeBeforeReady) controller.setAppBackgrounded(false);
-      native.renderer.complete();
-      await pausing;
-      expect(native.pauseEntered, !resumeBeforeReady);
-      expect(player.state.playing, resumeBeforeReady);
-    });
+    test(
+      'lifecycle pause ${resumeBeforeReady ? 'is cancelled on foreground' : 'dispatches while backgrounded'} after renderer readiness',
+      () async {
+        await startSource(local: true);
+        final native = _ReadinessNative();
+        player.native = native;
+        controller.setAppBackgrounded(true);
+        final pausing = controller.pause(onlyWhileBackgrounded: true);
+        await native.readinessReached.future.timeout(
+          const Duration(seconds: 1),
+        );
+        await flush();
+        if (resumeBeforeReady) controller.setAppBackgrounded(false);
+        native.renderer.complete();
+        await pausing;
+        expect(native.pauseEntered, !resumeBeforeReady);
+        expect(player.state.playing, resumeBeforeReady);
+      },
+    );
   }
 
   for (final payload in [
@@ -1286,40 +1569,50 @@ void main() {
     '<?xml version="1.0"?><MPD><Period /></MPD>',
     '<!doctype html><html><body>Sign in</body></html>',
   ]) {
-    test('local text artifact is rejected before native startup without remote fallback: ${payload.substring(0, 8)}', () async {
-      final directory = await Directory.systemTemp.createTemp('aw-local-payload-');
-      final file = await File('${directory.path}/episode.mp4').writeAsString(payload);
-      try {
-        final episode = _episode(1);
-        final native = _ReadinessNative();
-        player.native = native;
-        await controller.init(
-          player: player,
-          item: _item([episode]),
-          videoUrl: file.path,
-          episode: episode,
-        ).timeout(const Duration(seconds: 1));
-        await flush();
-        expect(player.opened, isEmpty);
-        expect(native.openEntered, isFalse);
-        expect(native.propertyWrites, 0);
-        expect(controller.currentState.uiPhase.kind, PlaybackUiPhaseKind.error);
-        expect(controller.currentState.errorMessage, isNotEmpty);
-        expect(catalog.streamCalls, 0);
-        expect(connectivityChecks, 0);
-        expect(await file.readAsString(), payload);
-      } finally {
-        player.native?.renderer.complete();
-        await directory.delete(recursive: true);
-      }
-    });
+    test(
+      'local text artifact is rejected before native startup without remote fallback: ${payload.substring(0, 8)}',
+      () async {
+        final directory = await Directory.systemTemp.createTemp(
+          'aw-local-payload-',
+        );
+        final file = await File('${directory.path}/episode.mp4')
+            .writeAsString(payload);
+        try {
+          final episode = _episode(1);
+          final native = _ReadinessNative();
+          player.native = native;
+          await controller
+              .init(
+                player: player,
+                item: _item([episode]),
+                videoUrl: file.path,
+                episode: episode,
+              )
+              .timeout(const Duration(seconds: 1));
+          await flush();
+          expect(player.opened, isEmpty);
+          expect(native.openEntered, isFalse);
+          expect(native.propertyWrites, 0);
+          expect(
+            controller.currentState.uiPhase.kind,
+            PlaybackUiPhaseKind.error,
+          );
+          expect(controller.currentState.errorMessage, isNotEmpty);
+          expect(catalog.streamCalls, 0);
+          expect(connectivityChecks, 0);
+          expect(await file.readAsString(), payload);
+        } finally {
+          player.native?.renderer.complete();
+          await directory.delete(recursive: true);
+        }
+      },
+    );
   }
 
   test('unknown binary local video is left to the native engine', () async {
     final directory = await Directory.systemTemp.createTemp('aw-local-binary-');
-    final file = await File('${directory.path}/episode.mp4').writeAsBytes([
-      0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109,
-    ]);
+    final file = await File('${directory.path}/episode.mp4')
+        .writeAsBytes([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109]);
     try {
       final episode = _episode(1);
       await controller.init(
@@ -1329,7 +1622,10 @@ void main() {
         episode: episode,
       );
       expect(player.opened, [file.path]);
-      expect(controller.currentState.uiPhase.kind, isNot(PlaybackUiPhaseKind.error));
+      expect(
+        controller.currentState.uiPhase.kind,
+        isNot(PlaybackUiPhaseKind.error),
+      );
       expect(await file.length(), 12);
     } finally {
       await directory.delete(recursive: true);

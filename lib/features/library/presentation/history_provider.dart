@@ -164,6 +164,11 @@ class ContinueWatchingNotifier extends Notifier<List<HistoryItem>> {
     refresh();
   }
 
+  Future<void> completeForItem(MultimediaItem item) async {
+    await ref.read(historyRepositoryProvider).completeItemFor(item);
+    refresh();
+  }
+
   Future<void> saveProgress(
     MultimediaItem item,
     int position,

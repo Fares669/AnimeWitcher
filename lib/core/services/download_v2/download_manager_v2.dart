@@ -848,12 +848,102 @@ final class DownloadManagerV2 {
     });
   }
 
+  /// Retries a failed logical download. A ranged transport that failed while
+  /// renewing an expired source keeps its exact generation and saved ranges;
+  /// other failures retain the historical fresh-generation retry behavior.
+  Future<DownloadTransportSnapshot> retry(
+    DownloadLogicalId logicalId, {
+    String? expectedTaskId,
+  }) {
+    return _runControlCommand(logicalId, 'retry', () async {
+      await initialize();
+      final currentRecord = await _store.get(logicalId);
+      if (currentRecord == null) {
+        throw StateError('Cannot retry missing logical download $logicalId');
+      }
+      if (expectedTaskId != null && currentRecord.taskId != expectedTaskId) {
+        return _snapshots[logicalId] ??
+            DownloadTransportSnapshot(
+              taskId: currentRecord.taskId,
+              status: DownloadTransportStatus.missing,
+              progress: 0,
+              totalBytes: currentRecord.expectedBytes,
+            );
+      }
+      final currentHandle = await _recordHandle(currentRecord);
+      if (currentRecord.intent != DownloadUserIntent.failed) {
+        return currentHandle?.current ??
+            _snapshots[logicalId] ??
+            DownloadTransportSnapshot(
+              taskId: currentRecord.taskId,
+              status: currentRecord.completedAtMillis != null
+                  ? DownloadTransportStatus.complete
+                  : currentRecord.intent == DownloadUserIntent.paused
+                  ? DownloadTransportStatus.paused
+                  : currentRecord.intent == DownloadUserIntent.canceled
+                  ? DownloadTransportStatus.canceled
+                  : currentRecord.awaitingAdmission
+                  ? DownloadTransportStatus.queued
+                  : DownloadTransportStatus.missing,
+              progress: currentRecord.completedAtMillis != null ? 1 : 0,
+              totalBytes: currentRecord.expectedBytes,
+              transferredBytes: currentRecord.completedAtMillis != null
+                  ? currentRecord.expectedBytes
+                  : null,
+            );
+      }
+      if (currentRecord.intent == DownloadUserIntent.failed &&
+          currentRecord.failureCategory ==
+              DownloadFailureCategory.sourceExpired &&
+          currentRecord.mediaKind == DownloadMediaKind.videoEpisode &&
+          currentHandle is SourceRenewingDownloadTransportHandleV2) {
+        final activeRecord = currentRecord.copyWith(
+          intent: DownloadUserIntent.active,
+          awaitingAdmission: false,
+          clearFailure: true,
+          updatedAtMillis: _nowMillis(),
+        );
+        await _store.put(activeRecord);
+        _rememberRecord(activeRecord);
+        if (currentHandle is DownloadTransportHandle) {
+          _activateHandle(logicalId, currentHandle);
+        }
+        _sourceRefreshAttempts.remove(logicalId);
+        _firstRenewedPositiveSample.remove(logicalId);
+        await _publishRecords();
+        _scheduleSourceRefresh(logicalId, activeRecord.taskId);
+        return currentHandle is DownloadTransportHandle
+            ? currentHandle.current
+            : (_snapshots[logicalId] ??
+                  DownloadTransportSnapshot(
+                    taskId: activeRecord.taskId,
+                    status: DownloadTransportStatus.failed,
+                    progress: 0,
+                    totalBytes: activeRecord.expectedBytes,
+                    failureCategory: DownloadFailureCategory.sourceExpired,
+                  ));
+      }
+
+      final request = _requestFromRecord(currentRecord);
+      _sourceRefreshAttempts.remove(logicalId);
+      _mangaSourceRefreshVerifiedPages.remove(logicalId);
+      _firstRenewedPositiveSample.remove(logicalId);
+      return _startFreshGeneration(request, currentRecord);
+    }, expectedTaskId: expectedTaskId);
+  }
+
   /// Persists paused intent before asking the package to pause.
-  Future<DownloadTransportSnapshot?> pause(DownloadLogicalId logicalId) {
+  Future<DownloadTransportSnapshot?> pause(
+    DownloadLogicalId logicalId, {
+    String? expectedTaskId,
+  }) {
     return _runControlCommand(logicalId, 'pause', () async {
       await initialize();
       final record = await _store.get(logicalId);
       if (record == null) return null;
+      if (expectedTaskId != null && record.taskId != expectedTaskId) {
+        return _snapshots[logicalId];
+      }
       final existingHandle = await _recordHandle(record);
       final existingSnapshot = existingHandle?.current ?? _snapshots[logicalId];
       if (record.completedAtMillis != null ||
@@ -979,7 +1069,7 @@ final class DownloadManagerV2 {
         if (reservesWhilePausing) _admissionReservations.remove(logicalId);
         _scheduleAdmissionPromotion();
       }
-    });
+    }, expectedTaskId: expectedTaskId);
   }
 
   /// Resumes the exact current package transfer when possible.
@@ -987,16 +1077,28 @@ final class DownloadManagerV2 {
   /// Paused intent never falls back to a fresh generation: losing the exact
   /// package handle must preserve the user's existing progress. Active records
   /// may still use normal missing-transfer recovery.
-  Future<DownloadTransportSnapshot> resume(DownloadLogicalId logicalId) {
+  Future<DownloadTransportSnapshot> resume(
+    DownloadLogicalId logicalId, {
+    String? expectedTaskId,
+  }) {
     return _runControlCommand(logicalId, 'resume', () async {
       await initialize();
       final record = await _store.get(logicalId);
       if (record == null) {
         throw StateError('Cannot resume missing logical download $logicalId');
       }
+      if (expectedTaskId != null && record.taskId != expectedTaskId) {
+        return _snapshots[logicalId] ??
+            DownloadTransportSnapshot(
+              taskId: record.taskId,
+              status: DownloadTransportStatus.missing,
+              progress: 0,
+              totalBytes: record.expectedBytes,
+            );
+      }
       final request = _requestFromRecord(record);
       return _resumeRecordUnsafe(record, request);
-    });
+    }, expectedTaskId: expectedTaskId);
   }
 
   /// Whether a paused record still has something to resume: a place in the
@@ -1290,16 +1392,18 @@ final class DownloadManagerV2 {
 
   /// Deletes the logical item and final artifact. Missing artifacts are treated
   /// as already deleted.
-  Future<void> delete(DownloadLogicalId logicalId) {
+  Future<void> delete(DownloadLogicalId logicalId, {String? expectedTaskId}) {
     return _runControlCommand(logicalId, 'delete', () async {
       await _initializeForLocalAccess();
       var record = await _store.get(logicalId);
       if (record == null) return;
+      if (expectedTaskId != null && record.taskId != expectedTaskId) return;
       if (record.completedAtMillis == null ||
           record.mediaKind != DownloadMediaKind.videoEpisode) {
         await initialize();
         record = await _store.get(logicalId);
         if (record == null) return;
+        if (expectedTaskId != null && record.taskId != expectedTaskId) return;
       }
       final deleting = record;
       final destinationKey = await _canonicalDestinationPath(
@@ -1365,7 +1469,7 @@ final class DownloadManagerV2 {
           _scheduleAdmissionPromotion();
         }
       });
-    });
+    }, expectedTaskId: expectedTaskId);
   }
 
   /// Legacy files still share title folders with current V2 downloads.
@@ -2288,11 +2392,23 @@ final class DownloadManagerV2 {
         : previousHandle ??
               (lookUpPreviousHandle ? await _recordHandle(previous) : null);
 
+    if (_pendingStopControls.containsKey(request.logicalId)) {
+      if (previous != null && obsoleteHandle != null) {
+        await _preservePausedResumeFailure(previous, obsoleteHandle);
+      }
+      throw StateError('Download startup interrupted by stop request');
+    }
     if (obsoleteHandle != null) {
       await _settleObsoleteHandle(
         obsoleteHandle,
         cancelEvenIfFinal: cancelPreviousEvenIfFinal,
       );
+    }
+    if (_pendingStopControls.containsKey(request.logicalId)) {
+      if (previous != null && obsoleteHandle != null) {
+        await _preservePausedResumeFailure(previous, obsoleteHandle);
+      }
+      throw StateError('Download startup interrupted by stop request');
     }
 
     final isManga = request.mediaKind == DownloadMediaKind.mangaChapter;
@@ -2305,6 +2421,12 @@ final class DownloadManagerV2 {
               () => _sourceResolver.resolve(request.sourceDescriptor),
             );
     } catch (error) {
+      if (_pendingStopControls.containsKey(request.logicalId)) {
+        if (previous != null && obsoleteHandle != null) {
+          await _preservePausedResumeFailure(previous, obsoleteHandle);
+        }
+        rethrow;
+      }
       if (!_recordChanges.isClosed &&
           previous != null &&
           previous.intent != DownloadUserIntent.canceled) {
@@ -2428,10 +2550,18 @@ final class DownloadManagerV2 {
   Future<T> _runControlCommand<T>(
     DownloadLogicalId logicalId,
     String action,
-    Future<T> Function() command,
-  ) {
+    Future<T> Function() command, {
+    String? expectedTaskId,
+  }) {
     final elapsed = Stopwatch()..start();
-    final stops = action == 'pause' || action == 'cancel' || action == 'delete';
+    final currentTaskId = _currentTaskIds[logicalId];
+    final targetsCurrentTask =
+        expectedTaskId == null ||
+        currentTaskId == null ||
+        currentTaskId == expectedTaskId;
+    final stops =
+        targetsCurrentTask &&
+        (action == 'pause' || action == 'cancel' || action == 'delete');
     if (stops) {
       _pendingStopControls.update(
         logicalId,
@@ -3628,19 +3758,38 @@ final class DownloadManagerV2 {
         }
         // Count only fenced renewal commands, never duplicate/stale callbacks.
         _sourceRefreshAttempts[logicalId] = attempts + 1;
+        void refundStoppedAttempt() {
+          if ((_sourceRefreshAttempts[logicalId] ?? 0) != attempts + 1) return;
+          if (attempts == 0) {
+            _sourceRefreshAttempts.remove(logicalId);
+          } else {
+            _sourceRefreshAttempts[logicalId] = attempts;
+          }
+        }
+
         _firstRenewedPositiveSample.remove(logicalId);
         await Future<void>.delayed(
           Duration(milliseconds: 200 * (1 << attempts)),
         );
+        if (_pendingStopControls.containsKey(logicalId)) {
+          refundStoppedAttempt();
+          if (renewableHandle != null) {
+            await _yieldSourceRenewalToStop(record, renewableHandle);
+          }
+          return;
+        }
         final request = _requestFromRecord(record);
         try {
           if (renewableHandle is SourceRenewingDownloadTransportHandleV2) {
-            final source = await _sourceResolver.resolve(
-              record.sourceDescriptor,
+            final source = await _resolveUntilStop<ResolvedDownloadSourceV2>(
+              logicalId,
+              () => _sourceResolver.resolve(record.sourceDescriptor),
             );
             if (_recordChanges.isClosed) return;
-            if (await _yieldSourceRenewalToStop(record, renewableHandle!))
+            if (await _yieldSourceRenewalToStop(record, renewableHandle!)) {
+              refundStoppedAttempt();
               return;
+            }
             final renewed =
                 await (renewableHandle
                         as SourceRenewingDownloadTransportHandleV2)
@@ -3649,8 +3798,10 @@ final class DownloadManagerV2 {
                       headers: source.headers,
                       expectedBytes: source.expectedBytes,
                     );
-            if (await _yieldSourceRenewalToStop(record, renewableHandle))
+            if (await _yieldSourceRenewalToStop(record, renewableHandle)) {
+              refundStoppedAttempt();
               return;
+            }
             if (!renewed) {
               throw StateError(
                 'Renewed source could not safely retain downloaded ranges',
@@ -3665,12 +3816,24 @@ final class DownloadManagerV2 {
             );
             return;
           }
+          if (renewableHandle != null &&
+              await _yieldSourceRenewalToStop(record, renewableHandle)) {
+            refundStoppedAttempt();
+            return;
+          }
           await _startFreshGeneration(
             request,
             record,
             cancelPreviousEvenIfFinal: true,
           );
         } catch (error) {
+          if (_pendingStopControls.containsKey(logicalId)) {
+            refundStoppedAttempt();
+            if (renewableHandle != null) {
+              await _yieldSourceRenewalToStop(record, renewableHandle);
+            }
+            return;
+          }
           if (renewableHandle is SourceRenewingDownloadTransportHandleV2 &&
               await _yieldSourceRenewalToStop(record, renewableHandle!))
             return;

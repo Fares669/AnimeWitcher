@@ -86,10 +86,12 @@ class HistoryItem {
   }
 }
 
-List<HistoryItem> historyForItem(HistoryRepository repository, MultimediaItem item) =>
-    item.provider == animeRiftProviderId
-        ? repository.getWatchHistoryFor(animeRiftProviderId)
-        : repository.getWatchHistory();
+List<HistoryItem> historyForItem(
+  HistoryRepository repository,
+  MultimediaItem item,
+) => item.provider == animeRiftProviderId
+    ? repository.getWatchHistoryFor(animeRiftProviderId)
+    : repository.getWatchHistory();
 
 int historyPositionForItem(
   HistoryRepository repository,
@@ -174,6 +176,10 @@ class HistoryRepository {
       providerId == animeRiftProviderId
       ? _local().removeContinueWatching(url)
       : removeContinueWatching(url);
+  Future<void> completeItemFor(MultimediaItem item) =>
+      item.provider == animeRiftProviderId
+      ? _local().completeMovie(item.url)
+      : removeContinueWatching(item.url);
   Future<void> clearHistoryFor(String? providerId) =>
       providerId == animeRiftProviderId
       ? _local().clearHistory()
@@ -329,7 +335,9 @@ class HistoryRepository {
         episodeServerName: episodeServerName,
         episodeServerNumber: episodeServerNumber,
         episodePosterUrl: episodePosterUrl,
-        lastStreamUrl: lastStreamUrl,
+        // Rift stream URLs can be short-lived and may contain signed query
+        // credentials. Keep only stable catalog/playback identity locally.
+        lastStreamUrl: null,
       );
       return;
     }

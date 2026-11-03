@@ -89,4 +89,19 @@ void main() {
       );
     },
   );
+
+  test(
+    'unknown persisted provider falls back without rewriting preference',
+    () async {
+      final settings = _TestSettings('missing.provider');
+      final container = _container(settings);
+      addTearDown(container.dispose);
+
+      final registered = container.read(extensionManagerProvider);
+      expect(container.read(activeProviderProvider), same(registered.first));
+
+      await Future<void>.delayed(Duration.zero);
+      expect(settings.savedId, 'missing.provider');
+    },
+  );
 }

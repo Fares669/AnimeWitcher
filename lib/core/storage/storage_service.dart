@@ -21,6 +21,7 @@ import 'scoped_cache_files.dart';
 import '../domain/entity/multimedia_item.dart';
 import '../services/download_concurrency.dart';
 import '../services/download_parallel.dart';
+import '../services/download_v2/anime_rift_download_metadata_v2.dart';
 import '../utils/safe_uri.dart';
 
 part 'storage_service.g.dart';
@@ -1451,6 +1452,14 @@ class StorageService {
     double? lastProgress,
     int? lastExpectedBytes,
   }) async {
+    final isRift = isAnimeRiftDownloadProviderV2(item.provider);
+    if (isRift) {
+      item = animeRiftDownloadItemSnapshotV2(item);
+      if (episode != null)
+        episode = animeRiftDownloadEpisodeSnapshotV2(episode);
+      trackingUrl = animeRiftDownloadTrackingIdentityV2(trackingUrl ?? '');
+      taskSnapshot = null;
+    }
     await _downloadMetadata('hive.put', [
       taskId,
       {
@@ -1486,9 +1495,20 @@ class StorageService {
     double? lastProgress,
     int? lastExpectedBytes,
   }) async {
+    final existing = await getDownloadMetadata(taskId);
+    final existingItem = existing?['item'];
+    final existingProvider = existingItem is Map
+        ? existingItem['provider']?.toString()
+        : null;
+    final isRift = isAnimeRiftDownloadProviderV2(existingProvider);
     final map = <String, dynamic>{};
     if (trackingUrl != null && trackingUrl.isNotEmpty) {
-      map['trackingUrl'] = trackingUrl;
+      final safeTracking = isRift
+          ? animeRiftDownloadTrackingIdentityV2(trackingUrl)
+          : trackingUrl;
+      if (safeTracking != null && safeTracking.isNotEmpty) {
+        map['trackingUrl'] = safeTracking;
+      }
     }
     if (filePath != null && filePath.isNotEmpty) {
       map['filePath'] = filePath;
@@ -1496,7 +1516,7 @@ class StorageService {
     if (logicalId != null && logicalId.trim().isNotEmpty) {
       map['logicalId'] = logicalId.trim();
     }
-    if (taskSnapshot != null) {
+    if (taskSnapshot != null && !isRift) {
       map['taskSnapshot'] = Map<String, dynamic>.from(taskSnapshot);
     }
     if (queueWaiting != null) {

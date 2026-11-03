@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 
 import '../domain/entity/multimedia_item.dart';
+import '../utils/anime_rift_identity.dart';
 import 'library_category.dart';
 import 'storage_service.dart';
 
@@ -38,13 +39,36 @@ class ProviderLocalLibrary {
         throw const FormatException('Invalid local provider library entry');
       }
     }
+    if (providerId == animeRiftProviderId) {
+      final normalized = <String, dynamic>{};
+      for (final entry in value.entries) {
+        final row = Map<String, dynamic>.from(entry.value as Map);
+        final item = Map<String, dynamic>.from(row['item'] as Map);
+        final rawUrl = (item['url'] ?? entry.key).toString();
+        final id = canonicalAnimeRiftStorageUrl(rawUrl);
+        final migrated = MultimediaItem.fromJson(item);
+        row['item'] = _riftCatalogSnapshot(migrated, id);
+        final previous = normalized[id];
+        if (previous is Map) {
+          row['favorite'] =
+              row['favorite'] == true || previous['favorite'] == true;
+          row['category'] ??= previous['category'];
+        }
+        normalized[id] = row;
+      }
+      return normalized;
+    }
     return value;
   }
 
-  bool isFavorite(String id) => (_read()[id] as Map?)?['favorite'] == true;
+  String _id(String value) => providerId == animeRiftProviderId
+      ? canonicalAnimeRiftStorageUrl(value)
+      : value.trim();
+
+  bool isFavorite(String id) => (_read()[_id(id)] as Map?)?['favorite'] == true;
 
   MultimediaItem? item(String id) {
-    final row = _read()[id] as Map?;
+    final row = _read()[_id(id)] as Map?;
     if (row == null) return null;
     return MultimediaItem.fromJson(
       Map<String, dynamic>.from(row['item'] as Map),
@@ -57,7 +81,7 @@ class ProviderLocalLibrary {
   }
 
   LibraryCategory? category(String id) {
-    final value = (_read()[id] as Map?)?['category'];
+    final value = (_read()[_id(id)] as Map?)?['category'];
     if (value is! String) return null;
     final result = LibraryCategory.fromStorageKey(value);
     return result.isPrimary ? result : null;
@@ -91,7 +115,7 @@ class ProviderLocalLibrary {
 
   Future<void> remove(String id) => _enqueue(() {
     final entries = _read();
-    entries.remove(id);
+    entries.remove(_id(id));
     return entries;
   });
 
@@ -111,7 +135,7 @@ class ProviderLocalLibrary {
     LibraryCategory? category,
     bool changeCategory = false,
   }) {
-    final id = item.url.trim();
+    final id = _id(item.url);
     if (id.isEmpty) throw ArgumentError.value(item.url, 'item.url');
     return _enqueue(() {
       final entries = _read();
@@ -124,7 +148,9 @@ class ProviderLocalLibrary {
         entries.remove(id);
       } else {
         entries[id] = <String, dynamic>{
-          'item': item.copyWith(provider: providerId).toJson(),
+          'item': providerId == animeRiftProviderId
+              ? _riftCatalogSnapshot(item, id)
+              : item.copyWith(provider: providerId).toJson(),
           'favorite': savedFavorite,
           'category': savedCategory,
         };
@@ -142,4 +168,30 @@ class ProviderLocalLibrary {
     queues[storageKey] = next;
     return next;
   }
+
+  Map<String, dynamic> _riftCatalogSnapshot(MultimediaItem item, String id) => {
+    'title': item.title,
+    'url': id,
+    'posterUrl': item.posterUrl,
+    'fullPosterUrl': item.fullPosterUrl,
+    'bannerUrl': item.bannerUrl,
+    'logoUrl': item.logoUrl,
+    'description': item.description,
+    'type': item.contentType.name,
+    'provider': providerId,
+    'year': item.year,
+    'score': item.score,
+    'duration': item.duration,
+    'status': item.status.name,
+    'tags': item.tags,
+    'contentRating': item.contentRating,
+    'isAdult': item.isAdult,
+    'tmdbId': item.tmdbId,
+    'imdbId': item.imdbId,
+    'source': item.source,
+    'episodeBadge': item.episodeBadge,
+    'catalogType': item.catalogType,
+    'publishedAt': item.publishedAt?.millisecondsSinceEpoch,
+    'isDubbed': item.isDubbed,
+  };
 }

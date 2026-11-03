@@ -201,6 +201,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     ProviderSearchFilters? selected;
     SearchDomain? pickedDomain;
     final animeProvider = ref.read(activeProviderProvider);
+    final initialDomain = ref.read(searchDomainProvider);
     try {
       // All, anime, animation, manga and characters are the sheet's main
       // categories; only the ones that can be filtered bring their tabs.
@@ -211,11 +212,13 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             searchCatalogProvider(domain, providers),
           );
 
-      final domain = ref.read(searchDomainProvider);
-      final options = await optionsFor(domain);
+      final options = await optionsFor(initialDomain);
       if (!mounted ||
-          ref.read(activeProviderProvider)?.packageName !=
-              animeProvider?.packageName) {
+          searchFilterRequestIsStale(
+            initialDomain,
+            animeProvider?.packageName,
+            ref.read(activeProviderProvider)?.packageName,
+          )) {
         return;
       }
 
@@ -248,7 +251,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               },
             ),
         ],
-        category: domain.name,
+        category: initialDomain.name,
         optionsFor: (name) => optionsFor(SearchDomain.values.byName(name)),
         onCategoryApplied: (name) =>
             pickedDomain = SearchDomain.values.byName(name),
@@ -266,10 +269,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       if (mounted) setState(() => _isLoadingProviderFilters = false);
     }
 
+    final appliedDomain = pickedDomain ?? initialDomain;
     if (!mounted ||
         selected == null ||
-        ref.read(activeProviderProvider)?.packageName !=
-            animeProvider?.packageName) {
+        searchFilterRequestIsStale(
+          appliedDomain,
+          animeProvider?.packageName,
+          ref.read(activeProviderProvider)?.packageName,
+        )) {
       return;
     }
     if (pickedDomain != null) _selectSearchDomain(pickedDomain!);

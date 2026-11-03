@@ -200,6 +200,25 @@ void main() {
     },
   );
 
+  test('filter staleness follows only the anime catalog', () {
+    expect(
+      searchFilterRequestIsStale(SearchDomain.anime, 'old', 'new'),
+      isTrue,
+    );
+    for (final domain in <SearchDomain>[
+      SearchDomain.all,
+      SearchDomain.animation,
+      SearchDomain.manga,
+      SearchDomain.characters,
+    ]) {
+      expect(
+        searchFilterRequestIsStale(domain, 'old', 'new'),
+        isFalse,
+        reason: domain.name,
+      );
+    }
+  });
+
   test(
     'suggestions follow provider switches and discard older responses',
     () async {

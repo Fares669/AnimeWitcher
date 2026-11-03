@@ -533,26 +533,38 @@ void main() {
         expect(stem, isNotEmpty);
         expect(stem.startsWith('.'), isFalse);
         expect(utf8.encode(filename).length, lessThanOrEqualTo(255));
+        final logicalId = logicalDownloadIdFor(
+          animeId: 'https://example.test/movie',
+          episodeKey: 'https://example.test/movie',
+          variantKey: 'default',
+          providerId: provider.packageName,
+        );
+        final digest = logicalId.value.startsWith('dl_')
+            ? logicalId.value.substring(3)
+            : logicalId.value;
+        final suffix = digest.length <= 12 ? digest : digest.substring(0, 12);
+        String withLogicalSuffix(String value) {
+          final extension = p.extension(value);
+          final stem = extension.isEmpty
+              ? value
+              : value.substring(0, value.length - extension.length);
+          return '$stem-$suffix$extension';
+        }
+
         final original = sanitizeDownloadFileName(title);
         if (scenario.filename == null) {
-          expect(stem, original.isEmpty ? 'video' : original);
+          expect(stem, '${original.isEmpty ? 'video' : original}-$suffix');
         } else {
           expect(
             filename,
-            scenario.filename!.isEmpty
-                ? 'one piece 0100 1080p'
-                : scenario.filename,
+            withLogicalSuffix(
+              scenario.filename!.isEmpty
+                  ? 'one piece 0100 1080p'
+                  : scenario.filename!,
+            ),
           );
         }
-        expect(
-          storage.logicalId,
-          logicalDownloadIdFor(
-            animeId: 'https://example.test/movie',
-            episodeKey: 'https://example.test/movie',
-            variantKey: 'default',
-            providerId: provider.packageName,
-          ).value,
-        );
+        expect(storage.logicalId, logicalId.value);
         expect(tester.takeException(), isNull);
         notifications.clearToasts();
         await tester.pumpWidget(const SizedBox.shrink());

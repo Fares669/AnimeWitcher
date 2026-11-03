@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
+import '../../../core/services/download_v2/anime_rift_download_metadata_v2.dart';
 import '../../../core/services/download_v2/download_file_planner_v2.dart';
 import '../../../core/services/download_v2/download_v2_identity.dart';
 import '../../../core/services/download_v2/download_v2_models.dart';
@@ -54,7 +55,7 @@ class DownloadedFiles extends _$DownloadedFiles {
   }) async {
     final selected = logicalId?.trim();
     if (selected != null && selected.isEmpty) return null;
-    final unitKey = key.trim();
+    final unitKey = _downloadUnitKeyForProvider(key, providerId);
     // Completed playback depends only on durable local metadata and bytes,
     // never on transport startup or remote download recovery.
     final store = ref.read(logicalDownloadStoreV2Provider);
@@ -68,7 +69,11 @@ class DownloadedFiles extends _$DownloadedFiles {
               (record) =>
                   record.mediaKind == DownloadMediaKind.videoEpisode &&
                   record.completedAtMillis != null &&
-                  record.unitKey == unitKey &&
+                  _downloadUnitKeyForProvider(
+                        record.unitKey,
+                        record.sourceDescriptor['providerId']?.toString(),
+                      ) ==
+                      unitKey &&
                   (selected != null
                       ? record.logicalId.value == selected
                       : downloadProviderScopeV2(
@@ -108,4 +113,10 @@ class DownloadedFiles extends _$DownloadedFiles {
   void removeFile(String key) {
     state = {...state, key: null};
   }
+}
+
+String _downloadUnitKeyForProvider(String value, String? providerId) {
+  final trimmed = value.trim();
+  if (!isAnimeRiftDownloadProviderV2(providerId)) return trimmed;
+  return animeRiftDownloadTrackingIdentityV2(trimmed) ?? trimmed;
 }

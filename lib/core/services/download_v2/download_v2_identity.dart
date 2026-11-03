@@ -2,6 +2,9 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
+import '../../utils/anime_rift_identity.dart';
+import 'anime_rift_download_metadata_v2.dart';
+
 /// Stable application-owned identity for one logical episode download.
 ///
 /// It deliberately contains no transport URL, package task state, or local
@@ -58,6 +61,10 @@ DownloadLogicalId logicalDownloadIdFor({
   String? providerId,
 }) {
   final scope = downloadProviderScopeV2(providerId);
+  if (isAnimeRiftDownloadProviderV2(providerId)) {
+    animeId = canonicalAnimeRiftStorageUrl(animeId);
+    episodeKey = canonicalAnimeRiftPlaybackStorageUrl(episodeKey);
+  }
   final legacyCanonical = <String>[
     animeId.trim(),
     episodeKey.trim(),

@@ -208,8 +208,11 @@ String _legacyDownloadFolderNameV2(String value, {required String fallback}) {
 }
 
 bool _safeLegacyDownloadLeafV2(String value) =>
-    value.isNotEmpty && value != '.' && value != '..' &&
-    !value.contains('/') && !value.contains('\\') &&
+    value.isNotEmpty &&
+    value != '.' &&
+    value != '..' &&
+    !value.contains('/') &&
+    !value.contains('\\') &&
     !RegExp(r'[\x00-\x1f\x7f-\x9f]').hasMatch(value) &&
     p.windows.basename(value) == value &&
     utf8.encode(value).length <= 255 &&
@@ -245,7 +248,11 @@ Future<String> firstWritableDownloadDirectoryV2(
 String _pathBelowDownloadDirectoryV2(String directory, List<String> segments) {
   final result = p.joinAll(<String>[directory, ...segments]);
   if (!p.isWithin(p.normalize(directory), p.normalize(result))) {
-    throw ArgumentError.value(segments, 'segments', 'Path escapes media directory');
+    throw ArgumentError.value(
+      segments,
+      'segments',
+      'Path escapes media directory',
+    );
   }
   return result;
 }
@@ -265,7 +272,8 @@ Future<List<String>> _downloadMediaRootsV2(String mediaType) async {
     return roots;
   }
   final downloads = await getDownloadsDirectory();
-  final root = downloads?.path ??
+  final root =
+      downloads?.path ??
       p.join((await getApplicationDocumentsDirectory()).path, 'Downloads');
   return <String>[p.join(root, mediaType)];
 }
@@ -275,7 +283,9 @@ Future<String> _downloadMediaDirectoryV2(
   List<String> segments,
 ) async {
   final roots = await _downloadMediaRootsV2(mediaType);
-  final paths = roots.map((root) => _pathBelowDownloadDirectoryV2(root, segments));
+  final paths = roots.map(
+    (root) => _pathBelowDownloadDirectoryV2(root, segments),
+  );
   if (Platform.isAndroid) {
     return firstWritableDownloadDirectoryV2(paths.map(Directory.new));
   }
@@ -291,6 +301,7 @@ Future<String> downloadDestinationPathV2(
   Episode? episode,
   required String filename,
   String? providerId,
+  DownloadLogicalId? logicalId,
 }) async {
   if (filename.isEmpty ||
       filename == '.' ||
@@ -300,14 +311,57 @@ Future<String> downloadDestinationPathV2(
       p.isAbsolute(filename) ||
       p.windows.basename(filename) != filename ||
       utf8.encode(filename).length > 255) {
-    throw ArgumentError.value(filename, 'filename', 'Expected one filename leaf');
+    throw ArgumentError.value(
+      filename,
+      'filename',
+      'Expected one filename leaf',
+    );
   }
   final title = _downloadFolderName(item.title, fallback: 'Unknown');
   final scope = downloadProviderScopeV2(providerId);
-  final directory = await _downloadMediaDirectoryV2(
-    'anime', <String>[if (scope != null) ...['.providers', scope], title],
-  );
-  return _pathBelowDownloadDirectoryV2(directory, <String>[filename]);
+  final directory = await _downloadMediaDirectoryV2('anime', <String>[
+    if (scope != null) ...['.providers', scope],
+    title,
+  ]);
+  final destinationFilename = logicalId == null
+      ? filename
+      : _filenameForLogicalDownloadV2(filename, logicalId);
+  return _pathBelowDownloadDirectoryV2(directory, <String>[
+    destinationFilename,
+  ]);
+}
+
+String _filenameForLogicalDownloadV2(
+  String filename,
+  DownloadLogicalId logicalId,
+) {
+  final digest = logicalId.value.startsWith('dl_')
+      ? logicalId.value.substring(3)
+      : logicalId.value;
+  final suffix = digest.length <= 12 ? digest : digest.substring(0, 12);
+  final extension = p.extension(filename);
+  final stem = filename.substring(0, filename.length - extension.length);
+  final marker = '-$suffix';
+  const maxBytes = 244; // leaves room for the transport ".assembling" suffix
+  final reservedBytes = utf8.encode('$marker$extension').length;
+  final maxStemBytes = maxBytes - reservedBytes;
+  final boundedStem = _utf8Prefix(stem, maxStemBytes);
+  final safeStem = boundedStem.isEmpty ? 'video' : boundedStem;
+  return '$safeStem$marker$extension';
+}
+
+String _utf8Prefix(String value, int maxBytes) {
+  if (maxBytes <= 0) return '';
+  final buffer = StringBuffer();
+  var used = 0;
+  for (final rune in value.runes) {
+    final part = String.fromCharCode(rune);
+    final bytes = utf8.encode(part).length;
+    if (used + bytes > maxBytes) break;
+    buffer.write(part);
+    used += bytes;
+  }
+  return buffer.toString();
 }
 
 /// Produces a readable chapter directory:

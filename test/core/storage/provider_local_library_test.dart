@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
 import 'package:animewitcher/core/storage/provider_local_library.dart';
@@ -53,4 +55,113 @@ void main() {
     await expectLater(library.setFavorite(item, true), throwsFormatException);
     expect(storage.values[library.storageKey], '{broken');
   });
+
+  test(
+    'Rift www and canonical catalog URLs share one library identity',
+    () async {
+      final storage = _Memory();
+      final library = ProviderLocalLibrary(storage, animeRiftProviderId);
+      final item = MultimediaItem(
+        title: 'Rift',
+        url: 'https://www.anime-rift.com/anime/42',
+        posterUrl: '',
+        provider: animeRiftProviderId,
+      );
+
+      await library.setFavorite(item, true);
+
+      const canonical = 'https://anime-rift.com/anime/42';
+      expect(library.isFavorite(canonical), isTrue);
+      expect(library.item(canonical)?.url, canonical);
+      expect(library.allItems(), hasLength(1));
+    },
+  );
+
+  test(
+    'Rift library persists catalog metadata without playback secrets',
+    () async {
+      final storage = _Memory();
+      final library = ProviderLocalLibrary(storage, animeRiftProviderId);
+      final item = MultimediaItem(
+        title: 'Rift',
+        url: 'https://anime-rift.com/anime/42',
+        posterUrl: 'https://anime-rift.com/poster.jpg',
+        provider: animeRiftProviderId,
+        headers: const {'Authorization': 'Bearer secret-header'},
+        syncData: const {'secret': 'secret-sync'},
+        streams: const [
+          StreamResult(
+            url: 'https://cdn.example/video.mp4?token=secret-stream',
+            source: 'Rift',
+          ),
+        ],
+        episodes: [
+          Episode(
+            name: '1',
+            url: 'https://anime-rift.com/episode/1?token=secret-episode',
+          ),
+        ],
+      );
+
+      await library.setFavorite(item, true);
+
+      final persisted = storage.values[library.storageKey]!;
+      expect(persisted, contains('"title":"Rift"'));
+      expect(persisted, isNot(contains('secret-header')));
+      expect(persisted, isNot(contains('secret-sync')));
+      expect(persisted, isNot(contains('secret-stream')));
+      expect(persisted, isNot(contains('secret-episode')));
+    },
+  );
+
+  test(
+    'legacy Rift library rows are sanitized when they are migrated',
+    () async {
+      final storage = _Memory();
+      final library = ProviderLocalLibrary(storage, animeRiftProviderId);
+      storage.values[library.storageKey] = jsonEncode({
+        'https://www.anime-rift.com/anime/42?token=legacy': {
+          'item': {
+            'title': 'Legacy Rift',
+            'url': 'https://www.anime-rift.com/anime/42?token=legacy',
+            'posterUrl': '',
+            'provider': animeRiftProviderId,
+            'headers': {'Authorization': 'Bearer legacy-secret'},
+            'syncData': {'token': 'legacy-sync-secret'},
+            'streams': [
+              {
+                'url':
+                    'https://cdn.invalid/video.mp4?token=legacy-stream-secret',
+                'source': 'Rift',
+                'drmKey': 'legacy-drm-secret',
+              },
+            ],
+          },
+          'favorite': true,
+          'category': LibraryCategory.planToWatch.storageKey,
+        },
+      });
+
+      await library.setFavorite(
+        MultimediaItem(
+          title: 'Legacy Rift',
+          url: 'https://anime-rift.com/anime/42',
+          posterUrl: '',
+          provider: animeRiftProviderId,
+        ),
+        true,
+      );
+
+      final persisted = storage.values[library.storageKey]!;
+      expect(persisted, contains('https://anime-rift.com/anime/42'));
+      expect(persisted, isNot(contains('legacy-secret')));
+      expect(persisted, isNot(contains('legacy-sync-secret')));
+      expect(persisted, isNot(contains('legacy-stream-secret')));
+      expect(persisted, isNot(contains('legacy-drm-secret')));
+      expect(
+        library.category('https://anime-rift.com/anime/42'),
+        LibraryCategory.planToWatch,
+      );
+    },
+  );
 }
