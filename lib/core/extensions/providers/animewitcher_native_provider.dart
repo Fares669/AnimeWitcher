@@ -21,15 +21,11 @@ import 'animewitcher_manga_mapping.dart';
 import 'mediafire_utils.dart';
 import 'server_extraction_utils.dart';
 
-class AnimeWitcherSeasonConfig {
-  final String past;
-  final String current;
-  final String next;
-
+class AnimeWitcherSeasonConfig extends ProviderSeasonConfig {
   const AnimeWitcherSeasonConfig({
-    required this.past,
-    required this.current,
-    required this.next,
+    required super.past,
+    required super.current,
+    required super.next,
   });
 }
 
@@ -2039,6 +2035,11 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       ],
     );
   }
+
+  @override
+  bool get supportsSeasons => true;
+  @override
+  bool get supportsBroadcastSchedule => true;
 
   AnimeWitcherSeasonConfig _fallbackSeasonConfig() {
     const names = <String>['شتاء', 'ربيع', 'صيف', 'خريف'];

@@ -1,5 +1,6 @@
 import '../../domain/entity/multimedia_item.dart';
 import '../../utils/anime_rift_identity.dart';
+import '../../utils/anime_rift_stream_identity.dart';
 
 bool isAnimeRiftDownloadProviderV2(String? providerId) =>
     providerId?.trim() == 'com.animerift.provider';
@@ -98,8 +99,13 @@ Map<String, Object?> safeDownloadSourceDescriptorV2(Map<String, Object?> raw) {
   final tracking = animeRiftDownloadTrackingIdentityV2(
     raw['trackingUrl']?.toString() ?? '',
   );
+  final source = AnimeRiftSourceIdentity.parse(
+    raw['refreshUrl']?.toString() ?? '',
+  );
   return <String, Object?>{
     'providerId': 'com.animerift.provider',
+    if (source != null && source.host != null && source.download)
+      'refreshUrl': source.sourceUrl,
     if (tracking != null) 'trackingUrl': tracking,
     for (final key in const ['source', 'quality', 'ownerTaskId', 'logicalId'])
       if (_safeSelector(raw[key]) case final String value) key: value,

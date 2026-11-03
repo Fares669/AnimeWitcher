@@ -16,6 +16,7 @@ class CatalogFixture extends AnimeRiftApiClient {
       );
   final calls = <String>[];
   Map<String, dynamic>? lastQuery;
+  Map<String, dynamic>? lastBody;
   @override
   Future<Map<String, dynamic>> request(
     String path,
@@ -27,6 +28,29 @@ class CatalogFixture extends AnimeRiftApiClient {
   }) async {
     calls.add(path);
     lastQuery = query;
+    lastBody = body;
+    if (path == 'library/genres')
+      return {
+        'items': [
+          {'id': 'genre42', 'label': 'أكشن'},
+        ],
+      };
+    if (path == 'library/schedule')
+      return {
+        'schedule': [
+          {
+            'dayName': 'monday',
+            'animes': [
+              {
+                'anime': anime,
+                'localBroadcastTime': '18:30',
+                'localBroadcastTimeInt': 1830,
+                'episodeNumber': 7,
+              },
+            ],
+          },
+        ],
+      };
     if (path == 'library/home_content')
       return {
         'sections': [
@@ -52,13 +76,27 @@ class CatalogFixture extends AnimeRiftApiClient {
         },
         'others': {
           'recommendations': [anime],
+          'related': [anime],
+          'characters': [
+            {
+              '_id': 'char1',
+              'name': 'Naruto',
+              'image_jpg_url': 'https://images.example/char.jpg',
+              'likes': 12,
+            },
+          ],
         },
       };
     if (path == 'library/episodes/42')
       return {
         'items': [
           {'_id': 'ep2', 'episode_number': 2},
-          {'_id': 'ep1', 'episode_number': 1},
+          {
+            '_id': 'ep1',
+            'episode_number': 1,
+            'is_filler': true,
+            'title_translations': {'ar': 'البداية'},
+          },
         ],
       };
     throw StateError('Unexpected path');
@@ -74,6 +112,77 @@ class CatalogFixture extends AnimeRiftApiClient {
 }
 
 void main() {
+  test(
+    'schedule maps actual backend weekday and retains source identity',
+    () async {
+      final api = CatalogFixture();
+      final provider = AnimeRiftProvider(client: api);
+      expect(provider.supportsBroadcastSchedule, isTrue);
+      final page = await provider.getBroadcastSchedulePage('الإثنين', limit: 1);
+      expect(page.items.single.provider, animeRiftProviderId);
+      expect(page.items.single.episodeBadge, contains('18:30'));
+      expect(page.items.single.episodeBadge, contains('7'));
+      expect(page.hasMore, isFalse);
+      expect((await provider.getBroadcastSchedulePage('الأحد')).items, isEmpty);
+      expect(api.calls.where((p) => p == 'library/schedule'), hasLength(1));
+    },
+  );
+  test(
+    'season browser uses server-side year and season filters with page cursors',
+    () async {
+      final api = CatalogFixture();
+      final provider = AnimeRiftProvider(client: api);
+      expect(provider.supportsSeasons, isTrue);
+      final config = await provider.getSeasonConfig();
+      expect(
+        config.current,
+        matches(RegExp(r'^(شتاء|ربيع|صيف|خريف) عام \d{4}$')),
+      );
+      final page = await provider.getSeasonPage('شتاء عام 2024', offset: 2);
+      expect(api.lastBody!['multi_seasons'], ['winter']);
+      expect(api.lastBody!['multi_release_year'], ['2024']);
+      expect(api.lastQuery!['page'], 2);
+      expect(page.nextOffset, 3);
+    },
+  );
+  test('filters map UI labels to backend enums and genre identities', () async {
+    final api = CatalogFixture();
+    final provider = AnimeRiftProvider(client: api);
+    final options = await provider.getSearchFilterOptions();
+    expect(options.genres, ['أكشن']);
+    expect(options.seasons, contains('شتاء'));
+    await provider.searchPage(
+      '',
+      const ProviderSearchFilters(
+        genres: {'أكشن'},
+        years: {'2024'},
+        seasons: {'شتاء'},
+        statuses: {'مستمر'},
+        types: {'فيلم'},
+        ageRatings: {'+13'},
+        sort: 'year_desc',
+      ),
+    );
+    expect(api.lastBody, {
+      'query': '',
+      'multi_genres': ['genre42'],
+      'multi_release_year': ['2024'],
+      'multi_seasons': ['winter'],
+      'multi_release_status': ['on_going'],
+      'multi_content_types': ['movie'],
+      'multi_age_rating': ['pg_13'],
+    });
+    expect(api.lastQuery!['sort_direction'], -1);
+    expect(api.calls.where((p) => p == 'library/genres'), hasLength(1));
+    await expectLater(
+      provider.searchPage(
+        '',
+        const ProviderSearchFilters(genres: {'غير موجود'}),
+      ),
+      throwsUnsupportedError,
+    );
+  });
+
   test(
     'configured home uses gateway data with source-qualified catalog URLs',
     () async {
@@ -123,6 +232,14 @@ void main() {
         (await provider.getRecommendations(details.url)).single.provider,
         animeRiftProviderId,
       );
+      expect((await provider.getCast(details.url)).single.name, 'Naruto');
+      expect(
+        (await provider.getRelated(details.url)).single.provider,
+        animeRiftProviderId,
+      );
+      expect(episodes.first.name, 'البداية');
+      expect(episodes.first.isFiller, isTrue);
+      expect(api.calls.where((p) => p == 'library/details/42'), hasLength(1));
       final count = api.calls.length;
       await expectLater(
         provider.getDetails('https://attacker.invalid/anime/42'),

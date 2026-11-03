@@ -1392,7 +1392,13 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     target.openDetails(context);
   }
 
-  void _openCharacter(Actor actor) {
+  void _openCharacter(MultimediaItem item, Actor actor) {
+    if (item.provider == animeRiftProviderId) {
+      ref
+          .read(notificationServiceProvider)
+          .showInfo('تفاصيل الشخصية غير متاحة حاليًا لدى Anime Rift.');
+      return;
+    }
     final id = actor.id?.trim() ?? '';
     if (id.isEmpty) return;
     Navigator.of(context).push(
@@ -1473,7 +1479,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       contentPadding: contentPadding,
       onTabBecameVisible: _onExtraTabBecameVisible,
       onAnimeTap: (child) => _openExtraAnime(item, child),
-      onCharacterTap: _openCharacter,
+      onCharacterTap: (actor) => _openCharacter(item, actor),
       onShowMoreSimilar: () {
         Navigator.of(context).push(
           MaterialPageRoute<void>(

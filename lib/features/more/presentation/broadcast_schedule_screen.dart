@@ -71,7 +71,7 @@ class _BroadcastScheduleScreenState
       vsync: this,
       initialIndex: _selectedDay,
     )..addListener(_handleTabTick);
-    if (ref.read(activeProviderProvider) is AnimeWitcherNativeProvider) {
+    if (ref.read(activeProviderProvider)?.supportsBroadcastSchedule == true) {
       unawaited(
         _loadDay(animeWitcherBroadcastDays[_selectedDay], refresh: true),
       );
@@ -95,7 +95,7 @@ class _BroadcastScheduleScreenState
     final value = _tabController.index;
     if (value == _selectedDay) return;
     setState(() => _selectedDay = value);
-    if (ref.read(activeProviderProvider) is! AnimeWitcherNativeProvider) {
+    if (ref.read(activeProviderProvider)?.supportsBroadcastSchedule != true) {
       return;
     }
     final day = animeWitcherBroadcastDays[value];
@@ -122,7 +122,7 @@ class _BroadcastScheduleScreenState
     final previous = _dayStates[day] ?? const _BroadcastScheduleDayState();
     if (!refresh && (previous.loading || !previous.hasMore)) return;
     final provider = ref.read(activeProviderProvider);
-    if (provider is! AnimeWitcherNativeProvider) return;
+    if (provider == null || !provider.supportsBroadcastSchedule) return;
 
     _requestTokens.remove(day)?.cancel('Superseded schedule request');
     final token = CancelToken();
@@ -207,13 +207,13 @@ class _BroadcastScheduleScreenState
       for (final day in animeWitcherBroadcastDays) {
         _dayStates[day] = const _BroadcastScheduleDayState();
       }
-      if (next is AnimeWitcherNativeProvider) {
+      if (next?.supportsBroadcastSchedule == true) {
         unawaited(
           _loadDay(animeWitcherBroadcastDays[_selectedDay], refresh: true),
         );
       }
     });
-    if (ref.watch(activeProviderProvider) is! AnimeWitcherNativeProvider) {
+    if (ref.watch(activeProviderProvider)?.supportsBroadcastSchedule != true) {
       return const ProviderUnsupportedPage(title: 'جدول البث');
     }
 

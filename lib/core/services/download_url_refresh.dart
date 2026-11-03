@@ -338,11 +338,13 @@ class DownloadUrlRefresher {
 
     List<StreamResult> latest = const <StreamResult>[];
     try {
-      final sources = await provider.loadStreamSources(descriptor.trackingUrl);
+      final sources = await provider.loadDownloadStreamSources(
+        descriptor.trackingUrl,
+      );
       final selected = _bestStreamMatch(sources, descriptor);
       if (selected != null) {
         latest = selected.requiresResolution
-            ? await provider.loadStreams(selected.url)
+            ? await provider.loadDownloadStreams(selected.url)
             : <StreamResult>[selected];
       }
     } catch (_) {}
@@ -355,7 +357,7 @@ class DownloadUrlRefresher {
     final refreshUrl = descriptor.refreshUrl?.trim();
     if (refreshUrl != null && refreshUrl.isNotEmpty) {
       try {
-        final tokenCandidates = await provider.loadStreams(refreshUrl);
+        final tokenCandidates = await provider.loadDownloadStreams(refreshUrl);
         final tokenResult = _bestStreamMatch(tokenCandidates, descriptor);
         if (_usableRefreshedStream(tokenResult, currentUrl)) {
           return _refreshedDownloadUrl(tokenResult!);

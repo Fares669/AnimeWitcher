@@ -5,15 +5,35 @@ import '../../storage/provider_local_library.dart';
 import '../base_provider.dart';
 import '../../utils/anime_rift_identity.dart';
 import 'anime_rift_api_client.dart';
+import 'anime_rift_streams.dart';
+export 'anime_rift_streams.dart'
+    show AnimeRiftPlaybackUnavailable, AnimeRiftAuthenticationRequired;
 export 'anime_rift_api_client.dart' show AnimeRiftAccessUnavailable;
 
-/// Rift catalog integration. Playback remains unavailable until separately verified.
+/// Independent Rift catalog, source selection and permitted media resolution.
 class AnimeRiftProvider extends AnimeWitcherProvider {
   AnimeRiftProvider({Dio? dio, AnimeRiftApiClient? client})
-    : _api = client ?? AnimeRiftApiClient(dio: dio);
+    : _api = client ?? AnimeRiftApiClient(dio: dio),
+      _externalDio = dio;
 
   // Own transport: never forward the AnimeWitcher account's credentials.
   final AnimeRiftApiClient _api;
+  final Dio? _externalDio;
+  final _episodeNumbers = <String, int>{};
+  late final _streams = AnimeRiftStreams(
+    _api,
+    _episodeNumber,
+    externalDio: _externalDio,
+  );
+
+  Future<int> _episodeNumber(String anime, String episode) async {
+    final key = '$anime:$episode';
+    if (!_episodeNumbers.containsKey(key))
+      await getEpisodes('$mainUrl/anime/$anime');
+    final number = _episodeNumbers[key];
+    if (number == null) throw const AnimeRiftPlaybackUnavailable();
+    return number;
+  }
 
   @override
   String get packageName => animeRiftProviderId;
@@ -39,7 +59,7 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     final sections = <String, List<MultimediaItem>>{};
     final rows = data['sections'];
     if (rows is! List) throw const AnimeRiftAccessUnavailable();
-    for (final row in rows.whereType<Map>()) {
+    for (final row in rows.whereType<Map<dynamic, dynamic>>()) {
       final title = row['sectionTitle'];
       if (title is! String || title.trim().isEmpty) continue;
       final items = _items(row['items']);
@@ -53,7 +73,7 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
   List<MultimediaItem> _items(dynamic rows) {
     if (rows is! List) return [];
     return [
-      for (final row in rows.whereType<Map>())
+      for (final row in rows.whereType<Map<dynamic, dynamic>>())
         if (row['_id'] is String &&
             _safeId.hasMatch(row['_id'] as String) &&
             row['title'] is String &&
@@ -73,7 +93,7 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
         : '';
   }
 
-  MultimediaItem _item(Map row) => MultimediaItem(
+  MultimediaItem _item(Map<dynamic, dynamic> row) => MultimediaItem(
     title: (row['title'] as String).trim(),
     url: '$mainUrl/anime/${row['_id']}',
     posterUrl: _art(row['main_picture']).isNotEmpty
@@ -97,6 +117,78 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     if (!_safeId.hasMatch(id)) throw const AnimeRiftAccessUnavailable();
     return id;
   }
+
+  static const _statuses = {'مستمر': 'on_going', 'مكتمل': 'finished'};
+  static const _types = {
+    'مسلسل': 'tv',
+    'فيلم': 'movie',
+    'اوفا': 'ova',
+    'اونا': 'ona',
+    'خاصة': 'special',
+  };
+  static const _ages = {'+13': 'pg_13', '+17': 'r', 'لجميع الأعمار': 'g'};
+  static const _seasons = {
+    'شتاء': 'winter',
+    'ربيع': 'spring',
+    'صيف': 'summer',
+    'خريف': 'fall',
+  };
+  Map<String, String>? _genres;
+  DateTime? _genresAt;
+  Future<Map<String, String>>? _genresPending;
+
+  Future<Map<String, String>> _genreOptions() async {
+    if (_genres != null &&
+        DateTime.now().difference(_genresAt!) < const Duration(minutes: 10))
+      return _genres!;
+    if (_genresPending != null) return _genresPending!;
+    final pending = _loadGenres();
+    _genresPending = pending;
+    try {
+      return await pending;
+    } finally {
+      _genresPending = null;
+    }
+  }
+
+  Future<Map<String, String>> _loadGenres() async {
+    final data = await _api.request(
+      'library/genres',
+      'ANIME.LIBRARY.FILTERS.GENRES',
+    );
+    final rows = data['items'];
+    if (rows is! List) throw const AnimeRiftAccessUnavailable();
+    final genres = <String, String>{};
+    for (final row in rows.whereType<Map<dynamic, dynamic>>()) {
+      final id = row['id'], label = row['label'];
+      if (id is String &&
+          _safeId.hasMatch(id) &&
+          label is String &&
+          label.trim().isNotEmpty)
+        genres[label.trim()] = id;
+    }
+    _genres = genres;
+    _genresAt = DateTime.now();
+    return genres;
+  }
+
+  @override
+  Future<ProviderSearchFilterOptions> getSearchFilterOptions() async =>
+      ProviderSearchFilterOptions(
+        statuses: _statuses.keys.toList(),
+        types: _types.keys.toList(),
+        ageRatings: _ages.keys.toList(),
+        seasons: _seasons.keys.toList(),
+        years: [for (var y = DateTime.now().year + 1; y >= 1900; y--) '$y'],
+        genres: (await _genreOptions()).keys.toList(),
+      );
+
+  List<String> _filterValues(Set<String> values, Map<String, String> options) =>
+      [
+        for (final value in values)
+          options[value] ??
+              (throw UnsupportedError('قيمة فلتر غير مدعومة في Anime Rift.')),
+      ];
 
   @override
   Future<List<MultimediaItem>> search(
@@ -124,16 +216,37 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     int limit = 30,
     CancelToken? cancelToken,
   }) async {
-    if (filters.isNotEmpty ||
-        !const {'', 'year_asc', 'year_desc'}.contains(filters.sort)) {
+    if (!const {'', 'year_asc', 'year_desc'}.contains(filters.sort)) {
       throw UnsupportedError('هذه الفلاتر غير مدعومة حاليًا في Anime Rift.');
     }
+    final body = <String, dynamic>{
+      'query': query,
+      if (filters.statuses.isNotEmpty)
+        'multi_release_status': _filterValues(filters.statuses, _statuses),
+      if (filters.types.isNotEmpty)
+        'multi_content_types': _filterValues(filters.types, _types),
+      if (filters.ageRatings.isNotEmpty)
+        'multi_age_rating': _filterValues(filters.ageRatings, _ages),
+      if (filters.seasons.isNotEmpty)
+        'multi_seasons': _filterValues(filters.seasons, _seasons),
+      if (filters.genres.isNotEmpty)
+        'multi_genres': _filterValues(filters.genres, await _genreOptions()),
+      if (filters.years.isNotEmpty)
+        'multi_release_year': [
+          for (final year in filters.years)
+            if (RegExp(r'^\d{4}$').hasMatch(year))
+              year
+            else
+              throw UnsupportedError('سنة غير صالحة.'),
+        ],
+    };
+    if (cancelToken?.isCancelled == true) throw cancelToken!.cancelError!;
     final page = offset < 0 ? 0 : offset;
     final data = await _api.request(
       'library/search',
       'ANIME.LIBRARY.SEARCH',
       method: 'POST',
-      body: {'query': query},
+      body: body,
       query: {
         'page': page,
         'sort_by': 'release_year',
@@ -150,30 +263,174 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     );
   }
 
+  static const _weekdays = {
+    'السبت': 'saturday',
+    'الأحد': 'sunday',
+    'الإثنين': 'monday',
+    'الثلاثاء': 'tuesday',
+    'الأربعاء': 'wednesday',
+    'الخميس': 'thursday',
+    'الجمعة': 'friday',
+  };
+  Map<String, dynamic>? _schedule;
+  DateTime? _scheduleAt;
+  @override
+  bool get supportsBroadcastSchedule => true;
+  @override
+  Future<ProviderMediaPage> getBroadcastSchedulePage(
+    String day, {
+    int offset = 0,
+    int limit = 30,
+    bool refresh = false,
+    CancelToken? cancelToken,
+  }) async {
+    final weekday = _weekdays[day];
+    if (weekday == null) throw UnsupportedError('يوم غير صالح.');
+    if (cancelToken?.isCancelled == true) throw cancelToken!.cancelError!;
+    var data = _schedule;
+    if (refresh ||
+        data == null ||
+        DateTime.now().difference(_scheduleAt!) >= const Duration(minutes: 1)) {
+      data = await _api.request(
+        'library/schedule',
+        'ANIME.LIBRARY.SCHEDULE',
+        cancelToken: cancelToken,
+      );
+      if (cancelToken?.isCancelled == true) throw cancelToken!.cancelError!;
+      if (data['schedule'] is! List) throw const AnimeRiftAccessUnavailable();
+      _schedule = data;
+      _scheduleAt = DateTime.now();
+    }
+    final items = <MultimediaItem>[];
+    final days = data['schedule'] as List;
+    for (final entry in days.whereType<Map<dynamic, dynamic>>()) {
+      if (entry['dayName'] != weekday || entry['animes'] is! List) continue;
+      final rows =
+          (entry['animes'] as List).whereType<Map<dynamic, dynamic>>().toList()
+            ..sort(
+              (a, b) => ((a['localBroadcastTimeInt'] as num?) ?? 9999)
+                  .compareTo((b['localBroadcastTimeInt'] as num?) ?? 9999),
+            );
+      for (final row in rows) {
+        final titles = _items([row['anime']]);
+        if (titles.isEmpty) continue;
+        final episode = row['episodeNumber'];
+        final time = row['localBroadcastTime'];
+        final labels = [
+          if (episode is num) 'الحلقة $episode',
+          if (time is String && RegExp(r'^\d{1,2}:\d{2}$').hasMatch(time)) time,
+        ];
+        items.add(
+          titles.single.copyWith(
+            episodeBadge: labels.isEmpty ? null : labels.join(' • '),
+          ),
+        );
+      }
+    }
+    final start = offset.clamp(0, items.length);
+    final end = (start + limit.clamp(1, 100)).clamp(start, items.length);
+    return ProviderMediaPage(
+      items: items.sublist(start, end),
+      nextOffset: end,
+      hasMore: end < items.length,
+    );
+  }
+
+  @override
+  bool get supportsSeasons => true;
+  String _seasonLabel(int year, int quarter) =>
+      '${_seasons.keys.elementAt(quarter)} عام $year';
+  @override
+  Future<ProviderSeasonConfig> getSeasonConfig() async {
+    final now = DateTime.now();
+    final quarter = (now.month - 1) ~/ 3;
+    return ProviderSeasonConfig(
+      past: _seasonLabel(
+        quarter == 0 ? now.year - 1 : now.year,
+        (quarter + 3) % 4,
+      ),
+      current: _seasonLabel(now.year, quarter),
+      next: _seasonLabel(
+        quarter == 3 ? now.year + 1 : now.year,
+        (quarter + 1) % 4,
+      ),
+    );
+  }
+
+  @override
+  Future<List<String>> getAllSeasons({bool refresh = false}) async => [
+    for (var year = DateTime.now().year + 1; year >= 1900; year--)
+      for (var quarter = 3; quarter >= 0; quarter--)
+        _seasonLabel(year, quarter),
+  ];
+  @override
+  Future<ProviderMediaPage> getSeasonPage(
+    String season, {
+    int offset = 0,
+    int limit = 30,
+  }) {
+    final match = RegExp(r'^(شتاء|ربيع|صيف|خريف) عام (\d{4})$')
+        .firstMatch(season);
+    if (match == null) throw UnsupportedError('موسم غير صالح.');
+    return searchPage(
+      '',
+      ProviderSearchFilters(
+        seasons: {match[1]!},
+        years: {match[2]!},
+        sort: 'year_desc',
+      ),
+      offset: offset,
+      limit: limit,
+    );
+  }
+
   @override
   bool get supportsIndependentDetailSections => true;
 
+  final _details =
+      <String, ({DateTime until, Future<Map<String, dynamic>> value})>{};
+  Future<Map<String, dynamic>> _detailData(String url) async {
+    final id = _catalogId(url);
+    final cached = _details[id];
+    if (cached != null && cached.until.isAfter(DateTime.now()))
+      return cached.value;
+    final future = _api.request('library/details/$id', 'ANIME.LIBRARY.DETAILS');
+    _details[id] = (
+      until: DateTime.now().add(const Duration(minutes: 2)),
+      value: future,
+    );
+    if (_details.length > 32) _details.remove(_details.keys.first);
+    try {
+      final data = await future;
+      final row = data['item'];
+      if (row is! Map<dynamic, dynamic> ||
+          row['_id'] != id ||
+          row['title'] is! String)
+        throw const AnimeRiftAccessUnavailable();
+      return data;
+    } catch (_) {
+      if (identical(_details[id]?.value, future)) _details.remove(id);
+      rethrow;
+    }
+  }
+
   @override
   Future<MultimediaItem> getDetails(String url) async {
-    final id = _catalogId(url);
-    final data = await _api.request(
-      'library/details/$id',
-      'ANIME.LIBRARY.DETAILS',
-    );
-    final row = data['item'];
-    if (row is! Map || row['_id'] != id || row['title'] is! String)
-      throw const AnimeRiftAccessUnavailable();
+    final data = await _detailData(url);
+    final row = data['item'] as Map<dynamic, dynamic>;
     final genreRows = row['genreLabels'];
     final others = data['others'];
     return _item(row).copyWith(
       description: row['synopsis'] is String ? row['synopsis'] as String : null,
       tags: genreRows is List
           ? [
-              for (final genre in genreRows.whereType<Map>())
+              for (final genre in genreRows.whereType<Map<dynamic, dynamic>>())
                 if (genre['label'] is String) genre['label'] as String,
             ]
           : null,
-      recommendations: _items(others is Map ? others['recommendations'] : null),
+      recommendations: _items(
+        others is Map<dynamic, dynamic> ? others['recommendations'] : null,
+      ),
     );
   }
 
@@ -189,7 +446,7 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     if (rows is! List) throw const AnimeRiftAccessUnavailable();
     final episodes = <Episode>[];
     final seen = <String>{};
-    for (final row in rows.whereType<Map>()) {
+    for (final row in rows.whereType<Map<dynamic, dynamic>>()) {
       final episodeId = row['_id'];
       final number = row['episode_number'];
       if (episodeId is! String ||
@@ -197,9 +454,12 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
           number is! num ||
           !seen.add(episodeId))
         continue;
+      _episodeNumbers['$id:$episodeId'] = number.toInt();
       episodes.add(
         Episode(
-          name: 'الحلقة $number',
+          name: _episodeTitle(row, number),
+          isFiller: row['is_filler'] == true,
+          airDate: row['airedAt'] is String ? row['airedAt'] as String : null,
           url: '$mainUrl/anime/$id/episode/$episodeId',
           season: 1,
           episode: number.toInt(),
@@ -215,22 +475,64 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
   Future<List<MultimediaItem>> getRecommendations(String url) async =>
       (await getDetails(url)).recommendations ?? [];
 
+  String _episodeTitle(Map<dynamic, dynamic> row, num number) {
+    final titles = row['title_translations'];
+    if (titles is Map<dynamic, dynamic>) {
+      for (final lang in const ['ar', 'en']) {
+        final title = titles[lang];
+        if (title is String && title.trim().isNotEmpty) return title.trim();
+      }
+    }
+    return 'الحلقة $number';
+  }
+
   @override
-  Future<List<Actor>> getCast(String url) async => [];
+  Future<List<Actor>> getCast(String url) async {
+    final data = await _detailData(url);
+    final others = data['others'];
+    final rows = others is Map<dynamic, dynamic> ? others['characters'] : null;
+    if (rows is! List) return [];
+    return [
+      for (final row in rows.whereType<Map<dynamic, dynamic>>())
+        if (row['name'] is String && (row['name'] as String).trim().isNotEmpty)
+          Actor(
+            name: (row['name'] as String).trim(),
+            id: row['_id'] is String ? row['_id'] as String : null,
+            image: _art(row['image_jpg_url']),
+            likes: (row['likes'] as num?)?.toInt() ?? 0,
+          ),
+    ];
+  }
+
   @override
   Future<List<Trailer>> getTrailers(String url) async => [];
   @override
-  Future<List<MultimediaItem>> getRelated(String url) async => [];
+  Future<List<MultimediaItem>> getRelated(String url) async {
+    final data = await _detailData(url);
+    final others = data['others'];
+    return _items(others is Map<dynamic, dynamic> ? others['related'] : null);
+  }
+
   @override
   Future<NextAiring?> getNextAiring(String url) async => null;
 
   @override
-  Future<List<StreamResult>> loadStreams(String url) =>
-      Future.error(const AnimeRiftPlaybackUnavailable());
-}
-
-class AnimeRiftPlaybackUnavailable extends AnimeRiftAccessUnavailable {
-  const AnimeRiftPlaybackUnavailable();
+  Future<List<StreamResult>> loadStreamSources(String url) =>
+      _streams.loadSources(url);
   @override
-  String toString() => 'لم يُفعّل التشغيل من Anime Rift بعد.';
+  Future<List<StreamResult>> loadStreams(String url) => _streams.resolve(url);
+  @override
+  Future<List<StreamResult>> loadDownloadStreamSources(String url) =>
+      _streams.loadSources(url, download: true);
+  @override
+  Future<List<StreamResult>> loadDownloadStreams(String url) =>
+      _streams.resolve(url, download: true);
+  @override
+  bool isExplicitStreamSelection(String url) =>
+      AnimeRiftStreams.isSourceSelection(url);
+  @override
+  void invalidateDetailCaches(String url) {
+    _details.remove(_catalogId(url));
+    _streams.invalidate();
+  }
 }

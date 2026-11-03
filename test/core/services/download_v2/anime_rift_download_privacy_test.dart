@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/services/download_url_refresh.dart';
+import 'package:animewitcher/core/utils/anime_rift_identity.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
@@ -18,6 +19,44 @@ const _native = 'com.fares669.animewitcher.native';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('only validated stable download source selectors survive restart', () {
+    const source =
+        'https://anime-rift.com/anime/a/episode/e/source/h/quality/720P/download/n/7';
+    const descriptor = DownloadUrlRefreshDescriptor(
+      trackingUrl: 'https://anime-rift.com/anime/a/episode/e',
+      providerId: _rift,
+      source: 'CR2',
+      quality: '720P',
+      refreshUrl: source,
+      updatedAtMillis: 1,
+    );
+    expect(
+      DownloadUrlRefreshDescriptor.fromJson(descriptor.toJson())?.refreshUrl,
+      source,
+    );
+    for (final unsafe in [
+      '$source?token=SECRET',
+      source.replaceFirst('/download/', '/play/'),
+      'https://anime-rift.com/source/arbitrary-secret',
+    ]) {
+      final safe = DownloadUrlRefreshDescriptor.fromJson({
+        ...descriptor.toJson(),
+        'refreshUrl': unsafe,
+      });
+      expect(safe?.refreshUrl, isNull);
+    }
+  });
+  test('non-network resource schemes do not enter persisted Rift artwork', () {
+    for (final value in [
+      'file:///private/image',
+      'data:image/png;base64,SECRET',
+      'javascript:alert(1)',
+    ]) {
+      expect(safeAnimeRiftPersistedResourceUrl(value), isNull);
+    }
+    expect(safeAnimeRiftPersistedResourceUrl('episode-7'), 'episode-7');
+  });
 
   test(
     'Rift logical ID ignores www and transient query aliases only for Rift',

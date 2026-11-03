@@ -37,6 +37,17 @@ class _ScheduleNative extends AnimeWitcherNativeProvider {
   }
 }
 
+class _ScheduleRift extends AnimeRiftProvider {
+  @override
+  Future<ProviderMediaPage> getBroadcastSchedulePage(
+    String day, {
+    int offset = 0,
+    int limit = 30,
+    bool refresh = false,
+    CancelToken? cancelToken,
+  }) async => _page('Rift schedule');
+}
+
 class _SelectedProvider extends ActiveProvider {
   _SelectedProvider(this.initial);
 
@@ -70,7 +81,7 @@ void main() {
       'Rift hides Witcher schedule; stale ${lateError.runtimeType} is ignored',
       (tester) async {
         final native = _ScheduleNative();
-        final rift = AnimeRiftProvider();
+        final rift = _ScheduleRift();
         final container = ProviderContainer(
           overrides: [
             activeProviderProvider.overrideWith(
@@ -96,10 +107,7 @@ void main() {
 
         await container.read(activeProviderProvider.notifier).set(rift);
         await tester.pump();
-        expect(
-          find.text('هذه الميزة غير متاحة للمزود المختار'),
-          findsOneWidget,
-        );
+        expect(find.text('Rift schedule'), findsWidgets);
         expect(native.cancellations.single?.isCancelled, isTrue);
 
         await container.read(activeProviderProvider.notifier).set(native);
@@ -119,10 +127,7 @@ void main() {
         await container.read(activeProviderProvider.notifier).set(rift);
         await tester.pump();
         expect(find.text('Witcher restored'), findsNothing);
-        expect(
-          find.text('هذه الميزة غير متاحة للمزود المختار'),
-          findsOneWidget,
-        );
+        expect(find.text('Rift schedule'), findsWidgets);
       },
     );
   }

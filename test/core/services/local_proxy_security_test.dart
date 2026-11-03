@@ -141,6 +141,45 @@ void main() {
     }, createHttpClient: (_) => upstream);
   }
 
+  for (final host in ['example.com', 'cdn.example.com', 'not-example.com']) {
+    test('mirror cookie scope uses DNS boundaries for $host', () async {
+      service = LocalProxyService.forTesting(
+        (_) async => [InternetAddress('8.8.8.8')],
+      );
+      final upstream = _Client([_Response(200)]);
+      final response = await fetch(
+        upstream,
+        'https://$host/video',
+        headers: {'Cookie': 'session=private'},
+        options: ProxyOptions(mirrorHosts: ['example.com']),
+      );
+      expect(response.status, 200);
+      expect(
+        upstream.requests.single.headers.value('cookie'),
+        host == 'not-example.com' ? isNull : 'session=private',
+      );
+    });
+  }
+  test('lookalike playlist host cannot inherit a signed query', () async {
+    service = LocalProxyService.forTesting(
+      (_) async => [InternetAddress('8.8.8.8')],
+    );
+    final upstream = _Client([
+      _Response(
+        200,
+        type: 'application/vnd.apple.mpegurl',
+        body: '#EXTM3U\nhttps://not-example.com/segment.ts\n',
+      ),
+    ]);
+    final result = await fetch(
+      upstream,
+      'https://example.com/master.m3u8?token=PRIVATE',
+      options: ProxyOptions(mirrorHosts: ['example.com']),
+    );
+    final child = Uri.parse(result.body.split('\n')[1]);
+    expect(Uri.parse(child.queryParameters['url']!).hasQuery, isFalse);
+  });
+
   for (final host in [
     '127.0.0.1',
     '127.1',
@@ -288,9 +327,9 @@ void main() {
 
     final encodedHeaders = proxy.queryParameters['h'];
     expect(encodedHeaders, isNotNull);
-    final decodedHeaders =
-        jsonDecode(utf8.decode(base64Url.decode(encodedHeaders!)))
-            as Map<String, dynamic>;
+    final decodedHeaders = jsonDecode(
+      utf8.decode(base64Url.decode(encodedHeaders!)),
+    ) as Map<String, dynamic>;
     expect(decodedHeaders['Authorization'], isNull);
     expect(decodedHeaders['Cookie'], isNull);
     expect(decodedHeaders['X-Api-Key'], isNull);
@@ -316,11 +355,9 @@ void main() {
       ),
     );
 
-    final decodedHeaders =
-        jsonDecode(
-              utf8.decode(base64Url.decode(proxy.queryParameters['h']!)),
-            )
-            as Map<String, dynamic>;
+    final decodedHeaders = jsonDecode(
+      utf8.decode(base64Url.decode(proxy.queryParameters['h']!)),
+    ) as Map<String, dynamic>;
     expect(decodedHeaders['Authorization'], 'Bearer same-origin');
     expect(decodedHeaders['Cookie'], 'session=keep');
     expect(proxy.queryParameters['o'], isNotNull);
@@ -337,7 +374,7 @@ void main() {
           type: 'application/vnd.apple.mpegurl',
           body: '#EXTM3U\nsegment.ts\n',
         ),
-      _Response(200),
+        _Response(200),
       ]);
       final result = await fetch(
         upstream,
@@ -361,16 +398,19 @@ void main() {
         );
       }
       expect(result.status, 200);
-    // Native HLS backends may resend the original Media HTTP headers to every
-    // local proxy URL, even when the rewritten URL no longer embeds them.
-    final child = await inbound.getUrl(segment);
-    child.headers.set('Authorization', 'Bearer private');
-    child.headers.set('Cookie', 'session=private');
-    child.headers.set('X-Custom-Credential', 'private');
-    final childResponse = await child.close();
-    await childResponse.drain<void>();
-    expect(childResponse.statusCode, 200);
-    expect(upstream.requests.last.headers.values.toString(), isNot(contains('private')));
+      // Native HLS backends may resend the original Media HTTP headers to every
+      // local proxy URL, even when the rewritten URL no longer embeds them.
+      final child = await inbound.getUrl(segment);
+      child.headers.set('Authorization', 'Bearer private');
+      child.headers.set('Cookie', 'session=private');
+      child.headers.set('X-Custom-Credential', 'private');
+      final childResponse = await child.close();
+      await childResponse.drain<void>();
+      expect(childResponse.statusCode, 200);
+      expect(
+        upstream.requests.last.headers.values.toString(),
+        isNot(contains('private')),
+      );
     },
   );
 
@@ -543,65 +583,59 @@ void main() {
     expect(attempted, ['8.8.8.8', '1.1.1.1']);
   });
 
-  test(
-    'HTTPS connector retries another checked address after TLS handshake failure',
-    () async {
-      service = LocalProxyService.forTesting(
-        (_) async => [
-          InternetAddress('8.8.8.8'),
-          InternetAddress('1.1.1.1'),
-        ],
+  test('HTTPS connector retries another checked address after TLS handshake failure', () async {
+    service = LocalProxyService.forTesting(
+      (_) async => [InternetAddress('8.8.8.8'), InternetAddress('1.1.1.1')],
+    );
+    final upstream = _Client([_Response(200)]);
+    await fetch(upstream, 'https://catalog.test/media');
+
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final subscription = server.listen((socket) {
+      socket.add(utf8.encode('not a TLS server'));
+      unawaited(socket.flush().whenComplete(socket.destroy));
+    });
+    final sockets = <Socket>[
+      await Socket.connect(InternetAddress.loopbackIPv4, server.port),
+      await Socket.connect(InternetAddress.loopbackIPv4, server.port),
+    ];
+    final attempted = <String>[];
+
+    try {
+      await IOOverrides.runZoned(
+        () async {
+          final task = await upstream.connectionFactory!(
+            Uri.parse('https://catalog.test/media'),
+            null,
+            null,
+          );
+          await expectLater(task.socket, throwsA(isA<TlsException>()));
+        },
+        socketStartConnect:
+            (
+              dynamic host,
+              int port, {
+              dynamic sourceAddress,
+              int sourcePort = 0,
+            }) async {
+              attempted.add((host as InternetAddress).address);
+              final socket = sockets[attempted.length - 1];
+              return ConnectionTask.fromSocket(
+                Future<Socket>.value(socket),
+                socket.destroy,
+              );
+            },
       );
-      final upstream = _Client([_Response(200)]);
-      await fetch(upstream, 'https://catalog.test/media');
-
-      final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-      final subscription = server.listen((socket) {
-        socket.add(utf8.encode('not a TLS server'));
-        unawaited(socket.flush().whenComplete(socket.destroy));
-      });
-      final sockets = <Socket>[
-        await Socket.connect(InternetAddress.loopbackIPv4, server.port),
-        await Socket.connect(InternetAddress.loopbackIPv4, server.port),
-      ];
-      final attempted = <String>[];
-
-      try {
-        await IOOverrides.runZoned(
-          () async {
-            final task = await upstream.connectionFactory!(
-              Uri.parse('https://catalog.test/media'),
-              null,
-              null,
-            );
-            await expectLater(task.socket, throwsA(isA<TlsException>()));
-          },
-          socketStartConnect:
-              (
-                dynamic host,
-                int port, {
-                dynamic sourceAddress,
-                int sourcePort = 0,
-              }) async {
-                attempted.add((host as InternetAddress).address);
-                final socket = sockets[attempted.length - 1];
-                return ConnectionTask.fromSocket(
-                  Future<Socket>.value(socket),
-                  socket.destroy,
-                );
-              },
-        );
-      } finally {
-        for (final socket in sockets) {
-          socket.destroy();
-        }
-        await subscription.cancel();
-        await server.close();
+    } finally {
+      for (final socket in sockets) {
+        socket.destroy();
       }
+      await subscription.cancel();
+      await server.close();
+    }
 
-      expect(attempted, ['8.8.8.8', '1.1.1.1']);
-    },
-  );
+    expect(attempted, ['8.8.8.8', '1.1.1.1']);
+  });
 
   test(
     'cross-origin playlist children do not inherit sticky credentials',

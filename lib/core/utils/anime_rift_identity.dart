@@ -61,7 +61,7 @@ String? safeAnimeRiftPersistedResourceUrl(String? value) {
   final parsed = Uri.tryParse(trimmed);
   if (parsed == null || parsed.scheme.isEmpty) return trimmed;
   final scheme = parsed.scheme.toLowerCase();
-  if (scheme != 'http' && scheme != 'https') return trimmed;
+  if (scheme != 'http' && scheme != 'https') return null;
   if (parsed.userInfo.isNotEmpty || parsed.hasQuery || parsed.hasFragment) {
     return null;
   }

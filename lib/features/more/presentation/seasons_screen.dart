@@ -12,7 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
-import '../../../core/extensions/providers/animewitcher_native_provider.dart';
+import '../../../core/extensions/base_provider.dart';
 import '../../../core/utils/offset_pager.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
@@ -63,11 +63,9 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
   }
 
   Future<_SeasonsBootstrap> _loadBootstrap() async {
-    final provider = (ref.read(activeProviderProvider) is AnimeWitcherNativeProvider
-        ? ref.read(activeProviderProvider) as AnimeWitcherNativeProvider
-        : null);
-    if (provider == null) {
-      throw StateError('AnimeWitcher Native provider is unavailable');
+    final provider = ref.read(activeProviderProvider);
+    if (provider == null || !provider.supportsSeasons) {
+      throw StateError('Seasons unavailable for selected provider');
     }
     final config = await provider.getSeasonConfig();
     final allSeasons = await provider.getAllSeasons();
@@ -90,11 +88,12 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
   @override
   Widget build(BuildContext context) {
     ref.listen(activeProviderProvider, (previous, next) {
-      if (previous is! AnimeWitcherNativeProvider && next is AnimeWitcherNativeProvider) {
+      if (previous?.packageName != next?.packageName &&
+          next?.supportsSeasons == true) {
         unawaited(_refreshSeasons().catchError((Object _) {}));
       }
     });
-    if (ref.watch(activeProviderProvider) is! AnimeWitcherNativeProvider) {
+    if (ref.watch(activeProviderProvider)?.supportsSeasons != true) {
       return const ProviderUnsupportedPage(title: 'المواسم');
     }
 
@@ -170,7 +169,9 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
     switch (index) {
       case 0:
         return _SeasonGrid(
-          key: ValueKey('past-${data.config.past}-$_reloadGeneration'),
+          key: ValueKey(
+            '${data.provider.packageName}-past-${data.config.past}-$_reloadGeneration',
+          ),
           provider: data.provider,
           season: data.config.past,
           showSeasonTitle: true,
@@ -178,7 +179,9 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
         );
       case 1:
         return _SeasonGrid(
-          key: ValueKey('current-${data.config.current}-$_reloadGeneration'),
+          key: ValueKey(
+            '${data.provider.packageName}-current-${data.config.current}-$_reloadGeneration',
+          ),
           provider: data.provider,
           season: data.config.current,
           showSeasonTitle: true,
@@ -186,7 +189,9 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
         );
       case 2:
         return _SeasonGrid(
-          key: ValueKey('next-${data.config.next}-$_reloadGeneration'),
+          key: ValueKey(
+            '${data.provider.packageName}-next-${data.config.next}-$_reloadGeneration',
+          ),
           provider: data.provider,
           season: data.config.next,
           showSeasonTitle: true,
@@ -267,8 +272,8 @@ class _SeasonsLoadingBody extends StatelessWidget {
 }
 
 class _SeasonsBootstrap {
-  final AnimeWitcherNativeProvider provider;
-  final AnimeWitcherSeasonConfig config;
+  final AnimeWitcherProvider provider;
+  final ProviderSeasonConfig config;
   final List<String> allSeasons;
 
   const _SeasonsBootstrap({
@@ -308,7 +313,7 @@ class _SeasonTabs extends StatelessWidget {
 }
 
 class _OtherSeasonsList extends StatelessWidget {
-  final AnimeWitcherNativeProvider provider;
+  final AnimeWitcherProvider provider;
   final List<String> allSeasons;
 
   const _OtherSeasonsList({
@@ -434,7 +439,7 @@ class _SeasonYearButton extends StatelessWidget {
 }
 
 class _SeasonResultsScreen extends StatelessWidget {
-  final AnimeWitcherNativeProvider provider;
+  final AnimeWitcherProvider provider;
   final String season;
 
   const _SeasonResultsScreen({required this.provider, required this.season});
@@ -460,7 +465,7 @@ class _SeasonResultsScreen extends StatelessWidget {
 }
 
 class _SeasonGrid extends StatefulWidget {
-  final AnimeWitcherNativeProvider provider;
+  final AnimeWitcherProvider provider;
   final double topPadding;
   final String season;
   final String emptyLabel;

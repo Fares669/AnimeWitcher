@@ -6,6 +6,15 @@ import 'package:flutter/foundation.dart';
 
 import '../utils/playback_log_redaction.dart';
 
+bool _matchesMirrorHost(String target, String allowed) {
+  final hostname = target.toLowerCase();
+  final domain = allowed.trim().toLowerCase();
+  if (domain.isEmpty) return false;
+  return hostname == domain ||
+      (InternetAddress.tryParse(domain) == null &&
+          hostname.endsWith('.$domain'));
+}
+
 class ProxyOptions {
   final List<String> mirrorHosts;
   final List<String> keepCookies;
@@ -727,7 +736,7 @@ class LocalProxyService {
     bool isMirrorSite = false;
     if (options != null) {
       isMirrorSite = options.mirrorHosts.any(
-        (host) => targetUri.host.contains(host),
+        (host) => _matchesMirrorHost(targetUri.host, host),
       );
     }
 
@@ -980,7 +989,7 @@ class LocalProxyService {
       bool isHostMatch = false;
       if (options != null) {
         isHostMatch = options.mirrorHosts.any(
-          (host) => resolved.host.contains(host),
+          (host) => _matchesMirrorHost(resolved.host, host),
         );
       }
 

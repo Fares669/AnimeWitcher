@@ -265,7 +265,7 @@ class DownloadLauncher {
           final results = await Future.wait(
             chunk.map((index) async {
               try {
-                final sources = await provider.loadStreamSources(
+                final sources = await provider.loadDownloadStreamSources(
                   episodes[index].url,
                 );
                 if (sources.where((s) => s.url.trim().isNotEmpty).isEmpty) {
@@ -375,7 +375,7 @@ class DownloadLauncher {
           final resolved = await resolveBatchStreamSources(
             candidates,
             resolveCandidate: (candidate) =>
-                provider.loadStreams(candidate.url),
+                provider.loadDownloadStreams(candidate.url),
           );
           final prioritized = orderStreamSourcesByPreference(
             resolved
@@ -483,7 +483,7 @@ class DownloadLauncher {
     bool loadingDialogShown = false;
 
     try {
-      final sourceFuture = provider.loadStreamSources(resolveUrl);
+      final sourceFuture = provider.loadDownloadStreamSources(resolveUrl);
       final preferences = _ref.read(generalSettingsProvider);
       final StreamResult? selected;
       if (preferences.autoSelectStreamSource) {
@@ -493,7 +493,7 @@ class DownloadLauncher {
           qualityPriority: preferences.streamQualityPriority,
           serverPriority: preferences.streamServerPriority,
           resolveCandidate: (StreamResult candidate) =>
-              provider.loadStreams(candidate.url),
+              provider.loadDownloadStreams(candidate.url),
         );
         if (selected == null) {
           throw Exception('لم يتم العثور على مصادر تشغيل.');
@@ -522,7 +522,7 @@ class DownloadLauncher {
             },
           ),
         );
-        final resolved = await provider.loadStreams(selected.url);
+        final resolved = await provider.loadDownloadStreams(selected.url);
         if (isCanceled || !context.mounted) return;
         if (loadingDialogShown) {
           Navigator.of(context, rootNavigator: true).pop();

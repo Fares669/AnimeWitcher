@@ -1,8 +1,18 @@
 import 'package:dio/dio.dart';
+
 import '../domain/entity/manga.dart';
 import '../domain/entity/multimedia_item.dart';
 
 enum ProviderType { movie, series, anime, manga, livestream, other }
+
+class ProviderSeasonConfig {
+  const ProviderSeasonConfig({
+    required this.past,
+    required this.current,
+    required this.next,
+  });
+  final String past, current, next;
+}
 
 class ProviderSearchFilterOptions {
   final List<String> statuses;
@@ -163,6 +173,24 @@ abstract class AnimeWitcherProvider {
 
   // Key methods providers must implement
   Future<List<MultimediaItem>> search(String query, {CancelToken? cancelToken});
+
+  bool get supportsSeasons => false;
+  Future<ProviderSeasonConfig> getSeasonConfig() async =>
+      throw UnsupportedError('المواسم غير مدعومة.');
+  Future<List<String>> getAllSeasons({bool refresh = false}) async => [];
+  Future<ProviderMediaPage> getSeasonPage(
+    String season, {
+    int offset = 0,
+    int limit = 30,
+  }) async => throw UnsupportedError('المواسم غير مدعومة.');
+  bool get supportsBroadcastSchedule => false;
+  Future<ProviderMediaPage> getBroadcastSchedulePage(
+    String day, {
+    int offset = 0,
+    int limit = 30,
+    bool refresh = false,
+    CancelToken? cancelToken,
+  }) async => throw UnsupportedError('جدول البث غير مدعوم.');
 
   /// Optional provider-defined search filter values.
   Future<ProviderSearchFilterOptions> getSearchFilterOptions() async {
@@ -434,6 +462,12 @@ abstract class AnimeWitcherProvider {
   /// True when [url] represents a user-selected source token that must bypass
   /// automatic quality/source preference logic.
   bool isExplicitStreamSelection(String url) => false;
+
+  /// Download entitlement may differ from playback entitlement.
+  Future<List<StreamResult>> loadDownloadStreamSources(String url) =>
+      loadStreamSources(url);
+  Future<List<StreamResult>> loadDownloadStreams(String url) =>
+      loadStreams(url);
 
   // Resolves a playable stream URL. Deferred providers may accept one of the
   // opaque URLs returned by [loadStreamSources].
