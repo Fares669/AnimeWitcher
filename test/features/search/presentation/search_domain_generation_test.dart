@@ -145,6 +145,45 @@ Future<void> _flush() async {
 
 void main() {
   test(
+    'Rift tags do not survive an anime provider or manga domain switch',
+    () async {
+      final rift = AnimeRiftProvider();
+      final catalog = _DeferredSearchProvider();
+      final container = ProviderContainer(
+        overrides: [
+          extensionManagerProvider.overrideWith(
+            () => _TwoProviderManager(rift, catalog),
+          ),
+          activeProviderProvider.overrideWith(() => _TestActiveProvider(rift)),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.read(searchDomainProvider.notifier).set(SearchDomain.anime);
+      container
+          .read(searchProviderFiltersProvider.notifier)
+          .set(
+            const ProviderSearchFilters(tags: {'بطل مضاد'}, sort: 'year_desc'),
+          );
+      expect(container.read(searchProviderFiltersProvider).tags, isNotEmpty);
+      await container.read(activeProviderProvider.notifier).set(catalog);
+      expect(container.read(searchProviderFiltersProvider).tags, isEmpty);
+      await container.read(activeProviderProvider.notifier).set(rift);
+      container
+          .read(searchProviderFiltersProvider.notifier)
+          .set(const ProviderSearchFilters(tags: {'بطل مضاد'}));
+      container.read(searchDomainProvider.notifier).set(SearchDomain.manga);
+      expect(container.read(searchProviderFiltersProvider).tags, isEmpty);
+      final options = await searchFilterOptionsFor(
+        SearchDomain.manga,
+        rift,
+        catalog,
+      );
+      expect(options.tags, isEmpty);
+      expect(options.genres, ['manga-${catalog.packageName}']);
+    },
+  );
+
+  test(
     'Rift without build configuration reports a recoverable connection error',
     () async {
       final provider = AnimeRiftProvider();

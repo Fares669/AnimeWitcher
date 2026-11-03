@@ -70,8 +70,10 @@ class _ProviderSearchFilterDialogState
   late Set<String> _years;
   late Set<String> _seasons;
   late Set<String> _genres;
+  late Set<String> _tags;
   String? _category;
   bool _allYears = false;
+  bool _allTags = false;
   final Map<String, Future<ProviderSearchFilterOptions>> _optionsByCategory =
       {};
 
@@ -88,6 +90,7 @@ class _ProviderSearchFilterDialogState
     _years = {...widget.initialValue.years};
     _seasons = {...widget.initialValue.seasons};
     _genres = {...widget.initialValue.genres};
+    _tags = {...widget.initialValue.tags};
     _category = widget.category;
     if (_category != null) {
       _optionsByCategory[_category!] = Future.value(widget.options);
@@ -139,6 +142,7 @@ class _ProviderSearchFilterDialogState
       _years.clear();
       _seasons.clear();
       _genres.clear();
+      _tags.clear();
     });
   }
 
@@ -159,6 +163,7 @@ class _ProviderSearchFilterDialogState
       years: keep(_years, options?.years),
       seasons: keep(_seasons, options?.seasons),
       genres: keep(_genres, options?.genres),
+      tags: keep(_tags, options?.tags),
       sort: widget.initialValue.sort,
     );
   }
@@ -361,7 +366,9 @@ class _ProviderSearchFilterDialogState
     ];
     final viewport = MediaQuery.sizeOf(context);
     final yearsPerRow =
-        appLayoutsAvailable(context) || viewport.width > viewport.height ? 10 : 5;
+        appLayoutsAvailable(context) || viewport.width > viewport.height
+        ? 10
+        : 5;
     final years = _allYears
         ? options.years
         : options.years.take(yearsPerRow).toList(growable: false);
@@ -371,6 +378,11 @@ class _ProviderSearchFilterDialogState
       for (final year in _years)
         if (!years.contains(year) && options.years.contains(year)) year,
     ];
+
+    final shownTags = <String>{
+      ...(_allTags ? options.tags : options.tags.take(24)),
+      ..._tags.where(options.tags.contains),
+    }.toList(growable: false);
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -465,6 +477,34 @@ class _ProviderSearchFilterDialogState
                   values: options.genres,
                   selected: _genres,
                   onToggle: (value) => _toggle(_genres, value),
+                ),
+              ),
+            ],
+            if (options.tags.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _FilterCard(
+                key: const ValueKey<String>('filterCard-tags'),
+                title: _t('Tags', 'الوسوم'),
+                multiple: true,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _ChipWrap(
+                      values: shownTags,
+                      selected: _tags,
+                      onToggle: (value) => _toggle(_tags, value),
+                    ),
+                    if (options.tags.length > 24)
+                      TextButton(
+                        key: const ValueKey<String>('filter-tags-more'),
+                        onPressed: () => setState(() => _allTags = !_allTags),
+                        child: Text(
+                          _allTags
+                              ? _t('Show less', 'عرض أقل')
+                              : _t('Show more', 'عرض المزيد'),
+                        ),
+                      ),
+                  ],
                 ),
               ),
             ],

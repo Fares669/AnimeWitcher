@@ -176,8 +176,32 @@ void main() {
         isTrue,
         reason: 'The genre identifier must constrain the returned catalog, not just appear in the request.',
       );
+      final tagRows =
+          (await api.request(
+                'library/tags',
+                'ANIME.LIBRARY.FILTERS.TAGS',
+              ))['items']
+              as List;
+      final chosenTag = tagRows.first as Map<dynamic, dynamic>;
+      final tagPage = await provider.searchPage(
+        '',
+        ProviderSearchFilters(tags: {chosenTag['label'] as String}),
+      );
+      expect(tagPage.items, isNotEmpty);
+      final tagDetails = await api.request(
+        'library/details/${Uri.parse(tagPage.items.first.url).pathSegments.last}',
+        'ANIME.LIBRARY.DETAILS',
+      );
+      final assignedTags =
+          (tagDetails['item'] as Map<dynamic, dynamic>)['tagsLabels'] as List;
+      expect(
+        assignedTags.any((dynamic tag) => tag['id'] == chosenTag['id']),
+        isTrue,
+        reason: 'The tag filter must constrain the returned catalog.',
+      );
       final options = await provider.getSearchFilterOptions();
       expect(options.genres, isNotEmpty);
+      expect(options.tags, isNotEmpty);
       final filtered = await provider.searchPage(
         '',
         const ProviderSearchFilters(years: {'2024'}),

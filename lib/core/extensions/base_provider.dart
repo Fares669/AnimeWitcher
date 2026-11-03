@@ -21,6 +21,7 @@ class ProviderSearchFilterOptions {
   final List<String> years;
   final List<String> seasons;
   final List<String> genres;
+  final List<String> tags;
 
   const ProviderSearchFilterOptions({
     this.statuses = const <String>[],
@@ -29,6 +30,7 @@ class ProviderSearchFilterOptions {
     this.years = const <String>[],
     this.seasons = const <String>[],
     this.genres = const <String>[],
+    this.tags = const <String>[],
   });
 
   bool get isEmpty =>
@@ -37,7 +39,8 @@ class ProviderSearchFilterOptions {
       ageRatings.isEmpty &&
       years.isEmpty &&
       seasons.isEmpty &&
-      genres.isEmpty;
+      genres.isEmpty &&
+      tags.isEmpty;
 
   factory ProviderSearchFilterOptions.fromJson(Map<String, dynamic> json) {
     List<String> read(String key) {
@@ -57,6 +60,7 @@ class ProviderSearchFilterOptions {
       years: read('years'),
       seasons: read('seasons'),
       genres: read('genres'),
+      tags: read('tags'),
     );
   }
 }
@@ -68,6 +72,7 @@ class ProviderSearchFilters {
   final Set<String> years;
   final Set<String> seasons;
   final Set<String> genres;
+  final Set<String> tags;
   final String sort;
 
   const ProviderSearchFilters({
@@ -77,6 +82,7 @@ class ProviderSearchFilters {
     this.years = const <String>{},
     this.seasons = const <String>{},
     this.genres = const <String>{},
+    this.tags = const <String>{},
     this.sort = '',
   });
 
@@ -89,7 +95,8 @@ class ProviderSearchFilters {
       ageRatings.length +
       years.length +
       seasons.length +
-      genres.length;
+      genres.length +
+      tags.length;
 
   Map<String, dynamic> toJson() {
     return <String, dynamic>{
@@ -99,6 +106,7 @@ class ProviderSearchFilters {
       'years': years.toList(growable: false),
       'seasons': seasons.toList(growable: false),
       'genres': genres.toList(growable: false),
+      if (tags.isNotEmpty) 'tags': tags.toList(growable: false),
       'sort': sort,
     };
   }
@@ -110,6 +118,7 @@ class ProviderSearchFilters {
     Set<String>? years,
     Set<String>? seasons,
     Set<String>? genres,
+    Set<String>? tags,
     String? sort,
   }) {
     return ProviderSearchFilters(
@@ -119,6 +128,7 @@ class ProviderSearchFilters {
       years: years ?? this.years,
       seasons: seasons ?? this.seasons,
       genres: genres ?? this.genres,
+      tags: tags ?? this.tags,
       sort: sort ?? this.sort,
     );
   }

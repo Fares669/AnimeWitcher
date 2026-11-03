@@ -31,6 +31,12 @@ class CatalogFixture extends AnimeRiftApiClient {
     calls.add(path);
     lastQuery = query;
     lastBody = body;
+    if (path == 'library/tags')
+      return {
+        'items': [
+          {'id': 'tag42', 'label': 'بطل مضاد'},
+        ],
+      };
     if (path == 'library/genres')
       return {
         'items': [
@@ -118,6 +124,34 @@ class CatalogFixture extends AnimeRiftApiClient {
 }
 
 void main() {
+  test(
+    'tags use their own backend IDs and share bounded filter metadata requests',
+    () async {
+      final api = CatalogFixture();
+      final provider = AnimeRiftProvider(client: api);
+      final options = await Future.wait([
+        provider.getSearchFilterOptions(),
+        provider.getSearchFilterOptions(),
+      ]);
+      expect(options.first.tags, ['بطل مضاد']);
+      expect(api.calls.where((p) => p == 'library/tags'), hasLength(1));
+      expect(api.calls.where((p) => p == 'library/genres'), hasLength(1));
+      await provider.searchPage(
+        '',
+        const ProviderSearchFilters(tags: {'بطل مضاد'}),
+      );
+      expect(api.lastBody!['multi_tags'], ['tag42']);
+      expect(api.lastBody!.containsKey('multi_genres'), isFalse);
+      await expectLater(
+        provider.searchPage(
+          '',
+          const ProviderSearchFilters(tags: {'وسم مجهول'}),
+        ),
+        throwsUnsupportedError,
+      );
+    },
+  );
+
   for (final date in [
     '2000-01-01T00:00:00Z',
     '2099-01-01T00:00:00',

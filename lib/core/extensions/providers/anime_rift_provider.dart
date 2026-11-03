@@ -133,55 +133,60 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     'صيف': 'summer',
     'خريف': 'fall',
   };
-  Map<String, String>? _genres;
-  DateTime? _genresAt;
-  Future<Map<String, String>>? _genresPending;
+  final _filterLabels =
+      <String, ({DateTime expires, Future<Map<String, String>> value})>{};
 
-  Future<Map<String, String>> _genreOptions() async {
-    if (_genres != null &&
-        DateTime.now().difference(_genresAt!) < const Duration(minutes: 10))
-      return _genres!;
-    if (_genresPending != null) return _genresPending!;
-    final pending = _loadGenres();
-    _genresPending = pending;
+  Future<Map<String, String>> _labelOptions(String kind) async {
+    final cached = _filterLabels[kind];
+    if (cached != null && cached.expires.isAfter(DateTime.now()))
+      return cached.value;
+    final pending = _loadLabels(kind);
+    _filterLabels[kind] = (
+      expires: DateTime.now().add(const Duration(minutes: 10)),
+      value: pending,
+    );
     try {
       return await pending;
-    } finally {
-      _genresPending = null;
+    } catch (_) {
+      if (identical(_filterLabels[kind]?.value, pending))
+        _filterLabels.remove(kind);
+      rethrow;
     }
   }
 
-  Future<Map<String, String>> _loadGenres() async {
+  Future<Map<String, String>> _loadLabels(String kind) async {
     final data = await _api.request(
-      'library/genres',
-      'ANIME.LIBRARY.FILTERS.GENRES',
+      'library/$kind',
+      'ANIME.LIBRARY.FILTERS.${kind.toUpperCase()}',
     );
     final rows = data['items'];
     if (rows is! List) throw const AnimeRiftAccessUnavailable();
-    final genres = <String, String>{};
-    for (final row in rows.whereType<Map<dynamic, dynamic>>()) {
-      final id = row['id'], label = row['label'];
-      if (id is String &&
-          _safeId.hasMatch(id) &&
-          label is String &&
-          label.trim().isNotEmpty)
-        genres[label.trim()] = id;
-    }
-    _genres = genres;
-    _genresAt = DateTime.now();
-    return genres;
+    return {
+      for (final row in rows.whereType<Map<dynamic, dynamic>>())
+        if (row['id'] is String &&
+            _safeId.hasMatch(row['id'] as String) &&
+            row['label'] is String &&
+            (row['label'] as String).trim().isNotEmpty)
+          (row['label'] as String).trim(): row['id'] as String,
+    };
   }
 
   @override
-  Future<ProviderSearchFilterOptions> getSearchFilterOptions() async =>
-      ProviderSearchFilterOptions(
-        statuses: _statuses.keys.toList(),
-        types: _types.keys.toList(),
-        ageRatings: _ages.keys.toList(),
-        seasons: _seasons.keys.toList(),
-        years: [for (var y = DateTime.now().year + 1; y >= 1900; y--) '$y'],
-        genres: (await _genreOptions()).keys.toList(),
-      );
+  Future<ProviderSearchFilterOptions> getSearchFilterOptions() async {
+    final labels = await Future.wait([
+      _labelOptions('genres'),
+      _labelOptions('tags'),
+    ]);
+    return ProviderSearchFilterOptions(
+      statuses: _statuses.keys.toList(),
+      types: _types.keys.toList(),
+      ageRatings: _ages.keys.toList(),
+      seasons: _seasons.keys.toList(),
+      years: [for (var y = DateTime.now().year + 1; y >= 1900; y--) '$y'],
+      genres: labels[0].keys.toList(),
+      tags: labels[1].keys.toList(),
+    );
+  }
 
   List<String> _filterValues(Set<String> values, Map<String, String> options) =>
       [
@@ -230,7 +235,12 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
       if (filters.seasons.isNotEmpty)
         'multi_seasons': _filterValues(filters.seasons, _seasons),
       if (filters.genres.isNotEmpty)
-        'multi_genres': _filterValues(filters.genres, await _genreOptions()),
+        'multi_genres': _filterValues(
+          filters.genres,
+          await _labelOptions('genres'),
+        ),
+      if (filters.tags.isNotEmpty)
+        'multi_tags': _filterValues(filters.tags, await _labelOptions('tags')),
       if (filters.years.isNotEmpty)
         'multi_release_year': [
           for (final year in filters.years)

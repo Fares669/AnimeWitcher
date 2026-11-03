@@ -300,6 +300,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         seasons: {...current.seasons}..remove(value),
       ),
       'genres' => current.copyWith(genres: {...current.genres}..remove(value)),
+      'tags' => current.copyWith(tags: {...current.tags}..remove(value)),
       _ => current,
     };
 
@@ -1246,6 +1247,7 @@ class _ActiveSearchFilterChips extends StatelessWidget {
 
   List<(String, String)> get _items => [
     ...filters.genres.map((value) => ('genres', value)),
+    ...filters.tags.map((value) => ('tags', value)),
     ...filters.years.map((value) => ('years', value)),
     ...filters.seasons.map((value) => ('seasons', value)),
     ...filters.ageRatings.map((value) => ('ageRatings', value)),
