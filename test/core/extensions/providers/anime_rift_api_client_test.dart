@@ -256,7 +256,50 @@ void main() {
         client.request('https://attacker.invalid/', 'scope'),
         throwsArgumentError,
       );
+      await expectLater(
+        client.request('character/../../user/view', 'scope'),
+        throwsArgumentError,
+      );
       expect(calls, 0);
+    },
+  );
+
+  test(
+    'character read endpoints are allowed with their own scoped request',
+    () async {
+      var characterCalls = 0;
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: fixtureDio((o) {
+          if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+          if (o.uri.path.endsWith('/auth/register/device')) {
+            return reply(o, {'sessionKey': 'fixture'}, 201);
+          }
+          characterCalls++;
+          final jwt = (o.headers['integrity'] as String)
+              .substring(7)
+              .split('.');
+          final payload = jsonDecode(
+            utf8.decode(base64Url.decode(base64Url.normalize(jwt[1]))),
+          ) as Map;
+          if (o.uri.path.endsWith('/character/all')) {
+            expect(payload['scope'], 'CHARACTERS.ALL');
+            expect(o.queryParameters['searchText'], 'Naruto');
+            return reply(o, {'items': []});
+          }
+          expect(o.uri.path, endsWith('/character/details/char_1'));
+          expect(payload['scope'], 'CHARACTERS.DETAILS');
+          return reply(o, {'item': {}});
+        }),
+      );
+
+      await client.request(
+        'character/all',
+        'CHARACTERS.ALL',
+        query: {'searchText': 'Naruto'},
+      );
+      await client.request('character/details/char_1', 'CHARACTERS.DETAILS');
+      expect(characterCalls, 2);
     },
   );
 

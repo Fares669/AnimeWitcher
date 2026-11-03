@@ -202,6 +202,23 @@ void main() {
       final options = await provider.getSearchFilterOptions();
       expect(options.genres, isNotEmpty);
       expect(options.tags, isNotEmpty);
+      final characterResponse = await api.request(
+        'character/all',
+        'CHARACTERS.ALL',
+        query: {'searchText': 'Naruto'},
+      );
+      final characterRows = characterResponse['items'];
+      expect(characterRows, isA<List>());
+      expect(characterRows as List, isNotEmpty);
+      final firstCharacter = Map<String, dynamic>.from(
+        characterRows.first as Map,
+      );
+      final characterResponseKeys = characterResponse.keys.toList()..sort();
+      final characterKeys = firstCharacter.keys.toList()..sort();
+      // Schema names are safe diagnostics; never log row values or headers.
+      print(
+        'Live character schema: response=$characterResponseKeys item=$characterKeys',
+      );
       final filtered = await provider.searchPage(
         '',
         const ProviderSearchFilters(years: {'2024'}),

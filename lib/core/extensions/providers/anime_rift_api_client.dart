@@ -438,8 +438,11 @@ class AnimeRiftApiClient {
     Map<String, dynamic>? query,
     CancelToken? cancelToken,
   }) async {
-    if (!RegExp(r'^library/[A-Za-z0-9_/-]+$').hasMatch(path) ||
-        path.contains('..')) {
+    final allowedPath =
+        RegExp(r'^library/[A-Za-z0-9_/-]+$').hasMatch(path) ||
+        path == 'character/all' ||
+        RegExp(r'^character/details/[A-Za-z0-9_-]+$').hasMatch(path);
+    if (!allowedPath || path.contains('..')) {
       throw ArgumentError('Invalid Anime Rift catalog path');
     }
     if (cancelToken?.isCancelled == true) throw cancelToken!.cancelError!;
