@@ -125,6 +125,57 @@ void main() {
       expect(season.items.every((item) => item.year == 2024), isTrue);
       expect(await provider.getCast(search.items.first.url), isNotEmpty);
       expect(await provider.getRelated(search.items.first.url), isNotEmpty);
+      final scheduleData = await api.request(
+        'library/schedule',
+        'ANIME.LIBRARY.SCHEDULE',
+      );
+      final futureRows = <Map<String, dynamic>>[];
+      for (final dynamic day in scheduleData['schedule'] as List) {
+        for (final dynamic row in day['animes'] as List) {
+          final date = DateTime.tryParse(row['airingDate'] as String);
+          if (date != null && date.isAfter(DateTime.now()))
+            futureRows.add(Map<String, dynamic>.from(row as Map));
+        }
+      }
+      futureRows.sort(
+        (a, b) =>
+            (a['airingDate'] as String).compareTo(b['airingDate'] as String),
+      );
+      expect(futureRows, isNotEmpty);
+      final futureRow = futureRows.first;
+      final next = await provider.getNextAiring(
+        'https://anime-rift.com/anime/${(futureRow['anime'] as Map)['_id']}',
+      );
+      expect(next?.episode, futureRow['episodeNumber']);
+      expect(
+        next?.unixTime,
+        DateTime.parse(futureRow['airingDate'] as String)
+                .millisecondsSinceEpoch ~/
+            1000,
+      );
+      final genreRows =
+          (await api.request(
+                'library/genres',
+                'ANIME.LIBRARY.FILTERS.GENRES',
+              ))['items']
+              as List;
+      final chosenGenre = genreRows.first as Map;
+      final genrePage = await provider.searchPage(
+        '',
+        ProviderSearchFilters(genres: {chosenGenre['label'] as String}),
+      );
+      expect(genrePage.items, isNotEmpty);
+      final genreDetails = await api.request(
+        'library/details/${Uri.parse(genrePage.items.first.url).pathSegments.last}',
+        'ANIME.LIBRARY.DETAILS',
+      );
+      final assignedGenres =
+          (genreDetails['item'] as Map)['genreLabels'] as List;
+      expect(
+        assignedGenres.any((dynamic genre) => genre['id'] == chosenGenre['id']),
+        isTrue,
+        reason: 'The genre identifier must constrain the returned catalog, not just appear in the request.',
+      );
       final options = await provider.getSearchFilterOptions();
       expect(options.genres, isNotEmpty);
       final filtered = await provider.searchPage(

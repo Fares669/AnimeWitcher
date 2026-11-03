@@ -15,6 +15,8 @@ class CatalogFixture extends AnimeRiftApiClient {
         ),
       );
   final calls = <String>[];
+  String? airingOverride;
+  final airing = DateTime.now().toUtc().add(const Duration(days: 1));
   Map<String, dynamic>? lastQuery;
   Map<String, dynamic>? lastBody;
   @override
@@ -46,6 +48,7 @@ class CatalogFixture extends AnimeRiftApiClient {
                 'localBroadcastTime': '18:30',
                 'localBroadcastTimeInt': 1830,
                 'episodeNumber': 7,
+                'airingDate': airingOverride ?? airing.toIso8601String(),
               },
             ],
           },
@@ -70,6 +73,9 @@ class CatalogFixture extends AnimeRiftApiClient {
         'item': {
           ...anime,
           'synopsis': 'Description',
+          '_related': [
+            {'_anime': '42', 'relation_type': 'sequel'},
+          ],
           'genreLabels': [
             {'label': 'Action'},
           ],
@@ -112,6 +118,51 @@ class CatalogFixture extends AnimeRiftApiClient {
 }
 
 void main() {
+  for (final date in [
+    '2000-01-01T00:00:00Z',
+    '2099-01-01T00:00:00',
+    'invalid-date',
+  ]) {
+    test('next airing omits past or ambiguous server date: $date', () async {
+      final api = CatalogFixture()..airingOverride = date;
+      expect(
+        await AnimeRiftProvider(client: api)
+            .getNextAiring('https://anime-rift.com/anime/42'),
+        isNull,
+      );
+    });
+  }
+
+  test(
+    'next airing uses the matching title and an explicit server UTC date',
+    () async {
+      final api = CatalogFixture();
+      final provider = AnimeRiftProvider(client: api);
+      final next = await provider.getNextAiring(
+        'https://anime-rift.com/anime/42',
+      );
+      expect(next?.episode, 7);
+      expect(next?.unixTime, api.airing.millisecondsSinceEpoch ~/ 1000);
+      expect(
+        await provider.getNextAiring('https://anime-rift.com/anime/other'),
+        isNull,
+      );
+      expect(api.calls.where((p) => p == 'library/schedule'), hasLength(1));
+    },
+  );
+  test(
+    'related title keeps the server relationship without changing its identity',
+    () async {
+      final provider = AnimeRiftProvider(client: CatalogFixture());
+      final related = (await provider.getRelated(
+        'https://anime-rift.com/anime/42',
+      )).single;
+      expect(related.relationType, 'SEQUEL');
+      expect(related.relationLabel, 'التالي');
+      expect(related.url, 'https://anime-rift.com/anime/42');
+    },
+  );
+
   test(
     'schedule maps actual backend weekday and retains source identity',
     () async {

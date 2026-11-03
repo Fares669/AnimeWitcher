@@ -274,18 +274,10 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
   };
   Map<String, dynamic>? _schedule;
   DateTime? _scheduleAt;
-  @override
-  bool get supportsBroadcastSchedule => true;
-  @override
-  Future<ProviderMediaPage> getBroadcastSchedulePage(
-    String day, {
-    int offset = 0,
-    int limit = 30,
+  Future<Map<String, dynamic>> _scheduleData({
     bool refresh = false,
     CancelToken? cancelToken,
   }) async {
-    final weekday = _weekdays[day];
-    if (weekday == null) throw UnsupportedError('يوم غير صالح.');
     if (cancelToken?.isCancelled == true) throw cancelToken!.cancelError!;
     var data = _schedule;
     if (refresh ||
@@ -301,6 +293,25 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
       _schedule = data;
       _scheduleAt = DateTime.now();
     }
+    return data;
+  }
+
+  @override
+  bool get supportsBroadcastSchedule => true;
+  @override
+  Future<ProviderMediaPage> getBroadcastSchedulePage(
+    String day, {
+    int offset = 0,
+    int limit = 30,
+    bool refresh = false,
+    CancelToken? cancelToken,
+  }) async {
+    final weekday = _weekdays[day];
+    if (weekday == null) throw UnsupportedError('يوم غير صالح.');
+    final data = await _scheduleData(
+      refresh: refresh,
+      cancelToken: cancelToken,
+    );
     final items = <MultimediaItem>[];
     final days = data['schedule'] as List;
     for (final entry in days.whereType<Map<dynamic, dynamic>>()) {
@@ -510,11 +521,77 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
   Future<List<MultimediaItem>> getRelated(String url) async {
     final data = await _detailData(url);
     final others = data['others'];
-    return _items(others is Map<dynamic, dynamic> ? others['related'] : null);
+    final rows = (data['item'] as Map<dynamic, dynamic>)['_related'];
+    final relations = <String, String>{};
+    if (rows is List) {
+      for (final row in rows.whereType<Map<dynamic, dynamic>>()) {
+        final id = row['_anime'], rawType = row['relation_type'];
+        if (id is! String || rawType is! String || rawType.length > 64)
+          continue;
+        final type = rawType
+            .trim()
+            .replaceAll(RegExp(r'[\s-]+'), '_')
+            .toUpperCase();
+        if (RegExp(r'^[A-Z_]+$').hasMatch(type)) relations[id] = type;
+      }
+    }
+    const labels = {
+      'PREQUEL': 'السابق',
+      'SEQUEL': 'التالي',
+      'PARENT': 'القصة الرئيسية',
+      'PARENT_STORY': 'القصة الرئيسية',
+      'SIDE_STORY': 'قصة جانبية',
+      'SPIN_OFF': 'عمل مشتق',
+      'ALTERNATIVE': 'نسخة بديلة',
+      'ALTERNATIVE_VERSION': 'نسخة بديلة',
+      'SUMMARY': 'ملخص',
+      'COMPILATION': 'تجميعة',
+      'ADAPTATION': 'اقتباس',
+      'CHARACTER': 'عمل مرتبط بالشخصيات',
+      'SOURCE': 'المصدر',
+    };
+    return [
+      for (final item in _items(
+        others is Map<dynamic, dynamic> ? others['related'] : null,
+      ))
+        item.copyWith(
+          relationType: relations[_catalogId(item.url)],
+          relationLabel: labels[relations[_catalogId(item.url)]],
+        ),
+    ];
   }
 
   @override
-  Future<NextAiring?> getNextAiring(String url) async => null;
+  Future<NextAiring?> getNextAiring(String url) async {
+    final id = _catalogId(url);
+    final data = await _scheduleData();
+    final now = DateTime.now();
+    NextAiring? next;
+    for (final day
+        in (data['schedule'] as List).whereType<Map<dynamic, dynamic>>()) {
+      final rows = day['animes'];
+      if (rows is! List) continue;
+      for (final row in rows.whereType<Map<dynamic, dynamic>>()) {
+        final anime = row['anime'],
+            rawDate = row['airingDate'],
+            episode = row['episodeNumber'];
+        if (anime is! Map<dynamic, dynamic> ||
+            anime['_id'] != id ||
+            rawDate is! String ||
+            episode is! num ||
+            episode <= 0 ||
+            !RegExp(r'(Z|[+-]\d{2}:\d{2})$').hasMatch(rawDate))
+          continue;
+        final date = DateTime.tryParse(rawDate);
+        if (date == null || !date.isAfter(now)) continue;
+        final timestamp = date.millisecondsSinceEpoch ~/ 1000;
+        if (next == null || timestamp < next.unixTime) {
+          next = NextAiring(episode: episode.toInt(), unixTime: timestamp);
+        }
+      }
+    }
+    return next;
+  }
 
   @override
   Future<List<StreamResult>> loadStreamSources(String url) =>
