@@ -100,6 +100,36 @@ Future<void> _flush() async {
 }
 
 void main() {
+  for (final failure in [false, true]) {
+    test(
+      'home response after disposal is ignored (failure=$failure)',
+      () async {
+        final source = _DeferredHomeSource();
+        final container = ProviderContainer(
+          overrides: [
+            activeProviderProvider.overrideWith(
+              () => _SwitchableActiveProvider(source),
+            ),
+            extensionManagerProvider.overrideWith(_EmptyManager.new),
+          ],
+        );
+        container.listen<HomeState>(homeDataProvider, (_, _) {});
+        await _flush();
+        container.dispose();
+        if (failure) {
+          source.home.completeError(const AnimeRiftAccessUnavailable());
+        } else {
+          source.home.complete({
+            'home': [
+              MultimediaItem(title: 'Late', url: 'test://late', posterUrl: ''),
+            ],
+          });
+        }
+        await _flush();
+      },
+    );
+  }
+
   test(
     'removing the selected provider invalidates an in-flight home response',
     () async {
@@ -128,23 +158,26 @@ void main() {
     },
   );
 
-  test('Rift displays a specific unavailable state when official access is not configured', () async {
-    final container = ProviderContainer(
-      overrides: [
-        activeProviderProvider.overrideWithValue(AnimeRiftProvider()),
-        extensionManagerProvider.overrideWith(_EmptyManager.new),
-      ],
-    );
-    addTearDown(container.dispose);
-    container.listen<HomeState>(homeDataProvider, (_, _) {});
-    await _flush();
-    final state = container.read(homeDataProvider);
-    expect(state, isA<HomeProviderUnavailable>());
-    expect(
-      (state as HomeProviderUnavailable).message,
-      contains('الاتصال الرسمية'),
-    );
-  });
+  test(
+    'Rift without build configuration displays a recoverable unavailable state',
+    () async {
+      final container = ProviderContainer(
+        overrides: [
+          activeProviderProvider.overrideWithValue(AnimeRiftProvider()),
+          extensionManagerProvider.overrideWith(_EmptyManager.new),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.listen<HomeState>(homeDataProvider, (_, _) {});
+      await _flush();
+      final state = container.read(homeDataProvider);
+      expect(state, isA<HomeProviderUnavailable>());
+      expect(
+        (state as HomeProviderUnavailable).message,
+        contains('إعدادات المزوّد'),
+      );
+    },
+  );
 
   TestWidgetsFlutterBinding.ensureInitialized();
 

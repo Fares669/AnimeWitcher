@@ -145,7 +145,7 @@ Future<void> _flush() async {
 
 void main() {
   test(
-    'Rift search explains that its official connection is unavailable',
+    'Rift without build configuration reports a recoverable connection error',
     () async {
       final provider = AnimeRiftProvider();
       final container = ProviderContainer(
@@ -163,7 +163,7 @@ void main() {
       await _flush();
       expect(
         container.read(searchPagedResultsProvider).errorMessage,
-        contains('الاتصال الرسمية'),
+        contains('إعدادات المزوّد'),
       );
     },
   );

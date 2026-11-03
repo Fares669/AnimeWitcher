@@ -116,17 +116,16 @@ jobs:
           echo "storeFile=release.jks" >> android/key.properties
 
       - name: Generate dart-defines file
-        shell: bash
-        run: |
-          cat > dart-defines.json << 'JSON_EOF'
-          {
-            "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",
-            "MAL_CLIENT_SECRET": "${{ secrets.MAL_CLIENT_SECRET }}",
-            "ANILIST_CLIENT_ID": "${{ secrets.ANILIST_CLIENT_ID }}",
-            "ANIMEWITCHER_FIREBASE_PROJECT_ID": "${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}",
-            "ANIMEWITCHER_FIREBASE_API_KEY": "${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}"
-          }
-          JSON_EOF
+        env:
+          MAL_CLIENT_ID: ${{ secrets.MAL_CLIENT_ID }}
+          MAL_CLIENT_SECRET: ${{ secrets.MAL_CLIENT_SECRET }}
+          ANILIST_CLIENT_ID: ${{ secrets.ANILIST_CLIENT_ID }}
+          ANIMEWITCHER_FIREBASE_PROJECT_ID: ${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}
+          ANIMEWITCHER_FIREBASE_API_KEY: ${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}
+          ANIMERIFT_FIREBASE_API_KEY: ${{ secrets.ANIMERIFT_FIREBASE_API_KEY }}
+          ANIMERIFT_FIREBASE_APP_ID: ${{ secrets.ANIMERIFT_FIREBASE_APP_ID }}
+          ANIMERIFT_JWT_SECRET: ${{ secrets.ANIMERIFT_JWT_SECRET }}
+        run: python3 scripts/write_dart_defines.py
 
       # One APK that installs on any device. The per-ABI splits only saved a
       # download at the cost of making the reader pick their own CPU, and the
@@ -177,17 +176,16 @@ jobs:
         run: bash scripts/prepare_media_kit_ios_headers.sh
 
       - name: Generate dart-defines file
-        shell: bash
-        run: |
-          cat > dart-defines.json << 'JSON_EOF'
-          {
-            "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",
-            "MAL_CLIENT_SECRET": "${{ secrets.MAL_CLIENT_SECRET }}",
-            "ANILIST_CLIENT_ID": "${{ secrets.ANILIST_CLIENT_ID }}",
-            "ANIMEWITCHER_FIREBASE_PROJECT_ID": "${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}",
-            "ANIMEWITCHER_FIREBASE_API_KEY": "${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}"
-          }
-          JSON_EOF
+        env:
+          MAL_CLIENT_ID: ${{ secrets.MAL_CLIENT_ID }}
+          MAL_CLIENT_SECRET: ${{ secrets.MAL_CLIENT_SECRET }}
+          ANILIST_CLIENT_ID: ${{ secrets.ANILIST_CLIENT_ID }}
+          ANIMEWITCHER_FIREBASE_PROJECT_ID: ${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}
+          ANIMEWITCHER_FIREBASE_API_KEY: ${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}
+          ANIMERIFT_FIREBASE_API_KEY: ${{ secrets.ANIMERIFT_FIREBASE_API_KEY }}
+          ANIMERIFT_FIREBASE_APP_ID: ${{ secrets.ANIMERIFT_FIREBASE_APP_ID }}
+          ANIMERIFT_JWT_SECRET: ${{ secrets.ANIMERIFT_JWT_SECRET }}
+        run: python3 scripts/write_dart_defines.py
 
       - name: Build iOS (No Codesign)
         run: |
@@ -239,17 +237,16 @@ jobs:
           dart run build_runner build --delete-conflicting-outputs
 
       - name: Generate dart-defines file
-        shell: bash
-        run: |
-          cat > dart-defines.json << 'JSON_EOF'
-          {
-            "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",
-            "MAL_CLIENT_SECRET": "${{ secrets.MAL_CLIENT_SECRET }}",
-            "ANILIST_CLIENT_ID": "${{ secrets.ANILIST_CLIENT_ID }}",
-            "ANIMEWITCHER_FIREBASE_PROJECT_ID": "${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}",
-            "ANIMEWITCHER_FIREBASE_API_KEY": "${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}"
-          }
-          JSON_EOF
+        env:
+          MAL_CLIENT_ID: ${{ secrets.MAL_CLIENT_ID }}
+          MAL_CLIENT_SECRET: ${{ secrets.MAL_CLIENT_SECRET }}
+          ANILIST_CLIENT_ID: ${{ secrets.ANILIST_CLIENT_ID }}
+          ANIMEWITCHER_FIREBASE_PROJECT_ID: ${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}
+          ANIMEWITCHER_FIREBASE_API_KEY: ${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}
+          ANIMERIFT_FIREBASE_API_KEY: ${{ secrets.ANIMERIFT_FIREBASE_API_KEY }}
+          ANIMERIFT_FIREBASE_APP_ID: ${{ secrets.ANIMERIFT_FIREBASE_APP_ID }}
+          ANIMERIFT_JWT_SECRET: ${{ secrets.ANIMERIFT_JWT_SECRET }}
+        run: python3 scripts/write_dart_defines.py
 
       # Build for a single architecture to reduce app size from ~430MB (universal) to ~270MB
       - name: Build macOS (${{ matrix.arch }})
@@ -381,17 +378,16 @@ jobs:
           Write-Host "Using downloaded libmpv: $($dll.FullName)"
 
       - name: Generate dart-defines file
-        shell: bash
-        run: |
-          cat > dart-defines.json << 'JSON_EOF'
-          {
-            "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",
-            "MAL_CLIENT_SECRET": "${{ secrets.MAL_CLIENT_SECRET }}",
-            "ANILIST_CLIENT_ID": "${{ secrets.ANILIST_CLIENT_ID }}",
-            "ANIMEWITCHER_FIREBASE_PROJECT_ID": "${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}",
-            "ANIMEWITCHER_FIREBASE_API_KEY": "${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}"
-          }
-          JSON_EOF
+        env:
+          MAL_CLIENT_ID: ${{ secrets.MAL_CLIENT_ID }}
+          MAL_CLIENT_SECRET: ${{ secrets.MAL_CLIENT_SECRET }}
+          ANILIST_CLIENT_ID: ${{ secrets.ANILIST_CLIENT_ID }}
+          ANIMEWITCHER_FIREBASE_PROJECT_ID: ${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}
+          ANIMEWITCHER_FIREBASE_API_KEY: ${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}
+          ANIMERIFT_FIREBASE_API_KEY: ${{ secrets.ANIMERIFT_FIREBASE_API_KEY }}
+          ANIMERIFT_FIREBASE_APP_ID: ${{ secrets.ANIMERIFT_FIREBASE_APP_ID }}
+          ANIMERIFT_JWT_SECRET: ${{ secrets.ANIMERIFT_JWT_SECRET }}
+        run: python3 scripts/write_dart_defines.py
 
       - name: Build Windows
         run: flutter build windows --release --dart-define-from-file=dart-defines.json
@@ -493,17 +489,16 @@ jobs:
           dart run build_runner build --delete-conflicting-outputs
 
       - name: Generate dart-defines file
-        shell: bash
-        run: |
-          cat > dart-defines.json << 'JSON_EOF'
-          {
-            "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",
-            "MAL_CLIENT_SECRET": "${{ secrets.MAL_CLIENT_SECRET }}",
-            "ANILIST_CLIENT_ID": "${{ secrets.ANILIST_CLIENT_ID }}",
-            "ANIMEWITCHER_FIREBASE_PROJECT_ID": "${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}",
-            "ANIMEWITCHER_FIREBASE_API_KEY": "${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}"
-          }
-          JSON_EOF
+        env:
+          MAL_CLIENT_ID: ${{ secrets.MAL_CLIENT_ID }}
+          MAL_CLIENT_SECRET: ${{ secrets.MAL_CLIENT_SECRET }}
+          ANILIST_CLIENT_ID: ${{ secrets.ANILIST_CLIENT_ID }}
+          ANIMEWITCHER_FIREBASE_PROJECT_ID: ${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}
+          ANIMEWITCHER_FIREBASE_API_KEY: ${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}
+          ANIMERIFT_FIREBASE_API_KEY: ${{ secrets.ANIMERIFT_FIREBASE_API_KEY }}
+          ANIMERIFT_FIREBASE_APP_ID: ${{ secrets.ANIMERIFT_FIREBASE_APP_ID }}
+          ANIMERIFT_JWT_SECRET: ${{ secrets.ANIMERIFT_JWT_SECRET }}
+        run: python3 scripts/write_dart_defines.py
 
       - name: Build Linux Packages
         run: |

@@ -320,8 +320,17 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   }
 
   List<AppleNativeMenuItem> _searchSortMenuItems(BuildContext context) {
+    final isRiftAnime =
+        ref.read(searchDomainProvider) == SearchDomain.anime &&
+        ref.read(activeProviderProvider) is AnimeRiftProvider;
+    final options = isRiftAnime
+        ? [
+            SearchSortOption.productionDateAscending,
+            SearchSortOption.productionDateDescending,
+          ]
+        : SearchSortOption.values;
     return <AppleNativeMenuItem>[
-      for (final option in SearchSortOption.values)
+      for (final option in options)
         AppleNativeMenuItem(
           value: option.value,
           label: option.label(context),

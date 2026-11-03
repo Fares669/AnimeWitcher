@@ -129,7 +129,7 @@ class HomeData extends _$HomeData {
 
     final activeProvider = ref.read(activeProviderProvider);
     if (activeProvider == null) {
-      if (generation != _fetchGeneration) return;
+      if (!ref.mounted || generation != _fetchGeneration) return;
       state = const HomeNoProvider();
       return;
     }
@@ -182,7 +182,7 @@ class HomeData extends _$HomeData {
 
     try {
       final items = await activeProvider.getHome();
-      if (generation != _fetchGeneration) return;
+      if (!ref.mounted || generation != _fetchGeneration) return;
       _saveSnapshot(activeProvider.packageName, items);
       state = HomeSuccess(
         items,
@@ -190,14 +190,14 @@ class HomeData extends _$HomeData {
         latestManga: mangaPage?.items ?? previousManga,
       );
     } on AnimeRiftAccessUnavailable catch (error) {
-      if (generation != _fetchGeneration) return;
+      if (!ref.mounted || generation != _fetchGeneration) return;
       state = HomeProviderUnavailable(
         error.toString(),
         latestManga: mangaPage?.items ?? previousManga,
       );
       return;
     } catch (e) {
-      if (generation != _fetchGeneration) return;
+      if (!ref.mounted || generation != _fetchGeneration) return;
       if (preserveCurrent) return;
       state = HomeError(e.toString());
       return;

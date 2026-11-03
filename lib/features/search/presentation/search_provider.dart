@@ -457,8 +457,15 @@ class SearchFilterNotifier extends _$SearchFilterNotifier {
 
 class SearchProviderFiltersNotifier extends Notifier<ProviderSearchFilters> {
   @override
-  ProviderSearchFilters build() =>
-      const ProviderSearchFilters(sort: 'favorites');
+  ProviderSearchFilters build() {
+    final domain = ref.watch(searchDomainProvider);
+    final provider = domain == SearchDomain.anime
+        ? ref.watch(activeProviderProvider)
+        : null;
+    return ProviderSearchFilters(
+      sort: provider is AnimeRiftProvider ? 'year_asc' : 'favorites',
+    );
+  }
 
   void set(ProviderSearchFilters value) => state = value;
 }
@@ -546,10 +553,16 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     SearchDomain domain,
   ) {
     final pageSize = provider.searchPageSize;
+    final filters =
+        domain == SearchDomain.anime &&
+            _domain == SearchDomain.all &&
+            provider is AnimeRiftProvider
+        ? const ProviderSearchFilters(sort: 'year_asc')
+        : _filters;
     return switch (domain) {
       SearchDomain.anime => provider.searchPage(
         _query,
-        _filters,
+        filters,
         offset: offset,
         limit: pageSize,
       ),
