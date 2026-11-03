@@ -365,7 +365,7 @@ void main() {
         await client.signInWithCode(privateCode);
         fail('invalid code must be rejected');
       } on ArgumentError catch (error) {
-        expect(error.toString(), isNot(contains('private-code')));
+        expect(error.toString(), isNot(contains(privateCode)));
       }
       expect(calls, 0);
       expect(secureValues, isEmpty);

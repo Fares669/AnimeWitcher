@@ -155,4 +155,3 @@ git commit -m "docs(animerift): record authenticated download boundary"
 - Type consistency: Task 2 consumes the four exact methods produced by Task 1; Task 3 uses the same client request path already consumed by streams.
 - Proportion: three independently testable tasks; no new account framework or dependency.
 - Ruling: the existing dedicated branch is retained instead of creating another worktree because the user explicitly required all integration work on this one branch and it is clean. Cost if wrong: weaker filesystem isolation, mitigated by explicit staging and CI.
-
