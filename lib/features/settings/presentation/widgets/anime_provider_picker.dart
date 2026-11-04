@@ -369,16 +369,16 @@ class _AnimeRiftAccountTileState extends ConsumerState<_AnimeRiftAccountTile> {
               ? appText(
                   context,
                   english:
-                      'Connected as ${identity!.displayName} · automatic sync enabled',
+                      'Connected as ${identity!.displayName} · automatic cloud import',
                   arabic:
-                      'متصل باسم ${identity.displayName} · المزامنة التلقائية مفعلة',
+                      'متصل باسم ${identity.displayName} · استيراد سحابي تلقائي',
                 )
               : linked && identity?.isVerified == true
               ? appText(
                   context,
                   english:
-                      'Connected: ${identity!.id} · automatic sync enabled',
-                  arabic: 'الحساب: ${identity.id} · المزامنة التلقائية مفعلة',
+                      'Connected: ${identity!.id} · automatic cloud import',
+                  arabic: 'الحساب: ${identity.id} · استيراد سحابي تلقائي',
                 )
               : linked
               ? appText(
