@@ -35,7 +35,7 @@ on:
         type: boolean
 
   push:
-    branches: [fix/download-manager-performance-v2]
+    branches: [fix/download-manager-performance-v2, feat/animerift-multi-provider]
 
 jobs:
   android:
