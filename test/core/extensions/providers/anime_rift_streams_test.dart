@@ -250,10 +250,12 @@ void main() {
           .where((call) => call.path.endsWith('/direct_link'))
           .length;
 
-      final refreshed = await DownloadUrlRefresher(
-        providerForId: (id) => id == provider.packageName ? provider : null,
-      ).refresh(descriptor, currentUrl: first.single.url);
-      expect(refreshed, isNull);
+      await expectLater(
+        DownloadUrlRefresher(
+          providerForId: (id) => id == provider.packageName ? provider : null,
+        ).refresh(descriptor, currentUrl: first.single.url),
+        throwsA(isA<AnimeRiftAuthenticationRequired>()),
+      );
       expect(
         api.calls.where((call) => call.path.endsWith('/direct_link')),
         hasLength(directLinksBefore),
@@ -440,13 +442,7 @@ void main() {
       provider.loadDownloadStreams(episodeUrl),
       throwsA(isA<AnimeRiftAuthenticationRequired>()),
     );
-    expect(
-      api.calls.where((c) => c.path.endsWith('/direct_link')),
-      isEmpty,
-    );
-    expect(
-      api.calls.where((c) => c.path.endsWith('/can_play')),
-      hasLength(2),
-    );
+    expect(api.calls.where((c) => c.path.endsWith('/direct_link')), isEmpty);
+    expect(api.calls.where((c) => c.path.endsWith('/can_play')), hasLength(2));
   });
 }
