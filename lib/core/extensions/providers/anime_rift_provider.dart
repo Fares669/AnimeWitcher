@@ -103,7 +103,10 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     for (final row in rows.whereType<Map<dynamic, dynamic>>()) {
       final title = row['sectionTitle'];
       if (title is! String || title.trim().isEmpty) continue;
-      final items = _items(row['items']);
+      final items = _items(
+        row['items'],
+        recentReleases: _isRecentReleaseSection(title),
+      );
       if (items.isNotEmpty) sections.putIfAbsent(title, () => []).addAll(items);
     }
     return sections;
@@ -111,7 +114,36 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
 
   static final _safeId = RegExp(r'^[A-Za-z0-9_-]+$');
 
-  List<MultimediaItem> _items(dynamic rows) {
+  static bool _isRecentReleaseSection(String title) {
+    final normalized = title
+        .toLowerCase()
+        .replaceAll(RegExp(r'[أإآ]'), 'ا')
+        .replaceAll('ة', 'ه');
+    return normalized.contains('اصدارات حديثه') ||
+        normalized.contains('الاصدارات الحديثه') ||
+        normalized.contains('احدث الاصدارات') ||
+        normalized.contains('اخر الاصدارات') ||
+        normalized.contains('recent releases') ||
+        normalized.contains('latest releases') ||
+        normalized.contains('recently updated');
+  }
+
+  static String? _latestReleaseEpisodeBadge(Map<dynamic, dynamic> row) {
+    // The original Rift catalog exposes
+    // latest_episode_released.episode_number. This is the released episode,
+    // unlike available_episodes (a count that may differ from its number).
+    final released = row['latest_episode_released'];
+    final number = released is Map ? released['episode_number'] : null;
+    if (number is! num || !number.isFinite || number <= 0 || number > 100000) {
+      return null;
+    }
+    final label = number == number.roundToDouble()
+        ? number.toInt().toString()
+        : number.toString();
+    return 'الحلقة $label';
+  }
+
+  List<MultimediaItem> _items(dynamic rows, {bool recentReleases = false}) {
     if (rows is! List) return [];
     return [
       for (final row in rows.whereType<Map<dynamic, dynamic>>())
@@ -119,7 +151,11 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
             _safeId.hasMatch(row['_id'] as String) &&
             row['title'] is String &&
             (row['title'] as String).trim().isNotEmpty)
-          _item(row),
+          _item(row).copyWith(
+            episodeBadge: recentReleases
+                ? _latestReleaseEpisodeBadge(row)
+                : null,
+          ),
     ];
   }
 
