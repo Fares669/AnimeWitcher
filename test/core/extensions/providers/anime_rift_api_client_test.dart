@@ -413,6 +413,7 @@ void main() {
         fail('invalid code must be rejected');
       } on ArgumentError catch (error) {
         expect(error.toString(), isNot(contains(privateCode)));
+        expect(error.toString(), isNot(contains('private')));
       }
       expect(calls, 0);
       expect(secureValues, isEmpty);

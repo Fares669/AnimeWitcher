@@ -407,11 +407,8 @@ class AnimeRiftApiClient {
     if (value.isEmpty ||
         value.length > 256 ||
         value.contains(RegExp(r'[\x00-\x1f\x7f]'))) {
-      throw ArgumentError.value(
-        code,
-        'code',
-        'Invalid Anime Rift sign-in code',
-      );
+      // Sign-in codes are credentials: never include their value in errors.
+      throw ArgumentError('Invalid Anime Rift sign-in code');
     }
     await _ensureReady();
     final response = await _send(
