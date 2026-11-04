@@ -20,6 +20,7 @@ class CatalogFixture extends AnimeRiftApiClient {
   final airing = DateTime.now().toUtc().add(const Duration(days: 1));
   Map<String, dynamic>? lastQuery;
   Map<String, dynamic>? lastBody;
+  String? lastMethod;
   @override
   Future<Map<String, dynamic>> request(
     String path,
@@ -32,6 +33,19 @@ class CatalogFixture extends AnimeRiftApiClient {
     calls.add(path);
     lastQuery = query;
     lastBody = body;
+    lastMethod = method;
+    if (path == 'library/all') {
+      return {
+        'items': [
+          {
+            ...anime,
+            '_id': query?['page'] == '0' ? 'first' : 'next',
+            'latest_episode_released': {'episode_number': 7},
+          },
+        ],
+        'hasNext': query?['page'] == '0',
+      };
+    }
     if (path == 'character/all')
       return {
         'items': [
@@ -156,6 +170,105 @@ class CloudOverviewFixture extends CatalogFixture {
 }
 
 void main() {
+  test('home sections request successive actual Rift catalog pages', () async {
+    final api = CatalogFixture()
+      ..homePayload = {
+        'sections': [
+          {
+            'sectionTitle': 'الإصدارات الحديثة',
+            'filterBy': 'recent_releases',
+            'sortkey': 'recently_updated',
+            'filterByDubReleases': true,
+            'dubLang': 'en',
+            'items': [CatalogFixture.anime],
+          },
+        ],
+      };
+    final provider = AnimeRiftProvider(client: api);
+    final first = await provider.getHomeSectionPage('الإصدارات الحديثة');
+    expect(api.lastMethod, 'POST');
+    expect(api.calls, ['library/home_content', 'library/all']);
+    expect(api.lastQuery, {
+      'page': '0',
+      'filter_by': 'recent_releases',
+      'sort_by': 'recently_updated',
+      'sort_direction': -1,
+      'text_direction': 'jp',
+      'dub': 'en',
+    });
+    expect(api.lastBody, isEmpty);
+    expect(first.items.single.url, 'https://anime-rift.com/anime/first');
+    expect(first.items.single.episodeBadge, 'الحلقة 7');
+    expect(first.nextOffset, 1);
+    expect(first.hasMore, isTrue);
+    final next = await provider.getHomeSectionPage(
+      'الإصدارات الحديثة', offset: first.nextOffset,
+    );
+    expect(api.lastQuery?['page'], '1');
+    expect(next.items.single.url, 'https://anime-rift.com/anime/next');
+    expect(next.nextOffset, 2);
+    expect(next.hasMore, isFalse);
+  });
+
+  test('home page filters retain section genre, season and country', () async {
+    final api = CatalogFixture()
+      ..homePayload = {
+        'sections': [
+          {
+            'sectionTitle': 'Season picks',
+            'filterBy': 'library',
+            'sortkey': 'popularity',
+            'contentType': 'movie',
+            'releaseYear': 2026,
+            'releaseSeason': 'fall',
+            'countryOfOrigin': 'CN',
+            'genreId': 'genre42',
+            'studioId': 'studio42',
+            'items': [CatalogFixture.anime],
+          },
+        ],
+      };
+    final page = await AnimeRiftProvider(client: api)
+        .getHomeSectionPage('Season picks');
+    expect(api.lastMethod, 'POST');
+    expect(api.lastQuery, {
+      'page': '0',
+      'filter_by': 'library',
+      'sort_by': 'popularity',
+      'sort_direction': -1,
+      'text_direction': 'jp',
+      'content_type': 'movie',
+    });
+    expect(api.lastBody, {
+      'multi_genres': ['genre42'],
+      'studio': 'studio42',
+      'release_year': '2026',
+      'release_season': 'fall',
+      'country_origin': 'CN',
+    });
+    expect(page.items.single.episodeBadge, isNull);
+  });
+
+  test('home dubbed pages require the descriptor language', () async {
+    final api = CatalogFixture()
+      ..homePayload = {
+        'sections': [
+          {
+            'sectionTitle': 'Dubbed picks',
+            'filterBy': 'recent_releases',
+            'sortkey': 'recently_updated',
+            'filterByDubReleases': true,
+            'items': [CatalogFixture.anime],
+          },
+        ],
+      };
+    await expectLater(
+      AnimeRiftProvider(client: api).getHomeSectionPage('Dubbed picks'),
+      throwsA(isA<AnimeRiftAccessUnavailable>()),
+    );
+    expect(api.calls, isNot(contains('library/all')));
+  });
+
   test('Rift account cloud counts are read without invented zeroes', () async {
     final provider = AnimeRiftProvider(client: CloudOverviewFixture());
     final counts = await provider.fetchCloudLibraryCounts();

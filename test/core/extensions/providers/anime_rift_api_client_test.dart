@@ -906,6 +906,38 @@ void main() {
     expect(plainValues, isNot(contains('fixture-user-token')));
   });
 
+  test('expired guest registration renews read-only catalog pagination', () async {
+    var registrations = 0;
+    var pages = 0;
+    final client = AnimeRiftApiClient(
+      config: fixtureConfig,
+      dio: fixtureDio((request) {
+        if (request.uri.host.endsWith('googleapis.com')) {
+          return reply(request, {}, 400);
+        }
+        if (request.uri.path.endsWith('/auth/register/device')) {
+          registrations++;
+          return reply(request, {'sessionKey': 'fixture'}, 201);
+        }
+        expect(request.uri.path, endsWith('/library/all'));
+        expect(request.method, 'POST');
+        expect(request.queryParameters, {'page': '1'});
+        expect(request.data, {'release_year': '2026'});
+        pages++;
+        return pages == 1
+            ? reply(request, {}, 401)
+            : reply(request, {'items': [], 'hasNext': false});
+      }),
+    );
+    final response = await client.request(
+      'library/all', 'ANIME.LIBRARY.ALL', method: 'POST',
+      query: {'page': '1'}, body: {'release_year': '2026'},
+    );
+    expect(response['items'], isEmpty);
+    expect(registrations, 2);
+    expect(pages, 2);
+  });
+
   test(
     'source entitlement denial does not re-register or replay a POST',
     () async {

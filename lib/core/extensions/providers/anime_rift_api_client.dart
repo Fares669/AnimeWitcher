@@ -800,6 +800,7 @@ class AnimeRiftApiClient {
       // Only known repeatable requests may be sent after re-registration.
       if (method != 'GET' &&
           path != 'library/episode/sources' &&
+          path != 'library/all' &&
           path != 'library/search') {
         rethrow;
       }

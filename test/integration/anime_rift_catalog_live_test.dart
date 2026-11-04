@@ -51,108 +51,32 @@ void main() {
       addTearDown(() => dio.close(force: true));
       final api = AnimeRiftApiClient(config: config, dio: dio);
       final provider = AnimeRiftProvider(client: api);
-      final homeResponse = await api.request(
-        'library/home_content',
-        'ANIME.LIBRARY.HOME_CONTENT',
-        query: {'with_genres': true},
-      );
-      expect(homeResponse['sections'], isA<List<dynamic>>());
-      for (final section
-          in (homeResponse['sections'] as List<dynamic>)
-              .whereType<Map<dynamic, dynamic>>()) {
-        // Public catalog descriptors only: no item values, URLs or headers.
-        // These identify the actual section contract before adding pagination.
-        final keys = section.keys.map((key) => key.toString()).toList()..sort();
-        final descriptors = <String, Object>{};
-        for (final key in const [
-          'sectionTitle',
-          'sectionId',
-          'sectionType',
-          'type',
-          'id',
-          'sort_by',
-          'sort_direction',
-          'hasNext',
-          'page',
-          'limit',
-          'filterBy',
-          'sortkey',
-          'contentType',
-          'releaseSeason',
-          'releaseYear',
-          'genreId',
-          'studioId',
-          'countryOfOrigin',
-          'filterByDubReleases',
-          'dubLang',
-        ]) {
-          final value = section[key];
-          if (value is num ||
-              value is bool ||
-              (value is String &&
-                  value.length <= 120 &&
-                  !value.contains('://'))) {
-            descriptors[key] = value as Object;
-          }
-        }
-        print('Live home section schema: keys=$keys descriptors=$descriptors');
-        final pagingQuery = <String, dynamic>{'page': 0};
-        for (final entry in const {
-          'filterBy': 'filter_by',
-          'sortkey': 'sort_by',
-          'contentType': 'content_type',
-          'releaseSeason': 'release_season',
-          'releaseYear': 'release_year',
-          'genreId': 'genre',
-          'studioId': 'studio',
-          'countryOfOrigin': 'country_origin',
-        }.entries) {
-          final value = section[entry.key];
-          if (value is num ||
-              value is bool ||
-              (value is String && value.isNotEmpty && value.length <= 120)) {
-            pagingQuery[entry.value] = value;
-          }
-        }
-        // Read-only contract discovery. Do not wire these candidate mappings
-        // into production unless the returned titles match the actual rail.
-        try {
-          final page = await api.request(
-            'library/all',
-            'ANIME.LIBRARY.ALL',
-            query: pagingQuery,
+      final home = await provider.getHome();
+      expect(home, isNotEmpty);
+      for (final section in home.entries) {
+        final first = await provider.getHomeSectionPage(section.key);
+        expect(first.nextOffset, 1);
+        expect(
+          first.items.take(section.value.length).map((item) => item.url),
+          section.value.map((item) => item.url),
+          reason:
+              'View All must retain the actual home section: ${section.key}',
+        );
+        if (first.hasMore) {
+          final next = await provider.getHomeSectionPage(
+            section.key,
+            offset: first.nextOffset,
           );
-          final expectedIds = (section['items'] as List<dynamic>)
-              .whereType<Map<dynamic, dynamic>>()
-              .map((row) => row['_id'])
-              .toList();
-          final rows = page['items'];
-          final returnedIds = rows is List
-              ? rows
-                    .whereType<Map<dynamic, dynamic>>()
-                    .map((row) => row['_id'])
-                    .toList()
-              : <dynamic>[];
-          final prefixMatches =
-              expectedIds.isNotEmpty &&
-              returnedIds.length >= expectedIds.length &&
-              List.generate(
-                expectedIds.length,
-                (i) => i,
-              ).every((i) => expectedIds[i] == returnedIds[i]);
-          print(
-            'Live home paging candidate: section=${descriptors['sectionTitle']} '
-            'responseKeys=${page.keys.toList()} count=${returnedIds.length} '
-            'hasNext=${page['hasNext']} prefixMatches=$prefixMatches '
-            'overlap=${returnedIds.where(expectedIds.contains).length}',
+          expect(next.nextOffset, 2);
+          final firstUrls = first.items.map((item) => item.url).toSet();
+          expect(
+            next.items.any((item) => !firstUrls.contains(item.url)),
+            isTrue,
+            reason: 'The next page must advance the section: ${section.key}',
           );
-        } catch (error) {
-          final diagnostic = error is AnimeRiftAccessUnavailable
-              ? 'HTTP ${error.statusCode} stage=${error.stage} failure=${error.failure}'
-              : error.runtimeType.toString();
-          print('Live home paging candidate unavailable: $diagnostic');
         }
       }
+      print('Live home paging verified for ${home.length} sections.');
       for (final filter in {
         'multi_content_types': ['tv', 'movie', 'ova', 'ona', 'special'],
         'multi_release_status': ['on_going', 'finished'],
@@ -194,7 +118,6 @@ void main() {
           );
         }
       }
-      final home = await provider.getHome();
       final items = home.values.expand((items) => items).toList();
       expect(items, isNotEmpty);
       final details = await provider.getDetails(items.first.url);

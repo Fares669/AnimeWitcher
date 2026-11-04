@@ -89,6 +89,8 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
       AnimeRiftCloudSync(AnimeRiftCloudApiReader(_api))
           .importToLocal(storage: storage, hydrate: getDetails);
 
+  final _homeSectionRows = <String, Map<dynamic, dynamic>>{};
+
   @override
   Future<Map<String, List<MultimediaItem>>> getHome() async {
     if (!_api.isConfigured) throw const AnimeRiftAccessUnavailable();
@@ -98,18 +100,93 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
       query: {'with_genres': true},
     );
     final sections = <String, List<MultimediaItem>>{};
+    final descriptors = <String, Map<dynamic, dynamic>>{};
     final rows = data['sections'];
     if (rows is! List) throw const AnimeRiftAccessUnavailable();
     for (final row in rows.whereType<Map<dynamic, dynamic>>()) {
       final title = row['sectionTitle'];
       if (title is! String || title.trim().isEmpty) continue;
+      descriptors[title] = Map<dynamic, dynamic>.of(row)..remove('items');
       final items = _items(
         row['items'],
-        recentReleases: _isRecentReleaseSection(title),
+        recentReleases: row['filterBy'] == 'recent_releases' ||
+            _isRecentReleaseSection(title),
       );
       if (items.isNotEmpty) sections.putIfAbsent(title, () => []).addAll(items);
     }
+    _homeSectionRows
+      ..clear()
+      ..addAll(descriptors);
     return sections;
+  }
+
+  @override
+  Future<ProviderMediaPage> getHomeSectionPage(
+    String sectionName, {
+    int offset = 0,
+    int limit = 30,
+  }) async {
+    if (!_homeSectionRows.containsKey(sectionName)) await getHome();
+    final row = _homeSectionRows[sectionName];
+    final filter = row?['filterBy'];
+    final sort = row?['sortkey'];
+    if (row == null ||
+        !const {'library', 'recent_releases'}.contains(filter) ||
+        !const {
+          'recently_updated', 'recently_added', 'popularity', 'rating', 'likes',
+        }.contains(sort)) {
+      // An unknown descriptor must not silently become an unrelated catalogue.
+      return super.getHomeSectionPage(sectionName, offset: offset, limit: limit);
+    }
+    final page = offset < 0 ? 0 : offset;
+    final query = <String, dynamic>{
+      'page': '$page',
+      'filter_by': filter,
+      'sort_by': sort,
+      'sort_direction': -1,
+      'text_direction': 'jp',
+    };
+    final body = <String, dynamic>{};
+    void copyString(Map<String, dynamic> target, String from, String to) {
+      final value = row[from];
+      if (value == null || value == '') return;
+      if (value is! String) throw const AnimeRiftAccessUnavailable();
+      target[to] = value;
+    }
+    copyString(query, 'contentType', 'content_type');
+    if (row['filterByDubReleases'] == true) {
+      copyString(query, 'dubLang', 'dub');
+      if (!query.containsKey('dub')) throw const AnimeRiftAccessUnavailable();
+    }
+    copyString(body, 'studioId', 'studio');
+    copyString(body, 'releaseSeason', 'release_season');
+    copyString(body, 'countryOfOrigin', 'country_origin');
+    final year = row['releaseYear'];
+    if (year != null && year != '') {
+      if (!RegExp(r'^\d{4}$').hasMatch('$year')) {
+        throw const AnimeRiftAccessUnavailable();
+      }
+      body['release_year'] = '$year';
+    }
+    final genre = row['genreId'];
+    if (genre != null && genre != '') {
+      if (genre is! String || !_safeId.hasMatch(genre)) {
+        throw const AnimeRiftAccessUnavailable();
+      }
+      body['multi_genres'] = [genre];
+    }
+    // Original AOT: 0xabf340 -> 0xa8a278 -> POST at 0x58ac80.
+    // Paging/sort belong in the query; genre/season/year belong in JSON.
+    final data = await _api.request(
+      'library/all', 'ANIME.LIBRARY.ALL',
+      method: 'POST', body: body, query: query,
+    );
+    if (data['items'] is! List) throw const AnimeRiftAccessUnavailable();
+    return ProviderMediaPage(
+      items: _items(data['items'], recentReleases: filter == 'recent_releases'),
+      nextOffset: page + 1,
+      hasMore: data['hasNext'] == true,
+    );
   }
 
   static final _safeId = RegExp(r'^[A-Za-z0-9_-]+$');
