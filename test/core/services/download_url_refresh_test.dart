@@ -1,5 +1,7 @@
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart';
+import 'package:animewitcher/core/storage/provider_local_library.dart';
 import 'package:animewitcher/core/services/download_url_refresh.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -79,6 +81,21 @@ class _FakeProvider extends AnimeWitcherProvider {
   @override
   void prepareForNetworkRetry() {
     prepared = true;
+  }
+}
+
+class _RiftLoginGatedProvider extends _FakeProvider {
+  @override
+  String get packageName => animeRiftProviderId;
+
+  @override
+  Future<List<StreamResult>> loadDownloadStreamSources(String url) async {
+    throw const AnimeRiftAuthenticationRequired();
+  }
+
+  @override
+  Future<List<StreamResult>> loadDownloadStreams(String url) async {
+    throw const AnimeRiftAuthenticationRequired();
   }
 }
 
@@ -333,6 +350,24 @@ void main() {
     const refresher = DownloadUrlRefresher(providerForId: _noProvider);
 
     expect(await refresher.refresh(descriptor, currentUrl: 'expired'), isNull);
+  });
+  test('Rift renewal preserves the account sign-in gate', () async {
+    const descriptor = DownloadUrlRefreshDescriptor(
+      trackingUrl: 'https://anime-rift.com/anime/anime42/episode/ep7',
+      providerId: animeRiftProviderId,
+      source: 'CR2 (عربي مترجم)',
+      quality: '1080P',
+      updatedAtMillis: 1,
+    );
+    final provider = _RiftLoginGatedProvider();
+    final refresher = DownloadUrlRefresher(
+      providerForId: (id) => id == animeRiftProviderId ? provider : null,
+    );
+    await expectLater(
+      refresher.refresh(descriptor, currentUrl: ''),
+      throwsA(isA<AnimeRiftAuthenticationRequired>()),
+    );
+    expect(provider.prepared, isTrue);
   });
 }
 

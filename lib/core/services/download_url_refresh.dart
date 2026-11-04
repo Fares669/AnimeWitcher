@@ -8,6 +8,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 import '../domain/entity/multimedia_item.dart';
 import '../extensions/base_provider.dart';
 import '../extensions/extension_manager.dart';
+import '../extensions/providers/anime_rift_api_client.dart';
 import '../utils/anime_rift_identity.dart';
 import 'download_v2/anime_rift_download_metadata_v2.dart';
 
@@ -337,6 +338,7 @@ class DownloadUrlRefresher {
     provider.prepareForNetworkRetry();
 
     List<StreamResult> latest = const <StreamResult>[];
+    AnimeRiftAuthenticationRequired? signInRequired;
     try {
       final sources = await provider.loadDownloadStreamSources(
         descriptor.trackingUrl,
@@ -347,6 +349,8 @@ class DownloadUrlRefresher {
             ? await provider.loadDownloadStreams(selected.url)
             : <StreamResult>[selected];
       }
+    } on AnimeRiftAuthenticationRequired catch (error) {
+      signInRequired = error;
     } catch (_) {}
 
     var refreshed = _bestStreamMatch(latest, descriptor);
@@ -363,6 +367,8 @@ class DownloadUrlRefresher {
           return _refreshedDownloadUrl(tokenResult!);
         }
         refreshed ??= tokenResult;
+      } on AnimeRiftAuthenticationRequired catch (error) {
+        signInRequired = error;
       } catch (_) {}
     }
 
@@ -370,6 +376,8 @@ class DownloadUrlRefresher {
         refreshed.requiresResolution ||
         refreshed.url.trim().isEmpty ||
         refreshed.url.trim() == currentUrl.trim()) {
+      // Keep the sign-in requirement visible to V2 after a denied renewal.
+      if (signInRequired != null) throw signInRequired;
       return null;
     }
     return _refreshedDownloadUrl(refreshed);
