@@ -77,6 +77,9 @@ class AnimeRiftStreams {
     bool download = false,
   }) async {
     final ref = await _identity(url, download: download);
+    // Catalog discovery can run as a guest. Protected download discovery must
+    // await the stored Rift session before checking server-side entitlements.
+    if (ref.download) await api.restoreAccountSession();
     final data = await _raw(ref);
     // Offline eligibility is explicitly advertised by the source catalog.
     // A missing flag is not permission to download a playback-only stream.
@@ -319,6 +322,26 @@ class AnimeRiftStreams {
     );
   }
 
+  /// Give each server a chance before retrying lower qualities on one server.
+  /// A single unavailable server may advertise more than six qualities.
+  Iterable<StreamResult> _fallbackSources(List<StreamResult> choices) sync* {
+    final byHost = <String, List<StreamResult>>{};
+    for (final source in choices) {
+      final host = _SourceIdentity.parse(source.url)?.host;
+      if (host == null) continue;
+      byHost.putIfAbsent(host, () => <StreamResult>[]).add(source);
+    }
+    for (var qualityIndex = 0; ; qualityIndex++) {
+      var found = false;
+      for (final sources in byHost.values) {
+        if (qualityIndex >= sources.length) continue;
+        found = true;
+        yield sources[qualityIndex];
+      }
+      if (!found) return;
+    }
+  }
+
   Future<List<StreamResult>> resolve(
     String url, {
     bool download = false,
@@ -327,7 +350,10 @@ class AnimeRiftStreams {
     final choices = await loadSources(url, download: ref.download);
     if (choices.isEmpty) throw const AnimeRiftPlaybackUnavailable();
     var authenticationRequired = false;
-    for (final source in choices.take(ref.host == null ? 6 : 1)) {
+    final candidates = ref.host == null
+        ? _fallbackSources(choices).take(6)
+        : choices.take(1);
+    for (final source in candidates) {
       try {
         return [await _resolve(source, download: ref.download)];
       } on AnimeRiftAuthenticationRequired {

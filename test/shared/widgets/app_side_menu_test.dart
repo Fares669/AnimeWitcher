@@ -3,6 +3,12 @@ import 'package:animewitcher/core/account/animewitcher_account_models.dart';
 import 'package:animewitcher/core/account/animewitcher_account_service.dart';
 import 'package:animewitcher/core/account/animewitcher_notification_models.dart';
 import 'package:animewitcher/core/account/firestore_rest_client.dart';
+import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/base_provider.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
+import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
+import 'package:animewitcher/core/storage/settings_repository.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/core/storage/secure_token_storage.dart';
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
@@ -11,6 +17,7 @@ import 'package:animewitcher/shared/widgets/app_side_menu.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:dio/dio.dart';
 
 import '../../support/memory_storage_service.dart';
 
@@ -66,6 +73,23 @@ final class _SignedInAccount extends AnimeWitcherAccountController {
   }
 }
 
+class _RiftClient extends AnimeRiftApiClient {
+  @override
+  bool get isAccountLinked => true;
+  @override
+  AnimeRiftAccountIdentity? get accountIdentity =>
+      const AnimeRiftAccountIdentity(id: 'rift-1', displayName: 'Rift Viewer');
+  @override
+  Future<bool> restoreAccountSession() async => true;
+}
+
+class _SelectedProvider extends ActiveProvider {
+  _SelectedProvider(this.provider);
+  final AnimeWitcherProvider provider;
+  @override
+  AnimeWitcherProvider build() => provider;
+}
+
 const _destinations = <TaskbarDestination>[
   TaskbarDestination.home,
   TaskbarDestination.search,
@@ -86,8 +110,15 @@ Future<_Harness> _pump(
   bool signedIn = false,
   Size size = const Size(400, 860),
   int fillerEntries = 0,
+  bool rift = false,
 }) async {
   final harness = _Harness();
+  final riftProvider = AnimeRiftProvider(client: _RiftClient());
+  final storage = MemoryStorageService();
+  final witcherProvider = AnimeWitcherNativeProvider(
+    Dio(),
+    SettingsRepository(storage),
+  );
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
@@ -95,12 +126,15 @@ Future<_Harness> _pump(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
-        storageServiceProvider.overrideWithValue(MemoryStorageService()),
+        storageServiceProvider.overrideWithValue(storage),
         animeWitcherAccountServiceProvider.overrideWithValue(
           _MenuAccountService(),
         ),
         animeWitcherAccountControllerProvider.overrideWith(
           signedIn ? _SignedInAccount.new : _SignedOutAccount.new,
+        ),
+        activeProviderProvider.overrideWith(
+          () => _SelectedProvider(rift ? riftProvider : witcherProvider),
         ),
       ],
       child: MaterialApp(
@@ -261,6 +295,25 @@ void main() {
     expect(
       (cover.image as NetworkImage).url,
       'https://example.test/banner.jpg',
+    );
+  });
+
+  testWidgets('Rift menu ignores a preserved Witcher login and its artwork', (
+    tester,
+  ) async {
+    await _pump(tester, signedIn: true, rift: true);
+    await tester.tap(find.byKey(const ValueKey('app-side-menu-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Rift Viewer'), findsOneWidget);
+    expect(find.text('Viewer'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('app-side-menu-account-cover')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('account-notifications-button')),
+      findsNothing,
     );
   });
 

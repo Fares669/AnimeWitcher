@@ -2,9 +2,10 @@ import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart'
-    show AnimeRiftSecureStorageUnavailable;
+    show AnimeRiftAuthenticationRequired, AnimeRiftSecureStorageUnavailable;
 import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
 import 'package:animewitcher/core/storage/anime_rift_account_scope.dart';
+import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/core/utils/localized_text.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -128,6 +129,8 @@ class _AnimeRiftAccountTile extends ConsumerStatefulWidget {
 
 class _AnimeRiftAccountTileState extends ConsumerState<_AnimeRiftAccountTile> {
   late Future<bool> _status;
+  bool _syncing = false;
+  String? _lastSyncSummary;
 
   @override
   void initState() {
@@ -154,6 +157,7 @@ class _AnimeRiftAccountTileState extends ConsumerState<_AnimeRiftAccountTile> {
 
   void _reload() {
     setState(() {
+      _lastSyncSummary = null;
       _status = _restoreAndRefresh();
     });
   }
@@ -266,6 +270,7 @@ class _AnimeRiftAccountTileState extends ConsumerState<_AnimeRiftAccountTile> {
       setState(() {
         _status = Future<bool>.value(true);
       });
+      await _syncCloud();
     }
   }
 
@@ -299,9 +304,11 @@ class _AnimeRiftAccountTileState extends ConsumerState<_AnimeRiftAccountTile> {
     );
     if (!mounted) return;
     if (action == 'switch') {
+      setState(() => _lastSyncSummary = null);
       await _showSignIn();
     } else if (action == 'unlink') {
       setState(() {
+        _lastSyncSummary = null;
         _status = widget.provider.signOut().then((_) {
           if (mounted) ref.read(accountDataRevisionProvider.notifier).bump();
           return false;
@@ -310,67 +317,34 @@ class _AnimeRiftAccountTileState extends ConsumerState<_AnimeRiftAccountTile> {
     }
   }
 
-  Future<void> _showCloudOverview() async {
-    final future = widget.provider.fetchCloudLibraryCounts();
-    const labels = <String, String>{
-      'my_list_favorites': 'المفضلة',
-      'my_list_currently_watching': 'أتابعها حاليًا',
-      'my_list_plan_to_watch': 'أخطط لمشاهدتها',
-      'my_list_finished_watching': 'أكملت مشاهدتها',
-      'my_list_on_hold': 'متوقفة مؤقتًا',
-      'my_list_dropped': 'توقفت عن مشاهدتها',
-    };
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('قوائم حساب Anime Rift السحابية'),
-        content: SizedBox(
-          width: 380,
-          child: FutureBuilder<Map<String, int>>(
-            future: future,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(
-                  heightFactor: 2,
-                  child: CircularProgressIndicator(),
-                );
-              }
-              final counts = snapshot.data;
-              if (snapshot.hasError || counts == null) {
-                return const Text(
-                  'تعذر قراءة بيانات الحساب من Anime Rift. '
-                  'تحقق من الجلسة والاتصال ثم حاول مجددًا.',
-                );
-              }
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (final entry in labels.entries)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 3),
-                      child: Text(
-                        '${entry.value}: ${counts[entry.key]?.toString() ?? '—'}',
-                      ),
-                    ),
-                  const SizedBox(height: 14),
-                  const Text(
-                    'هذه معاينة للبيانات الموجودة على خادم Rift. '
-                    'لم يتم تعديل مكتبتك المحلية أو حسابك.',
-                  ),
-                ],
-              );
-            },
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('إغلاق'),
-          ),
-        ],
-      ),
-    );
+  Future<void> _syncCloud() async {
+    if (_syncing) return;
+    setState(() => _syncing = true);
+    String message;
+    try {
+      final imported = await widget.provider.importCloudLibrary(
+        ref.read(storageServiceProvider),
+      );
+      if (!mounted) return;
+      ref.read(accountDataRevisionProvider.notifier).bump();
+      message =
+          'تمت مزامنة ${imported.favorites} مفضلة و'
+          '${imported.categories} عنصرًا بالمكتبة و'
+          '${imported.history} عنوانًا من سجل المشاهدة.';
+      if (imported.skipped > 0) {
+        message += ' تعذر التعرف على ${imported.skipped} عناصر من الخادم.';
+      }
+    } on AnimeRiftAuthenticationRequired {
+      message = 'جلسة Anime Rift منتهية؛ أعد ربط حساب Rift ثم جرّب المزامنة.';
+    } catch (_) {
+      message = 'تعذرت مزامنة بيانات Anime Rift. تحقق من الاتصال وصيغة البيانات ثم أعد المحاولة.';
+    } finally {
+      if (mounted) setState(() => _syncing = false);
+    }
+    if (!mounted) return;
+    setState(() => _lastSyncSummary = message);
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -441,19 +415,18 @@ class _AnimeRiftAccountTileState extends ConsumerState<_AnimeRiftAccountTile> {
           children: [
             accountTile,
             SettingsTile(
-              key: const ValueKey('animerift-cloud-overview'),
-              icon: Icons.cloud_outlined,
+              key: const ValueKey('animerift-cloud-sync'),
+              icon: Icons.cloud_sync_outlined,
               title: appText(
                 context,
-                english: 'View Anime Rift cloud lists',
-                arabic: 'عرض قوائم Anime Rift السحابية',
+                english: 'Sync Anime Rift library and watch history',
+                arabic: 'مزامنة مكتبة ومفضلة وسجل Anime Rift',
               ),
-              subtitle: appText(
-                context,
-                english: 'Read-only account totals; local library is unchanged',
-                arabic: 'معاينة أعداد القوائم؛ المكتبة المحلية لن تتغير',
-              ),
-              onTap: _showCloudOverview,
+              subtitle: _syncing
+                  ? 'جارٍ استيراد البيانات من حساب Rift…'
+                  : _lastSyncSummary ??
+                        'إضافة بيانات الحساب إلى المكتبة المحلية',
+              onTap: _syncing ? null : _syncCloud,
             ),
           ],
         );

@@ -2,6 +2,8 @@ import 'package:dio/dio.dart';
 
 import '../../domain/entity/multimedia_item.dart';
 import '../../storage/provider_local_library.dart';
+import '../../storage/anime_rift_cloud_sync.dart';
+import '../../storage/storage_service.dart';
 import '../base_provider.dart';
 import '../../utils/anime_rift_identity.dart';
 import 'anime_rift_api_client.dart';
@@ -78,6 +80,14 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     if (response['items'] is! Map) throw const AnimeRiftAccessUnavailable();
     return Map<String, int>.unmodifiable(parseMyListOverviewCounts(response));
   }
+
+  /// Populate this Rift account's local library and watch history from the
+  /// authenticated account's lists. Unknown server rows remain untouched.
+  Future<AnimeRiftCloudImportResult> importCloudLibrary(
+    StorageService storage,
+  ) =>
+      AnimeRiftCloudSync(AnimeRiftCloudApiReader(_api))
+          .importToLocal(storage: storage, hydrate: getDetails);
 
   @override
   Future<Map<String, List<MultimediaItem>>> getHome() async {

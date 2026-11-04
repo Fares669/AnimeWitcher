@@ -1,9 +1,12 @@
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
 import 'package:animewitcher/core/services/download_url_refresh.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/features/details/presentation/download_launcher.dart';
+import 'package:animewitcher/core/storage/anime_rift_account_scope.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -14,6 +17,51 @@ const _riftDownloadSource =
     'https://anime-rift.com/anime/a/episode/e/source/h/quality/1080p/download/n/1';
 
 void main() {
+  test('download renewal restores linked account before checking descriptor ownership', () async {
+    AnimeRiftLocalAccountScope.activate('account-A');
+    final accountHash = AnimeRiftLocalAccountScope.accountHash;
+    AnimeRiftLocalAccountScope.reset();
+    addTearDown(AnimeRiftLocalAccountScope.reset);
+
+    final provider = AnimeRiftProvider(client: _RestoringRiftApi());
+    final renewed =
+        await DownloadUrlRefresher(
+          providerForId: (id) => id == _rift ? provider : null,
+        ).refresh(
+          DownloadUrlRefreshDescriptor(
+            trackingUrl: _riftEpisode,
+            providerId: _rift,
+            source: 'CR2',
+            quality: '1080p',
+            refreshUrl: _riftDownloadSource,
+            accountHash: accountHash,
+            updatedAtMillis: 1,
+          ),
+          currentUrl: 'https://cdn.example/expired.mp4',
+        );
+
+    expect(renewed?.url, 'https://cdn.example/renewed.mp4');
+    expect(AnimeRiftLocalAccountScope.accountHash, accountHash);
+  });
+
+  test(
+    'download selection restores the Rift account before capturing its scope',
+    () async {
+      AnimeRiftLocalAccountScope.reset();
+      addTearDown(AnimeRiftLocalAccountScope.reset);
+      final provider = AnimeRiftProvider(client: _RestoringRiftApi());
+
+      expect(AnimeRiftLocalAccountScope.accountHash, isNull);
+      final hash = await downloadAccountHashForProviderV2(provider);
+      expect(hash, isNotNull);
+      expect(hash, AnimeRiftLocalAccountScope.accountHash);
+      expect(
+        await downloadAccountHashForProviderV2(_RefreshProvider(_native)),
+        isNull,
+      );
+    },
+  );
+
   test('batch skips existing episodes only within their original provider', () {
     final records = <LogicalDownloadRecordV2>[
       _record('legacy', null, intent: DownloadUserIntent.active),
@@ -108,6 +156,57 @@ void main() {
       expect(native.sourceRequests, isEmpty);
     },
   );
+}
+
+class _RestoringRiftApi extends AnimeRiftApiClient {
+  @override
+  Future<bool> restoreAccountSession() async {
+    AnimeRiftLocalAccountScope.activate('account-A');
+    return true;
+  }
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String path,
+    String scope, {
+    String method = 'GET',
+    Map<String, dynamic>? body,
+    Map<String, dynamic>? query,
+    CancelToken? cancelToken,
+  }) async {
+    switch (path) {
+      case 'library/episodes/a':
+        return {
+          'items': [
+            {'\u005fid': 'e', 'episode_number': 1},
+          ],
+        };
+      case 'library/episode/sources':
+        return {
+          'offline_mode_enabled': true,
+          'items': [
+            {
+              '_id': 'h',
+              'provider': 'cr2',
+              'server_name': 'CR2',
+              'qualities': ['1080p'],
+            },
+          ],
+          'configs': [
+            {'server_key': 'cr2', 'priority': 1},
+          ],
+        };
+      case 'library/episode/source/can_play':
+        return {'sessionId': 'session'};
+      case 'library/episode/source/direct_link':
+        return {
+          'url_response': true,
+          'videoUrl': 'https://cdn.example/renewed.mp4',
+        };
+      default:
+        throw StateError('Unexpected API route');
+    }
+  }
 }
 
 LogicalDownloadRecordV2 _record(

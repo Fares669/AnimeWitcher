@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/account/account_providers.dart';
 import '../../../../core/extensions/extension_manager.dart';
 import '../../../../core/storage/provider_local_library.dart';
+import '../../../../core/storage/storage_service.dart';
+import '../../../../core/extensions/providers/anime_rift_provider.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/utils/localized_text.dart';
 import '../../../../core/router/app_router.dart';
@@ -32,6 +34,37 @@ class BookmarksTab extends ConsumerStatefulWidget {
 
 class _BookmarksTabState extends ConsumerState<BookmarksTab>
     with AutomaticKeepAliveClientMixin {
+  bool _syncingCloud = false;
+
+  Future<void> _syncRiftLibrary() async {
+    final provider = ref.read(activeProviderProvider);
+    if (_syncingCloud || provider is! AnimeRiftProvider) return;
+    setState(() => _syncingCloud = true);
+    String message;
+    try {
+      final result = await provider.importCloudLibrary(
+        ref.read(storageServiceProvider),
+      );
+      if (!mounted) return;
+      ref.read(accountDataRevisionProvider.notifier).bump();
+      message =
+          'تم استيراد ${result.favorites} مفضلة و'
+          '${result.categories} عنصرًا من القوائم و'
+          '${result.history} عنوانًا من سجل المشاهدة.';
+      if (result.skipped > 0) message += ' تعذر قراءة ${result.skipped} عناصر.';
+    } on AnimeRiftAuthenticationRequired {
+      message = 'اربط حساب Anime Rift من الإعدادات للمزامنة.';
+    } catch (_) {
+      message = 'فشلت مزامنة حساب Anime Rift؛ تحقق من الاتصال ثم أعد المحاولة.';
+    } finally {
+      if (mounted) setState(() => _syncingCloud = false);
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
   @override
   bool get wantKeepAlive => true;
 
@@ -57,13 +90,25 @@ class _BookmarksTabState extends ConsumerState<BookmarksTab>
       children: [
         Padding(
           padding: const EdgeInsets.all(12),
-          child: Text(
-            appText(
-              context,
-              english: 'Anime Rift library is stored on this device and is not synced.',
-              arabic:
-                  'مكتبة Anime Rift محفوظة على هذا الجهاز ولا تتم مزامنتها.',
-            ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  appText(
+                    context,
+                    english: 'Your local Rift library can import your account lists.',
+                    arabic:
+                        'يمكن استيراد القوائم السحابية إلى مكتبة Rift المحلية.',
+                  ),
+                ),
+              ),
+              TextButton.icon(
+                key: const ValueKey('rift-library-sync-button'),
+                onPressed: _syncingCloud ? null : _syncRiftLibrary,
+                icon: const Icon(Icons.sync),
+                label: Text(_syncingCloud ? 'جارٍ المزامنة' : 'مزامنة'),
+              ),
+            ],
           ),
         ),
         Expanded(child: content),

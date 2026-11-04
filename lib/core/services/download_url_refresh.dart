@@ -9,6 +9,7 @@ import '../domain/entity/multimedia_item.dart';
 import '../extensions/base_provider.dart';
 import '../extensions/extension_manager.dart';
 import '../extensions/providers/anime_rift_api_client.dart';
+import '../extensions/providers/anime_rift_provider.dart';
 import '../utils/anime_rift_identity.dart';
 import '../utils/anime_rift_stream_identity.dart';
 import 'download_v2/anime_rift_download_metadata_v2.dart';
@@ -338,11 +339,14 @@ class DownloadUrlRefresher {
     final safe = DownloadUrlRefreshDescriptor.fromJson(descriptor.toJson());
     if (safe == null) return null;
     descriptor = safe;
+    final provider = providerForId(descriptor.providerId);
+    if (provider == null) return null;
+    if (provider is AnimeRiftProvider) {
+      await provider.restoreAccountSession();
+    }
     if (!downloadBelongsToCurrentRiftAccountV2(descriptor.toJson())) {
       return null;
     }
-    final provider = providerForId(descriptor.providerId);
-    if (provider == null) return null;
     provider.prepareForNetworkRetry();
 
     List<StreamResult> latest = const <StreamResult>[];

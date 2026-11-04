@@ -1,5 +1,10 @@
+import '../domain/entity/multimedia_item.dart';
 import '../extensions/providers/anime_rift_api_client.dart';
+import 'library_category.dart';
+import 'provider_local_history.dart';
+import 'provider_local_library.dart';
 import 'anime_rift_account_scope.dart';
+import 'storage_service.dart';
 
 /// The response body is intentionally opaque until authenticated examples
 /// establish Rift's list and episode row schemas.
@@ -108,9 +113,25 @@ class AnimeRiftCloudInspection {
   }
 }
 
-/// Read-only first step toward cloud sync. AOT confirms the overview counter
-/// keys and endpoint paths, but not the server's anime/episode row structure.
-/// Therefore an inspection can never reconcile or delete local/cloud data.
+/// Accepted cloud rows copied into the currently linked Rift account's local
+/// library. Unknown rows are counted as skipped, never fabricated as anime.
+class AnimeRiftCloudImportResult {
+  const AnimeRiftCloudImportResult({
+    required this.favorites,
+    required this.categories,
+    required this.history,
+    required this.skipped,
+  });
+
+  final int favorites;
+  final int categories;
+  final int history;
+  final int skipped;
+}
+
+/// Inspects remote counts and imports verified account lists additively.
+/// The server's anime/episode row structure is not fully documented, so
+/// unknown rows are skipped; existing local data is never removed.
 class AnimeRiftCloudSync {
   AnimeRiftCloudSync(this._reader);
 
@@ -123,6 +144,194 @@ class AnimeRiftCloudSync {
     'later',
     'dropped',
   ];
+
+  static const _categoryForList = <String, LibraryCategory>{
+    'currently': LibraryCategory.watching,
+    'want_to': LibraryCategory.planToWatch,
+    'later': LibraryCategory.continueLater,
+    'dropped': LibraryCategory.notInterested,
+  };
+
+  /// Import authenticated lists into the matching Rift account's actual
+  /// library and watch history. Existing local entries are preserved; an
+  /// unavailable or unrecognized response cannot erase the user's data.
+  Future<AnimeRiftCloudImportResult> importToLocal({
+    required StorageService storage,
+    Future<MultimediaItem?> Function(String catalogUrl)? hydrate,
+  }) async {
+    final previous = AnimeRiftLocalAccountScope.accountHash;
+    final linked = await _reader.restoreAccountSession();
+    final account = AnimeRiftLocalAccountScope.accountHash;
+    if (!linked ||
+        account == null ||
+        (previous != null && previous != account)) {
+      throw const AnimeRiftAuthenticationRequired();
+    }
+    // Use the linked account namespace even on the first launch after login.
+    final library = ProviderLocalLibrary(storage, animeRiftProviderId);
+    final history = ProviderLocalHistory(storage, animeRiftProviderId);
+
+    // Fetch before writing, so a failed request never looks like an empty
+    // remote library and a changed session cannot import into another user.
+    final remoteFavorites = _cloudRows(await _reader.fetchFavoriteAnime());
+    _requireAccount(account);
+    final remoteLists = <LibraryCategory, List<Object?>>{};
+    for (final entry in _categoryForList.entries) {
+      remoteLists[entry.value] = _cloudRows(
+        await _reader.fetchMyList(entry.key),
+      );
+      _requireAccount(account);
+    }
+    final remoteHistory = _cloudRows(await _readWatchHistory());
+    _requireAccount(account);
+
+    final hydrated = <String, MultimediaItem?>{};
+    var skipped = 0;
+    Future<MultimediaItem?> parse(Object? row) async {
+      final item = await _cloudAnime(row, hydrate, hydrated);
+      _requireAccount(account);
+      if (item == null) skipped++;
+      return item;
+    }
+
+    final favorites = <MultimediaItem>[];
+    for (final row in remoteFavorites) {
+      final item = await parse(row);
+      if (item != null) favorites.add(item);
+    }
+    final categories = <LibraryCategory, List<MultimediaItem>>{};
+    for (final entry in remoteLists.entries) {
+      final mapped = <MultimediaItem>[];
+      for (final row in entry.value) {
+        final item = await parse(row);
+        if (item != null) mapped.add(item);
+      }
+      categories[entry.key] = mapped;
+    }
+    final watched = <MultimediaItem>[];
+    for (final row in remoteHistory) {
+      final item = await parse(row);
+      if (item != null) watched.add(item);
+    }
+
+    _requireAccount(account);
+    for (final item in favorites) {
+      _requireAccount(account);
+      await library.setFavorite(item, true);
+    }
+    for (final entry in categories.entries) {
+      for (final item in entry.value) {
+        _requireAccount(account);
+        // Preserve the user's newer local changes when the remote state is
+        // older or the backend does not expose a comparable timestamp.
+        if (library.category(item.url) == null) {
+          await library.setCategory(item, entry.key);
+        }
+      }
+    }
+    final knownHistory = history
+        .history()
+        .map((entry) => entry.item.url)
+        .toSet();
+    for (final item in watched) {
+      _requireAccount(account);
+      if (knownHistory.add(item.url)) await history.recordOpened(item);
+    }
+    _requireAccount(account);
+    return AnimeRiftCloudImportResult(
+      favorites: favorites.length,
+      categories: categories.values.fold<int>(0, (n, rows) => n + rows.length),
+      history: watched.length,
+      skipped: skipped,
+    );
+  }
+
+  Future<Map<String, dynamic>> _readWatchHistory() async {
+    try {
+      return await _reader.fetchWatchHistoryFull();
+    } on AnimeRiftAuthenticationRequired {
+      rethrow;
+    } on AnimeRiftAccessUnavailable {
+      return _reader.fetchWatchHistoryLatest();
+    }
+  }
+
+  List<Object?> _cloudRows(Map<String, dynamic> response) {
+    final items = response['items'];
+    if (items is List) return List<Object?>.from(items);
+    if (items is Map) {
+      for (final field in const ['items', 'data', 'results']) {
+        final rows = items[field];
+        if (rows is List) return List<Object?>.from(rows);
+      }
+    }
+    throw const AnimeRiftAccessUnavailable();
+  }
+
+  Future<MultimediaItem?> _cloudAnime(
+    Object? value,
+    Future<MultimediaItem?> Function(String)? hydrate,
+    Map<String, MultimediaItem?> cache,
+  ) async {
+    if (value is! Map) return null;
+    final embedded = value['anime'] is Map
+        ? value['anime'] as Map
+        : value['_anime'] is Map
+        ? value['_anime'] as Map
+        : null;
+    final row = embedded ?? value;
+    // A list-membership row can have its own `_id`. Its `anime_id` or
+    // embedded anime identifies the actual catalog item.
+    final id = embedded != null
+        ? row['_id'] ?? row['anime_id'] ?? row['animeId']
+        : value['anime_id'] ??
+              value['animeId'] ??
+              value['_anime'] ??
+              value['anime'] ??
+              value['_id'];
+    if (id is! String || !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(id)) {
+      return null;
+    }
+    final url = 'https://anime-rift.com/anime/$id';
+    final title = row['title'];
+    if (title is String && title.trim().isNotEmpty) {
+      final image = row['main_picture'] ?? row['medium_picture'];
+      return MultimediaItem(
+        title: title.trim(),
+        url: url,
+        posterUrl: _safeArtwork(image),
+        provider: animeRiftProviderId,
+        contentType: MultimediaContentType.anime,
+      );
+    }
+    if (hydrate == null) return null;
+    MultimediaItem? resolved;
+    try {
+      resolved = await (cache.containsKey(url)
+          ? Future.value(cache[url])
+          : hydrate(url));
+    } on AnimeRiftAuthenticationRequired {
+      rethrow;
+    } on AnimeRiftAccessUnavailable {
+      return null;
+    }
+    cache[url] = resolved;
+    return resolved?.provider == animeRiftProviderId && resolved?.url == url
+        ? resolved
+        : null;
+  }
+
+  String _safeArtwork(Object? value) {
+    if (value is! String) return '';
+    final uri = Uri.tryParse(value);
+    return uri?.scheme == 'https' &&
+            uri?.host.isNotEmpty == true &&
+            uri!.userInfo.isEmpty &&
+            !uri.hasQuery &&
+            !uri.hasFragment
+        ? value
+        : '';
+  }
 
   /// Checks overview, favorite anime and latest watch history. More requests
   /// require explicit opt-in; no results are cached for subsequent accounts.

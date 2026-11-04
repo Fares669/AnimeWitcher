@@ -6,6 +6,8 @@ import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart';
 import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
 import 'package:animewitcher/core/storage/provider_local_library.dart';
+import 'package:animewitcher/core/storage/anime_rift_account_scope.dart';
+import 'package:animewitcher/core/storage/library_category.dart';
 import 'package:animewitcher/core/storage/settings_repository.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/settings/presentation/widgets/anime_provider_picker.dart';
@@ -82,6 +84,7 @@ class _RiftAccountFixture extends AnimeRiftApiClient {
   bool linked = false;
   final codes = <String>[];
   var signOuts = 0;
+  final cloudFavorites = <Object>[];
 
   @override
   bool get isAccountLinked => linked;
@@ -93,20 +96,57 @@ class _RiftAccountFixture extends AnimeRiftApiClient {
   Future<void> signInWithCode(String code) async {
     codes.add(code);
     linked = true;
+    AnimeRiftLocalAccountScope.activate('fixture-rift-account');
   }
 
   @override
   Future<void> signOut() async {
     signOuts++;
     linked = false;
+    AnimeRiftLocalAccountScope.reset();
+  }
+
+  @override
+  Future<Map<String, dynamic>> fetchFavoriteAnime({
+    CancelToken? cancelToken,
+  }) async => {'items': cloudFavorites};
+
+  @override
+  Future<Map<String, dynamic>> fetchMyList(
+    String category, {
+    CancelToken? cancelToken,
+  }) async => {'items': <Object>[]};
+
+  @override
+  Future<Map<String, dynamic>> fetchWatchHistoryFull({
+    CancelToken? cancelToken,
+  }) async => {'items': <Object>[]};
+}
+
+class _CloudStorage extends StorageService {
+  final values = <String, String>{};
+  @override
+  String? getString(String key) => values[key];
+  @override
+  Future<void> setString(String key, String? value) async {
+    if (value == null) {
+      values.remove(key);
+    } else {
+      values[key] = value;
+    }
   }
 }
 
-Widget _app(List<AnimeWitcherProvider> registered, _SavedSettings settings) {
+Widget _app(
+  List<AnimeWitcherProvider> registered,
+  _SavedSettings settings, {
+  StorageService? storage,
+}) {
   return ProviderScope(
     overrides: [
       extensionManagerProvider.overrideWith(() => _TestManager(registered)),
       settingsRepositoryProvider.overrideWithValue(settings),
+      if (storage != null) storageServiceProvider.overrideWithValue(storage),
     ],
     child: MaterialApp(
       locale: const Locale('ar'),
@@ -125,6 +165,7 @@ Widget _app(List<AnimeWitcherProvider> registered, _SavedSettings settings) {
 }
 
 void main() {
+  tearDown(AnimeRiftLocalAccountScope.reset);
   final native = _TestProvider('native', 'AnimeWitcher', {ProviderType.anime});
   final other = _TestProvider('other', 'Alternative Anime', {
     ProviderType.anime,
@@ -344,6 +385,32 @@ void main() {
       findsNothing,
     );
     expect(find.byType(ListTile), findsWidgets);
+  });
+
+  testWidgets('Rift cloud sync writes favorite anime to the actual library', (
+    tester,
+  ) async {
+    AnimeRiftLocalAccountScope.activate('fixture-rift-account');
+    final storage = _CloudStorage();
+    final fixture = _RiftAccountFixture()..linked = true;
+    fixture.cloudFavorites.add({
+      'anime': {'_id': 'synced1', 'title': 'Synced Anime'},
+    });
+    await tester.pumpWidget(
+      _app(
+        [AnimeRiftProvider(client: fixture)],
+        _SavedSettings(animeRiftProviderId),
+        storage: storage,
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('animerift-cloud-sync')));
+    await tester.pumpAndSettle();
+    final library = ProviderLocalLibrary(storage, animeRiftProviderId);
+    expect(
+      library.items(LibraryCategory.favorite).single.title,
+      'Synced Anime',
+    );
   });
 
   testWidgets('disables selection when no anime provider is registered', (

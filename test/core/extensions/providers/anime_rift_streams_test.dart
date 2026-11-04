@@ -18,13 +18,23 @@ class StreamFixture extends AnimeRiftApiClient {
       );
   final calls = <({String path, Map<String, dynamic>? body})>[];
   bool requireDownloadAuth = false;
+  bool requireRestoredDownloadSession = false;
+  bool sessionRestored = false;
   String? authRequiredHost;
   bool denyPlayback = false;
   bool? offlineModeEnabled = true;
   bool duplicateSourceLabels = false;
+  List<String> host1Qualities = ['720P', '1080P'];
   String host2Name = 'CR2';
   String videoToken = 'ephemeral';
   String? unavailableHost;
+
+  @override
+  Future<bool> restoreAccountSession() async {
+    sessionRestored = true;
+    return true;
+  }
+
   @override
   Future<Map<String, dynamic>> request(
     String path,
@@ -49,7 +59,7 @@ class StreamFixture extends AnimeRiftApiClient {
             'server_name': 'CR2',
             'provider': 'cr2',
             'sub_title': 'ar_sub',
-            'qualities': ['720P', '1080P'],
+            'qualities': host1Qualities,
           },
           if (duplicateSourceLabels)
             {
@@ -90,6 +100,11 @@ class StreamFixture extends AnimeRiftApiClient {
         ],
       };
     if (path.endsWith('/can_play')) {
+      if (body?['is_download'] == true &&
+          requireRestoredDownloadSession &&
+          !sessionRestored) {
+        return {'require_auth': true};
+      }
       if ((body?['is_download'] == true && requireDownloadAuth) ||
           body?['hostId'] == authRequiredHost)
         return {'require_auth': true};
@@ -124,6 +139,54 @@ class StreamFixture extends AnimeRiftApiClient {
 }
 
 void main() {
+  test('download discovery restores the linked session before checking entitlement', () async {
+    final api = StreamFixture()..requireRestoredDownloadSession = true;
+    final provider = AnimeRiftProvider(client: api);
+
+    final choices = await provider.loadDownloadStreamSources(episodeUrl);
+    expect(choices, isNotEmpty);
+    expect(api.sessionRestored, isTrue);
+    expect(
+      (await provider.loadDownloadStreams(choices.first.url)).single.url,
+      contains('video.mp4'),
+    );
+    expect(
+      api.calls
+          .where((call) => call.path.endsWith('/can_play'))
+          .single
+          .body?['is_download'],
+      isTrue,
+    );
+  });
+
+  test('automatic playback reaches a second host when the first has many qualities', () async {
+    final api = StreamFixture()
+      ..host1Qualities = ['144P', '240P', '360P', '480P', '720P', '1080P']
+      ..unavailableHost = 'host1';
+    final provider = AnimeRiftProvider(client: api);
+
+    final streams = await provider.loadStreams(episodeUrl);
+    expect(streams.single.source, contains('BBZ'));
+    final checks = api.calls.where((call) => call.path.endsWith('/can_play'));
+    expect(checks.length, lessThanOrEqualTo(6));
+    expect(checks.map((call) => call.body?['hostId']), contains('watchonly'));
+  });
+
+  test('automatic download tries another permitted host after an unavailable first host', () async {
+    final api = StreamFixture()
+      ..host1Qualities = ['144P', '240P', '360P', '480P', '720P', '1080P']
+      ..duplicateSourceLabels = true
+      ..unavailableHost = 'host1';
+    final provider = AnimeRiftProvider(client: api);
+
+    final streams = await provider.loadDownloadStreams(episodeUrl);
+    expect(streams.single.url, contains('host2.mp4'));
+    final checks = api.calls.where((call) => call.path.endsWith('/can_play'));
+    expect(checks.length, lessThanOrEqualTo(6));
+    expect(checks.map((call) => call.body?['hostId']), contains('host2'));
+    expect(checks.every((call) => call.body?['is_download'] == true), isTrue);
+  });
+
   test(
     'automatic playback falls back but an explicit server stays selected',
     () async {
@@ -143,7 +206,7 @@ void main() {
       expect(fallback.single.source, contains('BBZ'));
       expect(
         api.calls.where((c) => c.path.endsWith('/can_play')),
-        hasLength(3),
+        hasLength(2),
       );
     },
   );

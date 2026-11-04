@@ -10,8 +10,10 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/domain/stream_source_preferences.dart';
+import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/item_provider_resolution.dart';
+import '../../../core/extensions/providers/anime_rift_provider.dart';
 import '../../../core/network/dio_client_provider.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/services/download_parallel.dart';
@@ -147,6 +149,18 @@ LogicalDownloadRecordV2? existingRiftDownloadForItemV2(
   );
 }
 
+@visibleForTesting
+Future<String?> downloadAccountHashForProviderV2(
+  AnimeWitcherProvider provider,
+) async {
+  if (!isAnimeRiftDownloadProviderV2(provider.packageName)) return null;
+  if (provider is! AnimeRiftProvider) {
+    throw StateError('Anime Rift account provider unavailable');
+  }
+  await provider.restoreAccountSession();
+  return AnimeRiftLocalAccountScope.accountHash;
+}
+
 bool _batchRecordBelongsToProvider(
   LogicalDownloadRecordV2 record,
   String providerId,
@@ -237,11 +251,6 @@ class DownloadLauncher {
       notifications.showError('لا يوجد مزود تشغيل نشط');
       return;
     }
-    final accountAtSelection =
-        isAnimeRiftDownloadProviderV2(provider.packageName)
-        ? AnimeRiftLocalAccountScope.accountHash
-        : null;
-
     final messenger = ScaffoldMessenger.maybeOf(context);
     final sourceProgress = ValueNotifier<int>(0);
     void showSourceProgress() {
@@ -259,6 +268,9 @@ class DownloadLauncher {
 
     showSourceProgress();
     try {
+      final accountAtSelection = await downloadAccountHashForProviderV2(
+        provider,
+      );
       final allSources = List<List<StreamResult>?>.filled(
         episodes.length,
         null,
@@ -401,11 +413,19 @@ class DownloadLauncher {
           StreamResult? stream;
           DownloadSourceMetadataV2? metadata;
           for (final option in prioritized) {
-            final probe = await probeDownloadSourceV2(
-              _ref.read(dioClientProvider),
-              option.url,
-              headers: option.headers,
-            ).timeout(const Duration(seconds: 15), onTimeout: () => null);
+            final probe =
+                await probeDownloadSourceV2(
+                  _ref.read(dioClientProvider),
+                  option.url,
+                  headers: option.headers,
+                ).timeout(
+                  Duration(
+                    seconds: isAnimeRiftDownloadProviderV2(provider.packageName)
+                        ? 25
+                        : 15,
+                  ),
+                  onTimeout: () => null,
+                );
             if (probe?.size != null) {
               stream = option;
               metadata = probe;
@@ -489,15 +509,13 @@ class DownloadLauncher {
           .showError(l10n.errorPrefix('لا يوجد مزود تشغيل نشط'));
       return;
     }
-    final accountAtSelection =
-        isAnimeRiftDownloadProviderV2(provider.packageName)
-        ? AnimeRiftLocalAccountScope.accountHash
-        : null;
-
     bool isCanceled = false;
     bool loadingDialogShown = false;
 
     try {
+      final accountAtSelection = await downloadAccountHashForProviderV2(
+        provider,
+      );
       final sourceFuture = provider.loadDownloadStreamSources(resolveUrl);
       final preferences = _ref.read(generalSettingsProvider);
       final StreamResult? selected;
@@ -636,11 +654,17 @@ class DownloadLauncher {
       ),
     );
 
-    final metadata = await probeDownloadSourceV2(
-      _ref.read(dioClientProvider),
-      stream.url,
-      headers: stream.headers,
-    ).timeout(const Duration(seconds: 15), onTimeout: () => null);
+    final metadata =
+        await probeDownloadSourceV2(
+          _ref.read(dioClientProvider),
+          stream.url,
+          headers: stream.headers,
+        ).timeout(
+          Duration(
+            seconds: isAnimeRiftDownloadProviderV2(providerId) ? 25 : 15,
+          ),
+          onTimeout: () => null,
+        );
 
     if (!navContext.mounted) return;
     if (!isCanceled) {
