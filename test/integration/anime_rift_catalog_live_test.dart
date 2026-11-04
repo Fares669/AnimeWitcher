@@ -75,6 +75,16 @@ void main() {
           'hasNext',
           'page',
           'limit',
+          'filterBy',
+          'sortkey',
+          'contentType',
+          'releaseSeason',
+          'releaseYear',
+          'genreId',
+          'studioId',
+          'countryOfOrigin',
+          'filterByDubReleases',
+          'dubLang',
         ]) {
           final value = section[key];
           if (value is num ||
@@ -86,6 +96,59 @@ void main() {
           }
         }
         print('Live home section schema: keys=$keys descriptors=$descriptors');
+        final pagingQuery = <String, dynamic>{'page': 0};
+        for (final entry in const {
+          'filterBy': 'filter_by',
+          'sortkey': 'sort_by',
+          'contentType': 'content_type',
+          'releaseSeason': 'release_season',
+          'releaseYear': 'release_year',
+          'genreId': 'genre',
+          'studioId': 'studio',
+          'countryOfOrigin': 'country_origin',
+        }.entries) {
+          final value = section[entry.key];
+          if (value is num ||
+              value is bool ||
+              (value is String && value.isNotEmpty && value.length <= 120)) {
+            pagingQuery[entry.value] = value;
+          }
+        }
+        // Read-only contract discovery. Do not wire these candidate mappings
+        // into production unless the returned titles match the actual rail.
+        try {
+          final page = await api.request(
+            'library/all',
+            'ANIME.LIBRARY.ALL',
+            query: pagingQuery,
+          );
+          final expectedIds = (section['items'] as List<dynamic>)
+              .whereType<Map<dynamic, dynamic>>()
+              .map((row) => row['_id'])
+              .toList();
+          final rows = page['items'];
+          final returnedIds = rows is List
+              ? rows
+                    .whereType<Map<dynamic, dynamic>>()
+                    .map((row) => row['_id'])
+                    .toList()
+              : <dynamic>[];
+          final prefixMatches =
+              expectedIds.isNotEmpty &&
+              returnedIds.length >= expectedIds.length &&
+              List.generate(
+                expectedIds.length,
+                (i) => i,
+              ).every((i) => expectedIds[i] == returnedIds[i]);
+          print(
+            'Live home paging candidate: section=${descriptors['sectionTitle']} '
+            'responseKeys=${page.keys.toList()} count=${returnedIds.length} '
+            'hasNext=${page['hasNext']} prefixMatches=$prefixMatches '
+            'overlap=${returnedIds.where(expectedIds.contains).length}',
+          );
+        } catch (error) {
+          print('Live home paging candidate unavailable: ${error.runtimeType}');
+        }
       }
       for (final filter in {
         'multi_content_types': ['tv', 'movie', 'ova', 'ona', 'special'],
@@ -347,6 +410,6 @@ void main() {
       );
     },
     skip: Platform.environment['ANIMERIFT_LIVE_TEST'] != '1',
-    timeout: const Timeout(Duration(minutes: 3)),
+    timeout: const Timeout(Duration(minutes: 5)),
   );
 }
