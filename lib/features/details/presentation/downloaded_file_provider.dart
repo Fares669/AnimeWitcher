@@ -62,10 +62,13 @@ class DownloadedFiles extends _$DownloadedFiles {
     String? logicalId,
     String? providerId,
   }) async {
-    final manager = ref.read(downloadManagerV2Provider);
-    if (isAnimeRiftDownloadProviderV2(providerId)) {
-      await manager.ensureRiftAccountReady();
-    }
+    // Native completed files only require local metadata and integrity data.
+    // Avoid initializing the transport coordinator just to play an offline
+    // native episode. Rift needs its account restored before file selection.
+    final manager = isAnimeRiftDownloadProviderV2(providerId)
+        ? ref.read(downloadManagerV2Provider)
+        : null;
+    if (manager != null) await manager.ensureRiftAccountReady();
     final accountAtStart = AnimeRiftLocalAccountScope.accountHash;
     final selected = logicalId?.trim();
     if (selected != null && selected.isEmpty) return null;
@@ -82,7 +85,12 @@ class DownloadedFiles extends _$DownloadedFiles {
             .where(
               (record) =>
                   record.mediaKind == DownloadMediaKind.videoEpisode &&
-                  manager.canAccessSourceDescriptor(record.sourceDescriptor) &&
+                  (manager?.canAccessSourceDescriptor(
+                        record.sourceDescriptor,
+                      ) ??
+                      downloadBelongsToCurrentRiftAccountV2(
+                        record.sourceDescriptor,
+                      )) &&
                   record.completedAtMillis != null &&
                   _downloadUnitKeyForProvider(
                         record.unitKey,

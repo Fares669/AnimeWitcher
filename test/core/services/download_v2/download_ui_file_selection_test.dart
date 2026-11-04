@@ -38,8 +38,16 @@ void main() {
           expectedBytes: 1,
         ),
       );
+      final manager = DownloadManagerV2(
+        store: store,
+        gateway: _Gateway(),
+        sourceResolver: StaticSourceResolverV2(),
+      );
       final container = ProviderContainer(
-        overrides: [logicalDownloadStoreV2Provider.overrideWithValue(store)],
+        overrides: [
+          logicalDownloadStoreV2Provider.overrideWithValue(store),
+          downloadManagerV2Provider.overrideWithValue(manager),
+        ],
       );
       try {
         final files = container.read(downloadedFilesProvider.notifier);
@@ -68,6 +76,7 @@ void main() {
         );
       } finally {
         container.dispose();
+        await manager.dispose();
         await root.delete(recursive: true);
       }
     },
@@ -85,7 +94,7 @@ void main() {
         provider: 'com.fares669.animewitcher.native',
         stamp: 1,
       ),
-      (id: 'rift', file: rift, provider: 'animerift', stamp: 2),
+      (id: 'rift', file: rift, provider: 'com.animerift.provider', stamp: 2),
     ]) {
       await store.put(
         LogicalDownloadRecordV2(
@@ -105,8 +114,16 @@ void main() {
         ),
       );
     }
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: _Gateway(),
+      sourceResolver: StaticSourceResolverV2(),
+    );
     final container = ProviderContainer(
-      overrides: [logicalDownloadStoreV2Provider.overrideWithValue(store)],
+      overrides: [
+        logicalDownloadStoreV2Provider.overrideWithValue(store),
+        downloadManagerV2Provider.overrideWithValue(manager),
+      ],
     );
     try {
       final files = container.read(downloadedFilesProvider.notifier);
@@ -116,7 +133,7 @@ void main() {
         url: '/same',
         posterUrl: '',
       );
-      final riftItem = nativeItem.copyWith(provider: 'animerift');
+      final riftItem = nativeItem.copyWith(provider: 'com.animerift.provider');
       expect(
         (await files.resolveFile(nativeItem, episode: episode))?.path,
         native.path,
@@ -126,12 +143,12 @@ void main() {
         rift.path,
       );
       expect(
-        (await files.resolveFile(
+        await files.resolveFile(
           nativeItem,
           episode: episode,
           logicalId: 'rift',
-        ))?.path,
-        rift.path,
+        ),
+        isNull,
       );
       await files.checkFile(nativeItem, episode: episode);
       await files.checkFile(riftItem, episode: episode);
@@ -146,6 +163,7 @@ void main() {
       );
     } finally {
       container.dispose();
+      await manager.dispose();
       await root.delete(recursive: true);
     }
   });
@@ -310,6 +328,8 @@ void main() {
         ],
       );
       try {
+        // Rift session readiness adds an async step before transport startup.
+        await Future<void>.delayed(Duration.zero);
         expect(gateway.initializationCalls, 1);
         final files = container.read(downloadedFilesProvider.notifier);
         final item = MultimediaItem(
