@@ -44,6 +44,7 @@ void main() {
   final secureCalls = <MethodCall>[];
   var rejectSecureWrites = false;
   var rejectNextSecureRead = false;
+  Completer<void>? delayedSecureRead;
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
@@ -51,12 +52,15 @@ void main() {
     secureCalls.clear();
     rejectSecureWrites = false;
     rejectNextSecureRead = false;
+    delayedSecureRead = null;
     messenger.setMockMethodCallHandler(secureChannel, (call) async {
       secureCalls.add(call);
       final arguments = Map<Object?, Object?>.from(call.arguments as Map);
       final key = arguments['key'] as String?;
       switch (call.method) {
         case 'read':
+          final delay = delayedSecureRead;
+          if (delay != null) await delay.future;
           if (rejectNextSecureRead) {
             rejectNextSecureRead = false;
             throw PlatformException(code: 'SECURE_READ_FAILED');
@@ -530,6 +534,40 @@ void main() {
       throwsA(isA<AnimeRiftSecureStorageUnavailable>()),
     );
     expect(await restarted.restoreAccountSession(), isTrue);
+    expect(restarted.isAccountLinked, isTrue);
+  });
+
+  test('concurrent account restores wait for the same secure read', () async {
+    final dio = fixtureDio((o) {
+      if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+      if (o.uri.path.endsWith('/auth/register/device')) {
+        return reply(o, {}, 201);
+      }
+      return reply(o, {
+        'items': {
+          'profile': {'_id': 'rift-user-1'},
+          'token': 'fixture-user-token',
+        },
+      });
+    });
+    await AnimeRiftApiClient(
+      config: fixtureConfig,
+      dio: dio,
+    ).signInWithCode('valid-code');
+    secureCalls.clear();
+
+    final readGate = Completer<void>();
+    delayedSecureRead = readGate;
+    final restarted = AnimeRiftApiClient(config: fixtureConfig, dio: dio);
+    final first = restarted.restoreAccountSession();
+    final second = restarted.restoreAccountSession();
+    readGate.complete();
+
+    expect(await Future.wait([first, second]), [true, true]);
+    expect(
+      secureCalls.where((call) => call.method == 'read'),
+      hasLength(1),
+    );
     expect(restarted.isAccountLinked, isTrue);
   });
 }

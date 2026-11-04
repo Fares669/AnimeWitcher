@@ -96,6 +96,8 @@ class AnimeRiftApiClient {
   Object? _sessionRestoreError;
   bool _sessionRestoreAttempted = false;
   Future<void>? _initializing;
+  Future<void>? _identityLoad;
+  Future<bool>? _restoringSession;
   bool _registered = false;
   bool get isConfigured => config.isConfigured;
   bool get isAccountLinked => _accessToken != null;
@@ -109,8 +111,19 @@ class AnimeRiftApiClient {
     ).join();
   }
 
-  Future<void> _loadIdentity() async {
-    if (_identity != null) return;
+  Future<void> _loadIdentity() {
+    final pending = _identityLoad;
+    if (pending != null) return pending;
+    if (_identity != null) return Future<void>.value();
+    final future = _loadIdentityOnce();
+    final tracked = future.whenComplete(() {
+      _identityLoad = null;
+    });
+    _identityLoad = tracked;
+    return tracked;
+  }
+
+  Future<void> _loadIdentityOnce() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_identityKey);
     if (raw != null) {
@@ -352,14 +365,23 @@ class AnimeRiftApiClient {
 
   Future<bool> restoreAccountSession() async {
     await _loadIdentity();
-    if (_sessionRestoreAttempted) {
-      if (_sessionRestoreError == null) {
-        return isAccountLinked;
-      }
-      _sessionRestoreAttempted = false;
-      _sessionRestoreError = null;
+    final pending = _restoringSession;
+    if (pending != null) return pending;
+    if (_sessionRestoreAttempted && _sessionRestoreError == null) {
+      return isAccountLinked;
     }
     _sessionRestoreAttempted = true;
+    _sessionRestoreError = null;
+    final future = _restoreAccountSessionOnce();
+    _restoringSession = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_restoringSession, future)) _restoringSession = null;
+    }
+  }
+
+  Future<bool> _restoreAccountSessionOnce() async {
     try {
       final raw = await _secureStorage.read(key: _sessionKey);
       if (raw == null || raw.isEmpty) return false;
@@ -420,6 +442,14 @@ class AnimeRiftApiClient {
   }
 
   Future<void> signOut() async {
+    final pending = _restoringSession;
+    if (pending != null) {
+      try {
+        await pending;
+      } on AnimeRiftSecureStorageUnavailable {
+        // Still try to delete the Rift credential after a failed read.
+      }
+    }
     try {
       await _secureStorage.delete(key: _sessionKey);
     } catch (_) {
