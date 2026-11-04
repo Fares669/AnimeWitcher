@@ -29,6 +29,89 @@ Future<void> _writeShot(WidgetTester tester, String filename) async {
 }
 
 void main() {
+  test('Rift server variants map to available languages and audio modes only', () {
+    const sources = <StreamResult>[
+      StreamResult(url: 'ar-sub', source: 'PD (عربي مترجم)', quality: '1080'),
+      StreamResult(url: 'ar-dub', source: 'MF (عربي مدبلج)', quality: '720'),
+      StreamResult(url: 'en-sub', source: 'ST (إنجليزي مترجم)', quality: '480'),
+      StreamResult(url: 'unknown', source: 'Custom server', quality: '1080'),
+    ];
+    expect(streamSourceDisplayName(sources.first), 'PD');
+    expect(streamSourceDisplayName(sources[1]), 'MF');
+    expect(streamSourceDisplayName(sources.last), 'Custom server');
+    expect(availableStreamSourceLanguages(sources), [
+      StreamSourceLanguage.arabic,
+      StreamSourceLanguage.english,
+      StreamSourceLanguage.unknown,
+    ]);
+    final english = filterStreamSourcesByAudio(
+      sources,
+      language: StreamSourceLanguage.english,
+    );
+    expect(english.map((source) => source.url), ['en-sub']);
+    expect(availableStreamSourceAudioTypes(english), [
+      StreamSourceAudioType.subtitles,
+    ]);
+    final dubbed = filterStreamSourcesByAudio(
+      sources,
+      language: StreamSourceLanguage.arabic,
+      audioType: StreamSourceAudioType.dubbed,
+    );
+    expect(dubbed.map((source) => source.url), ['ar-dub']);
+    expect(
+      availableStreamSourceAudioTypes(
+        filterStreamSourcesByAudio(
+          sources,
+          language: StreamSourceLanguage.unknown,
+        ),
+      ),
+      isEmpty,
+    );
+  });
+
+  testWidgets('language and audio filters hide unavailable server variants', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Builder(
+          builder: (context) => TextButton(
+            onPressed: () {
+              unawaited(showStreamSourcePicker(
+                context,
+                const <StreamResult>[
+                  StreamResult(url: 'ar-sub', source: 'PD (عربي مترجم)', quality: '1080'),
+                  StreamResult(url: 'ar-dub', source: 'MF (عربي مدبلج)', quality: '720'),
+                  StreamResult(url: 'en-sub', source: 'ST (إنجليزي مترجم)', quality: '480'),
+                ],
+                forDownload: true,
+              ));
+            },
+            child: const Text('open'),
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('source-picker-language-arabic')), findsOneWidget);
+    expect(find.byKey(const ValueKey('source-picker-language-english')), findsOneWidget);
+    expect(find.byKey(const ValueKey('source-picker-mode-subtitles')), findsOneWidget);
+    expect(find.byKey(const ValueKey('source-picker-mode-dubbed')), findsOneWidget);
+    expect(find.text('PD'), findsOneWidget);
+    expect(find.text('MF'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('source-picker-mode-dubbed')));
+    await tester.pumpAndSettle();
+    expect(find.text('PD'), findsNothing);
+    expect(find.text('MF'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('source-picker-language-english')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('source-picker-mode-dubbed')), findsNothing);
+    expect(find.text('ST'), findsOneWidget);
+    expect(find.text('MF'), findsNothing);
+    expect(find.textContaining('إنجليزي مترجم'), findsNothing);
+  });
+
   group('sourcePickerHeader', () {
     test(
       'uses the server episode label instead of a generic source prompt',
