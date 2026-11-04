@@ -3,6 +3,8 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/storage/provider_local_library.dart';
+import 'package:animewitcher/core/storage/anime_rift_auto_sync.dart';
+import 'package:animewitcher/core/utils/anime_rift_identity.dart';
 
 import '../../../../core/storage/history_repository.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
@@ -33,7 +35,9 @@ class WatchHistory extends _$WatchHistory {
 
   Future<void> refreshFromServer() async {
     final repository = ref.read(historyRepositoryProvider);
-    if (ref.read(activeProviderProvider)?.packageName != animeRiftProviderId) {
+    if (ref.read(activeProviderProvider)?.packageName == animeRiftProviderId) {
+      await ref.read(riftAutoSyncProvider).refresh();
+    } else {
       await repository.syncRecentWatched();
     }
     refresh();
@@ -44,6 +48,7 @@ class WatchHistory extends _$WatchHistory {
     final id = ref.read(activeProviderProvider)?.packageName;
     if (id == animeRiftProviderId) {
       await repository.clearHistoryFor(id);
+      await ref.read(riftAutoSyncProvider).queueHistoryClear();
     } else {
       await repository.clearAllHistory();
     }
@@ -55,6 +60,7 @@ class WatchHistory extends _$WatchHistory {
     final id = ref.read(activeProviderProvider)?.packageName;
     if (id == animeRiftProviderId) {
       await repository.removeHistoryFor(url, id);
+      await ref.read(riftAutoSyncProvider).queueHistory(url, false);
     } else {
       await repository.removeFromHistory(url);
     }
@@ -65,6 +71,9 @@ class WatchHistory extends _$WatchHistory {
     await ref
         .read(historyRepositoryProvider)
         .removeHistoryFor(item.url, item.provider);
+    if (item.provider == animeRiftProviderId) {
+      await ref.read(riftAutoSyncProvider).queueHistory(item.url, false);
+    }
     refresh();
   }
 
@@ -103,6 +112,9 @@ class WatchHistory extends _$WatchHistory {
       episodeServerNumber: episodeServerNumber,
       episodePosterUrl: episodePosterUrl,
     );
+    if (item.provider == animeRiftProviderId) {
+      await ref.read(riftAutoSyncProvider).queueHistory(item.url, true);
+    }
     refresh();
   }
 }
@@ -127,7 +139,9 @@ class ContinueWatchingNotifier extends Notifier<List<HistoryItem>> {
   }
 
   Future<void> refreshFromServer() async {
-    if (ref.read(activeProviderProvider)?.packageName != animeRiftProviderId) {
+    if (ref.read(activeProviderProvider)?.packageName == animeRiftProviderId) {
+      await ref.read(riftAutoSyncProvider).refresh();
+    } else {
       await ref.read(historyRepositoryProvider).syncContinueWatching();
     }
     refresh();
@@ -197,6 +211,18 @@ class ContinueWatchingNotifier extends Notifier<List<HistoryItem>> {
           episodeServerNumber: episodeServerNumber,
           episodePosterUrl: episodePosterUrl,
         );
+    if (item.provider == animeRiftProviderId) {
+      await ref
+          .read(riftAutoSyncProvider)
+          .queuePlayback(
+            item.url,
+            episodeIdentity: animeRiftEpisodeIdForSync(lastEpisodeUrl),
+            position: position,
+            duration: duration,
+            season: season,
+            episode: episode,
+          );
+    }
     refresh();
   }
 }

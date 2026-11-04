@@ -13,6 +13,7 @@ import 'history_repository.dart';
 import 'storage_service.dart';
 import 'provider_local_history.dart';
 import 'provider_local_library.dart';
+import 'anime_rift_auto_sync.dart';
 
 bool? episodeExplicitStateFor(
   EpisodeWatchRepository repository,
@@ -74,6 +75,7 @@ final episodeWatchRepositoryProvider = Provider<EpisodeWatchRepository>((ref) {
     ref.watch(historyRepositoryProvider),
     ref.watch(animeWitcherAccountServiceProvider),
     () => ref.read(episodeWatchRevisionProvider.notifier).bump(),
+    () => ref.read(riftAutoSyncProvider).scheduleLocalChange(),
   );
 });
 
@@ -82,13 +84,15 @@ class EpisodeWatchRepository {
     this._storageService,
     this._historyRepository,
     this._accountService,
-    this._notifyChanged,
-  );
+    this._notifyChanged, [
+    this._onRiftLocalChange,
+  ]);
 
   final StorageService _storageService;
   final HistoryRepository _historyRepository;
   final AnimeWitcherAccountService _accountService;
   final void Function() _notifyChanged;
+  final Future<void> Function()? _onRiftLocalChange;
 
   static const String _legacyStorageKey = 'episode_watch_overrides_v1';
   static const String _storageKey = 'episode_watch_states_v2';
@@ -238,6 +242,7 @@ class EpisodeWatchRepository {
     }
     await _local().setWatched(item.url, episode, watched);
     _notifyChanged();
+    await _onRiftLocalChange?.call();
   }
 
   Future<void> setManyWatchedFor(
@@ -250,6 +255,7 @@ class EpisodeWatchRepository {
     }
     await _local().setManyWatched(item.url, episodes, watched);
     _notifyChanged();
+    await _onRiftLocalChange?.call();
   }
 
   bool? getExplicitState(String mainUrl, Episode episode) {

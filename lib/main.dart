@@ -40,6 +40,7 @@ import 'core/providers/device_info_provider.dart';
 import 'shared/widgets/loading_indicator.dart';
 import 'features/settings/presentation/general_settings_provider.dart';
 import 'core/account/account_providers.dart';
+import 'core/storage/anime_rift_auto_sync.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -299,17 +300,26 @@ class _MyAppState extends ConsumerState<MyApp>
       windowManager.addListener(this);
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       unawaited(
-        ref
-            .read(downloadManagerV2Provider)
-            .initialize()
-            .catchError((Object error) {
-              if (kDebugMode) {
-                debugPrint(
-                  '[DownloadManagerV2] Startup initialization deferred: $error',
-                );
-              }
-            }),
+        ref.read(riftAutoSyncProvider).refresh().catchError((Object error) {
+          if (kDebugMode) {
+            debugPrint(
+              '[AnimeRiftSync] Startup deferred (${error.runtimeType})',
+            );
+          }
+        }),
+      );
+      unawaited(
+        ref.read(downloadManagerV2Provider).initialize().catchError((
+          Object error,
+        ) {
+          if (kDebugMode) {
+            debugPrint(
+              '[DownloadManagerV2] Startup initialization deferred: $error',
+            );
+          }
+        }),
       );
       _checkAppUpdates();
       // The first-launch welcome (theme, skipping, sign-in) is part of the
@@ -330,6 +340,15 @@ class _MyAppState extends ConsumerState<MyApp>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) return;
+    unawaited(
+      ref.read(riftAutoSyncProvider).refresh().catchError((Object error) {
+        if (kDebugMode) {
+          debugPrint(
+            '[AnimeRiftSync] Foreground deferred (${error.runtimeType})',
+          );
+        }
+      }),
+    );
     final account = ref
         .read(animeWitcherAccountControllerProvider)
         .asData

@@ -34,13 +34,49 @@ class AnimeRiftConfig {
 }
 
 class AnimeRiftAccessUnavailable implements Exception {
-  const AnimeRiftAccessUnavailable({this.statusCode});
+  const AnimeRiftAccessUnavailable({this.statusCode, this.stage, this.failure});
   final int? statusCode;
+  final AnimeRiftRequestStage? stage;
+  final AnimeRiftFailureKind? failure;
+
+  /// Only known operation labels and an HTTP status are displayed. Never a
+  /// gateway response, URL, session token, or request headers.
+  String get _safeDiagnostic {
+    final operation = switch (stage) {
+      AnimeRiftRequestStage.deviceRegistration => 'تسجيل الجهاز',
+      AnimeRiftRequestStage.episodeSources => 'قائمة مصادر الحلقة',
+      AnimeRiftRequestStage.sourceAvailability => 'صلاحية التشغيل أو التنزيل',
+      AnimeRiftRequestStage.directLink => 'استخراج رابط الحلقة',
+      AnimeRiftRequestStage.other => 'طلب بيانات Anime Rift',
+      null => null,
+    };
+    final details = <String>[
+      if (operation != null) operation,
+      if (statusCode != null) 'HTTP $statusCode',
+      if (failure != null)
+        switch (failure!) {
+          AnimeRiftFailureKind.configuration => 'إعدادات الربط غير مكتملة',
+          AnimeRiftFailureKind.transport => 'تعذر الوصول إلى الشبكة',
+          AnimeRiftFailureKind.invalidResponse => 'استجابة غير صالحة',
+        },
+    ];
+    return details.isEmpty ? '' : ' (${details.join('، ')})';
+  }
 
   @override
   String toString() =>
-      'تعذر الاتصال بخدمة Anime Rift. تحقق من إعدادات المزوّد ثم أعد المحاولة.';
+      'تعذر الاتصال بخدمة Anime Rift$_safeDiagnostic. تحقق من إعدادات المزوّد ثم أعد المحاولة.';
 }
+
+enum AnimeRiftRequestStage {
+  deviceRegistration,
+  episodeSources,
+  sourceAvailability,
+  directLink,
+  other,
+}
+
+enum AnimeRiftFailureKind { configuration, transport, invalidResponse }
 
 class AnimeRiftAuthenticationRequired extends AnimeRiftAccessUnavailable {
   const AnimeRiftAuthenticationRequired({super.statusCode});
@@ -230,6 +266,7 @@ class AnimeRiftApiClient {
     Map<String, dynamic>? query,
     CancelToken? cancelToken,
   }) async {
+    final stage = _requestStage(url);
     try {
       final response = await _dio.request<dynamic>(
         url,
@@ -247,21 +284,47 @@ class AnimeRiftApiClient {
       );
       final status = response.statusCode ?? 0;
       if (status < 200 || status >= 300) {
-        throw AnimeRiftAccessUnavailable(statusCode: status);
+        throw AnimeRiftAccessUnavailable(statusCode: status, stage: stage);
       }
       final dynamic value = response.data is String
           ? jsonDecode(response.data as String)
           : response.data;
-      if (value is! Map) throw const AnimeRiftAccessUnavailable();
+      if (value is! Map) {
+        throw AnimeRiftAccessUnavailable(
+          stage: stage,
+          failure: AnimeRiftFailureKind.invalidResponse,
+        );
+      }
       return Map<String, dynamic>.from(value);
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) rethrow;
-      throw const AnimeRiftAccessUnavailable();
+      throw AnimeRiftAccessUnavailable(
+        statusCode: e.response?.statusCode,
+        stage: stage,
+        failure: e.response == null ? AnimeRiftFailureKind.transport : null,
+      );
     } on AnimeRiftAccessUnavailable {
       rethrow;
     } catch (_) {
-      throw const AnimeRiftAccessUnavailable();
+      throw AnimeRiftAccessUnavailable(
+        stage: stage,
+        failure: AnimeRiftFailureKind.invalidResponse,
+      );
     }
+  }
+
+  static AnimeRiftRequestStage _requestStage(String url) {
+    final path = Uri.tryParse(url)?.path;
+    return switch (path) {
+      '/api/v4/auth/register/device' =>
+        AnimeRiftRequestStage.deviceRegistration,
+      '/api/v4/library/episode/sources' => AnimeRiftRequestStage.episodeSources,
+      '/api/v4/library/episode/source/can_play' =>
+        AnimeRiftRequestStage.sourceAvailability,
+      '/api/v4/library/episode/source/direct_link' =>
+        AnimeRiftRequestStage.directLink,
+      _ => AnimeRiftRequestStage.other,
+    };
   }
 
   Future<void> _firebaseConfiguration() async {
@@ -422,7 +485,11 @@ class AnimeRiftApiClient {
   }
 
   Future<void> _ensureReady() async {
-    if (!isConfigured) throw const AnimeRiftAccessUnavailable();
+    if (!isConfigured) {
+      throw const AnimeRiftAccessUnavailable(
+        failure: AnimeRiftFailureKind.configuration,
+      );
+    }
     if (_registered) return;
     final pending = _initializing ??= _initialize();
     try {
@@ -722,7 +789,20 @@ class AnimeRiftApiClient {
       return response;
     } on AnimeRiftAccessUnavailable catch (e) {
       requireSameSession();
-      if (e.statusCode != 401 && e.statusCode != 403) rethrow;
+      // 403 can mean source entitlement, suspended device or access policy,
+      // not expired registration. Never replay a denied stateful POST.
+      if (e.statusCode != 401) rethrow;
+      if (sessionToken != null ||
+          path == 'library/episode/source/can_play' ||
+          path == 'library/episode/source/direct_link') {
+        throw AnimeRiftAuthenticationRequired(statusCode: e.statusCode);
+      }
+      // Only known repeatable requests may be sent after re-registration.
+      if (method != 'GET' &&
+          path != 'library/episode/sources' &&
+          path != 'library/search') {
+        rethrow;
+      }
       _registered = false;
       await _ensureReady();
       requireSameSession();

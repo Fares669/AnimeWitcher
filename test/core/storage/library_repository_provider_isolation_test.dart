@@ -86,6 +86,56 @@ final class _Account extends AnimeWitcherAccountService {
 
 void main() {
   test(
+    'Rift local mutations enqueue both favorite and category changes',
+    () async {
+      final storage = _Storage();
+      final account = _Account(storage);
+      final changes = <String>[];
+      final repository = LibraryRepository(
+        storage,
+        account,
+        onRiftFavoriteChange: (url, favorite) async {
+          changes.add('favorite:$url:$favorite');
+        },
+        onRiftCategoryChange: (url, category) async {
+          changes.add('category:$url:${category?.storageKey ?? 'none'}');
+        },
+      );
+      const url = 'https://anime-rift.com/anime/valid-id';
+      final item = MultimediaItem(
+        title: 'Rift',
+        url: url,
+        posterUrl: '',
+        provider: animeRiftProviderId,
+      );
+
+      await repository.addToLibrary(
+        item,
+        category: LibraryCategory.planToWatch,
+      );
+      await repository.setFavorite(item, true);
+      await repository.moveToCategory(
+        url,
+        LibraryCategory.continueLater,
+        providerId: animeRiftProviderId,
+      );
+      await repository.clearCategory(url, providerId: animeRiftProviderId);
+      await repository.removeFromLibrary(url, providerId: animeRiftProviderId);
+
+      expect(changes, [
+        'category:$url:pinned',
+        'favorite:$url:true',
+        'category:$url:onHold',
+        'category:$url:none',
+        'favorite:$url:false',
+        'category:$url:none',
+      ]);
+      expect(account.cloudWrites, 0);
+      expect(storage.nativeWrites, 0);
+    },
+  );
+
+  test(
     'Rift library writes never touch native records or cloud sync',
     () async {
       final storage = _Storage();
@@ -201,10 +251,7 @@ void main() {
       contentType: MultimediaContentType.manga,
     );
 
-    await repository.addToLibrary(
-      rift,
-      category: LibraryCategory.planToWatch,
-    );
+    await repository.addToLibrary(rift, category: LibraryCategory.planToWatch);
     await repository.setFavorite(rift, true);
 
     expect(

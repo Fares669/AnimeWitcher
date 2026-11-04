@@ -1,11 +1,14 @@
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+
+import 'dart:async';
+
 import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart'
-    show AnimeRiftAuthenticationRequired, AnimeRiftSecureStorageUnavailable;
+    show AnimeRiftSecureStorageUnavailable;
 import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
+import 'package:animewitcher/core/storage/anime_rift_auto_sync.dart';
 import 'package:animewitcher/core/storage/anime_rift_account_scope.dart';
-import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/core/utils/localized_text.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -80,6 +83,17 @@ class AnimeProviderSettingsTile extends ConsumerWidget {
                                   await ref
                                       .read(activeProviderProvider.notifier)
                                       .set(provider);
+                                  if (provider is AnimeRiftProvider) {
+                                    unawaited(
+                                      ref
+                                          .read(riftAutoSyncProvider)
+                                          .refresh()
+                                          .catchError((Object _) {
+                                            // The local lists remain usable
+                                            // while Rift is offline.
+                                          }),
+                                    );
+                                  }
                                 }
                                 if (dialogContext.mounted) {
                                   Navigator.of(dialogContext).pop();
@@ -129,8 +143,6 @@ class _AnimeRiftAccountTile extends ConsumerStatefulWidget {
 
 class _AnimeRiftAccountTileState extends ConsumerState<_AnimeRiftAccountTile> {
   late Future<bool> _status;
-  bool _syncing = false;
-  String? _lastSyncSummary;
 
   @override
   void initState() {
@@ -144,6 +156,7 @@ class _AnimeRiftAccountTileState extends ConsumerState<_AnimeRiftAccountTile> {
     if (mounted && previousScope != AnimeRiftLocalAccountScope.accountHash) {
       ref.read(accountDataRevisionProvider.notifier).bump();
     }
+    if (linked && mounted) _refreshCloudAutomatically();
     return linked;
   }
 
@@ -157,9 +170,17 @@ class _AnimeRiftAccountTileState extends ConsumerState<_AnimeRiftAccountTile> {
 
   void _reload() {
     setState(() {
-      _lastSyncSummary = null;
       _status = _restoreAndRefresh();
     });
+  }
+
+  void _refreshCloudAutomatically() {
+    unawaited(
+      ref.read(riftAutoSyncProvider).refresh().catchError((Object _) {
+        // Offline accounts keep their local data; the coordinator retries on
+        // the next startup, local change, or foreground activation.
+      }),
+    );
   }
 
   Future<void> _showSignIn() async {
@@ -270,7 +291,7 @@ class _AnimeRiftAccountTileState extends ConsumerState<_AnimeRiftAccountTile> {
       setState(() {
         _status = Future<bool>.value(true);
       });
-      await _syncCloud();
+      _refreshCloudAutomatically();
     }
   }
 
@@ -304,47 +325,15 @@ class _AnimeRiftAccountTileState extends ConsumerState<_AnimeRiftAccountTile> {
     );
     if (!mounted) return;
     if (action == 'switch') {
-      setState(() => _lastSyncSummary = null);
       await _showSignIn();
     } else if (action == 'unlink') {
       setState(() {
-        _lastSyncSummary = null;
         _status = widget.provider.signOut().then((_) {
           if (mounted) ref.read(accountDataRevisionProvider.notifier).bump();
           return false;
         });
       });
     }
-  }
-
-  Future<void> _syncCloud() async {
-    if (_syncing) return;
-    setState(() => _syncing = true);
-    String message;
-    try {
-      final imported = await widget.provider.importCloudLibrary(
-        ref.read(storageServiceProvider),
-      );
-      if (!mounted) return;
-      ref.read(accountDataRevisionProvider.notifier).bump();
-      message =
-          'تمت مزامنة ${imported.favorites} مفضلة و'
-          '${imported.categories} عنصرًا بالمكتبة و'
-          '${imported.history} عنوانًا من سجل المشاهدة.';
-      if (imported.skipped > 0) {
-        message += ' تعذر التعرف على ${imported.skipped} عناصر من الخادم.';
-      }
-    } on AnimeRiftAuthenticationRequired {
-      message = 'جلسة Anime Rift منتهية؛ أعد ربط حساب Rift ثم جرّب المزامنة.';
-    } catch (_) {
-      message = 'تعذرت مزامنة بيانات Anime Rift. تحقق من الاتصال وصيغة البيانات ثم أعد المحاولة.';
-    } finally {
-      if (mounted) setState(() => _syncing = false);
-    }
-    if (!mounted) return;
-    setState(() => _lastSyncSummary = message);
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -380,21 +369,23 @@ class _AnimeRiftAccountTileState extends ConsumerState<_AnimeRiftAccountTile> {
               ? appText(
                   context,
                   english:
-                      'Connected as ${identity!.displayName} · Rift library is local',
+                      'Connected as ${identity!.displayName} · automatic sync enabled',
                   arabic:
-                      'متصل باسم ${identity.displayName} · مكتبة Rift محلية',
+                      'متصل باسم ${identity.displayName} · المزامنة التلقائية مفعلة',
                 )
               : linked && identity?.isVerified == true
               ? appText(
                   context,
-                  english: 'Connected: ${identity!.id} · Rift library is local',
-                  arabic: 'الحساب: ${identity.id} · مكتبة Rift محلية',
+                  english:
+                      'Connected: ${identity!.id} · automatic sync enabled',
+                  arabic: 'الحساب: ${identity.id} · المزامنة التلقائية مفعلة',
                 )
               : linked
               ? appText(
                   context,
-                  english: 'Linked for protected Rift access · local library',
-                  arabic: 'مربوط للوصول المحمي إلى Rift · المكتبة محلية',
+                  english:
+                      'Linked for protected Rift access · automatic import',
+                  arabic: 'مربوط للوصول المحمي إلى Rift · استيراد تلقائي',
                 )
               : appText(
                   context,
@@ -409,27 +400,7 @@ class _AnimeRiftAccountTileState extends ConsumerState<_AnimeRiftAccountTile> {
               ? _confirmSignOut
               : _showSignIn,
         );
-        if (!linked) return accountTile;
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            accountTile,
-            SettingsTile(
-              key: const ValueKey('animerift-cloud-sync'),
-              icon: Icons.cloud_sync_outlined,
-              title: appText(
-                context,
-                english: 'Sync Anime Rift library and watch history',
-                arabic: 'مزامنة مكتبة ومفضلة وسجل Anime Rift',
-              ),
-              subtitle: _syncing
-                  ? 'جارٍ استيراد البيانات من حساب Rift…'
-                  : _lastSyncSummary ??
-                        'إضافة بيانات الحساب إلى المكتبة المحلية',
-              onTap: _syncing ? null : _syncCloud,
-            ),
-          ],
-        );
+        return accountTile;
       },
     );
   }

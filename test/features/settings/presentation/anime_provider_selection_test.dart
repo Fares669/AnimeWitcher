@@ -146,7 +146,7 @@ Widget _app(
     overrides: [
       extensionManagerProvider.overrideWith(() => _TestManager(registered)),
       settingsRepositoryProvider.overrideWithValue(settings),
-      if (storage != null) storageServiceProvider.overrideWithValue(storage),
+      storageServiceProvider.overrideWithValue(storage ?? _CloudStorage()),
     ],
     child: MaterialApp(
       locale: const Locale('ar'),
@@ -291,12 +291,12 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(settings.savedId, animeRiftProviderId);
-    expect(find.text('Anime Rift'), findsOneWidget);
+    expect(find.text('Anime Rift'), findsWidgets);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpWidget(_app(providers, settings));
     await tester.pumpAndSettle();
-    expect(find.text('Anime Rift'), findsOneWidget);
+    expect(find.text('Anime Rift'), findsWidgets);
   });
 
   testWidgets(
@@ -387,7 +387,7 @@ void main() {
     expect(find.byType(ListTile), findsWidgets);
   });
 
-  testWidgets('Rift cloud sync writes favorite anime to the actual library', (
+  testWidgets('Rift cloud sync has no manual button in account settings', (
     tester,
   ) async {
     AnimeRiftLocalAccountScope.activate('fixture-rift-account');
@@ -404,12 +404,17 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('animerift-cloud-sync')));
-    await tester.pumpAndSettle();
-    final library = ProviderLocalLibrary(storage, animeRiftProviderId);
+    expect(find.byKey(const ValueKey('animerift-cloud-sync')), findsNothing);
     expect(
-      library.items(LibraryCategory.favorite).single.title,
-      'Synced Anime',
+      ProviderLocalLibrary(
+        storage,
+        animeRiftProviderId,
+      ).items(LibraryCategory.favorite).map((item) => item.title),
+      contains('Synced Anime'),
+    );
+    expect(
+      find.byKey(const ValueKey('settings-animerift-account')),
+      findsOneWidget,
     );
   });
 

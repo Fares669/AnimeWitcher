@@ -4,6 +4,7 @@ import 'library_category.dart';
 import 'provider_local_history.dart';
 import 'provider_local_library.dart';
 import 'anime_rift_account_scope.dart';
+import 'anime_rift_cloud_pending.dart';
 import 'storage_service.dart';
 
 /// The response body is intentionally opaque until authenticated examples
@@ -121,12 +122,16 @@ class AnimeRiftCloudImportResult {
     required this.categories,
     required this.history,
     required this.skipped,
+    this.changed = 0,
   });
 
   final int favorites;
   final int categories;
   final int history;
   final int skipped;
+
+  /// Actual local writes, distinct from the number of remote rows parsed.
+  final int changed;
 }
 
 /// Inspects remote counts and imports verified account lists additively.
@@ -170,6 +175,7 @@ class AnimeRiftCloudSync {
     // Use the linked account namespace even on the first launch after login.
     final library = ProviderLocalLibrary(storage, animeRiftProviderId);
     final history = ProviderLocalHistory(storage, animeRiftProviderId);
+    final pending = AnimeRiftCloudPendingJournal(storage);
 
     // Fetch before writing, so a failed request never looks like an empty
     // remote library and a changed session cannot import into another user.
@@ -215,17 +221,25 @@ class AnimeRiftCloudSync {
     }
 
     _requireAccount(account);
+    var changed = 0;
     for (final item in favorites) {
       _requireAccount(account);
-      await library.setFavorite(item, true);
+      // A locally removed favorite must not reappear during an offline sync.
+      if (pending.hasPending(account, item.url, 'favorite')) continue;
+      if (!library.isFavorite(item.url)) {
+        await library.setFavorite(item, true);
+        changed++;
+      }
     }
     for (final entry in categories.entries) {
       for (final item in entry.value) {
         _requireAccount(account);
+        if (pending.hasPending(account, item.url, 'category')) continue;
         // Preserve the user's newer local changes when the remote state is
         // older or the backend does not expose a comparable timestamp.
         if (library.category(item.url) == null) {
           await library.setCategory(item, entry.key);
+          changed++;
         }
       }
     }
@@ -233,9 +247,18 @@ class AnimeRiftCloudSync {
         .history()
         .map((entry) => entry.item.url)
         .toSet();
+    final historyWasCleared = pending.hasPending(account, '', 'history-clear');
     for (final item in watched) {
       _requireAccount(account);
-      if (knownHistory.add(item.url)) await history.recordOpened(item);
+      if (historyWasCleared ||
+          pending.hasPending(account, item.url, 'history') ||
+          pending.hasPending(account, item.url, 'playback')) {
+        continue;
+      }
+      if (knownHistory.add(item.url)) {
+        await history.recordOpened(item);
+        changed++;
+      }
     }
     _requireAccount(account);
     return AnimeRiftCloudImportResult(
@@ -243,6 +266,7 @@ class AnimeRiftCloudSync {
       categories: categories.values.fold<int>(0, (n, rows) => n + rows.length),
       history: watched.length,
       skipped: skipped,
+      changed: changed,
     );
   }
 

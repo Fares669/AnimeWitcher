@@ -691,6 +691,71 @@ void main() {
   );
 
   test(
+    'missing build configuration is distinct from a gateway outage',
+    () async {
+      var calls = 0;
+      final client = AnimeRiftApiClient(
+        config: const AnimeRiftConfig(
+          firebaseApiKey: '',
+          firebaseAppId: '',
+          signingKey: '',
+        ),
+        dio: fixtureDio((o) {
+          calls++;
+          return reply(o, {});
+        }),
+      );
+      await expectLater(
+        client.request(
+          'library/episode/sources',
+          'ANIME.LIBRARY.EPISODES.SOURCES.ALL',
+        ),
+        throwsA(
+          isA<AnimeRiftAccessUnavailable>().having(
+            (e) => e.toString(),
+            'safe configuration diagnosis',
+            contains('إعدادات الربط غير مكتملة'),
+          ),
+        ),
+      );
+      expect(calls, 0);
+    },
+  );
+
+  test(
+    'malformed source response identifies the phase without raw data',
+    () async {
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: fixtureDio((o) {
+          if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+          if (o.uri.path.endsWith('/auth/register/device')) {
+            return reply(o, {'sessionKey': 'fixture'}, 201);
+          }
+          return reply(o, 'private-malformed-response');
+        }),
+      );
+      await expectLater(
+        client.request(
+          'library/episode/sources',
+          'ANIME.LIBRARY.EPISODES.SOURCES.ALL',
+        ),
+        throwsA(
+          isA<AnimeRiftAccessUnavailable>().having(
+            (e) => e.toString(),
+            'safe invalid response diagnosis',
+            allOf(
+              contains('قائمة مصادر الحلقة'),
+              contains('استجابة غير صالحة'),
+              isNot(contains('private-malformed-response')),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+
+  test(
     'canceled catalog and unsafe paths make no registration request',
     () async {
       var calls = 0;
@@ -840,6 +905,84 @@ void main() {
         .join();
     expect(plainValues, isNot(contains('fixture-user-token')));
   });
+
+  test(
+    'source entitlement denial does not re-register or replay a POST',
+    () async {
+      var registrations = 0;
+      var entitlementChecks = 0;
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: fixtureDio((request) {
+          if (request.uri.host.endsWith('googleapis.com')) {
+            return reply(request, {}, 400);
+          }
+          if (request.uri.path.endsWith('/auth/register/device')) {
+            registrations++;
+            return reply(request, {'sessionKey': 'fixture'}, 201);
+          }
+          entitlementChecks++;
+          expect(request.uri.path, endsWith('/source/can_play'));
+          return reply(request, {'error': 'must-not-leak'}, 403);
+        }),
+      );
+
+      await expectLater(
+        client.request(
+          'library/episode/source/can_play',
+          'ANIME.LIBRARY.EPISODES.SOURCES.CHECK_AVAILABILITY',
+          method: 'POST',
+          body: {'is_download': true},
+        ),
+        throwsA(
+          isA<AnimeRiftAccessUnavailable>()
+              .having((e) => e.statusCode, 'status code', 403)
+              .having(
+                (e) => e.toString(),
+                'safe diagnostic',
+                allOf(
+                  contains('HTTP 403'),
+                  contains('صلاحية التشغيل'),
+                  isNot(contains('must-not-leak')),
+                ),
+              ),
+        ),
+      );
+      expect(registrations, 1);
+      expect(entitlementChecks, 1);
+    },
+  );
+
+  test(
+    'guest source HTTP 401 is surfaced without replaying the entitlement',
+    () async {
+      var entitlementChecks = 0;
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: fixtureDio((request) {
+          if (request.uri.host.endsWith('googleapis.com')) {
+            return reply(request, {}, 400);
+          }
+          if (request.uri.path.endsWith('/auth/register/device')) {
+            return reply(request, {'sessionKey': 'fixture'}, 201);
+          }
+          entitlementChecks++;
+          expect(request.uri.path, endsWith('/source/can_play'));
+          return reply(request, {'error': 'private'}, 401);
+        }),
+      );
+      await expectLater(
+        client.request(
+          'library/episode/source/can_play',
+          'ANIME.LIBRARY.EPISODES.SOURCES.CHECK_AVAILABILITY',
+          method: 'POST',
+          body: {'is_download': true},
+        ),
+        throwsA(isA<AnimeRiftAuthenticationRequired>()),
+      );
+      expect(entitlementChecks, 1);
+    },
+  );
 
   test(
     'invalid sign-in input is rejected before any network request',

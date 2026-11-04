@@ -84,7 +84,7 @@ class _Mutable extends ActiveProvider {
 }
 
 void main() {
-  testWidgets('local library offers cloud import without claiming cloud sync', (
+  testWidgets('Rift library does not require a manual cloud sync button', (
     tester,
   ) async {
     final storage = _Memory();
@@ -111,12 +111,8 @@ void main() {
     );
     await tester.pump();
     expect(
-      find.text('يمكن استيراد القوائم السحابية إلى مكتبة Rift المحلية.'),
-      findsOneWidget,
-    );
-    expect(
       find.byKey(const ValueKey('rift-library-sync-button')),
-      findsOneWidget,
+      findsNothing,
     );
     expect(find.text('تسجيل الدخول'), findsNothing);
   });

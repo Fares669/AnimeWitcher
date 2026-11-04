@@ -2,6 +2,31 @@ const String animeRiftCatalogHost = 'anime-rift.com';
 
 final RegExp _animeRiftCatalogId = RegExp(r'^[A-Za-z0-9._~-]+$');
 
+/// Extracts only a stable episode ID from a Rift catalog episode URL. Never
+/// queues a signed CDN link or query token as cloud playback metadata.
+String? animeRiftEpisodeIdForSync(String? value) {
+  if (value == null) return null;
+  final uri = Uri.tryParse(value.trim());
+  if (uri == null ||
+      uri.scheme != 'https' ||
+      uri.userInfo.isNotEmpty ||
+      uri.hasQuery ||
+      uri.hasFragment ||
+      (uri.host != animeRiftCatalogHost &&
+          uri.host != 'www.$animeRiftCatalogHost')) {
+    return null;
+  }
+  final segments = uri.pathSegments;
+  if (segments.length != 4 ||
+      segments[0] != 'anime' ||
+      !_animeRiftCatalogId.hasMatch(segments[1]) ||
+      segments[2] != 'episode' ||
+      !_animeRiftCatalogId.hasMatch(segments[3])) {
+    return null;
+  }
+  return segments[3];
+}
+
 /// Returns one stable public Anime Rift catalog URL, or null when [value] is
 /// not a safe public catalog identity.
 String? canonicalAnimeRiftCatalogUrl(String value) {

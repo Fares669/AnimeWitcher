@@ -6,6 +6,7 @@ import '../../../../core/storage/library_category.dart';
 import '../../../../core/storage/library_repository.dart';
 import '../../../../core/storage/storage_service.dart';
 import '../../../../core/storage/provider_local_library.dart';
+import '../../../../core/storage/anime_rift_auto_sync.dart';
 import '../../../../core/extensions/extension_manager.dart';
 
 import './library_auth.dart';
@@ -162,8 +163,10 @@ class Library extends _$Library {
       }
       if (selected == LibraryCategory.favorite) {
         await _local().setFavorite(item, true);
+        await ref.read(riftAutoSyncProvider).queueFavorite(item.url, true);
       } else {
         await _local().setCategory(item, selected);
+        await ref.read(riftAutoSyncProvider).queueCategory(item.url, selected);
       }
       refresh();
       return;
@@ -185,6 +188,7 @@ class Library extends _$Library {
   }) async {
     if (!manga && providerId == animeRiftProviderId) {
       await _local().clearCategory(url);
+      await ref.read(riftAutoSyncProvider).queueCategory(url, null);
       refresh();
       return;
     }
@@ -198,6 +202,7 @@ class Library extends _$Library {
     if (item.provider == animeRiftProviderId &&
         item.contentType != MultimediaContentType.manga) {
       await _local().setFavorite(item, favorite);
+      await ref.read(riftAutoSyncProvider).queueFavorite(item.url, favorite);
       refresh();
       return;
     }

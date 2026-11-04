@@ -8,6 +8,7 @@ import '../account/animewitcher_account_service.dart';
 import '../domain/entity/multimedia_item.dart';
 import 'library_category.dart';
 import 'provider_local_library.dart';
+import 'anime_rift_auto_sync.dart';
 import 'storage_service.dart';
 
 part 'library_repository.g.dart';
@@ -17,14 +18,25 @@ LibraryRepository libraryRepository(Ref ref) {
   return LibraryRepository(
     ref.watch(storageServiceProvider),
     ref.watch(animeWitcherAccountServiceProvider),
+    onRiftFavoriteChange: (url, favorite) =>
+        ref.read(riftAutoSyncProvider).queueFavorite(url, favorite),
+    onRiftCategoryChange: (url, category) =>
+        ref.read(riftAutoSyncProvider).queueCategory(url, category),
   );
 }
 
 class LibraryRepository {
   final StorageService _storageService;
   final AnimeWitcherAccountService _accountService;
+  final Future<void> Function(String, bool)? onRiftFavoriteChange;
+  final Future<void> Function(String, LibraryCategory?)? onRiftCategoryChange;
 
-  LibraryRepository(this._storageService, this._accountService);
+  LibraryRepository(
+    this._storageService,
+    this._accountService, {
+    this.onRiftFavoriteChange,
+    this.onRiftCategoryChange,
+  });
 
   ProviderLocalLibrary _riftLibrary() =>
       ProviderLocalLibrary(_storageService, animeRiftProviderId);
@@ -40,9 +52,11 @@ class LibraryRepository {
     if (_isRiftItem(item)) {
       if (target == LibraryCategory.favorite) {
         await _riftLibrary().setFavorite(item, true);
+        await onRiftFavoriteChange?.call(item.url, true);
       } else {
         if (!target.isAssignableTo(item)) return;
         await _riftLibrary().setCategory(item, target);
+        await onRiftCategoryChange?.call(item.url, target);
       }
       onLocalChanged?.call();
       return;
@@ -108,9 +122,11 @@ class LibraryRepository {
       if (item == null) return;
       if (category == LibraryCategory.favorite) {
         await _riftLibrary().setFavorite(item, true);
+        await onRiftFavoriteChange?.call(item.url, true);
       } else {
         if (!category.isAssignableTo(item)) return;
         await _riftLibrary().setCategory(item, category);
+        await onRiftCategoryChange?.call(item.url, category);
       }
       onLocalChanged?.call();
       return;
@@ -181,6 +197,7 @@ class LibraryRepository {
   }) async {
     if (providerId == animeRiftProviderId) {
       await _riftLibrary().clearCategory(url);
+      await onRiftCategoryChange?.call(url, null);
       onLocalChanged?.call();
       return;
     }
@@ -236,6 +253,7 @@ class LibraryRepository {
   }) async {
     if (_isRiftItem(item)) {
       await _riftLibrary().setFavorite(item, favorite);
+      await onRiftFavoriteChange?.call(item.url, favorite);
       onLocalChanged?.call();
       return;
     }
@@ -290,6 +308,8 @@ class LibraryRepository {
   }) async {
     if (providerId == animeRiftProviderId) {
       await _riftLibrary().remove(url);
+      await onRiftFavoriteChange?.call(url, false);
+      await onRiftCategoryChange?.call(url, null);
       onLocalChanged?.call();
       return;
     }
