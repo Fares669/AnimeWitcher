@@ -51,6 +51,41 @@ void main() {
       addTearDown(() => dio.close(force: true));
       final api = AnimeRiftApiClient(config: config, dio: dio);
       final provider = AnimeRiftProvider(client: api);
+      final homeResponse = await api.request(
+        'library/home_content',
+        'ANIME.LIBRARY.HOME_CONTENT',
+        query: {'with_genres': true},
+      );
+      expect(homeResponse['sections'], isA<List>());
+      for (final section
+          in (homeResponse['sections'] as List).whereType<Map>()) {
+        // Public catalog descriptors only: no item values, URLs or headers.
+        // These identify the actual section contract before adding pagination.
+        final keys = section.keys.map((key) => key.toString()).toList()..sort();
+        final descriptors = <String, Object>{};
+        for (final key in const [
+          'sectionTitle',
+          'sectionId',
+          'sectionType',
+          'type',
+          'id',
+          'sort_by',
+          'sort_direction',
+          'hasNext',
+          'page',
+          'limit',
+        ]) {
+          final value = section[key];
+          if (value is num ||
+              value is bool ||
+              (value is String &&
+                  value.length <= 120 &&
+                  !value.contains('://'))) {
+            descriptors[key] = value as Object;
+          }
+        }
+        print('Live home section schema: keys=$keys descriptors=$descriptors');
+      }
       for (final filter in {
         'multi_content_types': ['tv', 'movie', 'ova', 'ona', 'special'],
         'multi_release_status': ['on_going', 'finished'],
