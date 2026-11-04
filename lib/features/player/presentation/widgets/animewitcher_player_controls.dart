@@ -1161,7 +1161,7 @@ class AnimeWitcherPlayerControlsState
   static String _sourceLabel(StreamResult stream) => [
     if ((stream.quality ?? '').trim().isNotEmpty)
       streamSourceQualityLabel(stream),
-    if (stream.source.trim().isNotEmpty) stream.source.trim(),
+    if (stream.source.trim().isNotEmpty) streamSourceDisplayName(stream),
   ].join(' · ');
 
   /// The quality number alone ("1080" from "1080p"), for telling which
@@ -1195,8 +1195,12 @@ class AnimeWitcherPlayerControlsState
       for (final group in groupStreamSourcesByQuality(sources))
         for (final source in group.sources)
           PlayerPanelChoice(
-            label: source.source.trim().isEmpty ? '—' : source.source.trim(),
+            label: source.source.trim().isEmpty
+                ? '—'
+                : streamSourceDisplayName(source),
             sectionLabel: group.qualityLabel,
+            language: streamSourceAudioMetadata(source).language,
+            audioType: streamSourceAudioMetadata(source).audioType,
             selected:
                 current != null &&
                 current.source.trim() == source.source.trim() &&
