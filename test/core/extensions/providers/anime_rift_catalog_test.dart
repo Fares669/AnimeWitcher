@@ -15,6 +15,7 @@ class CatalogFixture extends AnimeRiftApiClient {
         ),
       );
   final calls = <String>[];
+  Map<String, dynamic>? homePayload;
   String? airingOverride;
   final airing = DateTime.now().toUtc().add(const Duration(days: 1));
   Map<String, dynamic>? lastQuery;
@@ -75,6 +76,9 @@ class CatalogFixture extends AnimeRiftApiClient {
           },
         ],
       };
+    if (path == 'library/home_content' && homePayload != null) {
+      return homePayload!;
+    }
     if (path == 'library/home_content')
       return {
         'sections': [
@@ -331,6 +335,50 @@ void main() {
       expect(api.calls, ['library/home_content']);
     },
   );
+  test('recent Rift releases show the actual latest released episode number', () async {
+    final api = CatalogFixture()
+      ..homePayload = {
+        'sections': [
+          {
+            'sectionTitle': 'الإصدارات الحديثة',
+            'items': [
+              {
+                '_id': 'show1',
+                'title': 'Latest',
+                'latest_episode_released': {'episode_number': 12},
+                'available_episodes': 50,
+              },
+              {
+                '_id': 'show2',
+                'title': 'No release',
+                'available_episodes': 21,
+              },
+              {
+                '_id': 'show3',
+                'title': 'Fractional episode',
+                'latest_episode_released': {'episode_number': 12.5},
+              },
+            ],
+          },
+          {
+            'sectionTitle': 'رائج الآن',
+            'items': [
+              {
+                '_id': 'show4',
+                'title': 'Not a latest-release rail',
+                'latest_episode_released': {'episode_number': 15},
+              },
+            ],
+          },
+        ],
+      };
+    final home = await AnimeRiftProvider(client: api).getHome();
+    expect(home['الإصدارات الحديثة']![0].episodeBadge, 'الحلقة 12');
+    expect(home['الإصدارات الحديثة']![1].episodeBadge, isNull);
+    expect(home['الإصدارات الحديثة']![2].episodeBadge, 'الحلقة 12.5');
+    expect(home['رائج الآن']!.single.episodeBadge, isNull);
+  });
+
   test(
     'search uses backend page cursor rather than assuming a page size',
     () async {
