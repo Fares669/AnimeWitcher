@@ -78,7 +78,9 @@ class AnimeRiftStreams {
   }) async {
     final ref = await _identity(url, download: download);
     final data = await _raw(ref);
-    if (ref.download && data['offline_mode_enabled'] == false) return [];
+    // Offline eligibility is explicitly advertised by the source catalog.
+    // A missing flag is not permission to download a playback-only stream.
+    if (ref.download && data['offline_mode_enabled'] != true) return [];
     final configs = <String, Map<dynamic, dynamic>>{};
     if (data['configs'] case final List list) {
       for (final row in list.whereType<Map<dynamic, dynamic>>()) {

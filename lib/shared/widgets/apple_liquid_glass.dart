@@ -506,7 +506,9 @@ class _ApplePersistentGlassHeaderOverlayState
   }
 
   void _syncNativeNow() {
-    if (!mounted) return;
+    // The retired native glass overlay has no platform channel handler on
+    // Linux/Windows/Android, and is currently disabled on iOS as well.
+    if (!_usesNativeAppleLiquidGlass || !mounted) return;
     final state = _nativeState();
     final signature = jsonEncode(state);
     if (signature == _lastNativeSignature) return;

@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
+import '../../../core/account/account_providers.dart';
+import '../../../core/storage/anime_rift_account_scope.dart';
 import '../../../core/services/download_v2/anime_rift_download_metadata_v2.dart';
 import '../../../core/services/download_v2/download_file_planner_v2.dart';
 import '../../../core/services/download_v2/download_v2_identity.dart';
@@ -15,6 +17,10 @@ part 'downloaded_file_provider.g.dart';
 String downloadedFileKey(MultimediaItem item, {Episode? episode}) {
   final url = episode?.url ?? item.url;
   final scope = downloadProviderScopeV2(item.provider);
+  final account = isAnimeRiftDownloadProviderV2(item.provider)
+      ? AnimeRiftLocalAccountScope.accountHash
+      : null;
+  if (account != null) return jsonEncode([scope, account, url]);
   return scope == null ? url : jsonEncode([scope, url]);
 }
 
@@ -22,7 +28,10 @@ String downloadedFileKey(MultimediaItem item, {Episode? episode}) {
 @Riverpod(keepAlive: true)
 class DownloadedFiles extends _$DownloadedFiles {
   @override
-  Map<String, File?> build() => const <String, File?>{};
+  Map<String, File?> build() {
+    ref.watch(accountDataRevisionProvider);
+    return const <String, File?>{};
+  }
 
   Future<File?> resolveFile(
     MultimediaItem item, {
@@ -53,6 +62,11 @@ class DownloadedFiles extends _$DownloadedFiles {
     String? logicalId,
     String? providerId,
   }) async {
+    final manager = ref.read(downloadManagerV2Provider);
+    if (isAnimeRiftDownloadProviderV2(providerId)) {
+      await manager.ensureRiftAccountReady();
+    }
+    final accountAtStart = AnimeRiftLocalAccountScope.accountHash;
     final selected = logicalId?.trim();
     if (selected != null && selected.isEmpty) return null;
     final unitKey = _downloadUnitKeyForProvider(key, providerId);
@@ -68,23 +82,26 @@ class DownloadedFiles extends _$DownloadedFiles {
             .where(
               (record) =>
                   record.mediaKind == DownloadMediaKind.videoEpisode &&
+                  manager.canAccessSourceDescriptor(record.sourceDescriptor) &&
                   record.completedAtMillis != null &&
                   _downloadUnitKeyForProvider(
                         record.unitKey,
                         record.sourceDescriptor['providerId']?.toString(),
                       ) ==
                       unitKey &&
+                  downloadProviderScopeV2(
+                        record.sourceDescriptor['providerId']?.toString(),
+                      ) ==
+                      downloadProviderScopeV2(providerId) &&
                   (selected != null
                       ? record.logicalId.value == selected
-                      : downloadProviderScopeV2(
-                              record.sourceDescriptor['providerId']?.toString(),
-                            ) ==
-                            downloadProviderScopeV2(providerId)),
+                      : true),
             )
             .toList(growable: false)
           ..sort((a, b) => b.updatedAtMillis.compareTo(a.updatedAtMillis));
 
     for (final record in matching) {
+      if (accountAtStart != AnimeRiftLocalAccountScope.accountHash) return null;
       // completedAtMillis is a logical claim, not sufficient byte evidence.
       // Re-check the final artifact through the same V2 integrity authority
       // before returning it to playback.
@@ -96,6 +113,8 @@ class DownloadedFiles extends _$DownloadedFiles {
         file,
         expectedBytes: record.expectedBytes,
       )).isValid) {
+        if (accountAtStart != AnimeRiftLocalAccountScope.accountHash)
+          return null;
         resolved = file;
         break;
       }

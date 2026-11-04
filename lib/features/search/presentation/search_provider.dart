@@ -7,7 +7,6 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:dio/dio.dart';
 
 import '../../../../core/account/account_providers.dart';
-import '../../../../core/account/animewitcher_character_models.dart';
 import '../../../../core/extensions/extension_manager.dart';
 import '../../../../core/extensions/base_provider.dart';
 import '../../../../core/extensions/providers/animewitcher_native_provider.dart';
@@ -23,9 +22,14 @@ enum SearchFilter { content, live }
 /// provider and of extension registration order.
 AnimeWitcherProvider? searchCatalogProvider(
   SearchDomain domain,
-  Iterable<AnimeWitcherProvider> providers,
-) {
+  Iterable<AnimeWitcherProvider> providers, {
+  AnimeWitcherProvider? activeAnimeProvider,
+}) {
   if (domain == SearchDomain.anime || domain == SearchDomain.all) return null;
+  if (domain == SearchDomain.characters &&
+      activeAnimeProvider?.supportsCharacters == true) {
+    return activeAnimeProvider;
+  }
   if (domain == SearchDomain.manga) {
     for (final provider in providers) {
       if (provider is AnimeWitcherNativeProvider) return provider;
@@ -100,7 +104,7 @@ class ProviderSearchResult {
 
 class SearchAggregateState {
   final List<ProviderSearchResult> results;
-  final List<AnimeWitcherCharacterHit> characters;
+  final List<Actor> characters;
   final bool isLoading;
   final bool isLoadingMore;
   final bool hasMore;
@@ -119,7 +123,7 @@ class SearchAggregateState {
 
   SearchAggregateState copyWith({
     List<ProviderSearchResult>? results,
-    List<AnimeWitcherCharacterHit>? characters,
+    List<Actor>? characters,
     bool? isLoading,
     bool? isLoadingMore,
     bool? hasMore,
@@ -522,10 +526,17 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
       _domain = next;
       _reload(clearExisting: true);
     });
-    ref.listen(accountDataRevisionProvider, (_, _) => _reload());
+    // An account switch must immediately hide the previous account's items.
+    // A failed replacement request must never reveal its cached results.
+    ref.listen(
+      accountDataRevisionProvider,
+      (_, _) => _reload(clearExisting: true),
+    );
     ref.listen(activeProviderProvider, (previous, next) {
       if (previous?.packageName == next?.packageName) return;
-      if (_domain == SearchDomain.anime || _domain == SearchDomain.all) {
+      if (_domain == SearchDomain.anime ||
+          _domain == SearchDomain.characters ||
+          _domain == SearchDomain.all) {
         _reload(clearExisting: true);
       }
     });
@@ -544,6 +555,7 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     return searchCatalogProvider(
       domain ?? _domain,
       ref.read(extensionManagerProvider.notifier).getAllProviders(),
+      activeAnimeProvider: ref.read(activeProviderProvider),
     );
   }
 
@@ -591,28 +603,11 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     };
   }
 
-  Future<AnimeWitcherCharacterPage> _loadCharacterPage(
+  Future<ProviderCharacterPage> _loadCharacterPage(
     AnimeWitcherProvider provider,
     int page,
-  ) async {
-    if (provider is! AnimeWitcherNativeProvider) {
-      return const AnimeWitcherCharacterPage(
-        items: <AnimeWitcherCharacterHit>[],
-        page: 0,
-        hasMore: false,
-      );
-    }
-    if (page == 0) {
-      return provider.searchCharacters(_query);
-    }
-    if (_query.trim().isNotEmpty) {
-      return AnimeWitcherCharacterPage(
-        items: const <AnimeWitcherCharacterHit>[],
-        page: page,
-        hasMore: false,
-      );
-    }
-    return provider.getCharactersPage(page: page);
+  ) {
+    return provider.searchCharacterPage(_query.trim(), page: page);
   }
 
   /// The first page of each category at once, for [SearchDomain.all]: one
@@ -644,11 +639,11 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
 
     final charactersProvider = _provider(SearchDomain.characters);
     final characterPage = charactersProvider == null
-        ? Future<AnimeWitcherCharacterPage?>.value(null)
+        ? Future<ProviderCharacterPage?>.value(null)
         : _loadCharacterPage(
             charactersProvider,
             0,
-          ).then<AnimeWitcherCharacterPage?>(
+          ).then<ProviderCharacterPage?>(
             (page) => page,
             onError: (Object e) {
               debugPrint('[SEARCH ALL] characters failed: $e');
@@ -671,7 +666,7 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
               results: pages[i]!.items,
             ),
       ],
-      characters: characters?.items ?? const <AnimeWitcherCharacterHit>[],
+      characters: characters?.items ?? const <Actor>[],
       isLoading: false,
     );
   }
@@ -768,12 +763,13 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
         final page = await _loadCharacterPage(provider, state.nextOffset);
         if (generation != _generation || requestDomain != _domain) return;
         final seen = <String>{};
-        final merged = <AnimeWitcherCharacterHit>[];
-        for (final item in <AnimeWitcherCharacterHit>[
-          ...state.characters,
-          ...page.items,
-        ]) {
-          if (seen.add(item.id)) merged.add(item);
+        final merged = <Actor>[];
+        for (final item in <Actor>[...state.characters, ...page.items]) {
+          final id = item.id?.trim() ?? '';
+          final key = id.isNotEmpty
+              ? id
+              : '${item.name.trim().toLowerCase()}|${item.image ?? ''}';
+          if (seen.add(key)) merged.add(item);
         }
         state = SearchAggregateState(
           characters: merged,
@@ -872,7 +868,7 @@ class SearchSuggestionState {
   /// Searching every category: what the others found.
   final List<MultimediaItem> animation;
   final List<MultimediaItem> manga;
-  final List<AnimeWitcherCharacterHit> characters;
+  final List<Actor> characters;
   final bool isLoading;
   final String query;
 
@@ -897,7 +893,7 @@ class SearchSuggestionState {
     List<MultimediaItem>? items,
     List<MultimediaItem>? animation,
     List<MultimediaItem>? manga,
-    List<AnimeWitcherCharacterHit>? characters,
+    List<Actor>? characters,
     bool? isLoading,
     String? query,
   }) {
@@ -920,10 +916,19 @@ class SearchSuggestionController extends _$SearchSuggestionController {
 
   @override
   SearchSuggestionState build() {
+    ref.listen(accountDataRevisionProvider, (_, _) {
+      // Invalidate the in-flight generation and purge the previous account's
+      // instant suggestions before requesting the current account's catalog.
+      _restartForCatalogChange();
+    });
     ref.listen(activeProviderProvider, (previous, next) {
       if (previous?.packageName == next?.packageName) return;
       final domain = ref.read(searchDomainProvider);
-      if (domain != SearchDomain.anime && domain != SearchDomain.all) return;
+      if (domain != SearchDomain.anime &&
+          domain != SearchDomain.characters &&
+          domain != SearchDomain.all) {
+        return;
+      }
       _restartForCatalogChange();
     });
     ref.listen(searchDomainProvider, (_, _) => _restartForCatalogChange());
@@ -977,6 +982,7 @@ class SearchSuggestionController extends _$SearchSuggestionController {
         final charactersProvider = searchCatalogProvider(
           SearchDomain.characters,
           providers,
+          activeAnimeProvider: ref.read(activeProviderProvider),
         );
         final animeProvider = ref.read(activeProviderProvider);
         const none = ProviderSearchFilters();
@@ -1014,12 +1020,12 @@ class SearchSuggestionController extends _$SearchSuggestionController {
             : Future.value(const <MultimediaItem>[]);
         final charactersFuture =
             (everything || domain == SearchDomain.characters) &&
-                charactersProvider is AnimeWitcherNativeProvider
-            ? charactersProvider
-                  .searchCharacters(query)
+                charactersProvider?.supportsCharacters == true
+            ? charactersProvider!
+                  .searchCharacterPage(query)
                   .then((page) => page.items)
-                  .catchError((Object _) => const <AnimeWitcherCharacterHit>[])
-            : Future.value(const <AnimeWitcherCharacterHit>[]);
+                  .catchError((Object _) => const <Actor>[])
+            : Future.value(const <Actor>[]);
         final animeFuture =
             animeProvider != null &&
                 (everything || domain == SearchDomain.anime)

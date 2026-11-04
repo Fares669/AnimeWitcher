@@ -1,9 +1,26 @@
 import '../../domain/entity/multimedia_item.dart';
+import '../../storage/anime_rift_account_scope.dart';
 import '../../utils/anime_rift_identity.dart';
 import '../../utils/anime_rift_stream_identity.dart';
 
 bool isAnimeRiftDownloadProviderV2(String? providerId) =>
     providerId?.trim() == 'com.animerift.provider';
+
+/// Null denotes the original guest partition, including pre-account records.
+/// The value is a one-way account hash; raw account IDs and tokens never enter
+/// the download store.
+String? animeRiftDownloadAccountHashV2(Map<String, Object?> descriptor) {
+  final raw = descriptor['accountHash'];
+  return raw is String && RegExp(r'^[0-9a-f]{64}$').hasMatch(raw) ? raw : null;
+}
+
+bool downloadBelongsToCurrentRiftAccountV2(Map<String, Object?> descriptor) {
+  if (!isAnimeRiftDownloadProviderV2(descriptor['providerId']?.toString())) {
+    return true;
+  }
+  return animeRiftDownloadAccountHashV2(descriptor) ==
+      AnimeRiftLocalAccountScope.accountHash;
+}
 
 /// Only provider-owned identities can be persisted for renewal. A CDN URL is
 /// transport state, even if its query is removed. No API format is inferred.
@@ -104,6 +121,8 @@ Map<String, Object?> safeDownloadSourceDescriptorV2(Map<String, Object?> raw) {
   );
   return <String, Object?>{
     'providerId': 'com.animerift.provider',
+    if (animeRiftDownloadAccountHashV2(raw) case final String accountHash)
+      'accountHash': accountHash,
     if (source != null && source.host != null && source.download)
       'refreshUrl': source.sourceUrl,
     if (tracking != null) 'trackingUrl': tracking,

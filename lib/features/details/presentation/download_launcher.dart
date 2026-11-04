@@ -25,6 +25,7 @@ import '../../../core/services/download_v2/download_v2_models.dart';
 import '../../../core/services/download_v2/download_v2_provider.dart';
 import '../../../core/storage/provider_local_library.dart'
     show animeRiftProviderId;
+import '../../../core/storage/anime_rift_account_scope.dart';
 import '../../../core/storage/settings_repository.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../../shared/widgets/loading_dialog.dart';
@@ -87,6 +88,7 @@ Set<String> existingBatchEpisodeKeysForProviderV2(
   return <String>{
     for (final record in records)
       if (record.mediaKind == DownloadMediaKind.videoEpisode &&
+          downloadBelongsToCurrentRiftAccountV2(record.sourceDescriptor) &&
           _downloadMediaIdV2(record.mediaId, providerId) ==
               _downloadMediaIdV2(mediaId, providerId) &&
           _batchRecordBelongsToProvider(record, providerId, providerScope) &&
@@ -135,6 +137,7 @@ LogicalDownloadRecordV2? existingRiftDownloadForItemV2(
         isAnimeRiftDownloadProviderV2(
           record.sourceDescriptor['providerId']?.toString(),
         ) &&
+        downloadBelongsToCurrentRiftAccountV2(record.sourceDescriptor) &&
         mediaIds.contains(
           _downloadMediaIdV2(record.mediaId, animeRiftProviderId),
         ) &&
@@ -234,6 +237,10 @@ class DownloadLauncher {
       notifications.showError('لا يوجد مزود تشغيل نشط');
       return;
     }
+    final accountAtSelection =
+        isAnimeRiftDownloadProviderV2(provider.packageName)
+        ? AnimeRiftLocalAccountScope.accountHash
+        : null;
 
     final messenger = ScaffoldMessenger.maybeOf(context);
     final sourceProgress = ValueNotifier<int>(0);
@@ -416,6 +423,10 @@ class DownloadLauncher {
             providerId: provider.packageName,
             episode: episode,
             forceEpisodeFilename: true,
+            expectedRiftAccountHash: accountAtSelection,
+            enforceRiftAccount: isAnimeRiftDownloadProviderV2(
+              provider.packageName,
+            ),
           );
           queued++;
         } catch (error) {
@@ -478,6 +489,10 @@ class DownloadLauncher {
           .showError(l10n.errorPrefix('لا يوجد مزود تشغيل نشط'));
       return;
     }
+    final accountAtSelection =
+        isAnimeRiftDownloadProviderV2(provider.packageName)
+        ? AnimeRiftLocalAccountScope.accountHash
+        : null;
 
     bool isCanceled = false;
     bool loadingDialogShown = false;
@@ -543,6 +558,8 @@ class DownloadLauncher {
         resolveUrl,
         providerId: provider.packageName,
         episode: resolvedEpisode,
+        expectedRiftAccountHash: accountAtSelection,
+        enforceRiftAccount: isAnimeRiftDownloadProviderV2(provider.packageName),
       );
     } catch (e) {
       if (!context.mounted) return;
@@ -574,6 +591,8 @@ class DownloadLauncher {
     String resolveUrl, {
     required String providerId,
     Episode? episode,
+    String? expectedRiftAccountHash,
+    bool enforceRiftAccount = false,
   }) async {
     final l10n = AppLocalizations.of(context)!;
     final navContext = rootNavigatorKey.currentContext ?? context;
@@ -724,6 +743,8 @@ class DownloadLauncher {
                       metadata: metadata,
                       providerId: providerId,
                       episode: episode,
+                      expectedRiftAccountHash: expectedRiftAccountHash,
+                      enforceRiftAccount: enforceRiftAccount,
                     );
                   } catch (error) {
                     if (!finalContext.mounted) return;
@@ -753,7 +774,13 @@ class DownloadLauncher {
     required String providerId,
     Episode? episode,
     bool forceEpisodeFilename = false,
+    String? expectedRiftAccountHash,
+    bool enforceRiftAccount = false,
   }) async {
+    if (enforceRiftAccount &&
+        expectedRiftAccountHash != AnimeRiftLocalAccountScope.accountHash) {
+      throw StateError('Anime Rift account changed during source selection');
+    }
     final episodeData =
         episode ?? item.episodes?.firstWhereOrNull((e) => e.url == resolveUrl);
     unawaited(cacheSkipSegmentsForDownloadV2(_ref, item, episodeData));
@@ -773,6 +800,9 @@ class DownloadLauncher {
       forceEpisodeFilename: forceEpisodeFilename,
     );
 
+    final accountAtStart = isAnimeRiftDownloadProviderV2(providerId)
+        ? AnimeRiftLocalAccountScope.accountHash
+        : null;
     final animeId = downloadMediaIdForItemV2(item, providerId);
     final episodeKey = _downloadUnitKeyV2(resolveUrl, providerId);
     if (isAnimeRiftDownloadProviderV2(providerId) &&
@@ -819,12 +849,17 @@ class DownloadLauncher {
       providerId: providerId,
       logicalId: logicalId,
     );
+    if (isAnimeRiftDownloadProviderV2(providerId) &&
+        accountAtStart != AnimeRiftLocalAccountScope.accountHash) {
+      throw StateError('Anime Rift account changed during download setup');
+    }
     final descriptor = DownloadUrlRefreshDescriptor(
       trackingUrl: episodeKey,
       providerId: providerId,
       source: stream.source,
       quality: stream.quality,
       refreshUrl: stream.refreshUrl,
+      accountHash: accountAtStart,
       updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
     );
     final preference = _ref
@@ -860,6 +895,10 @@ class DownloadLauncher {
 
     final downloadManager = _ref.read(downloadManagerV2Provider);
     try {
+      if (isAnimeRiftDownloadProviderV2(providerId) &&
+          accountAtStart != AnimeRiftLocalAccountScope.accountHash) {
+        throw StateError('Anime Rift account changed during download setup');
+      }
       await downloadManager.start(
         DownloadStartRequestV2(
           logicalId: logicalId,

@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:animewitcher/core/account/animewitcher_character_models.dart';
+import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
@@ -29,8 +29,8 @@ class _DeferredSearchProvider extends AnimeWitcherNativeProvider {
   final Completer<ProviderMediaPage> anime = Completer<ProviderMediaPage>();
   final Completer<ProviderMediaPage> manga = Completer<ProviderMediaPage>();
   final Completer<ProviderMediaPage> animation = Completer<ProviderMediaPage>();
-  final Completer<AnimeWitcherCharacterPage> characters =
-      Completer<AnimeWitcherCharacterPage>();
+  final Completer<ProviderCharacterPage> characters =
+      Completer<ProviderCharacterPage>();
   int animeCalls = 0;
   int mangaCalls = 0;
   int animationCalls = 0;
@@ -90,9 +90,93 @@ class _DeferredSearchProvider extends AnimeWitcherNativeProvider {
   }
 
   @override
-  Future<AnimeWitcherCharacterPage> searchCharacters(String query) {
+  Future<ProviderCharacterPage> searchCharacterPage(
+    String query, {
+    int page = 0,
+  }) {
     characterCalls++;
     return characters.future;
+  }
+}
+
+final class _RiftCharacterProvider extends AnimeRiftProvider {
+  int characterCalls = 0;
+
+  @override
+  Future<ProviderCharacterPage> searchCharacterPage(
+    String query, {
+    int page = 0,
+  }) async {
+    characterCalls++;
+    return ProviderCharacterPage(
+      items: <Actor>[
+        Actor(
+          id: 'rift-c1',
+          name: 'Rift Character',
+          image: 'https://images.example/rift-c1.jpg',
+        ),
+      ],
+      page: page,
+      hasMore: false,
+    );
+  }
+}
+
+final class _DeferredRiftCharacterProvider extends AnimeRiftProvider {
+  final Completer<ProviderCharacterPage> characters =
+      Completer<ProviderCharacterPage>();
+  int characterCalls = 0;
+
+  @override
+  Future<ProviderCharacterPage> searchCharacterPage(
+    String query, {
+    int page = 0,
+  }) {
+    characterCalls++;
+    return characters.future;
+  }
+}
+
+final class _AccountSwitchSearchProvider extends AnimeWitcherNativeProvider {
+  _AccountSwitchSearchProvider()
+    : super(Dio(), SettingsRepository(_TestStorageService()));
+
+  int pageCalls = 0;
+  final refreshedPage = Completer<ProviderMediaPage>();
+  final refreshedSuggestions = Completer<List<MultimediaItem>>();
+  int suggestionCalls = 0;
+
+  @override
+  Future<ProviderMediaPage> searchPage(
+    String query,
+    ProviderSearchFilters filters, {
+    int offset = 0,
+    int limit = 30,
+    CancelToken? cancelToken,
+  }) {
+    if (++pageCalls == 1) {
+      return Future.value(
+        ProviderMediaPage(
+          items: [_item('previous-account', MultimediaContentType.anime)],
+          nextOffset: 0,
+          hasMore: false,
+        ),
+      );
+    }
+    return refreshedPage.future;
+  }
+
+  @override
+  Future<List<MultimediaItem>> search(
+    String query, {
+    CancelToken? cancelToken,
+  }) {
+    if (++suggestionCalls == 1) {
+      return Future.value([
+        _item('previous-account', MultimediaContentType.anime),
+      ]);
+    }
+    return refreshedSuggestions.future;
   }
 }
 
@@ -144,6 +228,85 @@ Future<void> _flush() async {
 }
 
 void main() {
+  test(
+    'account revision removes old paged results even when refresh fails',
+    () async {
+      final provider = _AccountSwitchSearchProvider();
+      final container = ProviderContainer(
+        overrides: [
+          extensionManagerProvider.overrideWith(
+            () => _FakeExtensionManager(provider),
+          ),
+          activeProviderProvider.overrideWith(
+            () => _TestActiveProvider(provider),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.read(searchPagedResultsProvider);
+      await _flush();
+      expect(container.read(searchPagedResultsProvider).results, isNotEmpty);
+
+      container.read(accountDataRevisionProvider.notifier).bump();
+      expect(container.read(searchPagedResultsProvider).results, isEmpty);
+      await _flush();
+      expect(provider.pageCalls, 2);
+      provider.refreshedPage.completeError(
+        StateError('new account unavailable'),
+      );
+      await _flush();
+      expect(container.read(searchPagedResultsProvider).results, isEmpty);
+    },
+  );
+
+  test('account revision purges instant results and refetches query', () async {
+    final provider = _AccountSwitchSearchProvider();
+    final container = ProviderContainer(
+      overrides: [
+        extensionManagerProvider.overrideWith(
+          () => _FakeExtensionManager(provider),
+        ),
+        activeProviderProvider.overrideWith(
+          () => _TestActiveProvider(provider),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+    final subscription = container.listen(
+      searchSuggestionControllerProvider,
+      (_, _) {},
+    );
+    addTearDown(subscription.close);
+    container
+        .read(searchSuggestionControllerProvider.notifier)
+        .onQueryChanged('hero');
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    await _flush();
+    expect(
+      container.read(searchSuggestionControllerProvider).items,
+      isNotEmpty,
+    );
+
+    container.read(accountDataRevisionProvider.notifier).bump();
+    expect(container.read(searchSuggestionControllerProvider).items, isEmpty);
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    expect(provider.suggestionCalls, 2);
+    provider.refreshedSuggestions.completeError(StateError('account changed'));
+    await _flush();
+    expect(container.read(searchSuggestionControllerProvider).items, isEmpty);
+  });
+
+  test('characters catalog follows the active capable anime provider', () {
+    final rift = AnimeRiftProvider();
+
+    expect(
+      searchCatalogProvider(SearchDomain.characters, <AnimeWitcherProvider>[
+        rift,
+      ], activeAnimeProvider: rift),
+      same(rift),
+    );
+  });
+
   test(
     'Rift tags do not survive an anime provider or manga domain switch',
     () async {
@@ -452,7 +615,7 @@ void main() {
       ),
     );
     catalog.characters.complete(
-      const AnimeWitcherCharacterPage(items: [], page: 0, hasMore: false),
+      const ProviderCharacterPage(items: <Actor>[], page: 0, hasMore: false),
     );
     await _flush();
     final result = container.read(searchSuggestionControllerProvider);
@@ -533,13 +696,6 @@ void main() {
           hasMore: false,
         ),
       );
-      catalog.characters.complete(
-        const AnimeWitcherCharacterPage(
-          items: [AnimeWitcherCharacterHit(id: 'c1', name: 'Character One')],
-          page: 0,
-          hasMore: false,
-        ),
-      );
       await _flush();
       final state = container.read(searchPagedResultsProvider);
       expect(state.isLoading, isFalse);
@@ -554,7 +710,8 @@ void main() {
             .map((item) => item.title),
         ['Animation hit', 'Manga hit'],
       );
-      expect(state.characters.single.name, 'Character One');
+      expect(state.characters, isEmpty);
+      expect(catalog.characterCalls, 0);
     },
   );
 
@@ -715,6 +872,74 @@ void main() {
     },
   );
 
+  test('characters domain queries the active Rift provider', () async {
+    final rift = _RiftCharacterProvider();
+    final container = ProviderContainer(
+      overrides: [
+        extensionManagerProvider.overrideWith(
+          () => _FakeExtensionManager(rift),
+        ),
+        activeProviderProvider.overrideWith(() => _TestActiveProvider(rift)),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    container.read(searchDomainProvider.notifier).set(SearchDomain.characters);
+    container.read(searchPagedResultsProvider);
+    await _flush();
+
+    expect(rift.characterCalls, 1);
+  });
+
+  test('late Rift characters cannot leak after switching providers', () async {
+    final rift = _DeferredRiftCharacterProvider();
+    final native = _NamedDeferredProvider('native-after-rift');
+    final container = ProviderContainer(
+      overrides: [
+        extensionManagerProvider.overrideWith(
+          () => _TwoProviderManager(rift, native),
+        ),
+        activeProviderProvider.overrideWith(() => _TestActiveProvider(rift)),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    container.read(searchDomainProvider.notifier).set(SearchDomain.characters);
+    container.read(searchPagedResultsProvider);
+    await _flush();
+    expect(rift.characterCalls, 1);
+
+    await container.read(activeProviderProvider.notifier).set(native);
+    await _flush();
+    expect(native.characterCalls, 1);
+
+    native.characters.complete(
+      ProviderCharacterPage(
+        items: <Actor>[Actor(id: 'native-c1', name: 'Native Character')],
+        page: 0,
+        hasMore: false,
+      ),
+    );
+    await _flush();
+    expect(
+      container.read(searchPagedResultsProvider).characters.single.name,
+      'Native Character',
+    );
+
+    rift.characters.complete(
+      ProviderCharacterPage(
+        items: <Actor>[Actor(id: 'rift-c1', name: 'Late Rift Character')],
+        page: 0,
+        hasMore: false,
+      ),
+    );
+    await _flush();
+    expect(
+      container.read(searchPagedResultsProvider).characters.single.name,
+      'Native Character',
+    );
+  });
+
   test('characters stay in separate character result state', () async {
     final fake = _DeferredSearchProvider();
     final container = ProviderContainer(
@@ -733,12 +958,12 @@ void main() {
 
     expect(fake.characterCalls, 1);
     fake.characters.complete(
-      const AnimeWitcherCharacterPage(
-        items: <AnimeWitcherCharacterHit>[
-          AnimeWitcherCharacterHit(
+      ProviderCharacterPage(
+        items: <Actor>[
+          Actor(
             id: 'c1',
             name: 'Character One',
-            imageUrl: 'https://img.example/c1.webp',
+            image: 'https://img.example/c1.webp',
           ),
         ],
         page: 0,
@@ -802,10 +1027,8 @@ void main() {
       ),
     );
     fake.characters.complete(
-      const AnimeWitcherCharacterPage(
-        items: <AnimeWitcherCharacterHit>[
-          AnimeWitcherCharacterHit(id: 'c1', name: 'Character One'),
-        ],
+      ProviderCharacterPage(
+        items: <Actor>[Actor(id: 'c1', name: 'Character One')],
         page: 0,
         hasMore: false,
       ),

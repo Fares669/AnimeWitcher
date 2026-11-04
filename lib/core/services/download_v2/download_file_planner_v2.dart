@@ -7,9 +7,11 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../domain/entity/manga.dart';
 import '../../domain/entity/multimedia_item.dart';
+import '../../storage/anime_rift_account_scope.dart';
 import '../../utils/episode_label.dart';
 import '../download_parallel.dart';
 import 'download_v2_identity.dart';
+import 'anime_rift_download_metadata_v2.dart';
 import 'manga_chapter_manifest_v2.dart';
 
 final class DownloadSourceMetadataV2 {
@@ -319,8 +321,12 @@ Future<String> downloadDestinationPathV2(
   }
   final title = _downloadFolderName(item.title, fallback: 'Unknown');
   final scope = downloadProviderScopeV2(providerId);
+  final accountHash = isAnimeRiftDownloadProviderV2(providerId)
+      ? AnimeRiftLocalAccountScope.accountHash
+      : null;
   final directory = await _downloadMediaDirectoryV2('anime', <String>[
     if (scope != null) ...['.providers', scope],
+    if (accountHash != null) ...['.accounts', accountHash],
     title,
   ]);
   final destinationFilename = logicalId == null

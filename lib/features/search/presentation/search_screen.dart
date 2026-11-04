@@ -1039,9 +1039,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
   Widget _characterGrid(
     BuildContext context,
-    List<AnimeWitcherCharacterHit> characters, {
+    List<Actor> characters, {
     required bool loadingMore,
   }) {
+    final riftCharacters =
+        ref.watch(activeProviderProvider) is AnimeRiftProvider;
     return SliverPadding(
       padding: EdgeInsets.fromLTRB(
         MultimediaCardLayout.catalogGridHorizontalPadding(context),
@@ -1074,20 +1076,36 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               return const AnimePosterShimmer();
             }
             final character = characters[index];
+            final characterId = character.id?.trim() ?? '';
             return CharacterPosterCard(
-              key: ValueKey('search-character-${character.id}'),
-              character: character,
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => CharacterDetailsScreen(
-                      characterId: character.id,
-                      initialName: character.name,
-                      initialImageUrl: character.imageUrl,
-                    ),
-                  ),
-                );
-              },
+              key: ValueKey('search-character-$characterId'),
+              character: AnimeWitcherCharacterHit(
+                id: characterId,
+                name: character.name,
+                imageUrl: character.image,
+                likes: character.likes,
+              ),
+              onTap: riftCharacters
+                  ? () => ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'تفاصيل شخصيات Anime Rift غير متاحة حاليًا',
+                        ),
+                      ),
+                    )
+                  : characterId.isEmpty
+                  ? () {}
+                  : () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => CharacterDetailsScreen(
+                            characterId: characterId,
+                            initialName: character.name,
+                            initialImageUrl: character.image,
+                          ),
+                        ),
+                      );
+                    },
             );
           },
           childCount:
@@ -1145,20 +1163,24 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     // way Harbor answers a search as it is typed.
     // Searching manga alone, its results are manga, not anime series.
     final mangaOnly = ref.read(searchDomainProvider) == SearchDomain.manga;
+    final riftCharacters =
+        ref.watch(activeProviderProvider) is AnimeRiftProvider;
     return SearchInstantResults(
       items: mangaOnly ? const <MultimediaItem>[] : items,
       animation: suggestionState.animation,
       manga: mangaOnly ? items : suggestionState.manga,
       characters: suggestionState.characters,
-      onOpenCharacter: (character) => Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => CharacterDetailsScreen(
-            characterId: character.id,
-            initialName: character.name,
-            initialImageUrl: character.imageUrl,
-          ),
-        ),
-      ),
+      onOpenCharacter: riftCharacters
+          ? null
+          : (character) => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => CharacterDetailsScreen(
+                  characterId: character.id?.trim() ?? '',
+                  initialName: character.name,
+                  initialImageUrl: character.image,
+                ),
+              ),
+            ),
       loading: suggestionState.isLoading,
       firstFocusNode: _firstSuggestionFocusNode,
       onOpen: (item) => item.contentType == MultimediaContentType.manga

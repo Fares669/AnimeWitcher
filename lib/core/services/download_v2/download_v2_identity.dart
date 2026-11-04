@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 
 import '../../utils/anime_rift_identity.dart';
+import '../../storage/anime_rift_account_scope.dart';
 import 'anime_rift_download_metadata_v2.dart';
 
 /// Stable application-owned identity for one logical episode download.
@@ -59,18 +60,35 @@ DownloadLogicalId logicalDownloadIdFor({
   required String episodeKey,
   required String variantKey,
   String? providerId,
+  String? accountHash,
+  bool useActiveAccount = true,
 }) {
   final scope = downloadProviderScopeV2(providerId);
   if (isAnimeRiftDownloadProviderV2(providerId)) {
     animeId = canonicalAnimeRiftStorageUrl(animeId);
     episodeKey = canonicalAnimeRiftPlaybackStorageUrl(episodeKey);
   }
+  final riftAccount = isAnimeRiftDownloadProviderV2(providerId)
+      ? (useActiveAccount
+            ? AnimeRiftLocalAccountScope.accountHash
+            : accountHash)
+      : null;
   final legacyCanonical = <String>[
     animeId.trim(),
     episodeKey.trim(),
     variantKey.trim(),
   ].join('\u001f');
-  final canonical = scope == null
+  final canonical = riftAccount != null
+      ? jsonEncode([
+          'provider',
+          scope,
+          'account',
+          riftAccount,
+          animeId.trim(),
+          episodeKey.trim(),
+          variantKey.trim(),
+        ])
+      : scope == null
       ? legacyCanonical
       : jsonEncode([
           'provider',

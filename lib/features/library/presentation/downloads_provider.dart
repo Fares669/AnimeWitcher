@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/entity/manga.dart';
+import '../../../core/account/account_providers.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/services/download_concurrency.dart';
 import '../../../core/services/download_v2/download_artwork_store_v2.dart';
@@ -29,6 +30,7 @@ class DownloadItem {
   final MangaChapter? chapter;
   final DownloadMediaKind mediaKind;
   final String? logicalId;
+  final String? accountHash;
   final bool artworkMetadataVerified;
   final int timestamp;
   final String trackingUrl;
@@ -49,6 +51,7 @@ class DownloadItem {
     this.chapter,
     this.mediaKind = DownloadMediaKind.videoEpisode,
     this.logicalId,
+    this.accountHash,
     this.artworkMetadataVerified = false,
     required this.timestamp,
     String? trackingUrl,
@@ -71,6 +74,11 @@ bool sameDownloadProvider(MultimediaItem a, MultimediaItem b) =>
     downloadProviderScopeV2(a.provider) == downloadProviderScopeV2(b.provider);
 
 bool downloadsPointAtSameTarget(DownloadItem a, DownloadItem b) {
+  if (isAnimeRiftDownloadProviderV2(a.item.provider) &&
+      isAnimeRiftDownloadProviderV2(b.item.provider) &&
+      a.accountHash != b.accountHash) {
+    return false;
+  }
   if (identical(a, b) || a.id == b.id) return true;
   if (a.mediaKind == DownloadMediaKind.videoEpisode &&
       b.mediaKind == DownloadMediaKind.videoEpisode &&
@@ -354,7 +362,9 @@ class DownloadsNotifier extends _$DownloadsNotifier {
 
   @override
   Future<List<DownloadItem>> build() async {
+    ref.watch(accountDataRevisionProvider);
     final manager = ref.read(downloadManagerV2Provider);
+    await manager.ensureRiftAccountReady();
     final store = ref.read(logicalDownloadStoreV2Provider);
     final storage = ref.read(storageServiceProvider);
     // Completed rows are local. Transport recovery may wait for the network.
@@ -472,6 +482,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
 
     final items = <DownloadItem>[];
     for (final record in _records) {
+      if (!manager.canAccessSourceDescriptor(record.sourceDescriptor)) continue;
       final observed = manager.snapshotFor(record.logicalId);
       final snapshot = observed?.taskId == record.taskId ? observed : null;
       // A timed-out cancellation still owns its exact native writer. Keep its
@@ -510,6 +521,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
         chapter: chapter,
         mediaKind: record.mediaKind,
         logicalId: record.logicalId.value,
+        accountHash: animeRiftDownloadAccountHashV2(record.sourceDescriptor),
         artworkMetadataVerified: downloadArtworkMetadataMatchesRecordV2(
           metadata,
           record,
@@ -571,6 +583,16 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       return true;
     }
     final current = List<DownloadItem>.from(state.value ?? items);
+    if (items.any(
+      (requested) => !current.any(
+        (visible) =>
+            visible.id == requested.id &&
+            visible.logicalId == requested.logicalId &&
+            visible.accountHash == requested.accountHash,
+      ),
+    )) {
+      return false;
+    }
     final toRemove = <String, DownloadItem>{};
 
     for (final requested in items) {
@@ -607,7 +629,13 @@ class DownloadsNotifier extends _$DownloadsNotifier {
             final currentRecord = await ref
                 .read(logicalDownloadStoreV2Provider)
                 .get(DownloadLogicalId(logical));
-            if (currentRecord != null && currentRecord.taskId != item.id) {
+            if (currentRecord == null ||
+                !manager.canAccessSourceDescriptor(
+                  currentRecord.sourceDescriptor,
+                )) {
+              return;
+            }
+            if (currentRecord.taskId != item.id) {
               droppedIds.add(item.id);
               return;
             }

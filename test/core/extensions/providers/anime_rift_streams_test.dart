@@ -20,6 +20,10 @@ class StreamFixture extends AnimeRiftApiClient {
   bool requireDownloadAuth = false;
   String? authRequiredHost;
   bool denyPlayback = false;
+  bool? offlineModeEnabled = true;
+  bool duplicateSourceLabels = false;
+  String host2Name = 'CR2';
+  String videoToken = 'ephemeral';
   String? unavailableHost;
   @override
   Future<Map<String, dynamic>> request(
@@ -47,6 +51,14 @@ class StreamFixture extends AnimeRiftApiClient {
             'sub_title': 'ar_sub',
             'qualities': ['720P', '1080P'],
           },
+          if (duplicateSourceLabels)
+            {
+              '_id': 'host2',
+              'server_name': host2Name,
+              'provider': 'cr2',
+              'sub_title': 'ar_sub',
+              'qualities': ['720P', '1080P'],
+            },
           {
             '_id': 'watchonly',
             'server_name': 'BBZ',
@@ -61,7 +73,8 @@ class StreamFixture extends AnimeRiftApiClient {
             'qualities': ['1080P'],
           },
         ],
-        'offline_mode_enabled': true,
+        if (offlineModeEnabled != null)
+          'offline_mode_enabled': offlineModeEnabled,
         'configs': [
           {
             'server_key': 'cr2',
@@ -91,7 +104,8 @@ class StreamFixture extends AnimeRiftApiClient {
     if (path.endsWith('/direct_link'))
       return {
         'url_response': true,
-        'videoUrl': 'https://cdn.example/video.mp4?token=ephemeral',
+        'videoUrl':
+            'https://cdn.example/${body?['id'] == 'host2' ? 'host2' : 'video'}.mp4?token=$videoToken',
         'tracks': [
           {
             'file': 'https://cdn.example/ar.vtt',
@@ -165,6 +179,151 @@ void main() {
           .single;
       expect(availability.body!['is_download'], isTrue);
       expect(availability.body!['event_name'], 'download_episode_unlocked');
+    },
+  );
+  test(
+    'V2 renewal pins the exact host even when labels collide or change',
+    () async {
+      final original = StreamFixture()..duplicateSourceLabels = true;
+      final originalProvider = AnimeRiftProvider(client: original);
+      final selected = (await originalProvider.loadDownloadStreamSources(
+        episodeUrl,
+      )).firstWhere((source) => source.url.contains('/source/host2/'));
+      final descriptor = DownloadUrlRefreshDescriptor.fromJson(
+        DownloadUrlRefreshDescriptor(
+          trackingUrl: episodeUrl,
+          providerId: originalProvider.packageName,
+          source: selected.source,
+          quality: selected.quality,
+          refreshUrl: selected.url,
+          updatedAtMillis: 1,
+        ).toJson(),
+      )!;
+      final restarted = StreamFixture()
+        ..duplicateSourceLabels = true
+        ..host2Name = 'Renamed server'
+        ..videoToken = 'renewed';
+      final restartedProvider = AnimeRiftProvider(client: restarted);
+      final refresher = DownloadUrlRefresher(
+        providerForId: (id) =>
+            id == restartedProvider.packageName ? restartedProvider : null,
+      );
+
+      final renewed = await refresher.refresh(
+        descriptor,
+        currentUrl: 'https://cdn.example/host2.mp4?token=expired',
+      );
+      expect(renewed?.url, 'https://cdn.example/host2.mp4?token=renewed');
+      final direct = restarted.calls.singleWhere(
+        (call) => call.path.endsWith('/direct_link'),
+      );
+      expect(direct.body?['id'], 'host2');
+      expect(
+        restarted.calls
+            .singleWhere((call) => call.path.endsWith('/can_play'))
+            .body?['is_download'],
+        isTrue,
+      );
+    },
+  );
+  test(
+    'V2 renewal never downgrades to playback after download access expires',
+    () async {
+      final api = StreamFixture();
+      final provider = AnimeRiftProvider(client: api);
+      final selected = (await provider.loadDownloadStreamSources(episodeUrl))
+          .first;
+      final descriptor = DownloadUrlRefreshDescriptor.fromJson(
+        DownloadUrlRefreshDescriptor(
+          trackingUrl: episodeUrl,
+          providerId: provider.packageName,
+          source: selected.source,
+          quality: selected.quality,
+          refreshUrl: selected.url,
+          updatedAtMillis: 1,
+        ).toJson(),
+      )!;
+      final first = await provider.loadDownloadStreams(selected.url);
+      expect(first.single.url, contains('token=ephemeral'));
+      api.requireDownloadAuth = true;
+      final directLinksBefore = api.calls
+          .where((call) => call.path.endsWith('/direct_link'))
+          .length;
+
+      final refreshed = await DownloadUrlRefresher(
+        providerForId: (id) => id == provider.packageName ? provider : null,
+      ).refresh(descriptor, currentUrl: first.single.url);
+      expect(refreshed, isNull);
+      expect(
+        api.calls.where((call) => call.path.endsWith('/direct_link')),
+        hasLength(directLinksBefore),
+      );
+      expect(
+        api.calls
+            .where((call) => call.path.endsWith('/can_play'))
+            .skip(1)
+            .every((call) => call.body?['is_download'] == true),
+        isTrue,
+      );
+    },
+  );
+  test(
+    'legacy Rift download without a stable host cannot renew by label',
+    () async {
+      final api = StreamFixture()..duplicateSourceLabels = true;
+      final provider = AnimeRiftProvider(client: api);
+      final picked = (await provider.loadDownloadStreamSources(episodeUrl))
+          .first;
+      final refresher = DownloadUrlRefresher(
+        providerForId: (id) => id == provider.packageName ? provider : null,
+      );
+      for (final untrusted in <String?>[
+        null,
+        picked.url.replaceFirst('/download/', '/play/'),
+        'https://cdn.example/video.mp4?token=legacy',
+      ]) {
+        final descriptor = DownloadUrlRefreshDescriptor.fromJson(
+          DownloadUrlRefreshDescriptor(
+            trackingUrl: episodeUrl,
+            providerId: provider.packageName,
+            source: picked.source,
+            quality: picked.quality,
+            refreshUrl: untrusted,
+            updatedAtMillis: 1,
+          ).toJson(),
+        )!;
+        expect(
+          await refresher.refresh(
+            descriptor,
+            currentUrl: 'https://cdn.example/expired.mp4',
+          ),
+          isNull,
+        );
+      }
+      expect(api.calls.any((call) => call.path.endsWith('/can_play')), isFalse);
+      expect(
+        api.calls.any((call) => call.path.endsWith('/direct_link')),
+        isFalse,
+      );
+    },
+  );
+  test(
+    'download listing fails closed when offline entitlement is not declared',
+    () async {
+      for (final allowed in [false, null]) {
+        final api = StreamFixture()..offlineModeEnabled = allowed;
+        final provider = AnimeRiftProvider(client: api);
+        final playback = (await provider.loadStreamSources(episodeUrl)).first;
+        expect(await provider.loadDownloadStreamSources(episodeUrl), isEmpty);
+        await expectLater(
+          provider.loadDownloadStreams(playback.url),
+          throwsA(isA<AnimeRiftPlaybackUnavailable>()),
+        );
+        expect(
+          api.calls.any((call) => call.path.endsWith('/can_play')),
+          isFalse,
+        );
+      }
     },
   );
 

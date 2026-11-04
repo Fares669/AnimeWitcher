@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart';
+import 'package:animewitcher/core/storage/anime_rift_account_scope.dart';
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
@@ -51,6 +52,7 @@ void main() {
   Completer<void>? secureDeleteStarted;
 
   setUp(() {
+    AnimeRiftLocalAccountScope.reset();
     SharedPreferences.setMockInitialValues({});
     secureValues.clear();
     secureCalls.clear();
@@ -102,6 +104,440 @@ void main() {
   });
 
   tearDown(() => messenger.setMockMethodCallHandler(secureChannel, null));
+
+  test('AOT overview items counters retain the seven recovered keys', () {
+    expect(
+      parseMyListOverviewCounts({
+        'items': <String, dynamic>{
+          'my_list_favorites': 4,
+          'my_list_currently_watching': '12',
+          'my_list_plan_to_watch': 0,
+          'my_list_finished_watching': 3,
+          'my_list_on_hold': 2,
+          'my_list_dropped': 1,
+          'favorite_characters_count': 8,
+          'unrecognized_metric': 99,
+        },
+      }),
+      {
+        'my_list_favorites': 4,
+        'my_list_currently_watching': 12,
+        'my_list_plan_to_watch': 0,
+        'my_list_finished_watching': 3,
+        'my_list_on_hold': 2,
+        'my_list_dropped': 1,
+        'favorite_characters_count': 8,
+      },
+    );
+  });
+
+  test('overview counts omit missing, malformed and negative counters', () {
+    expect(parseMyListOverviewCounts(<String, dynamic>{}), isEmpty);
+    expect(parseMyListOverviewCounts({'items': <String>[]}), isEmpty);
+    expect(parseMyListOverviewCounts({'items': 'not-a-map'}), isEmpty);
+    expect(
+      parseMyListOverviewCounts({
+        'items': <String, dynamic>{
+          'my_list_favorites': -1,
+          'my_list_currently_watching': true,
+          'my_list_plan_to_watch': '1.5',
+          'my_list_finished_watching': 'five',
+          'my_list_on_hold': 3.4,
+          'my_list_dropped': null,
+          'favorite_characters_count': '2',
+        },
+      }),
+      {'favorite_characters_count': 2},
+    );
+  });
+
+  test(
+    'cloud account reads require Rift sign-in before any network request',
+    () async {
+      var requests = 0;
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: fixtureDio((o) {
+          requests++;
+          return reply(o, <String, dynamic>{});
+        }),
+      );
+      final attempts = <Future<Map<String, dynamic>>>[
+        client.fetchFavoriteAnime(),
+        client.fetchMyList('favorite'),
+        client.fetchMyListOverview(),
+        client.fetchWatchHistoryLatest(),
+        client.fetchWatchHistoryFull(),
+      ];
+      for (final attempt in attempts) {
+        await expectLater(
+          attempt,
+          throwsA(isA<AnimeRiftAuthenticationRequired>()),
+        );
+      }
+      expect(requests, 0);
+      for (final invalid in [
+        '',
+        'finished',
+        'COMPLETED',
+        '../favorites',
+        'favorite?user=other',
+      ]) {
+        expect(() => client.fetchMyList(invalid), throwsArgumentError);
+      }
+      expect(requests, 0);
+    },
+  );
+
+  test(
+    'Rift account GETs use only the recovered paths/scopes and raw response',
+    () async {
+      const routes = <String, String>{
+        '/api/v4/favorite/anime/all': 'USER.FAVORITES.ANIME.ALL',
+        '/api/v4/my_list/all': 'USER.MY_LIST.GET_ALL',
+        '/api/v4/my_list/overview': 'USER.MY_LIST.OVERVIEW',
+        '/api/v4/watch_history/latest': 'USER.WATCH_HISTORY.VIEW.LATEST',
+        '/api/v4/watch_history/full': 'USER.WATCH_HISTORY.VIEW.FULL',
+      };
+      final requested = <String>[];
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: fixtureDio((o) {
+          if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+          if (o.uri.path.endsWith('/auth/register/device')) {
+            return reply(o, {'sessionKey': 'fixture'}, 201);
+          }
+          if (o.uri.path.endsWith('/auth/sign-in/with-code')) {
+            return reply(o, {
+              'items': {
+                'profile': {'_id': 'rift-user'},
+                'token': 'rift-user-token',
+              },
+            });
+          }
+          expect(o.uri.host, 'gateway.embrassme.top');
+          expect(o.method, 'GET');
+          expect(o.data, isNull);
+          expect(o.headers['authorization'], 'Bearer rift-user-token');
+          expect(routes[o.uri.path], isNotNull);
+          final jwt = (o.headers['integrity'] as String)
+              .substring(7)
+              .split('.');
+          final payload = jsonDecode(
+            utf8.decode(base64Url.decode(base64Url.normalize(jwt[1]))),
+          ) as Map;
+          expect(payload['scope'], routes[o.uri.path]);
+          if (o.uri.path == '/api/v4/my_list/all') {
+            expect(o.uri.queryParameters, {'my_list': 'want_to'});
+          } else {
+            expect(o.uri.queryParameters, isEmpty);
+          }
+          requested.add(o.uri.path);
+          return reply(o, {
+            'arbitrary': <String, dynamic>{'value': 'opaque'},
+          });
+        }),
+      );
+      await client.signInWithCode('owner-issued-code');
+      final response = await client.fetchFavoriteAnime();
+      expect(response, {
+        'arbitrary': {'value': 'opaque'},
+      });
+      await client.fetchMyList('want_to');
+      await client.fetchMyListOverview();
+      await client.fetchWatchHistoryLatest();
+      await client.fetchWatchHistoryFull();
+      expect(requested, routes.keys);
+      await expectLater(
+        client.request('my_list/all', 'USER.MY_LIST.GET_ALL'),
+        throwsArgumentError,
+      );
+    },
+  );
+
+  test(
+    'account read reports expired credentials without silently retrying',
+    () async {
+      var reads = 0;
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: fixtureDio((o) {
+          if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+          if (o.uri.path.endsWith('/auth/register/device')) {
+            return reply(o, {'sessionKey': 'fixture'}, 201);
+          }
+          if (o.uri.path.endsWith('/auth/sign-in/with-code')) {
+            return reply(o, {
+              'items': {
+                'profile': {'_id': 'rift-user'},
+                'token': 'expired-token',
+              },
+            });
+          }
+          reads++;
+          return reply(o, {'error': 'must-not-leak'}, 401);
+        }),
+      );
+      await client.signInWithCode('owner-code');
+      await expectLater(
+        client.fetchFavoriteAnime(),
+        throwsA(isA<AnimeRiftAuthenticationRequired>()),
+      );
+      expect(reads, 1);
+      expect(client.isAccountLinked, isTrue);
+    },
+  );
+
+  test('an account read cannot publish data after unlinking Rift', () async {
+    final started = Completer<void>();
+    final replyLater = Completer<Response<dynamic>>();
+    final client = AnimeRiftApiClient(
+      config: fixtureConfig,
+      dio: fixtureDio((o) {
+        if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+        if (o.uri.path.endsWith('/auth/register/device')) {
+          return reply(o, {'sessionKey': 'fixture'}, 201);
+        }
+        if (o.uri.path.endsWith('/auth/sign-in/with-code')) {
+          return reply(o, {
+            'items': {
+              'profile': {'_id': 'account-a'},
+              'token': 'token-a',
+            },
+          });
+        }
+        expect(o.uri.path, '/api/v4/my_list/all');
+        started.complete();
+        return replyLater.future;
+      }),
+    );
+    await client.signInWithCode('account-a-code');
+    final pending = client.fetchMyList('currently');
+    await started.future;
+    await client.signOut();
+    replyLater.complete(
+      reply(RequestOptions(path: '/api/v4/my_list/all'), {
+        'items': <Object>[
+          {'_id': 'private-anime'},
+        ],
+      }),
+    );
+    await expectLater(pending, throwsA(isA<AnimeRiftAuthenticationRequired>()));
+    expect(client.isAccountLinked, isFalse);
+  });
+
+  test(
+    'Rift local account partition follows sign-in, restart and unlink',
+    () async {
+      final dio = fixtureDio((o) {
+        if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+        if (o.uri.path.endsWith('/auth/register/device')) {
+          return reply(o, {'sessionKey': 'fixture'}, 201);
+        }
+        if (o.uri.path.endsWith('/auth/sign-in/with-code')) {
+          final code = (o.data as Map)['code'];
+          return reply(o, {
+            'items': {
+              'profile': {'_id': 'user-$code', 'username': 'Name $code'},
+              'token': 'token-$code',
+            },
+          });
+        }
+        return reply(o, {'items': []});
+      });
+      final client = AnimeRiftApiClient(config: fixtureConfig, dio: dio);
+      expect(AnimeRiftLocalAccountScope.accountHash, isNull);
+
+      await client.signInWithCode('one');
+      expect(client.accountIdentity?.id, 'user-one');
+      expect(client.accountIdentity?.displayName, 'Name one');
+      final firstScope = AnimeRiftLocalAccountScope.accountHash;
+      expect(firstScope, isNotNull);
+      expect(firstScope, isNot(contains('user-one')));
+
+      await client.signInWithCode('two');
+      expect(client.accountIdentity?.id, 'user-two');
+      final secondScope = AnimeRiftLocalAccountScope.accountHash;
+      expect(secondScope, isNot(firstScope));
+
+      AnimeRiftLocalAccountScope.reset();
+      final restarted = AnimeRiftApiClient(config: fixtureConfig, dio: dio);
+      expect(await restarted.restoreAccountSession(), isTrue);
+      expect(restarted.accountIdentity?.id, 'user-two');
+      expect(AnimeRiftLocalAccountScope.accountHash, secondScope);
+
+      await restarted.signOut();
+      expect(restarted.accountIdentity, isNull);
+      expect(AnimeRiftLocalAccountScope.accountHash, isNull);
+      expect(
+        await AnimeRiftApiClient(
+          config: fixtureConfig,
+          dio: dio,
+        ).restoreAccountSession(),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'valid Rift profile without a recognized ID still authenticates safely',
+    () async {
+      final dio = fixtureDio((o) {
+        if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+        if (o.uri.path.endsWith('/auth/register/device')) {
+          return reply(o, {'sessionKey': 'fixture'}, 201);
+        }
+        if (o.uri.path.endsWith('/auth/sign-in/with-code')) {
+          return reply(o, {
+            'items': {
+              'profile': <String, dynamic>{'unrecognized_field': 'value'},
+              'token': 'no-profile-id-token',
+            },
+          });
+        }
+        expect(o.headers['authorization'], 'Bearer no-profile-id-token');
+        return reply(o, {'items': <Object>[]});
+      });
+      final client = AnimeRiftApiClient(config: fixtureConfig, dio: dio);
+      await client.signInWithCode('owner-code');
+      expect(client.isAccountLinked, isTrue);
+      expect(client.accountIdentity?.isVerified, isFalse);
+      final scope = AnimeRiftLocalAccountScope.accountHash;
+      expect(scope, isNotNull);
+      await client.request(
+        'library/home_content',
+        'ANIME.LIBRARY.HOME_CONTENT',
+      );
+
+      AnimeRiftLocalAccountScope.reset();
+      final restarted = AnimeRiftApiClient(config: fixtureConfig, dio: dio);
+      expect(await restarted.restoreAccountSession(), isTrue);
+      expect(restarted.accountIdentity?.isVerified, isFalse);
+      expect(AnimeRiftLocalAccountScope.accountHash, scope);
+    },
+  );
+
+  test('overlapping restore calls share the secure read', () async {
+    final client = AnimeRiftApiClient(config: fixtureConfig);
+    final results = await Future.wait([
+      client.restoreAccountSession(),
+      client.restoreAccountSession(),
+      client.restoreAccountSession(),
+    ]);
+    expect(results, [false, false, false]);
+    expect(secureCalls.where((call) => call.method == 'read'), hasLength(1));
+  });
+
+  test(
+    'sign-out cancels a delayed sign-in without restoring its token',
+    () async {
+      final signInResponse = Completer<Response<dynamic>>();
+      final started = Completer<void>();
+      final dio = fixtureDio((o) {
+        if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+        if (o.uri.path.endsWith('/auth/register/device')) {
+          return reply(o, {'sessionKey': 'fixture'}, 201);
+        }
+        if (o.uri.path.endsWith('/auth/sign-in/with-code')) {
+          started.complete();
+          return signInResponse.future;
+        }
+        return reply(o, {'items': []});
+      });
+      final client = AnimeRiftApiClient(config: fixtureConfig, dio: dio);
+      final signingIn = client.signInWithCode('one');
+      await started.future;
+      await client.signOut();
+      signInResponse.complete(
+        reply(RequestOptions(path: '/auth/sign-in/with-code'), {
+          'items': {
+            'profile': {'_id': 'late-user'},
+            'token': 'late-token',
+          },
+        }),
+      );
+      await expectLater(signingIn, throwsA(isA<AnimeRiftAccessUnavailable>()));
+      expect(client.isAccountLinked, isFalse);
+      expect(AnimeRiftLocalAccountScope.accountHash, isNull);
+      expect(secureValues, isEmpty);
+    },
+  );
+
+  test(
+    'a delayed catalog response cannot cross Rift account switches',
+    () async {
+      final pendingCatalog = Completer<Response<dynamic>>();
+      final catalogStarted = Completer<void>();
+      final dio = fixtureDio((o) {
+        if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+        if (o.uri.path.endsWith('/auth/register/device')) {
+          return reply(o, {'sessionKey': 'fixture'}, 201);
+        }
+        if (o.uri.path.endsWith('/auth/sign-in/with-code')) {
+          final code = (o.data as Map)['code'];
+          return reply(o, {
+            'items': {
+              'profile': {'_id': 'user-$code'},
+              'token': 'token-$code',
+            },
+          });
+        }
+        if (o.uri.path.endsWith('/library/home_content')) {
+          catalogStarted.complete();
+          return pendingCatalog.future;
+        }
+        return reply(o, {'items': <Object>[]});
+      });
+      final client = AnimeRiftApiClient(config: fixtureConfig, dio: dio);
+      await client.signInWithCode('one');
+      final oldAccountRequest = client.request(
+        'library/home_content',
+        'ANIME.LIBRARY.HOME_CONTENT',
+      );
+      await catalogStarted.future;
+      await client.signInWithCode('two');
+      pendingCatalog.complete(
+        reply(RequestOptions(path: '/library/home_content'), {
+          'items': <String, Object>{'secret': 'user-one'},
+        }),
+      );
+      await expectLater(
+        oldAccountRequest,
+        throwsA(isA<AnimeRiftAuthenticationRequired>()),
+      );
+      expect(client.accountIdentity?.id, 'user-two');
+    },
+  );
+
+  test('legacy credential remains linked in its own token-derived partition', () async {
+    final client = AnimeRiftApiClient(config: fixtureConfig);
+    expect(await client.restoreAccountSession(), isFalse);
+    final prefs = await SharedPreferences.getInstance();
+    final device =
+        jsonDecode(prefs.getString('animerift.api.installation.v1')!) as Map;
+    // Older installations only stored a token and device ID in secure storage.
+    secureValues['animerift.user.session.v1'] = jsonEncode({
+      'version': 1,
+      'deviceId': device['deviceId'],
+      'token': 'legacy-token',
+    });
+    final restarted = AnimeRiftApiClient(config: fixtureConfig);
+    expect(await restarted.restoreAccountSession(), isTrue);
+    expect(restarted.isAccountLinked, isTrue);
+    expect(restarted.accountIdentity?.isVerified, isFalse);
+    expect(restarted.accountIdentity?.displayName, isNull);
+    final scope = AnimeRiftLocalAccountScope.accountHash;
+    expect(scope, isNotNull);
+    expect(scope, isNot(contains('legacy-token')));
+    expect(secureValues, hasLength(1));
+    AnimeRiftLocalAccountScope.reset();
+    final anotherRestart = AnimeRiftApiClient(config: fixtureConfig);
+    expect(await anotherRestart.restoreAccountSession(), isTrue);
+    expect(AnimeRiftLocalAccountScope.accountHash, scope);
+    await anotherRestart.signOut();
+    expect(secureValues, isEmpty);
+    expect(AnimeRiftLocalAccountScope.accountHash, isNull);
+  });
 
   test(
     'concurrent catalog calls share registration and scoped signing',
@@ -552,8 +988,11 @@ void main() {
       restarted.restoreAccountSession(),
       throwsA(isA<AnimeRiftSecureStorageUnavailable>()),
     );
+    expect(restarted.isAccountLinked, isFalse);
+    expect(AnimeRiftLocalAccountScope.accountHash, isNull);
     expect(await restarted.restoreAccountSession(), isTrue);
     expect(restarted.isAccountLinked, isTrue);
+    expect(AnimeRiftLocalAccountScope.accountHash, isNotNull);
   });
 
   test('concurrent account restores wait for the same secure read', () async {
@@ -590,7 +1029,7 @@ void main() {
     expect(restarted.isAccountLinked, isTrue);
   });
 
-  test('unlink waits for a pending secure sign-in write before deleting', () async {
+  test('unlink cancels a pending secure sign-in write before deleting', () async {
     final dio = fixtureDio((o) {
       if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
       if (o.uri.path.endsWith('/auth/register/device')) {
@@ -611,7 +1050,8 @@ void main() {
 
     final unlinking = client.signOut();
     delayedSecureWrite!.complete();
-    await Future.wait([linking, unlinking]);
+    await expectLater(linking, throwsA(isA<AnimeRiftAccessUnavailable>()));
+    await unlinking;
 
     expect(client.isAccountLinked, isFalse);
     expect(secureValues, isEmpty);

@@ -10,6 +10,7 @@ import '../extensions/base_provider.dart';
 import '../extensions/extension_manager.dart';
 import '../extensions/providers/anime_rift_api_client.dart';
 import '../utils/anime_rift_identity.dart';
+import '../utils/anime_rift_stream_identity.dart';
 import 'download_v2/anime_rift_download_metadata_v2.dart';
 
 const String kDownloadUrlRefreshBox = 'download_url_refresh_v1';
@@ -26,6 +27,7 @@ class DownloadUrlRefreshDescriptor {
     this.logicalId,
     this.quality,
     this.refreshUrl,
+    this.accountHash,
   });
 
   final String trackingUrl;
@@ -33,6 +35,7 @@ class DownloadUrlRefreshDescriptor {
   final String source;
   final String? quality;
   final String? refreshUrl;
+  final String? accountHash;
   final int updatedAtMillis;
   final int generation;
   final String? ownerTaskId;
@@ -45,6 +48,7 @@ class DownloadUrlRefreshDescriptor {
         'source': source,
         if (quality?.trim().isNotEmpty ?? false) 'quality': quality,
         if (refreshUrl?.trim().isNotEmpty ?? false) 'refreshUrl': refreshUrl,
+        if (accountHash != null) 'accountHash': accountHash,
         'updatedAtMillis': updatedAtMillis,
         'generation': generation,
         if (ownerTaskId?.trim().isNotEmpty ?? false) 'ownerTaskId': ownerTaskId,
@@ -65,6 +69,7 @@ class DownloadUrlRefreshDescriptor {
       source: source,
       quality: _string(map['quality']),
       refreshUrl: _string(map['refreshUrl']),
+      accountHash: _string(map['accountHash']),
       updatedAtMillis: _int(map['updatedAtMillis']),
       // Older descriptors predate generation fencing. Generation zero keeps
       // them readable until the owning V2 record rewrites the descriptor.
@@ -333,6 +338,9 @@ class DownloadUrlRefresher {
     final safe = DownloadUrlRefreshDescriptor.fromJson(descriptor.toJson());
     if (safe == null) return null;
     descriptor = safe;
+    if (!downloadBelongsToCurrentRiftAccountV2(descriptor.toJson())) {
+      return null;
+    }
     final provider = providerForId(descriptor.providerId);
     if (provider == null) return null;
     provider.prepareForNetworkRetry();
@@ -404,6 +412,31 @@ StreamResult? _bestStreamMatch(
   DownloadUrlRefreshDescriptor descriptor,
 ) {
   if (streams.isEmpty) return null;
+  if (isAnimeRiftDownloadProviderV2(descriptor.providerId)) {
+    final original = AnimeRiftSourceIdentity.parse(descriptor.refreshUrl ?? '');
+    // Older records without a stable download selector retain their files,
+    // but their display names cannot safely identify a replacement host.
+    if (original == null || original.host == null || !original.download) {
+      return null;
+    }
+    // The displayed source name can change, and different hosts may share
+    // the same label and quality. Only the persisted provider-owned selector
+    // identifies the original host for a renewed download.
+    for (final stream in streams) {
+      final candidate = AnimeRiftSourceIdentity.parse(
+        stream.refreshUrl ?? stream.url,
+      );
+      if (candidate != null &&
+          candidate.download &&
+          candidate.anime == original.anime &&
+          candidate.episode == original.episode &&
+          candidate.host == original.host &&
+          candidate.quality == original.quality) {
+        return stream;
+      }
+    }
+    return null;
+  }
   final wantedSource = descriptor.source.trim().toLowerCase();
   final wantedQuality = descriptor.quality?.trim().toLowerCase();
 

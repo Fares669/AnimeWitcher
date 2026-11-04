@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
@@ -7,6 +8,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../network/stale_connection_retry.dart';
+import '../../storage/anime_rift_account_scope.dart';
 
 class AnimeRiftConfig {
   const AnimeRiftConfig({
@@ -56,6 +58,77 @@ class AnimeRiftSecureStorageUnavailable extends AnimeRiftAccessUnavailable {
       'تعذر الوصول إلى التخزين الآمن لجلسة Anime Rift. لم يتم حفظ رمز الدخول.';
 }
 
+/// Extracts the numeric overview counters found in Rift's shipped AOT.
+///
+/// The endpoint returns an `items` map. Missing or malformed counters are
+/// omitted rather than mislabeled as zero; this is not an anime-item parser.
+Map<String, int> parseMyListOverviewCounts(Map<String, dynamic> response) {
+  final items = response['items'];
+  if (items is! Map) return <String, int>{};
+
+  const keys = <String>[
+    'my_list_favorites',
+    'my_list_currently_watching',
+    'my_list_plan_to_watch',
+    'my_list_finished_watching',
+    'my_list_on_hold',
+    'my_list_dropped',
+    'favorite_characters_count',
+  ];
+  final result = <String, int>{};
+  for (final key in keys) {
+    final value = items[key];
+    final parsed = value is int
+        ? value
+        : value is String && RegExp(r'^\d+$').hasMatch(value)
+        ? int.tryParse(value)
+        : null;
+    if (parsed != null && parsed >= 0) result[key] = parsed;
+  }
+  return result;
+}
+
+/// Only verified identity fields are retained. Rift's full profile is not
+/// needed for authentication or local storage partitioning.
+class AnimeRiftAccountIdentity {
+  const AnimeRiftAccountIdentity({
+    required this.id,
+    this.displayName,
+    this.isVerified = true,
+  });
+
+  final String id;
+  final String? displayName;
+
+  /// Old secure sessions lacked a profile ID. Their partition is token-based.
+  final bool isVerified;
+
+  static String? _safeField(Object? value, {int maxLength = 256}) {
+    if (value is! String) return null;
+    final text = value.trim();
+    return text.isNotEmpty &&
+            text.length <= maxLength &&
+            !text.contains(RegExp(r'[\x00-\x1f\x7f]'))
+        ? text
+        : null;
+  }
+
+  static AnimeRiftAccountIdentity? fromProfile(Map<dynamic, dynamic> profile) {
+    String? id;
+    for (final key in const ['_id', 'id', 'userId', 'user_id']) {
+      id = _safeField(profile[key]);
+      if (id != null) break;
+    }
+    if (id == null) return null;
+    String? name;
+    for (final key in const ['displayName', 'username', 'name']) {
+      name = _safeField(profile[key], maxLength: 120);
+      if (name != null) break;
+    }
+    return AnimeRiftAccountIdentity(id: id, displayName: name);
+  }
+}
+
 /// Isolated, experimental catalog transport. Never inherits account credentials.
 /// The embedded compatibility signing configuration is extractable from binaries;
 /// it must not be treated as a server-side secret or used for account privileges.
@@ -93,16 +166,17 @@ class AnimeRiftApiClient {
   String _base = _defaultBase;
   Map<String, String>? _identity;
   String? _accessToken;
-  Object? _sessionRestoreError;
+  AnimeRiftAccountIdentity? _accountIdentity;
+  Future<void>? _identityLoading;
+  Future<bool>? _restoringSession;
+  Future<void> _pendingSessionStorage = Future<void>.value();
+  int _sessionEpoch = 0;
   bool _sessionRestoreAttempted = false;
   Future<void>? _initializing;
-  Future<void>? _identityLoad;
-  Future<bool>? _restoringSession;
-  Future<void>? _signingIn;
-  Future<void>? _signingOut;
   bool _registered = false;
   bool get isConfigured => config.isConfigured;
   bool get isAccountLinked => _accessToken != null;
+  AnimeRiftAccountIdentity? get accountIdentity => _accountIdentity;
 
   static String _randomText(int length) {
     const alphabet =
@@ -114,18 +188,14 @@ class AnimeRiftApiClient {
   }
 
   Future<void> _loadIdentity() {
-    final pending = _identityLoad;
-    if (pending != null) return pending;
     if (_identity != null) return Future<void>.value();
-    final future = _loadIdentityOnce();
-    final tracked = future.whenComplete(() {
-      _identityLoad = null;
+    return _identityLoading ??= _loadIdentityOnce().whenComplete(() {
+      _identityLoading = null;
     });
-    _identityLoad = tracked;
-    return tracked;
   }
 
   Future<void> _loadIdentityOnce() async {
+    if (_identity != null) return;
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_identityKey);
     if (raw != null) {
@@ -176,8 +246,9 @@ class AnimeRiftApiClient {
         ),
       );
       final status = response.statusCode ?? 0;
-      if (status < 200 || status >= 300)
+      if (status < 200 || status >= 300) {
         throw AnimeRiftAccessUnavailable(statusCode: status);
+      }
       final dynamic value = response.data is String
           ? jsonDecode(response.data as String)
           : response.data;
@@ -217,8 +288,9 @@ class AnimeRiftApiClient {
       final fid = installation['fid'];
       final auth = installation['authToken'];
       final token = auth is Map ? auth['token'] : null;
-      if (fid is! String || fid.isEmpty || token is! String || token.isEmpty)
+      if (fid is! String || fid.isEmpty || token is! String || token.isEmpty) {
         return;
+      }
       _identity!['fid'] = fid;
       _identity!['deviceId'] =
           '$fid:${_identity!['deviceId']!.split(':').last}';
@@ -365,41 +437,85 @@ class AnimeRiftApiClient {
       value.length <= 8192 &&
       !value.contains(RegExp(r'[\x00-\x20\x7f]'));
 
-  Future<bool> restoreAccountSession() async {
-    await _loadIdentity();
-    final pending = _restoringSession;
-    if (pending != null) return pending;
-    if (_sessionRestoreAttempted && _sessionRestoreError == null) {
-      return isAccountLinked;
-    }
-    _sessionRestoreAttempted = true;
-    _sessionRestoreError = null;
-    final future = _restoreAccountSessionOnce();
-    _restoringSession = future;
+  Future<T> _withSessionStorage<T>(Future<T> Function() action) async {
+    final previous = _pendingSessionStorage;
+    final completed = Completer<void>();
+    _pendingSessionStorage = completed.future;
+    await previous;
     try {
-      return await future;
+      return await action();
     } finally {
-      if (identical(_restoringSession, future)) _restoringSession = null;
+      completed.complete();
     }
   }
 
-  Future<bool> _restoreAccountSessionOnce() async {
+  Future<bool> restoreAccountSession() =>
+      _restoringSession ??= _restoreAccountSession().whenComplete(() {
+        _restoringSession = null;
+      });
+
+  Future<bool> _restoreAccountSession() async {
+    await _loadIdentity();
+    if (_sessionRestoreAttempted) return isAccountLinked;
+    final epoch = _sessionEpoch;
     try {
-      final raw = await _secureStorage.read(key: _sessionKey);
-      if (raw == null || raw.isEmpty) return false;
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map ||
-          decoded['version'] != 1 ||
-          decoded['deviceId'] != _identity!['deviceId'] ||
-          decoded['token'] is! String ||
-          !_validAccessToken(decoded['token'] as String)) {
-        await _secureStorage.delete(key: _sessionKey);
-        return false;
+      return await _withSessionStorage(() async {
+        if (epoch != _sessionEpoch) return isAccountLinked;
+        final raw = await _secureStorage.read(key: _sessionKey);
+        if (epoch != _sessionEpoch) return isAccountLinked;
+        if (raw == null || raw.isEmpty) {
+          _sessionRestoreAttempted = true;
+          AnimeRiftLocalAccountScope.reset();
+          return false;
+        }
+        Map<dynamic, dynamic>? decoded;
+        try {
+          final value = jsonDecode(raw);
+          if (value is Map) decoded = value;
+        } on FormatException {
+          // Only the corrupt Rift credential is discarded.
+        }
+        final storedAccountId = AnimeRiftAccountIdentity._safeField(
+          decoded?['accountId'],
+        );
+        if (decoded?['version'] != 1 ||
+            decoded?['deviceId'] != _identity!['deviceId'] ||
+            decoded?['token'] is! String ||
+            !_validAccessToken(decoded!['token'] as String)) {
+          await _secureStorage.delete(key: _sessionKey);
+          if (epoch == _sessionEpoch) {
+            _sessionRestoreAttempted = true;
+            AnimeRiftLocalAccountScope.reset();
+          }
+          return isAccountLinked;
+        }
+        final token = decoded['token'] as String;
+        // Preserve pre-partition Rift sessions: they have a real token but no
+        // server profile ID. A token-derived partition isolates that legacy
+        // session without incorrectly claiming any other user's library.
+        final accountId =
+            storedAccountId ?? 'legacy:${sha256.convert(utf8.encode(token))}';
+        final name = AnimeRiftAccountIdentity._safeField(
+          decoded['displayName'],
+          maxLength: 120,
+        );
+        _accessToken = token;
+        _accountIdentity = AnimeRiftAccountIdentity(
+          id: accountId,
+          displayName: name,
+          isVerified: storedAccountId != null,
+        );
+        AnimeRiftLocalAccountScope.activate(accountId);
+        _sessionRestoreAttempted = true;
+        return true;
+      });
+    } catch (_) {
+      // A fresh client must not expose a stale previous Rift account's local
+      // partition while its own secure credentials cannot be restored.
+      if (epoch == _sessionEpoch && _accessToken == null) {
+        _accountIdentity = null;
+        AnimeRiftLocalAccountScope.reset();
       }
-      _accessToken = decoded['token'] as String;
-      return true;
-    } catch (error) {
-      _sessionRestoreError = error;
       throw const AnimeRiftSecureStorageUnavailable();
     }
   }
@@ -409,25 +525,11 @@ class AnimeRiftApiClient {
     if (value.isEmpty ||
         value.length > 256 ||
         value.contains(RegExp(r'[\x00-\x1f\x7f]'))) {
-      // Sign-in codes are credentials: never include their value in errors.
       throw ArgumentError('Invalid Anime Rift sign-in code');
     }
-    // Linking and unlinking must not race over the secure credential.
-    final unlinking = _signingOut;
-    if (unlinking != null) await unlinking;
-    final linking = _signingIn;
-    if (linking != null) return linking;
-    final pending = _signInWithCodeOnce(value);
-    _signingIn = pending;
-    try {
-      await pending;
-    } finally {
-      if (identical(_signingIn, pending)) _signingIn = null;
-    }
-  }
-
-  Future<void> _signInWithCodeOnce(String value) async {
+    final epoch = ++_sessionEpoch;
     await _ensureReady();
+    if (epoch != _sessionEpoch) throw const AnimeRiftAccessUnavailable();
     final response = await _send(
       '$_base/auth/sign-in/with-code',
       headers: _headers('USER.AUTH.SIGN_IN_WITH_CODE', includeUserToken: false),
@@ -440,58 +542,145 @@ class AnimeRiftApiClient {
     if (profile is! Map || token is! String || !_validAccessToken(token)) {
       throw const AnimeRiftAccessUnavailable();
     }
+    // The verified sign-in contract guarantees a profile map, but has not
+    // established a required field name for its stable identifier.
+    final identity =
+        AnimeRiftAccountIdentity.fromProfile(profile) ??
+        AnimeRiftAccountIdentity(
+          id: 'legacy:${sha256.convert(utf8.encode(token))}',
+          isVerified: false,
+        );
     final stored = jsonEncode({
       'version': 1,
       'deviceId': _identity!['deviceId'],
       'token': token,
+      if (identity.isVerified) 'accountId': identity.id,
+      if (identity.displayName != null) 'displayName': identity.displayName,
     });
-    try {
-      await _secureStorage.write(key: _sessionKey, value: stored);
-    } catch (_) {
-      throw const AnimeRiftSecureStorageUnavailable();
-    }
-    _accessToken = token;
-    _sessionRestoreAttempted = true;
-    _sessionRestoreError = null;
+    final applied = await _withSessionStorage(() async {
+      if (epoch != _sessionEpoch) return false;
+      try {
+        await _secureStorage.write(key: _sessionKey, value: stored);
+      } catch (_) {
+        throw const AnimeRiftSecureStorageUnavailable();
+      }
+      if (epoch != _sessionEpoch) return false;
+      _accessToken = token;
+      _accountIdentity = identity;
+      AnimeRiftLocalAccountScope.activate(identity.id);
+      _sessionRestoreAttempted = true;
+      return true;
+    });
+    if (!applied) throw const AnimeRiftAccessUnavailable();
   }
 
   Future<void> signOut() async {
-    final unlinking = _signingOut;
-    if (unlinking != null) return unlinking;
-    final pending = _signOutOnce();
-    _signingOut = pending;
-    try {
-      await pending;
-    } finally {
-      if (identical(_signingOut, pending)) _signingOut = null;
-    }
+    ++_sessionEpoch;
+    await _withSessionStorage(() async {
+      try {
+        await _secureStorage.delete(key: _sessionKey);
+      } catch (_) {
+        throw const AnimeRiftSecureStorageUnavailable();
+      }
+      _accessToken = null;
+      _accountIdentity = null;
+      AnimeRiftLocalAccountScope.reset();
+      _sessionRestoreAttempted = true;
+    });
   }
 
-  Future<void> _signOutOnce() async {
-    final linking = _signingIn;
-    if (linking != null) {
-      try {
-        await linking;
-      } catch (_) {
-        // An unsuccessful sign-in must not prevent removing an older token.
-      }
+  /// Read-only cloud account endpoints recovered from the shipped Rift AOT.
+  /// These intentionally return the server's opaque response map: item and
+  /// pagination schemas are not yet verified with an authenticated account.
+  /// They never accept a caller-supplied path, method, scope or request body.
+  Future<Map<String, dynamic>> fetchFavoriteAnime({CancelToken? cancelToken}) =>
+      _readAccountData(
+        'favorite/anime/all',
+        'USER.FAVORITES.ANIME.ALL',
+        cancelToken: cancelToken,
+      );
+
+  /// Known Rift list values recovered alongside `/my_list/all?my_list=`.
+  /// Other values cannot be used to construct account API URLs.
+  Future<Map<String, dynamic>> fetchMyList(
+    String category, {
+    CancelToken? cancelToken,
+  }) {
+    if (!const {
+      'favorite',
+      'currently',
+      'want_to',
+      'later',
+      'dropped',
+    }.contains(category)) {
+      throw ArgumentError('Invalid Anime Rift list category');
     }
-    final pending = _restoringSession;
-    if (pending != null) {
-      try {
-        await pending;
-      } on AnimeRiftSecureStorageUnavailable {
-        // Still try to delete the Rift credential after a failed read.
-      }
+    return _readAccountData(
+      'my_list/all',
+      'USER.MY_LIST.GET_ALL',
+      query: {'my_list': category},
+      cancelToken: cancelToken,
+    );
+  }
+
+  Future<Map<String, dynamic>> fetchMyListOverview({
+    CancelToken? cancelToken,
+  }) => _readAccountData(
+    'my_list/overview',
+    'USER.MY_LIST.OVERVIEW',
+    cancelToken: cancelToken,
+  );
+
+  Future<Map<String, dynamic>> fetchWatchHistoryLatest({
+    CancelToken? cancelToken,
+  }) => _readAccountData(
+    'watch_history/latest',
+    'USER.WATCH_HISTORY.VIEW.LATEST',
+    cancelToken: cancelToken,
+  );
+
+  Future<Map<String, dynamic>> fetchWatchHistoryFull({
+    CancelToken? cancelToken,
+  }) => _readAccountData(
+    'watch_history/full',
+    'USER.WATCH_HISTORY.VIEW.FULL',
+    cancelToken: cancelToken,
+  );
+
+  Future<Map<String, dynamic>> _readAccountData(
+    String path,
+    String scope, {
+    Map<String, dynamic>? query,
+    CancelToken? cancelToken,
+  }) async {
+    if (cancelToken?.isCancelled == true) throw cancelToken!.cancelError!;
+    // Reject guests before performing gateway registration or network requests.
+    if (!await restoreAccountSession()) {
+      throw const AnimeRiftAuthenticationRequired();
     }
+    await _ensureReady();
+    if (cancelToken?.isCancelled == true) throw cancelToken!.cancelError!;
+    final token = _accessToken;
+    if (token == null) throw const AnimeRiftAuthenticationRequired();
+    final epoch = _sessionEpoch;
     try {
-      await _secureStorage.delete(key: _sessionKey);
-    } catch (_) {
-      throw const AnimeRiftSecureStorageUnavailable();
+      final response = await _send(
+        '$_base/$path',
+        headers: _headers(scope),
+        query: query,
+        cancelToken: cancelToken,
+      );
+      // Never expose data fetched for a previous Rift account after a switch.
+      if (epoch != _sessionEpoch || _accessToken != token) {
+        throw const AnimeRiftAuthenticationRequired();
+      }
+      return response;
+    } on AnimeRiftAccessUnavailable catch (error) {
+      if (error.statusCode == 401 || error.statusCode == 403) {
+        throw AnimeRiftAuthenticationRequired(statusCode: error.statusCode);
+      }
+      rethrow;
     }
-    _accessToken = null;
-    _sessionRestoreAttempted = true;
-    _sessionRestoreError = null;
   }
 
   Future<Map<String, dynamic>> request(
@@ -512,8 +701,16 @@ class AnimeRiftApiClient {
     if (cancelToken?.isCancelled == true) throw cancelToken!.cancelError!;
     await _ensureReady();
     if (cancelToken?.isCancelled == true) throw cancelToken!.cancelError!;
+    final sessionEpoch = _sessionEpoch;
+    final sessionToken = _accessToken;
+    void requireSameSession() {
+      if (sessionEpoch != _sessionEpoch || sessionToken != _accessToken) {
+        throw const AnimeRiftAuthenticationRequired();
+      }
+    }
+
     try {
-      return await _send(
+      final response = await _send(
         '$_base/$path',
         headers: _headers(scope),
         method: method,
@@ -521,13 +718,17 @@ class AnimeRiftApiClient {
         query: query,
         cancelToken: cancelToken,
       );
+      requireSameSession();
+      return response;
     } on AnimeRiftAccessUnavailable catch (e) {
+      requireSameSession();
       if (e.statusCode != 401 && e.statusCode != 403) rethrow;
       _registered = false;
       await _ensureReady();
+      requireSameSession();
       if (cancelToken?.isCancelled == true) throw cancelToken!.cancelError!;
       try {
-        return await _send(
+        final response = await _send(
           '$_base/$path',
           headers: _headers(scope),
           method: method,
@@ -535,7 +736,10 @@ class AnimeRiftApiClient {
           query: query,
           cancelToken: cancelToken,
         );
+        requireSameSession();
+        return response;
       } on AnimeRiftAccessUnavailable catch (retryError) {
+        requireSameSession();
         if (_accessToken != null &&
             (retryError.statusCode == 401 || retryError.statusCode == 403)) {
           throw AnimeRiftAuthenticationRequired(

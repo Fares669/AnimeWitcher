@@ -294,6 +294,22 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('إلغاء ربط حساب Anime Rift؟'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('animerift-account-switch')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('animerift-code-field')),
+        '  another-account-code  ',
+      );
+      await tester.tap(find.byKey(const ValueKey('animerift-account-submit')));
+      await tester.pumpAndSettle();
+      expect(account.codes, ['owner-issued-code', 'another-account-code']);
+      expect(account.signOuts, 0);
+      expect(settings.savedId, 'native');
+
+      await tester.tap(
+        find.byKey(const ValueKey('settings-animerift-account')),
+      );
+      await tester.pumpAndSettle();
       await tester.tap(
         find.byKey(const ValueKey('animerift-account-signout-confirm')),
       );

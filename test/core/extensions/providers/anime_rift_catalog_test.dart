@@ -31,6 +31,21 @@ class CatalogFixture extends AnimeRiftApiClient {
     calls.add(path);
     lastQuery = query;
     lastBody = body;
+    if (path == 'character/all')
+      return {
+        'items': [
+          {
+            '_id': 'char1',
+            'name': 'Naruto Uzumaki',
+            'image_jpg_url': 'https://images.example/naruto.jpg',
+            'likes': 321,
+          },
+        ],
+        'page': query?['page'] ?? 0,
+        'limit': 20,
+        'size': 1,
+        'hasNext': false,
+      };
     if (path == 'library/tags')
       return {
         'items': [
@@ -123,7 +138,45 @@ class CatalogFixture extends AnimeRiftApiClient {
   };
 }
 
+class CloudOverviewFixture extends CatalogFixture {
+  @override
+  Future<Map<String, dynamic>> fetchMyListOverview({
+    CancelToken? cancelToken,
+  }) async => {
+    'items': {
+      'my_list_favorites': 3,
+      'my_list_currently_watching': '8',
+      'my_list_dropped': null,
+    },
+  };
+}
+
 void main() {
+  test('Rift account cloud counts are read without invented zeroes', () async {
+    final provider = AnimeRiftProvider(client: CloudOverviewFixture());
+    final counts = await provider.fetchCloudLibraryCounts();
+    expect(counts['my_list_favorites'], 3);
+    expect(counts['my_list_currently_watching'], 8);
+    expect(counts.containsKey('my_list_dropped'), isFalse);
+    expect(counts.containsKey('my_list_finished_watching'), isFalse);
+  });
+
+  test('Rift character search maps the live character/all schema', () async {
+    final api = CatalogFixture();
+    final provider = AnimeRiftProvider(client: api);
+
+    final page = await provider.searchCharacterPage('Naruto');
+
+    expect(api.calls, contains('character/all'));
+    expect(api.lastQuery?['searchText'], 'Naruto');
+    expect(page.items, hasLength(1));
+    expect(page.items.single.id, 'char1');
+    expect(page.items.single.name, 'Naruto Uzumaki');
+    expect(page.items.single.image, 'https://images.example/naruto.jpg');
+    expect(page.items.single.likes, 321);
+    expect(page.hasMore, isFalse);
+  });
+
   test(
     'tags use their own backend IDs and share bounded filter metadata requests',
     () async {

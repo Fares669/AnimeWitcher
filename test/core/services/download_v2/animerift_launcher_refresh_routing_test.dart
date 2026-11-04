@@ -9,6 +9,9 @@ import 'package:flutter_test/flutter_test.dart';
 
 const _native = 'com.fares669.animewitcher.native';
 const _rift = 'com.animerift.provider';
+const _riftEpisode = 'https://anime-rift.com/anime/a/episode/e';
+const _riftDownloadSource =
+    'https://anime-rift.com/anime/a/episode/e/source/h/quality/1080p/download/n/1';
 
 void main() {
   test('batch skips existing episodes only within their original provider', () {
@@ -60,10 +63,11 @@ void main() {
         },
       );
       const descriptor = DownloadUrlRefreshDescriptor(
-        trackingUrl: 'episode/1',
+        trackingUrl: _riftEpisode,
         providerId: _rift,
         source: 'Server A',
         quality: '1080p',
+        refreshUrl: _riftDownloadSource,
         updatedAtMillis: 1234,
       );
       final restored = DownloadUrlRefreshDescriptor.fromJson(
@@ -77,7 +81,7 @@ void main() {
 
       expect(requestedProviders, [_rift]);
       expect(native.sourceRequests, isEmpty);
-      expect(rift.sourceRequests, ['episode/1']);
+      expect(rift.sourceRequests, [_riftEpisode]);
       expect(result?.url, 'https://rift.invalid/episode.mp4');
       expect(restored.providerId, _rift);
     },
@@ -168,14 +172,28 @@ class _RefreshProvider extends AnimeWitcherProvider {
     return [
       StreamResult(
         url: packageName == _rift
-            ? 'https://rift.invalid/episode.mp4'
+            ? _riftDownloadSource
             : 'https://native.invalid/episode.mp4',
         source: 'Server A',
         quality: '1080p',
+        requiresResolution: packageName == _rift,
       ),
     ];
   }
 
   @override
   Future<List<StreamResult>> loadStreams(String url) async => [];
+
+  @override
+  Future<List<StreamResult>> loadDownloadStreams(String url) async =>
+      packageName == _rift && url == _riftDownloadSource
+      ? [
+          StreamResult(
+            url: 'https://rift.invalid/episode.mp4',
+            source: 'Server A',
+            quality: '1080p',
+            refreshUrl: _riftDownloadSource,
+          ),
+        ]
+      : [];
 }

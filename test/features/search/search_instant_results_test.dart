@@ -1,4 +1,3 @@
-import 'package:animewitcher/core/account/animewitcher_character_models.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/features/search/presentation/widgets/search_instant_results.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
@@ -106,15 +105,13 @@ void main() {
     tester.view.physicalSize = const Size(1400, 1000);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
-    AnimeWitcherCharacterHit? character;
+    Actor? character;
     await tester.pumpWidget(
       _app(
         SearchInstantResults(
           items: items,
           manga: [_item('Naruto (manga)', type: MultimediaContentType.manga)],
-          characters: const [
-            AnimeWitcherCharacterHit(id: 'c1', name: 'Uzumaki Naruto'),
-          ],
+          characters: [Actor(id: 'c1', name: 'Uzumaki Naruto')],
           onOpenCharacter: (hit) => character = hit,
           loading: false,
           onOpen: (_) {},

@@ -234,6 +234,9 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   String get packageName => 'com.fares669.animewitcher.native';
 
   @override
+  bool get supportsCharacters => true;
+
+  @override
   String get name => 'AnimeWitcher';
 
   @override
@@ -936,6 +939,46 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       throwOnFailure: true,
     );
     return _characterPageFromAlgolia(payload, requestedPage: 0, isSearch: true);
+  }
+
+  @override
+  Future<ProviderCharacterPage> getCharacterPage({int page = 0}) async {
+    final legacy = await getCharactersPage(page: page);
+    return _providerCharacterPage(legacy);
+  }
+
+  @override
+  Future<ProviderCharacterPage> searchCharacterPage(
+    String query, {
+    int page = 0,
+  }) async {
+    if (page > 0 && query.trim().isNotEmpty) {
+      return ProviderCharacterPage(
+        items: const <Actor>[],
+        page: page,
+        hasMore: false,
+      );
+    }
+    final legacy = query.trim().isEmpty
+        ? await getCharactersPage(page: page)
+        : await searchCharacters(query);
+    return _providerCharacterPage(legacy);
+  }
+
+  ProviderCharacterPage _providerCharacterPage(AnimeWitcherCharacterPage page) {
+    return ProviderCharacterPage(
+      items: <Actor>[
+        for (final character in page.items)
+          Actor(
+            id: character.id,
+            name: character.name,
+            image: character.imageUrl,
+            likes: character.likes,
+          ),
+      ],
+      page: page.page,
+      hasMore: page.hasMore,
+    );
   }
 
   AnimeWitcherCharacterPage _characterPageFromAlgolia(
@@ -4674,11 +4717,9 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   ) async {
     final hits = await _resolveMalIds(rawIds);
     return <int, MultimediaItem>{
-      for (final entry in hits.entries)
-        entry.key: _relatedItem(entry.value),
+      for (final entry in hits.entries) entry.key: _relatedItem(entry.value),
     };
   }
-
 
   String _relationType(dynamic raw) {
     final value = _text(raw).replaceAll(RegExp(r'[\s-]+'), '_').toUpperCase();

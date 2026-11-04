@@ -37,6 +37,9 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
 
   @override
   String get packageName => animeRiftProviderId;
+
+  @override
+  bool get supportsCharacters => true;
   @override
   String get name => 'Anime Rift';
   @override
@@ -49,9 +52,32 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
   Set<ProviderType> get supportedTypes => const {ProviderType.anime};
 
   bool get isAccountLinked => _api.isAccountLinked;
-  Future<bool> restoreAccountSession() => _api.restoreAccountSession();
-  Future<void> signInWithCode(String code) => _api.signInWithCode(code);
-  Future<void> signOut() => _api.signOut();
+  AnimeRiftAccountIdentity? get accountIdentity => _api.accountIdentity;
+
+  Future<bool> restoreAccountSession() async {
+    final previous = _api.accountIdentity?.id;
+    final restored = await _api.restoreAccountSession();
+    if (previous != _api.accountIdentity?.id) _streams.invalidate();
+    return restored;
+  }
+
+  Future<void> signInWithCode(String code) async {
+    await _api.signInWithCode(code);
+    _streams.invalidate();
+  }
+
+  Future<void> signOut() async {
+    await _api.signOut();
+    _streams.invalidate();
+  }
+
+  /// Shows verified server-side list totals without changing local library
+  /// rows. Importing anime records requires a confirmed account list schema.
+  Future<Map<String, int>> fetchCloudLibraryCounts() async {
+    final response = await _api.fetchMyListOverview();
+    if (response['items'] is! Map) throw const AnimeRiftAccessUnavailable();
+    return Map<String, int>.unmodifiable(parseMyListOverviewCounts(response));
+  }
 
   @override
   Future<Map<String, List<MultimediaItem>>> getHome() async {
@@ -510,6 +536,56 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
       }
     }
     return 'الحلقة $number';
+  }
+
+  @override
+  Future<ProviderCharacterPage> getCharacterPage({int page = 0}) {
+    return searchCharacterPage('', page: page);
+  }
+
+  @override
+  Future<ProviderCharacterPage> searchCharacterPage(
+    String query, {
+    int page = 0,
+  }) async {
+    final safePage = page < 0 ? 0 : page;
+    final data = await _api.request(
+      'character/all',
+      'CHARACTERS.ALL',
+      query: <String, dynamic>{
+        'searchText': query.trim(),
+        if (safePage > 0) 'page': safePage,
+      },
+    );
+    final rows = data['items'];
+    if (rows is! List) throw const AnimeRiftAccessUnavailable();
+    final characters = <Actor>[];
+    final seen = <String>{};
+    for (final row in rows.whereType<Map<dynamic, dynamic>>()) {
+      final id = row['_id'];
+      final name = row['name'];
+      if (id is! String ||
+          !_safeId.hasMatch(id) ||
+          name is! String ||
+          name.trim().isEmpty ||
+          !seen.add(id)) {
+        continue;
+      }
+      characters.add(
+        Actor(
+          id: id,
+          name: name.trim(),
+          image: _art(row['image_jpg_url']),
+          likes: (row['likes'] as num?)?.toInt() ?? 0,
+        ),
+      );
+    }
+    final responsePage = (data['page'] as num?)?.toInt() ?? safePage;
+    return ProviderCharacterPage(
+      items: characters,
+      page: responsePage < 0 ? safePage : responsePage,
+      hasMore: data['hasNext'] == true,
+    );
   }
 
   @override

@@ -1,6 +1,10 @@
+import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart'
+    show AnimeRiftSecureStorageUnavailable;
 import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
+import 'package:animewitcher/core/storage/anime_rift_account_scope.dart';
 import 'package:animewitcher/core/utils/localized_text.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -112,29 +116,45 @@ class AnimeRiftAccountSettingsTile extends ConsumerWidget {
   }
 }
 
-class _AnimeRiftAccountTile extends StatefulWidget {
+class _AnimeRiftAccountTile extends ConsumerStatefulWidget {
   const _AnimeRiftAccountTile({required this.provider});
 
   final AnimeRiftProvider provider;
 
   @override
-  State<_AnimeRiftAccountTile> createState() => _AnimeRiftAccountTileState();
+  ConsumerState<_AnimeRiftAccountTile> createState() =>
+      _AnimeRiftAccountTileState();
 }
 
-class _AnimeRiftAccountTileState extends State<_AnimeRiftAccountTile> {
-  late Future<bool> _status = widget.provider.restoreAccountSession();
+class _AnimeRiftAccountTileState extends ConsumerState<_AnimeRiftAccountTile> {
+  late Future<bool> _status;
+
+  @override
+  void initState() {
+    super.initState();
+    _status = _restoreAndRefresh();
+  }
+
+  Future<bool> _restoreAndRefresh() async {
+    final previousScope = AnimeRiftLocalAccountScope.accountHash;
+    final linked = await widget.provider.restoreAccountSession();
+    if (mounted && previousScope != AnimeRiftLocalAccountScope.accountHash) {
+      ref.read(accountDataRevisionProvider.notifier).bump();
+    }
+    return linked;
+  }
 
   @override
   void didUpdateWidget(covariant _AnimeRiftAccountTile oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.provider, widget.provider)) {
-      _status = widget.provider.restoreAccountSession();
+      _status = _restoreAndRefresh();
     }
   }
 
   void _reload() {
     setState(() {
-      _status = widget.provider.restoreAccountSession();
+      _status = _restoreAndRefresh();
     });
   }
 
@@ -210,6 +230,15 @@ class _AnimeRiftAccountTileState extends State<_AnimeRiftAccountTile> {
                         if (dialogContext.mounted) {
                           Navigator.of(dialogContext).pop(true);
                         }
+                      } on AnimeRiftSecureStorageUnavailable {
+                        if (dialogContext.mounted) {
+                          setDialogState(() {
+                            busy = false;
+                            error =
+                                'تعذر حفظ جلسة Rift في التخزين الآمن. '
+                                'تحقق من إعدادات حماية الجهاز ثم أعد المحاولة.';
+                          });
+                        }
                       } catch (_) {
                         if (dialogContext.mounted) {
                           setDialogState(() {
@@ -233,6 +262,7 @@ class _AnimeRiftAccountTileState extends State<_AnimeRiftAccountTile> {
       ),
     );
     if (linked == true && mounted) {
+      ref.read(accountDataRevisionProvider.notifier).bump();
       setState(() {
         _status = Future<bool>.value(true);
       });
@@ -240,32 +270,107 @@ class _AnimeRiftAccountTileState extends State<_AnimeRiftAccountTile> {
   }
 
   Future<void> _confirmSignOut() async {
-    final confirmed = await showDialog<bool>(
+    final action = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('إلغاء ربط حساب Anime Rift؟'),
         content: const Text(
-          'سيعود الوصول المحمي والتنزيل إلى وضع الضيف. لن تُحذف مكتبة '
-          'Anime Rift المحلية أو تنزيلاتك أو حساب AnimeWitcher.',
+          'يمكنك تبديل حساب Rift برمز من حساب آخر أو إلغاء الربط. '
+          'ستظهر مكتبة Rift المحلية الخاصة بالحساب المختار، '
+          'وتبقى بيانات AnimeWitcher مستقلة.',
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
+            onPressed: () => Navigator.of(dialogContext).pop(),
             child: const Text('رجوع'),
+          ),
+          TextButton(
+            key: const ValueKey('animerift-account-switch'),
+            onPressed: () => Navigator.of(dialogContext).pop('switch'),
+            child: const Text('تبديل الحساب'),
           ),
           FilledButton(
             key: const ValueKey('animerift-account-signout-confirm'),
-            onPressed: () => Navigator.of(dialogContext).pop(true),
+            onPressed: () => Navigator.of(dialogContext).pop('unlink'),
             child: const Text('إلغاء الربط'),
           ),
         ],
       ),
     );
-    if (confirmed == true && mounted) {
+    if (!mounted) return;
+    if (action == 'switch') {
+      await _showSignIn();
+    } else if (action == 'unlink') {
       setState(() {
-        _status = widget.provider.signOut().then((_) => false);
+        _status = widget.provider.signOut().then((_) {
+          if (mounted) ref.read(accountDataRevisionProvider.notifier).bump();
+          return false;
+        });
       });
     }
+  }
+
+  Future<void> _showCloudOverview() async {
+    final future = widget.provider.fetchCloudLibraryCounts();
+    const labels = <String, String>{
+      'my_list_favorites': 'المفضلة',
+      'my_list_currently_watching': 'أتابعها حاليًا',
+      'my_list_plan_to_watch': 'أخطط لمشاهدتها',
+      'my_list_finished_watching': 'أكملت مشاهدتها',
+      'my_list_on_hold': 'متوقفة مؤقتًا',
+      'my_list_dropped': 'توقفت عن مشاهدتها',
+    };
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('قوائم حساب Anime Rift السحابية'),
+        content: SizedBox(
+          width: 380,
+          child: FutureBuilder<Map<String, int>>(
+            future: future,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(
+                  heightFactor: 2,
+                  child: CircularProgressIndicator(),
+                );
+              }
+              final counts = snapshot.data;
+              if (snapshot.hasError || counts == null) {
+                return const Text(
+                  'تعذر قراءة بيانات الحساب من Anime Rift. '
+                  'تحقق من الجلسة والاتصال ثم حاول مجددًا.',
+                );
+              }
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final entry in labels.entries)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 3),
+                      child: Text(
+                        '${entry.value}: ${counts[entry.key]?.toString() ?? '—'}',
+                      ),
+                    ),
+                  const SizedBox(height: 14),
+                  const Text(
+                    'هذه معاينة للبيانات الموجودة على خادم Rift. '
+                    'لم يتم تعديل مكتبتك المحلية أو حسابك.',
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('إغلاق'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -276,7 +381,8 @@ class _AnimeRiftAccountTileState extends State<_AnimeRiftAccountTile> {
         final waiting = snapshot.connectionState == ConnectionState.waiting;
         final failed = snapshot.hasError;
         final linked = snapshot.data == true;
-        return SettingsTile(
+        final identity = linked ? widget.provider.accountIdentity : null;
+        final accountTile = SettingsTile(
           key: const ValueKey('settings-animerift-account'),
           icon: linked ? Icons.link_rounded : Icons.link_off_rounded,
           title: appText(
@@ -296,11 +402,25 @@ class _AnimeRiftAccountTileState extends State<_AnimeRiftAccountTile> {
                   english: 'Secure session unavailable — tap to retry',
                   arabic: 'تعذر قراءة الجلسة الآمنة — اضغط لإعادة المحاولة',
                 )
+              : linked && identity?.displayName != null
+              ? appText(
+                  context,
+                  english:
+                      'Connected as ${identity!.displayName} · Rift library is local',
+                  arabic:
+                      'متصل باسم ${identity.displayName} · مكتبة Rift محلية',
+                )
+              : linked && identity?.isVerified == true
+              ? appText(
+                  context,
+                  english: 'Connected: ${identity!.id} · Rift library is local',
+                  arabic: 'الحساب: ${identity.id} · مكتبة Rift محلية',
+                )
               : linked
               ? appText(
                   context,
-                  english: 'Linked for protected Rift playback and downloads',
-                  arabic: 'مربوط للتشغيل والتنزيل المحمي من Rift',
+                  english: 'Linked for protected Rift access · local library',
+                  arabic: 'مربوط للوصول المحمي إلى Rift · المكتبة محلية',
                 )
               : appText(
                   context,
@@ -314,6 +434,28 @@ class _AnimeRiftAccountTileState extends State<_AnimeRiftAccountTile> {
               : linked
               ? _confirmSignOut
               : _showSignIn,
+        );
+        if (!linked) return accountTile;
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            accountTile,
+            SettingsTile(
+              key: const ValueKey('animerift-cloud-overview'),
+              icon: Icons.cloud_outlined,
+              title: appText(
+                context,
+                english: 'View Anime Rift cloud lists',
+                arabic: 'عرض قوائم Anime Rift السحابية',
+              ),
+              subtitle: appText(
+                context,
+                english: 'Read-only account totals; local library is unchanged',
+                arabic: 'معاينة أعداد القوائم؛ المكتبة المحلية لن تتغير',
+              ),
+              onTap: _showCloudOverview,
+            ),
+          ],
         );
       },
     );

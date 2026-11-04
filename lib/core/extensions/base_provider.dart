@@ -146,6 +146,18 @@ class ProviderMediaPage {
   });
 }
 
+class ProviderCharacterPage {
+  const ProviderCharacterPage({
+    required this.items,
+    required this.page,
+    required this.hasMore,
+  });
+
+  final List<Actor> items;
+  final int page;
+  final bool hasMore;
+}
+
 class ProviderNewsPage {
   final List<NewsItem> items;
   final int nextOffset;
@@ -169,6 +181,7 @@ abstract class AnimeWitcherProvider {
   List<String> get languages;
   Set<ProviderType> get supportedTypes;
   bool get hasSearch => true;
+  bool get supportsCharacters => false;
   bool get isDebug => packageName.endsWith('.debug');
 
   /// Preferred provider-controlled batch sizes for paginated content.
@@ -201,6 +214,21 @@ abstract class AnimeWitcherProvider {
     bool refresh = false,
     CancelToken? cancelToken,
   }) async => throw UnsupportedError('جدول البث غير مدعوم.');
+
+  Future<ProviderCharacterPage> getCharacterPage({int page = 0}) async {
+    return ProviderCharacterPage(
+      items: const <Actor>[],
+      page: page < 0 ? 0 : page,
+      hasMore: false,
+    );
+  }
+
+  Future<ProviderCharacterPage> searchCharacterPage(
+    String query, {
+    int page = 0,
+  }) {
+    return getCharacterPage(page: page);
+  }
 
   /// Optional provider-defined search filter values.
   Future<ProviderSearchFilterOptions> getSearchFilterOptions() async {

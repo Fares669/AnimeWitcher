@@ -4,6 +4,7 @@ import 'package:crypto/crypto.dart';
 
 import '../domain/entity/multimedia_item.dart';
 import '../utils/anime_rift_identity.dart';
+import 'anime_rift_account_scope.dart';
 import 'history_repository.dart';
 import 'provider_local_library.dart' show animeRiftProviderId;
 import 'storage_service.dart';
@@ -11,15 +12,19 @@ import 'storage_service.dart';
 /// Provider-scoped local playback data, kept separate from account sync.
 class ProviderLocalHistory {
   ProviderLocalHistory(this._storage, String providerId)
-    : providerId = providerId.trim() {
+    : providerId = providerId.trim(),
+      _namespace = AnimeRiftLocalAccountScope.storageNamespace(
+        providerId.trim(),
+      ) {
     if (this.providerId.isEmpty) throw ArgumentError.value(providerId);
   }
 
   final StorageService _storage;
   final String providerId;
+  final String _namespace;
   static final _queues = Expando<Map<String, Future<void>>>();
   String get storageKey =>
-      'provider_history_v1_${sha256.convert(utf8.encode(providerId))}';
+      'provider_history_v1_${sha256.convert(utf8.encode(_namespace))}';
 
   Map<String, dynamic> _read() {
     final raw = _storage.getString(storageKey);

@@ -9,8 +9,10 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../../domain/entity/manga.dart';
+import '../../account/account_providers.dart';
 import '../../extensions/base_provider.dart';
 import '../../extensions/extension_manager.dart';
+import '../../extensions/providers/anime_rift_provider.dart';
 import '../../storage/settings_repository.dart';
 import '../../storage/storage_service.dart';
 import '../download_continued_processing_service.dart';
@@ -184,7 +186,19 @@ final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
     parallelPauseReadiness: pauseReadiness,
     maxConcurrentDownloads: () =>
         ref.read(settingsRepositoryProvider).getDownloadConcurrency(),
+    ensureAccountReady: () async {
+      final provider = ref
+          .read(extensionManagerProvider.notifier)
+          .getProvider('com.animerift.provider');
+      if (provider is! AnimeRiftProvider) {
+        throw StateError('Anime Rift account provider unavailable');
+      }
+      await provider.restoreAccountSession();
+    },
   );
+  ref.listen(accountDataRevisionProvider, (_, __) {
+    unawaited(manager.refreshRiftAccountAfterChange());
+  });
   // iOS suspends Dart shortly after backgrounding, and queue advancement is
   // Dart-only: run a final admission pass (within the configured
   // concurrency cap) while the process is still alive to do it.

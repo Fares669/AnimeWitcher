@@ -10,6 +10,7 @@ import '../download_parallel.dart';
 import '../../utils/download_cleanup.dart';
 import '../../utils/local_file_io.dart';
 import '../../storage/provider_local_library.dart' show animeRiftProviderId;
+import 'anime_rift_download_metadata_v2.dart';
 
 import 'background_downloader_gateway.dart';
 import 'download_continued_processing_v2.dart';
@@ -79,6 +80,7 @@ final class DownloadManagerV2 {
     NativeParallelPauseReadinessV2? parallelPauseReadiness,
     int Function()? maxConcurrentDownloads,
     int Function()? nowMillis,
+    Future<void> Function()? ensureAccountReady,
   }) : _store = store,
        _gateway = gateway,
        _sourceResolver = sourceResolver,
@@ -93,7 +95,8 @@ final class DownloadManagerV2 {
        _parallelPauseReadiness = parallelPauseReadiness,
        _maxConcurrentDownloads =
            maxConcurrentDownloads ?? (() => kDownloadConcurrencyMax),
-       _nowMillis = nowMillis ?? (() => DateTime.now().millisecondsSinceEpoch);
+       _nowMillis = nowMillis ?? (() => DateTime.now().millisecondsSinceEpoch),
+       _ensureAccountReady = ensureAccountReady;
 
   final LogicalDownloadStoreV2 _store;
   final BackgroundDownloaderGateway _gateway;
@@ -105,6 +108,44 @@ final class DownloadManagerV2 {
   final NativeParallelPauseReadinessV2? _parallelPauseReadiness;
   final int Function() _maxConcurrentDownloads;
   final int Function() _nowMillis;
+  final Future<void> Function()? _ensureAccountReady;
+  Future<void>? _accountReadyFuture;
+  bool _riftAccountRestoreFailed = false;
+
+  bool canAccessSourceDescriptor(Map<String, Object?> descriptor) =>
+      !(_riftAccountRestoreFailed &&
+          isAnimeRiftDownloadProviderV2(
+            descriptor['providerId']?.toString(),
+          )) &&
+      downloadBelongsToCurrentRiftAccountV2(descriptor);
+
+  /// The caller may read local V2 metadata only after Rift session restoration.
+  /// A secure-storage failure fails closed for Rift while native downloads run.
+  Future<void> ensureRiftAccountReady() {
+    return _accountReadyFuture ??= () async {
+      try {
+        await _ensureAccountReady?.call();
+        _riftAccountRestoreFailed = false;
+      } catch (_) {
+        _riftAccountRestoreFailed = true;
+      }
+    }();
+  }
+
+  Future<void> refreshRiftAccountAfterChange() async {
+    _accountReadyFuture = null;
+    await ensureRiftAccountReady();
+    await suspendForeignRiftTransfers();
+  }
+
+  void _requireAccountAccess(Map<String, Object?> sourceDescriptor) {
+    if (!canAccessSourceDescriptor(sourceDescriptor)) {
+      throw StateError('This Anime Rift download belongs to another account');
+    }
+  }
+
+  void _requireRecordAccountAccess(LogicalDownloadRecordV2 record) =>
+      _requireAccountAccess(record.sourceDescriptor);
 
   final _commands = _KeyedCommandQueue<DownloadLogicalId>();
   final _destinationCommands = _KeyedCommandQueue<String>();
@@ -200,8 +241,18 @@ final class DownloadManagerV2 {
       onError: buffered.addError,
     );
     try {
-      yield List<LogicalDownloadRecordV2>.unmodifiable(await _store.all());
-      yield* buffered.stream;
+      yield List<LogicalDownloadRecordV2>.unmodifiable(
+        (await _store.all()).where(
+          (record) => canAccessSourceDescriptor(record.sourceDescriptor),
+        ),
+      );
+      yield* buffered.stream.map(
+        (records) => records
+            .where(
+              (record) => canAccessSourceDescriptor(record.sourceDescriptor),
+            )
+            .toList(growable: false),
+      );
     } finally {
       await subscription.cancel();
       // A single-subscription controller's close future does not complete until
@@ -235,12 +286,43 @@ final class DownloadManagerV2 {
     return attempt;
   }
 
+  /// Reconcile a linked Rift account switch without deleting the previous
+  /// account's files, persistent queue slots or native resume checkpoints.
+  Future<void> suspendForeignRiftTransfers() async {
+    await initialize();
+    for (final record in await _store.all()) {
+      if (canAccessSourceDescriptor(record.sourceDescriptor) ||
+          !_taskBelongsToLogicalId(record.logicalId, record.taskId)) {
+        continue;
+      }
+      final handle = await _recordHandle(record);
+      await _pauseForeignRiftHandle(handle);
+    }
+    await _publishRecords();
+    _scheduleAdmissionPromotion();
+  }
+
+  Future<void> _pauseForeignRiftHandle(DownloadTransportHandle? handle) async {
+    if (handle == null ||
+        handle.current.isFinal ||
+        handle.current.status == DownloadTransportStatus.paused) {
+      return;
+    }
+    try {
+      await _pauseHandleAndSettle(handle);
+    } catch (_) {
+      // An unacknowledged native pause must not erase another account's
+      // checkpoint or alter its durable intent.
+    }
+  }
+
   Future<void> _initializeForLocalAccess() {
     initialize().ignore();
     return _localReadiness!.future;
   }
 
   Future<void> _initialize() async {
+    await ensureRiftAccountReady();
     await _gateway.initialize();
     final rehydrated = await _gateway.rehydrate();
     final byTaskId = <String, DownloadTransportHandle>{
@@ -274,6 +356,15 @@ final class DownloadManagerV2 {
         (record) => record.mediaKind == DownloadMediaKind.mangaChapter,
       ),
     ]) {
+      if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
+        // A native task may have survived a process restart. Stop its network
+        // activity without removing its checkpoint, files or durable intent.
+        final foreign = _taskBelongsToLogicalId(record.logicalId, record.taskId)
+            ? byTaskId[record.taskId]
+            : null;
+        await _pauseForeignRiftHandle(foreign);
+        continue;
+      }
       if (record.mediaKind == DownloadMediaKind.mangaChapter) {
         // An unrelated chapter's deep verification must not gate local video controls.
         await _publishLocalReadiness();
@@ -281,10 +372,14 @@ final class DownloadManagerV2 {
       DownloadTransportHandle? startupOwnership;
       void recoverAfterLocalIndex(Future<void> Function() recover) {
         recoveries.add(() async {
-          if (_recordChanges.isClosed) return;
+          if (_recordChanges.isClosed ||
+              !canAccessSourceDescriptor(record.sourceDescriptor)) {
+            return;
+          }
           try {
             await recover();
           } catch (error) {
+            if (!canAccessSourceDescriptor(record.sourceDescriptor)) return;
             await _recordStartupFailure(record, startupOwnership, error);
           }
         });
@@ -315,6 +410,10 @@ final class DownloadManagerV2 {
           _forgetHandle(id);
           startupOwnership = null;
         }
+        if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
+          await _pauseForeignRiftHandle(byTaskId[record.taskId]);
+          continue;
+        }
         // A persisted row can retain an old foreign task ID. Never adopt or
         // control another provider's native transport during rehydration.
         startupOwnership =
@@ -334,6 +433,10 @@ final class DownloadManagerV2 {
             record,
             repairManga: true,
           );
+          if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
+            await _pauseForeignRiftHandle(startupOwnership);
+            continue;
+          }
           if (result.isValid) {
             final snapshot = DownloadTransportSnapshot(
               taskId: record.taskId,
@@ -397,6 +500,10 @@ final class DownloadManagerV2 {
                 record.intent != DownloadUserIntent.canceled
             ? await _verifyRecordDestination(record, repairManga: false)
             : null;
+        if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
+          await _pauseForeignRiftHandle(exactHandle);
+          continue;
+        }
         final startupSnapshot = pages == null
             ? exactHandle?.current
             : _snapshotWithPages(
@@ -465,7 +572,9 @@ final class DownloadManagerV2 {
               // If even cancel is rejected, the writer remains authoritative.
               // Preserve paused user intent but expose its running transport so
               // admission counts this exact writer until it really settles.
-              _activateHandle(pausedRecord.logicalId, exactHandle);
+              if (canAccessSourceDescriptor(record.sourceDescriptor)) {
+                _activateHandle(pausedRecord.logicalId, exactHandle);
+              }
               continue;
             }
             final settledTruth = pages == null
@@ -504,6 +613,10 @@ final class DownloadManagerV2 {
                   // retains admission until a genuine pause callback arrives.
                   settledPause = exactHandle.current;
                 }
+              }
+              if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
+                await _pauseForeignRiftHandle(exactHandle);
+                continue;
               }
               _activateHandle(record.logicalId, exactHandle);
             }
@@ -589,6 +702,10 @@ final class DownloadManagerV2 {
                   updatedAtMillis: _nowMillis(),
                 );
                 await _store.put(admitted);
+                if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
+                  await _pauseForeignRiftHandle(exactHandle);
+                  continue;
+                }
                 _rememberRecord(admitted);
                 if (exactHandle is MangaChapterTransportHandleV2 &&
                     exactHandle.recoveryOnly) {
@@ -631,6 +748,10 @@ final class DownloadManagerV2 {
               }
               if (exactHandle.current.status ==
                   DownloadTransportStatus.paused) {
+                if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
+                  await _pauseForeignRiftHandle(exactHandle);
+                  continue;
+                }
                 var resumed = false;
                 try {
                   resumed = await _resumeHandleAndAwaitAcknowledgement(
@@ -639,6 +760,10 @@ final class DownloadManagerV2 {
                   );
                 } catch (_) {
                   // Preserve the exact generation if native resume throws.
+                }
+                if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
+                  await _pauseForeignRiftHandle(exactHandle);
+                  continue;
                 }
                 if (!resumed) {
                   // Never turn a recoverable paused transfer into a failed row
@@ -649,6 +774,10 @@ final class DownloadManagerV2 {
                     updatedAtMillis: _nowMillis(),
                   );
                   await _store.put(pausedRecord);
+                  if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
+                    await _pauseForeignRiftHandle(exactHandle);
+                    continue;
+                  }
                   _rememberRecord(pausedRecord);
                   _activateHandle(pausedRecord.logicalId, exactHandle);
                   continue;
@@ -695,7 +824,11 @@ final class DownloadManagerV2 {
     DownloadTransportHandle? startupOwnership,
     Object error,
   ) async {
-    if (_recordChanges.isClosed) return;
+    if (_recordChanges.isClosed ||
+        !canAccessSourceDescriptor(record.sourceDescriptor)) {
+      await _pauseForeignRiftHandle(startupOwnership);
+      return;
+    }
     final current = await _store.get(record.logicalId) ?? record;
     // Recovery can fail for a passing reason, such as launching offline.
     // Keep the user's intent so the next launch tries again; this session
@@ -735,6 +868,11 @@ final class DownloadManagerV2 {
     DownloadStartRequestV2 request, {
     bool enqueueOnly = false,
   }) {
+    try {
+      _requireAccountAccess(request.sourceDescriptor);
+    } catch (error) {
+      return Future.error(error);
+    }
     final providerId = request.sourceDescriptor['providerId']
         ?.toString()
         .trim();
@@ -746,6 +884,10 @@ final class DownloadManagerV2 {
               episodeKey: request.unitKey,
               variantKey: request.variantKey,
               providerId: providerId,
+              accountHash: animeRiftDownloadAccountHashV2(
+                request.sourceDescriptor,
+              ),
+              useActiveAccount: false,
             )) {
       return Future.error(
         StateError('Invalid provider-scoped download identity'),
@@ -753,7 +895,9 @@ final class DownloadManagerV2 {
     }
     return _runControlCommand(request.logicalId, 'start', () async {
       await initialize();
+      _requireAccountAccess(request.sourceDescriptor);
       final currentRecord = await _store.get(request.logicalId);
+      if (currentRecord != null) _requireRecordAccountAccess(currentRecord);
 
       if (currentRecord != null) {
         if (currentRecord.completedAtMillis != null &&
@@ -840,6 +984,7 @@ final class DownloadManagerV2 {
       if (currentRecord == null) {
         throw StateError('Cannot restart missing logical download $logicalId');
       }
+      _requireRecordAccountAccess(currentRecord);
       final request = _requestFromRecord(currentRecord);
       _sourceRefreshAttempts.remove(logicalId);
       _mangaSourceRefreshVerifiedPages.remove(logicalId);
@@ -861,6 +1006,7 @@ final class DownloadManagerV2 {
       if (currentRecord == null) {
         throw StateError('Cannot retry missing logical download $logicalId');
       }
+      _requireRecordAccountAccess(currentRecord);
       if (expectedTaskId != null && currentRecord.taskId != expectedTaskId) {
         return _snapshots[logicalId] ??
             DownloadTransportSnapshot(
@@ -941,6 +1087,7 @@ final class DownloadManagerV2 {
       await initialize();
       final record = await _store.get(logicalId);
       if (record == null) return null;
+      _requireRecordAccountAccess(record);
       if (expectedTaskId != null && record.taskId != expectedTaskId) {
         return _snapshots[logicalId];
       }
@@ -1087,6 +1234,7 @@ final class DownloadManagerV2 {
       if (record == null) {
         throw StateError('Cannot resume missing logical download $logicalId');
       }
+      _requireRecordAccountAccess(record);
       if (expectedTaskId != null && record.taskId != expectedTaskId) {
         return _snapshots[logicalId] ??
             DownloadTransportSnapshot(
@@ -1119,6 +1267,7 @@ final class DownloadManagerV2 {
     LogicalDownloadRecordV2 record,
     DownloadStartRequestV2 request,
   ) async {
+    _requireRecordAccountAccess(record);
     final logicalId = record.logicalId;
     if (record.awaitingAdmission) {
       final activeRecord = record.intent == DownloadUserIntent.active
@@ -1374,6 +1523,7 @@ final class DownloadManagerV2 {
       await initialize();
       final record = await _store.get(logicalId);
       if (record == null) return;
+      _requireRecordAccountAccess(record);
       final destinationKey = await _canonicalDestinationPath(
         record.destinationPath,
       );
@@ -1397,12 +1547,14 @@ final class DownloadManagerV2 {
       await _initializeForLocalAccess();
       var record = await _store.get(logicalId);
       if (record == null) return;
+      _requireRecordAccountAccess(record);
       if (expectedTaskId != null && record.taskId != expectedTaskId) return;
       if (record.completedAtMillis == null ||
           record.mediaKind != DownloadMediaKind.videoEpisode) {
         await initialize();
         record = await _store.get(logicalId);
         if (record == null) return;
+        _requireRecordAccountAccess(record);
         if (expectedTaskId != null && record.taskId != expectedTaskId) return;
       }
       final deleting = record;
@@ -1492,8 +1644,13 @@ final class DownloadManagerV2 {
     });
   }
 
-  DownloadTransportSnapshot? snapshotFor(DownloadLogicalId logicalId) =>
-      _snapshots[logicalId];
+  DownloadTransportSnapshot? snapshotFor(DownloadLogicalId logicalId) {
+    final record = _recordsByLogicalId[logicalId];
+    if (record != null && !canAccessSourceDescriptor(record.sourceDescriptor)) {
+      return null;
+    }
+    return _snapshots[logicalId];
+  }
 
   /// Applies read-only native throughput telemetry to the current generation.
   ///
@@ -1603,7 +1760,8 @@ final class DownloadManagerV2 {
     await initialize();
     final record = await _store.get(logicalId);
     if (record?.completedAtMillis == null) return false;
-    final result = await _verifyRecordDestination(record!, repairManga: true);
+    _requireRecordAccountAccess(record!);
+    final result = await _verifyRecordDestination(record, repairManga: true);
     return result.isValid;
   }
 
@@ -1615,6 +1773,7 @@ final class DownloadManagerV2 {
     DownloadTransportHandle? previousHandle,
     bool lookUpPreviousHandle = true,
   }) async {
+    _requireAccountAccess(request.sourceDescriptor);
     final destinationKey = await _canonicalDestinationPath(
       request.destinationPath,
     );
@@ -1661,6 +1820,7 @@ final class DownloadManagerV2 {
     DownloadTransportHandle? previousHandle,
     bool lookUpPreviousHandle = true,
   }) async {
+    _requireAccountAccess(request.sourceDescriptor);
     if (previous != null &&
         previous.intent == DownloadUserIntent.active &&
         previous.awaitingAdmission) {
@@ -1727,6 +1887,7 @@ final class DownloadManagerV2 {
       updatedAtMillis: _nowMillis(),
       enqueuedAtMillis: _nextEnqueuedAtMillis(),
     );
+    _requireAccountAccess(request.sourceDescriptor);
     await _store.put(queuedRecord);
     _rememberRecord(queuedRecord);
     await _publishRecords();
@@ -1811,6 +1972,20 @@ final class DownloadManagerV2 {
       final transport = _taskBelongsToLogicalId(record.logicalId, taskId)
           ? _handlesByTaskId[taskId]?.current
           : null;
+      if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
+        // Other accounts' parked records cannot consume the current
+        // account's queue slots. Count an unpausable native writer until
+        // its real ownership has stopped to preserve the concurrency limit.
+        if (transport != null &&
+            {
+              DownloadTransportStatus.queued,
+              DownloadTransportStatus.running,
+              DownloadTransportStatus.held,
+            }.contains(transport.status)) {
+          occupied.add(record.logicalId);
+        }
+        continue;
+      }
       final ownsWorkingTransport =
           transport != null &&
           {
@@ -1933,6 +2108,7 @@ final class DownloadManagerV2 {
         .where(
           (record) =>
               record.intent == DownloadUserIntent.active &&
+              canAccessSourceDescriptor(record.sourceDescriptor) &&
               record.awaitingAdmission &&
               !_pendingStopControls.containsKey(record.logicalId),
         )
@@ -1959,6 +2135,7 @@ final class DownloadManagerV2 {
         final attempt = await _commands.run(candidate.logicalId, () async {
           final current = await _store.get(candidate.logicalId);
           if (current == null ||
+              !canAccessSourceDescriptor(current.sourceDescriptor) ||
               current.intent != DownloadUserIntent.active ||
               !current.awaitingAdmission ||
               _pendingStopControls.containsKey(candidate.logicalId)) {
@@ -1970,6 +2147,7 @@ final class DownloadManagerV2 {
           return _destinationCommands.run(destinationKey, () async {
             final latest = await _store.get(candidate.logicalId);
             if (latest == null ||
+                !canAccessSourceDescriptor(latest.sourceDescriptor) ||
                 latest.intent != DownloadUserIntent.active ||
                 !latest.awaitingAdmission ||
                 _pendingStopControls.containsKey(candidate.logicalId)) {
@@ -2007,6 +2185,7 @@ final class DownloadManagerV2 {
             } catch (_) {
               final current = await _store.get(latest.logicalId);
               if (current == null ||
+                  !canAccessSourceDescriptor(current.sourceDescriptor) ||
                   current.intent == DownloadUserIntent.failed)
                 return _AdmissionAttempt.promoted;
               final failedRecord = current.copyWith(
@@ -2056,8 +2235,13 @@ final class DownloadManagerV2 {
   Future<void> _promoteQueuedAdmissionUnsafe(
     LogicalDownloadRecordV2 record,
   ) async {
+    _requireRecordAccountAccess(record);
     final request = _requestFromRecord(record);
     final existing = await _recordHandle(record);
+    if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
+      await _pauseForeignRiftHandle(existing);
+      return;
+    }
     if (existing != null) {
       if (existing is MangaChapterTransportHandleV2 && existing.recoveryOnly) {
         await _startExistingMangaGenerationUnsafe(request, record);
@@ -2083,18 +2267,31 @@ final class DownloadManagerV2 {
               expectedChildren: record.parallelChunks,
             );
             if (!ready) {
+              if (!canAccessSourceDescriptor(record.sourceDescriptor)) return;
               await _preservePausedResumeFailure(record, existing);
               return;
             }
+          }
+          if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
+            await _pauseForeignRiftHandle(existing);
+            return;
           }
           resumed = await _resumeHandleAndAwaitAcknowledgement(
             record.logicalId,
             existing,
           );
         } catch (_) {
+          if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
+            await _pauseForeignRiftHandle(existing);
+            return;
+          }
           // A thrown resume is no proof the progress is gone. Keep it paused
           // rather than failed, whose Retry would start from byte zero.
           await _preservePausedResumeFailure(record, existing);
+          return;
+        }
+        if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
+          await _pauseForeignRiftHandle(existing);
           return;
         }
         if (resumed) {
@@ -2104,6 +2301,10 @@ final class DownloadManagerV2 {
             updatedAtMillis: _nowMillis(),
           );
           await _store.put(admitted);
+          if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
+            await _pauseForeignRiftHandle(existing);
+            return;
+          }
           _rememberRecord(admitted);
           await _publishRecords();
           _activateHandle(record.logicalId, existing);
@@ -2121,6 +2322,10 @@ final class DownloadManagerV2 {
           updatedAtMillis: _nowMillis(),
         );
         await _store.put(admitted);
+        if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
+          await _pauseForeignRiftHandle(existing);
+          return;
+        }
         _rememberRecord(admitted);
         await _publishRecords();
         _activateHandle(record.logicalId, existing);
@@ -2147,6 +2352,7 @@ final class DownloadManagerV2 {
             request.logicalId,
             () => _sourceResolver.resolve(request.sourceDescriptor),
           );
+    if (!canAccessSourceDescriptor(record.sourceDescriptor)) return;
     final admitted = record.copyWith(
       awaitingAdmission: false,
       parallelChunks: isManga
@@ -2160,6 +2366,7 @@ final class DownloadManagerV2 {
       updatedAtMillis: _nowMillis(),
     );
     await _store.put(admitted);
+    if (!canAccessSourceDescriptor(record.sourceDescriptor)) return;
     _rememberRecord(admitted);
     await _publishRecords();
 
@@ -2184,6 +2391,10 @@ final class DownloadManagerV2 {
       expectedBytes: admitted.expectedBytes,
       videoSource: source,
     );
+    if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
+      await _pauseForeignRiftHandle(handle);
+      return;
+    }
     _activateHandle(admitted.logicalId, handle);
   }
 
@@ -2293,6 +2504,7 @@ final class DownloadManagerV2 {
     int? expectedBytes,
     ResolvedDownloadSourceV2? videoSource,
   }) async {
+    _requireAccountAccess(request.sourceDescriptor);
     try {
       if (request.mediaKind == DownloadMediaKind.mangaChapter) {
         final resolver = _mangaChapterPageResolver;
@@ -2326,6 +2538,7 @@ final class DownloadManagerV2 {
             request.logicalId,
             () => _sourceResolver.resolve(request.sourceDescriptor),
           );
+      _requireAccountAccess(request.sourceDescriptor);
       return await _gateway.start(
         DownloadTaskSpecV2(
           taskId: taskId,
@@ -2429,6 +2642,7 @@ final class DownloadManagerV2 {
       }
       if (!_recordChanges.isClosed &&
           previous != null &&
+          canAccessSourceDescriptor(previous.sourceDescriptor) &&
           previous.intent != DownloadUserIntent.canceled) {
         await _persistFailure(
           previous,
@@ -2449,6 +2663,7 @@ final class DownloadManagerV2 {
     if (_recordChanges.isClosed) {
       throw StateError('Download manager disposed during source recovery');
     }
+    _requireAccountAccess(request.sourceDescriptor);
     if (previous != null &&
         previous.mediaKind == DownloadMediaKind.mangaChapter &&
         _taskBelongsToLogicalId(previous.logicalId, previous.taskId)) {
@@ -2488,6 +2703,7 @@ final class DownloadManagerV2 {
       enqueuedAtMillis: _nextEnqueuedAtMillis(),
     );
 
+    _requireAccountAccess(request.sourceDescriptor);
     await _store.put(nextRecord);
     _rememberRecord(nextRecord);
     await _publishRecords();
@@ -2513,11 +2729,16 @@ final class DownloadManagerV2 {
         expectedBytes: expectedBytes,
         videoSource: source,
       );
+      if (!canAccessSourceDescriptor(request.sourceDescriptor)) {
+        await _pauseForeignRiftHandle(handle);
+        throw StateError('Anime Rift account changed during download startup');
+      }
       _activateHandle(request.logicalId, handle);
       return request.mediaKind == DownloadMediaKind.mangaChapter
           ? (_snapshots[request.logicalId] ?? handle.current)
           : handle.current;
     } catch (e) {
+      if (!canAccessSourceDescriptor(request.sourceDescriptor)) rethrow;
       final failedRecord = nextRecord.copyWith(
         intent: DownloadUserIntent.failed,
         awaitingAdmission: false,
@@ -3534,6 +3755,7 @@ final class DownloadManagerV2 {
       _commands.run(logicalId, () async {
         final record = await _store.get(logicalId);
         if (record == null ||
+            !canAccessSourceDescriptor(record.sourceDescriptor) ||
             record.intent == DownloadUserIntent.canceled ||
             record.intent == DownloadUserIntent.failed ||
             record.taskId != completedSnapshot.taskId) {
@@ -3570,6 +3792,7 @@ final class DownloadManagerV2 {
           // on startup; playback can report a recoverable error without cleanup.
           rejectNonVideoPayload: true,
         );
+        if (!canAccessSourceDescriptor(record.sourceDescriptor)) return;
         if (!result.isValid &&
             record.mediaKind != DownloadMediaKind.mangaChapter) {
           await _deleteDestination(
@@ -3581,6 +3804,7 @@ final class DownloadManagerV2 {
 
         final updated = await _store.mutate(logicalId, (current) {
           if (current == null ||
+              !canAccessSourceDescriptor(current.sourceDescriptor) ||
               current.intent == DownloadUserIntent.canceled ||
               current.intent == DownloadUserIntent.failed ||
               current.taskId != completedSnapshot.taskId) {
@@ -3710,6 +3934,7 @@ final class DownloadManagerV2 {
       _commands.run(logicalId, () async {
         final record = await _store.get(logicalId);
         if (record == null ||
+            !canAccessSourceDescriptor(record.sourceDescriptor) ||
             record.intent != DownloadUserIntent.active ||
             record.taskId != failedTaskId) {
           return;
@@ -3786,6 +4011,7 @@ final class DownloadManagerV2 {
               () => _sourceResolver.resolve(record.sourceDescriptor),
             );
             if (_recordChanges.isClosed) return;
+            if (!canAccessSourceDescriptor(record.sourceDescriptor)) return;
             if (await _yieldSourceRenewalToStop(record, renewableHandle!)) {
               refundStoppedAttempt();
               return;
@@ -3928,7 +4154,9 @@ final class DownloadManagerV2 {
         integrityResult: integrityResult,
       ),
     );
-    if (record != null && record.taskId == snapshot.taskId) {
+    if (record != null &&
+        record.taskId == snapshot.taskId &&
+        canAccessSourceDescriptor(record.sourceDescriptor)) {
       if (!_presentationChanges.isClosed) _presentationChanges.add(null);
       for (final observer in _presentationObservers) {
         unawaited(_observePresentation(observer, record, snapshot));
@@ -3962,7 +4190,13 @@ final class DownloadManagerV2 {
     final records = await _store.all();
     records.sort((a, b) => a.updatedAtMillis.compareTo(b.updatedAtMillis));
     if (!_recordChanges.isClosed) {
-      _recordChanges.add(List<LogicalDownloadRecordV2>.unmodifiable(records));
+      _recordChanges.add(
+        List<LogicalDownloadRecordV2>.unmodifiable(
+          records.where(
+            (record) => canAccessSourceDescriptor(record.sourceDescriptor),
+          ),
+        ),
+      );
     }
   }
 
