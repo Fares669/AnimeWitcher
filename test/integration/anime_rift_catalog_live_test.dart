@@ -56,9 +56,10 @@ void main() {
         'ANIME.LIBRARY.HOME_CONTENT',
         query: {'with_genres': true},
       );
-      expect(homeResponse['sections'], isA<List>());
+      expect(homeResponse['sections'], isA<List<dynamic>>());
       for (final section
-          in (homeResponse['sections'] as List).whereType<Map>()) {
+          in (homeResponse['sections'] as List<dynamic>)
+              .whereType<Map<dynamic, dynamic>>()) {
         // Public catalog descriptors only: no item values, URLs or headers.
         // These identify the actual section contract before adding pagination.
         final keys = section.keys.map((key) => key.toString()).toList()..sort();
@@ -258,7 +259,7 @@ void main() {
         query: {'searchText': 'Naruto'},
       );
       final characterRows = characterResponse['items'];
-      expect(characterRows, isA<List>());
+      expect(characterRows, isA<List<dynamic>>());
       expect(characterRows as List, isNotEmpty);
       final firstCharacter = Map<String, dynamic>.from(
         characterRows.first as Map,
