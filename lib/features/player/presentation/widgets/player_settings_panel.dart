@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:animewitcher/core/utils/localized_text.dart';
 import 'package:animewitcher/features/player/data/anime4k.dart';
+import 'package:animewitcher/features/details/presentation/source_picker.dart';
 
 /// The desktop player's settings panel: one ⚙ button opens it above the
 /// bar, and the picture and speed choices live in it as tabs instead of as a
@@ -75,12 +76,16 @@ class PlayerPanelChoice {
     required this.selected,
     required this.onTap,
     this.sectionLabel,
+    this.language,
+    this.audioType,
   });
 
   final String label;
   final bool selected;
   final VoidCallback onTap;
   final String? sectionLabel;
+  final StreamSourceLanguage? language;
+  final StreamSourceAudioType? audioType;
 }
 
 class _PlayerSettingsPanelState extends State<PlayerSettingsPanel> {
@@ -89,6 +94,8 @@ class _PlayerSettingsPanelState extends State<PlayerSettingsPanel> {
 
   /// The quality list, fetched once per opening of the panel.
   Future<List<PlayerPanelChoice>>? _qualityFuture;
+  StreamSourceLanguage? _sourceLanguage;
+  StreamSourceAudioType? _sourceAudioType;
 
   List<_Tab> get _tabs => [
     if (widget.showAnime4k || widget.showResize || widget.qualityLabel != null)
@@ -319,6 +326,95 @@ extension on _PlayerSettingsPanelState {
   }
 
   Widget _choiceList(List<PlayerPanelChoice> list, Color accent) {
+    final sources = list.where((choice) => choice.language != null).toList();
+    if (sources.isEmpty) return _choiceItems(list, accent);
+
+    final languages = [
+      for (final language in StreamSourceLanguage.values)
+        if (sources.any((choice) => choice.language == language)) language,
+    ];
+    final language = languages.contains(_sourceLanguage)
+        ? _sourceLanguage!
+        : languages.firstWhere(
+            (option) => sources.any(
+              (choice) => choice.selected && choice.language == option,
+            ),
+            orElse: () => languages.first,
+          );
+    final languageSources = sources
+        .where((choice) => choice.language == language)
+        .toList();
+    final modes = [
+      for (final mode in StreamSourceAudioType.values)
+        if (languageSources.any((choice) => choice.audioType == mode)) mode,
+    ];
+    final mode = modes.contains(_sourceAudioType)
+        ? _sourceAudioType
+        : modes.isEmpty
+        ? null
+        : modes.firstWhere(
+            (option) => languageSources.any(
+              (choice) => choice.selected && choice.audioType == option,
+            ),
+            orElse: () => modes.first,
+          );
+    final visible = languageSources
+        .where((choice) => mode == null || choice.audioType == mode)
+        .toList();
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (languages.length > 1 ||
+            languages.first != StreamSourceLanguage.unknown)
+          Align(
+            alignment: Alignment.centerRight,
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: [
+                for (final option in languages)
+                  ChoiceChip(
+                    key: ValueKey('player-source-language-${option.name}'),
+                    label: Text(option.label),
+                    selected: option == language,
+                    onSelected: (_) => setState(() {
+                      _sourceLanguage = option;
+                      _sourceAudioType = null;
+                    }),
+                  ),
+              ],
+            ),
+          ),
+        if (modes.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 5),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Wrap(
+                spacing: 4,
+                runSpacing: 3,
+                children: [
+                  for (final option in modes)
+                    ChoiceChip(
+                      key: ValueKey('player-source-mode-${option.name}'),
+                      label: Text(option.label),
+                      visualDensity: VisualDensity.compact,
+                      labelPadding: const EdgeInsets.symmetric(horizontal: 1),
+                      selected: option == mode,
+                      onSelected: (_) => setState(() => _sourceAudioType = option),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        _choiceItems(visible, accent),
+      ],
+    );
+  }
+
+  Widget _choiceItems(List<PlayerPanelChoice> list, Color accent) {
     return ConstrainedBox(
       constraints: BoxConstraints(
         // A phone on its side is short: the list scrolls within it.
