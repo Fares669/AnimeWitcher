@@ -4052,19 +4052,11 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     int offset = 0,
     int limit = 30,
   }) {
-    if (offset > 0) {
-      return Future<ProviderMediaPage>.value(
-        ProviderMediaPage(
-          items: const <MultimediaItem>[],
-          nextOffset: offset,
-          hasMore: false,
-        ),
-      );
-    }
     return _loadHomePage(
       sectionName,
-      offset: 0,
+      offset: offset,
       limit: _homeViewMoreHitsPerPage,
+      throwOnFailure: true,
     );
   }
 
