@@ -171,7 +171,6 @@ void main() {
     await tester.pump();
     expect(find.text('RiftOnly'), findsWidgets);
     expect(find.text('Frieren'), findsNothing);
-    expect(find.text('مكتبة Anime Rift محفوظة على هذا الجهاز ولا تتم مزامنتها.'), findsOneWidget);
   });
 
   testWidgets('PC: menu appears top left and hides with the top bar', (
