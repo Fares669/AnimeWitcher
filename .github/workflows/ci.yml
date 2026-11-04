@@ -113,7 +113,7 @@ jobs:
     if: >-
       github.event.head_commit.message != 'chore: purge obsolete workflow history'
     name: Build iOS V2 and retain log
-    runs-on: macos-latest
+    runs-on: macos-26-intel
     steps:
       - uses: actions/checkout@v5
 
@@ -150,7 +150,7 @@ jobs:
     if: >-
       github.event.head_commit.message != 'chore: purge obsolete workflow history'
     name: Typecheck native download logger
-    runs-on: macos-latest
+    runs-on: macos-26-intel
     steps:
       - uses: actions/checkout@v5
       - name: Typecheck the production Foundation logger
