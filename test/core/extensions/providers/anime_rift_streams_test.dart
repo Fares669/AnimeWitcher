@@ -18,6 +18,7 @@ class StreamFixture extends AnimeRiftApiClient {
       );
   final calls = <({String path, Map<String, dynamic>? body})>[];
   bool requireDownloadAuth = false;
+  String? authRequiredHost;
   bool denyPlayback = false;
   String? unavailableHost;
   @override
@@ -76,7 +77,8 @@ class StreamFixture extends AnimeRiftApiClient {
         ],
       };
     if (path.endsWith('/can_play')) {
-      if (body?['is_download'] == true && requireDownloadAuth)
+      if ((body?['is_download'] == true && requireDownloadAuth) ||
+          body?['hostId'] == authRequiredHost)
         return {'require_auth': true};
       if (body?['hostId'] == unavailableHost) return {'can_play': false};
       if (denyPlayback) return {'can_play': false, 'requires_ad': true};
@@ -254,5 +256,38 @@ void main() {
       );
     }
     expect(api.calls, isEmpty);
+  });
+
+  test('automatic playback skips a login-gated host for a guest-accessible fallback', () async {
+    final api = StreamFixture()..authRequiredHost = 'host1';
+    final provider = AnimeRiftProvider(client: api);
+    final automatic = await provider.loadStreams(episodeUrl);
+    expect(automatic.single.source, contains('BBZ'));
+    expect(
+      api.calls.where((c) => c.path.endsWith('/direct_link')),
+      hasLength(1),
+    );
+    final first = (await provider.loadStreamSources(episodeUrl)).first;
+    await expectLater(
+      provider.loadStreams(first.url),
+      throwsA(isA<AnimeRiftAuthenticationRequired>()),
+    );
+  });
+
+  test('automatic download preserves the authentication error when every source is gated', () async {
+    final api = StreamFixture()..requireDownloadAuth = true;
+    final provider = AnimeRiftProvider(client: api);
+    await expectLater(
+      provider.loadDownloadStreams(episodeUrl),
+      throwsA(isA<AnimeRiftAuthenticationRequired>()),
+    );
+    expect(
+      api.calls.where((c) => c.path.endsWith('/direct_link')),
+      isEmpty,
+    );
+    expect(
+      api.calls.where((c) => c.path.endsWith('/can_play')),
+      hasLength(2),
+    );
   });
 }

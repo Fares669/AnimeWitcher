@@ -324,15 +324,20 @@ class AnimeRiftStreams {
     final ref = await _identity(url, download: download);
     final choices = await loadSources(url, download: ref.download);
     if (choices.isEmpty) throw const AnimeRiftPlaybackUnavailable();
+    var authenticationRequired = false;
     for (final source in choices.take(ref.host == null ? 6 : 1)) {
       try {
         return [await _resolve(source, download: ref.download)];
       } on AnimeRiftAuthenticationRequired {
-        rethrow;
+        if (ref.host != null) rethrow;
+        // For automatic playback, another server may be accessible to guests.
+        // Never use a playback entitlement as a substitute for download access.
+        authenticationRequired = true;
       } on AnimeRiftAccessUnavailable {
         if (ref.host != null) rethrow;
       }
     }
+    if (authenticationRequired) throw const AnimeRiftAuthenticationRequired();
     throw const AnimeRiftPlaybackUnavailable();
   }
 }

@@ -98,6 +98,8 @@ class AnimeRiftApiClient {
   Future<void>? _initializing;
   Future<void>? _identityLoad;
   Future<bool>? _restoringSession;
+  Future<void>? _signingIn;
+  Future<void>? _signingOut;
   bool _registered = false;
   bool get isConfigured => config.isConfigured;
   bool get isAccountLinked => _accessToken != null;
@@ -410,6 +412,21 @@ class AnimeRiftApiClient {
       // Sign-in codes are credentials: never include their value in errors.
       throw ArgumentError('Invalid Anime Rift sign-in code');
     }
+    // Linking and unlinking must not race over the secure credential.
+    final unlinking = _signingOut;
+    if (unlinking != null) await unlinking;
+    final linking = _signingIn;
+    if (linking != null) return linking;
+    final pending = _signInWithCodeOnce(value);
+    _signingIn = pending;
+    try {
+      await pending;
+    } finally {
+      if (identical(_signingIn, pending)) _signingIn = null;
+    }
+  }
+
+  Future<void> _signInWithCodeOnce(String value) async {
     await _ensureReady();
     final response = await _send(
       '$_base/auth/sign-in/with-code',
@@ -439,6 +456,26 @@ class AnimeRiftApiClient {
   }
 
   Future<void> signOut() async {
+    final unlinking = _signingOut;
+    if (unlinking != null) return unlinking;
+    final pending = _signOutOnce();
+    _signingOut = pending;
+    try {
+      await pending;
+    } finally {
+      if (identical(_signingOut, pending)) _signingOut = null;
+    }
+  }
+
+  Future<void> _signOutOnce() async {
+    final linking = _signingIn;
+    if (linking != null) {
+      try {
+        await linking;
+      } catch (_) {
+        // An unsuccessful sign-in must not prevent removing an older token.
+      }
+    }
     final pending = _restoringSession;
     if (pending != null) {
       try {

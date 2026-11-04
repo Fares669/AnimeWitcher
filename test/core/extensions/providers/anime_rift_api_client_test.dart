@@ -45,6 +45,10 @@ void main() {
   var rejectSecureWrites = false;
   var rejectNextSecureRead = false;
   Completer<void>? delayedSecureRead;
+  Completer<void>? delayedSecureWrite;
+  Completer<void>? secureWriteStarted;
+  Completer<void>? delayedSecureDelete;
+  Completer<void>? secureDeleteStarted;
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
@@ -53,6 +57,10 @@ void main() {
     rejectSecureWrites = false;
     rejectNextSecureRead = false;
     delayedSecureRead = null;
+    delayedSecureWrite = null;
+    secureWriteStarted = null;
+    delayedSecureDelete = null;
+    secureDeleteStarted = null;
     messenger.setMockMethodCallHandler(secureChannel, (call) async {
       secureCalls.add(call);
       final arguments = Map<Object?, Object?>.from(call.arguments as Map);
@@ -67,12 +75,22 @@ void main() {
           }
           return secureValues[key];
         case 'write':
+          if (secureWriteStarted != null && !secureWriteStarted!.isCompleted) {
+            secureWriteStarted!.complete();
+          }
+          final writeGate = delayedSecureWrite;
+          if (writeGate != null) await writeGate.future;
           if (rejectSecureWrites) {
             throw PlatformException(code: 'SECURE_WRITE_FAILED');
           }
           secureValues[key!] = arguments['value']! as String;
           return null;
         case 'delete':
+          if (secureDeleteStarted != null && !secureDeleteStarted!.isCompleted) {
+            secureDeleteStarted!.complete();
+          }
+          final deleteGate = delayedSecureDelete;
+          if (deleteGate != null) await deleteGate.future;
           secureValues.remove(key);
           return null;
         case 'deleteAll':
@@ -570,5 +588,64 @@ void main() {
       hasLength(1),
     );
     expect(restarted.isAccountLinked, isTrue);
+  });
+
+  test('unlink waits for a pending secure sign-in write before deleting', () async {
+    final dio = fixtureDio((o) {
+      if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+      if (o.uri.path.endsWith('/auth/register/device')) {
+        return reply(o, {}, 201);
+      }
+      return reply(o, {
+        'items': {
+          'profile': {'_id': 'rift-user-1'},
+          'token': 'fixture-user-token',
+        },
+      });
+    });
+    final client = AnimeRiftApiClient(config: fixtureConfig, dio: dio);
+    delayedSecureWrite = Completer<void>();
+    secureWriteStarted = Completer<void>();
+    final linking = client.signInWithCode('valid-code');
+    await secureWriteStarted!.future;
+
+    final unlinking = client.signOut();
+    delayedSecureWrite!.complete();
+    await Future.wait([linking, unlinking]);
+
+    expect(client.isAccountLinked, isFalse);
+    expect(secureValues, isEmpty);
+    final writes = secureCalls.where((call) => call.method == 'write');
+    final deletes = secureCalls.where((call) => call.method == 'delete');
+    expect(writes, hasLength(1));
+    expect(deletes, hasLength(1));
+  });
+
+  test('link waits for in-flight unlink to complete before storing a token', () async {
+    final dio = fixtureDio((o) {
+      if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+      if (o.uri.path.endsWith('/auth/register/device')) {
+        return reply(o, {}, 201);
+      }
+      return reply(o, {
+        'items': {
+          'profile': {'_id': 'rift-user-1'},
+          'token': 'fixture-user-token',
+        },
+      });
+    });
+    final client = AnimeRiftApiClient(config: fixtureConfig, dio: dio);
+    await client.signInWithCode('valid-code');
+    delayedSecureDelete = Completer<void>();
+    secureDeleteStarted = Completer<void>();
+
+    final unlinking = client.signOut();
+    await secureDeleteStarted!.future;
+    final linking = client.signInWithCode('valid-code');
+    delayedSecureDelete!.complete();
+    await Future.wait([unlinking, linking]);
+
+    expect(client.isAccountLinked, isTrue);
+    expect(secureValues.values.single, contains('fixture-user-token'));
   });
 }
