@@ -122,6 +122,7 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     return normalized.contains('اصدارات حديثه') ||
         normalized.contains('الاصدارات الحديثه') ||
         normalized.contains('احدث الاصدارات') ||
+        normalized.contains('احدث اصدارات') ||
         normalized.contains('اخر الاصدارات') ||
         normalized.contains('recent releases') ||
         normalized.contains('latest releases') ||

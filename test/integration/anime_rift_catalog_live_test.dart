@@ -147,7 +147,10 @@ void main() {
             'overlap=${returnedIds.where(expectedIds.contains).length}',
           );
         } catch (error) {
-          print('Live home paging candidate unavailable: ${error.runtimeType}');
+          final diagnostic = error is AnimeRiftAccessUnavailable
+              ? 'HTTP ${error.statusCode} stage=${error.stage} failure=${error.failure}'
+              : error.runtimeType.toString();
+          print('Live home paging candidate unavailable: $diagnostic');
         }
       }
       for (final filter in {

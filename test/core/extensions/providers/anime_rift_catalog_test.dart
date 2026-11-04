@@ -379,6 +379,27 @@ void main() {
     expect(home['رائج الآن']!.single.episodeBadge, isNull);
   });
 
+  test('recent dubbed releases retain their episode badge', () async {
+    final api = CatalogFixture()
+      ..homePayload = {
+        'sections': [
+          {
+            'sectionTitle': 'أحدث إصدارات المدبلجة (إنجليزي)',
+            'items': [
+              {
+                '_id': 'dubbed',
+                'title': 'Dubbed release',
+                'latest_episode_released': {'episode_number': 7},
+                'available_episodes': 50,
+              },
+            ],
+          },
+        ],
+      };
+    final home = await AnimeRiftProvider(client: api).getHome();
+    expect(home.values.single.single.episodeBadge, 'الحلقة 7');
+  });
+
   test(
     'search uses backend page cursor rather than assuming a page size',
     () async {
