@@ -164,6 +164,18 @@ jobs:
           path: animewitcher-ios-unsigned.ipa
           retention-days: 7
 
+      # Diagnostic only; the API schema is not a public contract. The gate runs
+      # after IPA upload and cannot prevent delivery of a successful preview.
+      - name: Inspect Rift character details schema (authorized live probe)
+        if: ${{ github.ref == 'refs/heads/feat/animerift-multi-provider' }}
+        continue-on-error: true
+        env:
+          ANIMERIFT_LIVE_TEST: '1'
+          ANIMERIFT_FIREBASE_API_KEY: ${{ secrets.ANIMERIFT_FIREBASE_API_KEY }}
+          ANIMERIFT_FIREBASE_APP_ID: ${{ secrets.ANIMERIFT_FIREBASE_APP_ID }}
+          ANIMERIFT_JWT_SECRET: ${{ secrets.ANIMERIFT_JWT_SECRET }}
+        run: flutter test --no-pub test/integration/anime_rift_character_schema_live_test.dart
+
   macos:
     name: macOS Build (${{ matrix.arch }})
     if: ${{ github.event.inputs.build_macos == 'true' }}
