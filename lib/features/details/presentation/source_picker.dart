@@ -129,11 +129,8 @@ class _SourcePickerSheetState extends State<_SourcePickerSheet> {
     if (sources.isEmpty) {
       return const _SourcePickerMessage('لم يتم العثور على مصادر تشغيل.');
     }
-
     final languages = availableStreamSourceLanguages(sources);
-    final language = languages.contains(_language)
-        ? _language!
-        : languages.first;
+    final language = languages.contains(_language) ? _language! : languages.first;
     final languageSources = filterStreamSourcesByAudio(
       sources,
       language: language,
@@ -141,9 +138,9 @@ class _SourcePickerSheetState extends State<_SourcePickerSheet> {
     final audioTypes = availableStreamSourceAudioTypes(languageSources);
     final audioType = audioTypes.contains(_audioType)
         ? _audioType
-        : audioTypes.isNotEmpty
-        ? audioTypes.first
-        : null;
+        : audioTypes.isEmpty
+        ? null
+        : audioTypes.first;
     final rows = _buildSourcePickerRows(
       filterStreamSourcesByAudio(
         languageSources,
@@ -151,7 +148,6 @@ class _SourcePickerSheetState extends State<_SourcePickerSheet> {
         audioType: audioType,
       ),
     );
-
     return Column(
       children: [
         if (languages.length > 1 ||
@@ -210,7 +206,6 @@ class _SourcePickerSheetState extends State<_SourcePickerSheet> {
               if (row.heading != null) {
                 return _SourceQualityHeader(label: row.heading!);
               }
-
               final source = row.source!;
               return ListTile(
                 contentPadding: const EdgeInsetsDirectional.only(
@@ -268,192 +263,7 @@ class StreamSourceAudioMetadata {
 }
 
 final _riftAudioSuffix = RegExp(
-  r'\s*\((عربي مترجم|عربي مدبلج|إنجليزي مترجم|إنجليزي مدبلج|Arabic sub|Arabic dub|English sub|English dub)\)\s*
-  const _SourcePickerLoadingLabel();
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
-    return Text(
-      l10n?.loading ?? 'جارٍ التحميل...',
-      textAlign: TextAlign.center,
-      style: Theme.of(context).textTheme.bodyLarge
-          ?.copyWith(fontWeight: FontWeight.w500),
-    );
-  }
-}
-
-class _SourcePickerMessage extends StatelessWidget {
-  final String message;
-
-  const _SourcePickerMessage(this.message);
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 24, 20, 32),
-      child: Center(
-        child: Text(
-          message,
-          textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.bodyLarge,
-        ),
-      ),
-    );
-  }
-}
-
-List<_SourcePickerRow> _buildSourcePickerRows(List<StreamResult> sources) {
-  return <_SourcePickerRow>[
-    for (final group in groupStreamSourcesByQuality(sources)) ...[
-      _SourcePickerRow.heading(group.qualityLabel),
-      for (final source in group.sources) _SourcePickerRow.source(source),
-    ],
-  ];
-}
-
-/// Groups sources exactly as both source pickers display them: highest quality
-/// first, then preferred servers inside each quality.
-List<StreamSourceQualityGroup> groupStreamSourcesByQuality(
-  List<StreamResult> sources,
-) {
-  final entries = <_SourcePickerEntry>[
-    for (var i = 0; i < sources.length; i++)
-      _SourcePickerEntry(
-        source: sources[i],
-        originalIndex: i,
-        qualityScore: _qualityScore(sources[i].quality),
-        qualityLabel: _qualityLabel(sources[i].quality),
-      ),
-  ];
-
-  entries.sort((a, b) {
-    final qualityCompare = b.qualityScore.compareTo(a.qualityScore);
-    if (qualityCompare != 0) return qualityCompare;
-
-    final serverCompare = _serverPriority(a.source.source)
-        .compareTo(_serverPriority(b.source.source));
-    if (serverCompare != 0) return serverCompare;
-
-    final nameCompare = a.source.source.toLowerCase().compareTo(
-      b.source.source.toLowerCase(),
-    );
-    if (nameCompare != 0) return nameCompare;
-
-    return a.originalIndex.compareTo(b.originalIndex);
-  });
-
-  final grouped = <String, List<StreamResult>>{};
-  for (final entry in entries) {
-    grouped
-        .putIfAbsent(entry.qualityLabel, () => <StreamResult>[])
-        .add(entry.source);
-  }
-  return <StreamSourceQualityGroup>[
-    for (final entry in grouped.entries)
-      StreamSourceQualityGroup(qualityLabel: entry.key, sources: entry.value),
-  ];
-}
-
-String streamSourceQualityLabel(StreamResult source) =>
-    _qualityLabel(source.quality);
-
-class StreamSourceQualityGroup {
-  const StreamSourceQualityGroup({
-    required this.qualityLabel,
-    required this.sources,
-  });
-
-  final String qualityLabel;
-  final List<StreamResult> sources;
-}
-
-int _serverPriority(String source) {
-  final normalized = source.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
-  if (normalized.startsWith('PD') || normalized.contains('PIXELDRAIN')) {
-    return 0;
-  }
-  if (normalized.startsWith('MF') || normalized.contains('MEDIAFIRE')) {
-    return 1;
-  }
-  if (normalized.startsWith('ST') || normalized.contains('STREAMTAPE')) {
-    return 2;
-  }
-  if (normalized.startsWith('SF')) {
-    return 3;
-  }
-  return 10;
-}
-
-int _qualityScore(String? quality) {
-  final raw = quality?.trim();
-  if (raw == null || raw.isEmpty) return -1;
-
-  final lower = raw.toLowerCase();
-  final numericMatch = RegExp(r'(\d{3,4})').firstMatch(lower);
-  if (numericMatch != null) {
-    return int.tryParse(numericMatch.group(1)!) ?? -1;
-  }
-
-  if (lower.contains('4k') || lower.contains('uhd')) return 2160;
-  if (lower.contains('fhd') || lower.contains('fullhd')) return 1080;
-  if (lower == 'hd' || lower.contains('hd')) return 720;
-  if (lower.contains('sd')) return 480;
-  return -1;
-}
-
-String _qualityLabel(String? quality) {
-  final score = _qualityScore(quality);
-  if (score > 0) return '${score}p';
-
-  final raw = quality?.trim();
-  if (raw != null && raw.isNotEmpty) return raw;
-  return 'غير معروف';
-}
-
-class _SourcePickerEntry {
-  final StreamResult source;
-  final int originalIndex;
-  final int qualityScore;
-  final String qualityLabel;
-
-  const _SourcePickerEntry({
-    required this.source,
-    required this.originalIndex,
-    required this.qualityScore,
-    required this.qualityLabel,
-  });
-}
-
-class _SourcePickerRow {
-  final String? heading;
-  final StreamResult? source;
-
-  const _SourcePickerRow.heading(this.heading) : source = null;
-  const _SourcePickerRow.source(this.source) : heading = null;
-}
-
-class _SourceQualityHeader extends StatelessWidget {
-  final String label;
-
-  const _SourceQualityHeader({required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsetsDirectional.fromSTEB(20, 18, 20, 6),
-      child: Align(
-        alignment: AlignmentDirectional.centerStart,
-        child: Text(
-          label,
-          style: Theme.of(context).textTheme.titleMedium
-              ?.copyWith(fontWeight: FontWeight.w800),
-        ),
-      ),
-    );
-  }
-}
-,
+  r'\s*\((عربي مترجم|عربي مدبلج|إنجليزي مترجم|إنجليزي مدبلج|Arabic sub|Arabic dub|English sub|English dub)\)\s*$',
   caseSensitive: false,
 );
 
