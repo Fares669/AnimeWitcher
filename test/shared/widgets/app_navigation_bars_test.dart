@@ -1,4 +1,5 @@
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
+import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/shared/widgets/app_navigation_bars.dart';
 import 'package:animewitcher/shared/widgets/app_side_menu.dart';
@@ -6,6 +7,8 @@ import 'package:animewitcher/shared/widgets/custom_bottom_nav.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import '../../support/memory_storage_service.dart';
 
 const _destinations = <TaskbarDestination>[
   TaskbarDestination.home,
@@ -21,6 +24,9 @@ Future<void> _pumpTopBar(WidgetTester tester, Size size) async {
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     ProviderScope(
+      overrides: [
+        storageServiceProvider.overrideWithValue(MemoryStorageService()),
+      ],
       child: MaterialApp(
         locale: const Locale('ar'),
         localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -80,6 +86,9 @@ void main() {
       };
       await tester.pumpWidget(
         ProviderScope(
+          overrides: [
+            storageServiceProvider.overrideWithValue(MemoryStorageService()),
+          ],
           child: MaterialApp(
             locale: const Locale('ar'),
             localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -99,7 +108,10 @@ void main() {
       final menu = find.byKey(const ValueKey('app-side-menu-button'));
       final news = find.byIcon(Icons.newspaper_rounded);
       if (layout == 'dock') {
-        expect(find.byKey(const ValueKey('account-avatar-button')), findsNothing);
+        expect(
+          find.byKey(const ValueKey('account-avatar-button')),
+          findsNothing,
+        );
         expect(tester.getCenter(menu).dx, lessThan(tester.getCenter(news).dx));
         await tester.tap(news);
         expect(newsOpened, 1);
@@ -109,9 +121,9 @@ void main() {
         expect(
           tester.getCenter(news).dy,
           lessThan(
-            tester.getCenter(
-              find.byKey(const ValueKey('account-avatar-button')),
-            ).dy,
+            tester
+                .getCenter(find.byKey(const ValueKey('account-avatar-button')))
+                .dy,
           ),
         );
       }

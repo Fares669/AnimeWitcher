@@ -4,6 +4,7 @@ import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart';
 import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -11,12 +12,26 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   test(
+    'guest secure storage fixture restores without a native keychain',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      FlutterSecureStorage.setMockInitialValues({});
+      final api = AnimeRiftApiClient(config: const AnimeRiftConfig());
+      expect(await api.restoreAccountSession(), isFalse);
+    },
+  );
+
+  test(
     'authorized live Rift catalog (explicit opt-in only)',
     () async {
       final previousOverrides = HttpOverrides.current;
       HttpOverrides.global = null;
       addTearDown(() => HttpOverrides.global = previousOverrides);
       SharedPreferences.setMockInitialValues({});
+      // Widget-test runners have no platform keychain. Keep this a guest test:
+      // the empty mock session exercises the real authentication gate without
+      // mistaking a missing OS secure-storage plugin for a CDN failure.
+      FlutterSecureStorage.setMockInitialValues({});
       final config = AnimeRiftConfig(
         firebaseApiKey:
             Platform.environment['ANIMERIFT_FIREBASE_API_KEY'] ?? '',

@@ -34,7 +34,12 @@ class _Memory extends StorageService {
   @override
   List<MultimediaItem> getLibraryItems({String? category}) => [
     MultimediaItem(title: 'Native', url: 'id', posterUrl: ''),
-    MultimediaItem(title: 'Manga', url: 'manga', posterUrl: '', contentType: MultimediaContentType.manga),
+    MultimediaItem(
+      title: 'Manga',
+      url: 'manga',
+      posterUrl: '',
+      contentType: MultimediaContentType.manga,
+    ),
   ];
 }
 
@@ -79,7 +84,9 @@ class _Mutable extends ActiveProvider {
 }
 
 void main() {
-  testWidgets('local library explains that it is not synced', (tester) async {
+  testWidgets('local library offers cloud import without claiming cloud sync', (
+    tester,
+  ) async {
     final storage = _Memory();
     final account = AnimeWitcherAccountService(
       storage: storage,
@@ -104,7 +111,11 @@ void main() {
     );
     await tester.pump();
     expect(
-      find.text('مكتبة Anime Rift محفوظة على هذا الجهاز ولا تتم مزامنتها.'),
+      find.text('يمكن استيراد القوائم السحابية إلى مكتبة Rift المحلية.'),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('rift-library-sync-button')),
       findsOneWidget,
     );
     expect(find.text('تسجيل الدخول'), findsNothing);
@@ -134,8 +145,20 @@ void main() {
       provider: animeRiftProviderId,
     );
     await library.addItem(item, category: LibraryCategory.watching);
-    expect(library.itemsForCategory(LibraryMediaKind.anime, LibraryCategory.watching).single.title, 'Rift');
-    expect(library.itemsForCategory(LibraryMediaKind.manga, LibraryCategory.watching).single.title, 'Manga');
+    expect(
+      library
+          .itemsForCategory(LibraryMediaKind.anime, LibraryCategory.watching)
+          .single
+          .title,
+      'Rift',
+    );
+    expect(
+      library
+          .itemsForCategory(LibraryMediaKind.manga, LibraryCategory.watching)
+          .single
+          .title,
+      'Manga',
+    );
     expect(
       (container.read(libraryProvider) as LibrarySuccess).items.single.title,
       'Rift',
