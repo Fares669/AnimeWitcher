@@ -515,8 +515,13 @@ class AnimeRiftApiClient {
         );
       }
       final dynamic value = response.data is String
-          ? jsonDecode(response.data as String)
+          ? (response.data as String).trim().isEmpty && method != 'GET'
+                ? null
+                : jsonDecode(response.data as String)
           : response.data;
+      // Rift's successful mutation responses may have no JSON body (204).
+      // GETs must still return structured data so a broken list is not empty.
+      if (value == null && method != 'GET') return <String, dynamic>{};
       if (value is! Map) {
         throw AnimeRiftAccessUnavailable(
           stage: stage,
@@ -1395,6 +1400,32 @@ class AnimeRiftApiClient {
         'characters_rating': characters.toDouble(),
         'animation_rating': animation.toDouble(),
         'music_rating': music.toDouble(),
+      },
+      accountHash: accountHash,
+    );
+  }
+
+  /// Native /my_list/rate is the sole known rating-write endpoint. Submit
+  /// zero scores as the desired unrated state; the caller MUST verify a
+  /// subsequent authenticated details read before acknowledging deletion.
+  Future<Map<String, dynamic>> clearAnimeRating(
+    String animeId, {
+    required String accountHash,
+  }) {
+    if (!RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(animeId)) {
+      throw ArgumentError('Invalid Rift anime ID');
+    }
+    return _readAccountData(
+      'my_list/rate',
+      'USER.MY_LIST.RATE',
+      method: 'PUT',
+      body: {
+        'animeId': animeId,
+        'general_rating': 0.0,
+        'story_rating': 0.0,
+        'characters_rating': 0.0,
+        'animation_rating': 0.0,
+        'music_rating': 0.0,
       },
       accountHash: accountHash,
     );

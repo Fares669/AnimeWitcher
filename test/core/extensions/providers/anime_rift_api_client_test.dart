@@ -108,6 +108,66 @@ void main() {
   tearDown(() => messenger.setMockMethodCallHandler(secureChannel, null));
 
   test(
+    'successful no-body account PUT is accepted rather than treated as failure',
+    () async {
+      final writes = <RequestOptions>[];
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: fixtureDio((options) {
+          if (options.uri.host.endsWith('googleapis.com')) {
+            return reply(options, <String, dynamic>{}, 400);
+          }
+          if (options.uri.path.endsWith('/auth/register/device')) {
+            return reply(options, {'sessionKey': 'fixture'}, 201);
+          }
+          if (options.uri.path.endsWith('/auth/sign-in/with-code')) {
+            return reply(options, {
+              'items': {
+                'profile': {'_id': 'rift-user'},
+                'token': 'token',
+              },
+            });
+          }
+          if (options.uri.path.endsWith('/my_list/rate')) {
+            expect(options.method, 'PUT');
+            writes.add(options);
+            return reply(options, null, 204);
+          }
+          return reply(options, <String, dynamic>{});
+        }),
+      );
+      await client.signInWithCode('test-code');
+      expect(
+        await client.rateAnime(
+          'anime42',
+          story: 8,
+          characters: 8,
+          animation: 8,
+          music: 8,
+          accountHash: AnimeRiftLocalAccountScope.accountHash!,
+        ),
+        isEmpty,
+      );
+      expect(
+        await client.clearAnimeRating(
+          'anime42',
+          accountHash: AnimeRiftLocalAccountScope.accountHash!,
+        ),
+        isEmpty,
+      );
+      expect(writes, hasLength(2));
+      expect(writes.last.data, {
+        'animeId': 'anime42',
+        'general_rating': 0.0,
+        'story_rating': 0.0,
+        'characters_rating': 0.0,
+        'animation_rating': 0.0,
+        'music_rating': 0.0,
+      });
+    },
+  );
+
+  test(
     'Rift comment creation sends anime/episode IDs and authenticated text',
     () async {
       final writes = <RequestOptions>[];

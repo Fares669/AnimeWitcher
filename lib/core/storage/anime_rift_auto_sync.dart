@@ -43,6 +43,11 @@ class AnimeRiftCloudWriter implements AnimeRiftVerifiedCloudWriter {
       required String accountHash,
     })?
     setRating,
+    Future<Map<String, dynamic>> Function(
+      String, {
+      required String accountHash,
+    })?
+    clearRating,
     Future<AnimeRiftRating?> Function(String)? readRating,
     Future<Map<String, dynamic>> Function()? readHistory,
     Future<Map<String, dynamic>> Function(
@@ -61,6 +66,7 @@ class AnimeRiftCloudWriter implements AnimeRiftVerifiedCloudWriter {
        _readFavorites = readFavorites,
        _setWatched = setWatched,
        _setRating = setRating,
+       _clearRating = clearRating,
        _readRating = readRating,
        _readHistory = readHistory,
        _clearHistoryOne = clearHistoryOne,
@@ -93,6 +99,11 @@ class AnimeRiftCloudWriter implements AnimeRiftVerifiedCloudWriter {
     required String accountHash,
   })?
   _setRating;
+  final Future<Map<String, dynamic>> Function(
+    String, {
+    required String accountHash,
+  })?
+  _clearRating;
   final Future<AnimeRiftRating?> Function(String)? _readRating;
   final Future<Map<String, dynamic>> Function()? _readHistory;
   final Future<Map<String, dynamic>> Function(
@@ -260,16 +271,24 @@ class AnimeRiftCloudWriter implements AnimeRiftVerifiedCloudWriter {
       // episode-by-episode GET verification is not guaranteed by this API.
       return true;
     } else if (change.kind == 'rating') {
-      final setter = _setRating;
       final readback = _readRating;
-      if (setter == null || readback == null) return false;
-      final rating = AnimeRiftRating.fromMap(change.value);
-      if (rating == null) throw const FormatException('Invalid Rift rating');
-      await setter(id, rating, accountHash: accountHash);
+      if (readback == null) return false;
+      if (change.value['clear'] == true) {
+        final clear = _clearRating;
+        if (clear == null) return false;
+        await clear(id, accountHash: accountHash);
+      } else {
+        final setter = _setRating;
+        if (setter == null) return false;
+        final rating = AnimeRiftRating.fromMap(change.value);
+        if (rating == null) throw const FormatException('Invalid Rift rating');
+        await setter(id, rating, accountHash: accountHash);
+      }
       AnimeRiftCloudPendingJournal.requireAccount(accountHash);
       final remote = await readback(change.url);
       AnimeRiftCloudPendingJournal.requireAccount(accountHash);
-      return remote == rating;
+      if (change.value['clear'] == true) return remote == null;
+      return remote == AnimeRiftRating.fromMap(change.value);
     } else {
       final setCategory = _setCategory;
       final readCategory = _readCategory;
@@ -335,6 +354,8 @@ class AnimeRiftAutoSyncCoordinator {
   Future<void>? _inFlight;
   Timer? _debounceTimer;
   bool _refreshRequested = false;
+  bool _ratingFlushRequested = false;
+  final Set<String> _ratingFlushUrls = {};
   final Set<LibraryCategory> _requestedCategories = {};
   bool _requestedHistory = false;
   bool _disposed = false;
@@ -376,6 +397,26 @@ class AnimeRiftAutoSyncCoordinator {
     _debounceTimer = null;
     _requestedHistory = true;
     return _beginRefresh();
+  }
+
+  /// Push only pending rating edits, without waiting for a full catalog pull.
+  /// A false result means the desired state remains durable but unconfirmed.
+  Future<bool> pushRatingNow(String url) async {
+    final account = AnimeRiftLocalAccountScope.accountHash;
+    if (account == null || !_canRecordLocalChange) {
+      throw const AnimeRiftAuthenticationRequired();
+    }
+    _debounceTimer?.cancel();
+    _debounceTimer = null;
+    _ratingFlushRequested = true;
+    _ratingFlushUrls.add(AnimeRiftCloudPendingJournal.catalogUrl(url));
+    await _beginRefresh();
+    AnimeRiftCloudPendingJournal.requireAccount(account);
+    return !_journal.hasPending(
+      account,
+      AnimeRiftCloudPendingJournal.catalogUrl(url),
+      'rating',
+    );
   }
 
   Future<void> _beginRefresh() {
@@ -432,6 +473,22 @@ class AnimeRiftAutoSyncCoordinator {
     if (!_canRecordLocalChange) return;
     await _journal.queueRating(url, rating);
     _scheduleRefresh();
+  }
+
+  Future<void> queueClearRating(String url) async {
+    if (!_canRecordLocalChange) throw const AnimeRiftAuthenticationRequired();
+    await _journal.queueClearRating(url);
+    _scheduleRefresh();
+  }
+
+  bool hasPendingRating(String url) {
+    if (!_canRecordLocalChange) return false;
+    final account = AnimeRiftLocalAccountScope.accountHash!;
+    return _journal.hasPending(
+      account,
+      AnimeRiftCloudPendingJournal.catalogUrl(url),
+      'rating',
+    );
   }
 
   AnimeRiftRating? pendingRating(String url) {
@@ -516,7 +573,11 @@ class AnimeRiftAutoSyncCoordinator {
         final all = _refreshRequested;
         final categories = Set<LibraryCategory>.of(_requestedCategories);
         final history = _requestedHistory;
+        final ratings = _ratingFlushRequested;
+        final ratingUrls = Set<String>.of(_ratingFlushUrls);
         _refreshRequested = false;
+        _ratingFlushRequested = false;
+        _ratingFlushUrls.clear();
         _requestedCategories.clear();
         _requestedHistory = false;
         final provider = _activeRift();
@@ -532,6 +593,7 @@ class AnimeRiftAutoSyncCoordinator {
         if (_writer != null) {
           await _pushPending(
             account,
+            ratingUrls: ratings && !all ? ratingUrls : null,
             kinds: all
                 ? null
                 : {
@@ -542,6 +604,7 @@ class AnimeRiftAutoSyncCoordinator {
                       'watched',
                       'playback',
                     ],
+                    if (ratings) 'rating',
                   },
           );
         }
@@ -567,6 +630,7 @@ class AnimeRiftAutoSyncCoordinator {
         }
         _lastError = null;
       } while ((_refreshRequested ||
+              _ratingFlushRequested ||
               _requestedCategories.isNotEmpty ||
               _requestedHistory) &&
           !_disposed);
@@ -576,7 +640,11 @@ class AnimeRiftAutoSyncCoordinator {
     }
   }
 
-  Future<void> _pushPending(String account, {Set<String>? kinds}) async {
+  Future<void> _pushPending(
+    String account, {
+    Set<String>? kinds,
+    Set<String>? ratingUrls,
+  }) async {
     final writer = _writer;
     if (writer == null) return;
     final changes = _journal.pending(account);
@@ -584,6 +652,11 @@ class AnimeRiftAutoSyncCoordinator {
       AnimeRiftCloudPendingJournal.requireAccount(account);
       if (change.kind == 'rescan') continue;
       if (kinds != null && !kinds.contains(change.kind)) continue;
+      if (ratingUrls != null &&
+          change.kind == 'rating' &&
+          !ratingUrls.contains(change.url)) {
+        continue;
+      }
       if (!await writer.write(account, change)) continue;
       AnimeRiftCloudPendingJournal.requireAccount(account);
       await _journal.acknowledge(account, change);
@@ -651,6 +724,11 @@ final riftAutoSyncProvider = Provider<AnimeRiftAutoSyncCoordinator>((ref) {
         final provider = activeRift();
         if (provider == null) throw StateError('Rift provider changed');
         return provider.setCloudRating(id, rating, accountHash: accountHash);
+      },
+      clearRating: (id, {required accountHash}) {
+        final provider = activeRift();
+        if (provider == null) throw StateError('Rift provider changed');
+        return provider.clearCloudRating(id, accountHash: accountHash);
       },
       readRating: (url) {
         final provider = activeRift();

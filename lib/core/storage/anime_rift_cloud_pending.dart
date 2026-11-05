@@ -148,6 +148,9 @@ class AnimeRiftCloudPendingJournal {
     return _upsert('rating', catalogUrl(url), rating.toJson());
   }
 
+  Future<void> queueClearRating(String url) =>
+      _upsert('rating', catalogUrl(url), const {'clear': true});
+
   Future<void> queueCategory(String url, LibraryCategory? category) {
     if (category == LibraryCategory.favorite) {
       throw ArgumentError.value(category, 'category');

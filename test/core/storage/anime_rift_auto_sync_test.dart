@@ -311,6 +311,122 @@ void main() {
     },
   );
 
+  test(
+    'Rift rating deletion is queued and acknowledged only when remote clears',
+    () async {
+      final storage = _MemoryStorage();
+      final provider = _FakeRift('alice');
+      await provider.restoreAccountSession();
+      AnimeRiftRating? remote = const AnimeRiftRating(
+        story: 8,
+        characters: 8,
+        animation: 8,
+        music: 8,
+      );
+      var clearCalls = 0;
+      final sync = AnimeRiftAutoSyncCoordinator(
+        storage: storage,
+        activeRift: () => provider,
+        verifiedWriter: AnimeRiftCloudWriter(
+          _FavoriteClient().setFavoriteAnime,
+          clearRating: (id, {required accountHash}) async {
+            AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+            expect(id, 'safe1');
+            clearCalls++;
+            return {};
+          },
+          readRating: (_) async => remote,
+        ),
+        debounce: const Duration(days: 1),
+      );
+      addTearDown(sync.dispose);
+      await sync.queueClearRating(_title);
+      expect(sync.hasPendingRating(_title), isTrue);
+      expect(await sync.pushRatingNow(_title), isFalse);
+      expect(clearCalls, 1);
+      expect(sync.hasPendingRating(_title), isTrue);
+      remote = null;
+      expect(await sync.pushRatingNow(_title), isTrue);
+      expect(sync.hasPendingRating(_title), isFalse);
+    },
+  );
+
+  test(
+    'Rift rating pushes immediately without a full cloud-library import',
+    () async {
+      final storage = _MemoryStorage();
+      final provider = _FakeRift('alice');
+      await provider.restoreAccountSession();
+      AnimeRiftRating? remote;
+      const rating = AnimeRiftRating(
+        story: 9,
+        characters: 6,
+        animation: 9,
+        music: 8,
+      );
+      final sync = AnimeRiftAutoSyncCoordinator(
+        storage: storage,
+        activeRift: () => provider,
+        verifiedWriter: AnimeRiftCloudWriter(
+          _FavoriteClient().setFavoriteAnime,
+          setRating: (id, selected, {required accountHash}) async {
+            AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+            remote = selected;
+            return {};
+          },
+          readRating: (_) async => remote,
+        ),
+        debounce: const Duration(days: 1),
+      );
+      addTearDown(sync.dispose);
+      await sync.queueRating(_title, rating);
+      expect(await sync.pushRatingNow(_title), isTrue);
+      expect(sync.hasPendingRating(_title), isFalse);
+      expect(remote, rating);
+      expect(provider.pullCalls, 0);
+    },
+  );
+
+  test(
+    'uploading a rating never fails behind another pending rating',
+    () async {
+      final storage = _MemoryStorage();
+      final provider = _FakeRift('alice');
+      await provider.restoreAccountSession();
+      const rating = AnimeRiftRating(
+        story: 9,
+        characters: 9,
+        animation: 9,
+        music: 9,
+      );
+      AnimeRiftRating? remote;
+      final sent = <String>[];
+      final sync = AnimeRiftAutoSyncCoordinator(
+        storage: storage,
+        activeRift: () => provider,
+        verifiedWriter: AnimeRiftCloudWriter(
+          _FavoriteClient().setFavoriteAnime,
+          setRating: (id, value, {required accountHash}) async {
+            sent.add(id);
+            if (id == 'broken') throw StateError('Old server rejection');
+            remote = value;
+            return {};
+          },
+          readRating: (_) async => remote,
+        ),
+        debounce: const Duration(days: 1),
+      );
+      addTearDown(sync.dispose);
+      const stuck = 'https://anime-rift.com/anime/broken';
+      await sync.queueRating(stuck, rating);
+      await sync.queueRating(_title, rating);
+      expect(await sync.pushRatingNow(_title), isTrue);
+      expect(sent, ['safe1']);
+      expect(sync.hasPendingRating(stuck), isTrue);
+      expect(sync.hasPendingRating(_title), isFalse);
+    },
+  );
+
   test('verified favorite writer flushes favorites while preserving unsupported edits', () async {
     final storage = _MemoryStorage();
     final provider = _FakeRift('alice');

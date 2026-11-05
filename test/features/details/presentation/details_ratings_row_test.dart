@@ -249,7 +249,7 @@ void main() {
   testWidgets(
     'Rift rating editor computes general and edits only four scores',
     (tester) async {
-      AnimeRiftRating? result;
+      ({bool clear, AnimeRiftRating? rating})? result;
       final service = _FakeAccountService(signedIn: true);
       await tester.pumpWidget(
         _app(
@@ -283,7 +283,7 @@ void main() {
       await tester.tap(find.text('حفظ'));
       await tester.pumpAndSettle();
       expect(
-        result,
+        result?.rating,
         const AnimeRiftRating(
           story: 8.5,
           characters: 7,
@@ -291,10 +291,40 @@ void main() {
           music: 5,
         ),
       );
-      expect(result!.general, (8.5 + 7 + 9 + 5) / 4);
+      expect(result!.rating!.general, (8.5 + 7 + 9 + 5) / 4);
       expect(service.writes, isEmpty);
     },
   );
+  testWidgets('Rift rating editor can clear a previously saved rating', (
+    tester,
+  ) async {
+    ({bool clear, AnimeRiftRating? rating})? result;
+    await tester.pumpWidget(
+      _app(
+        service: _FakeAccountService(signedIn: true),
+        child: Builder(
+          builder: (context) => TextButton(
+            onPressed: () async => result = await showRiftRatingEditor(
+              context,
+              initial: const AnimeRiftRating(
+                story: 9,
+                characters: 8,
+                animation: 8,
+                music: 9,
+              ),
+            ),
+            child: const Text('clear rift'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('clear rift'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('حذف التقييم'));
+    await tester.pumpAndSettle();
+    expect(result?.clear, isTrue);
+    expect(result?.rating, isNull);
+  });
   testWidgets('Rift ratings row never reads or writes Witcher account rating', (
     tester,
   ) async {

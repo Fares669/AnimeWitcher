@@ -181,6 +181,7 @@ void main() {
       expect(client.lastQuery, {
         'animeId': 'anime42',
         'page': 0,
+        'level': 0,
         'canReply': '1',
       });
 
@@ -191,6 +192,7 @@ void main() {
         'episodeId': 'ep11',
         'parentId': 'comment1',
         'page': 2,
+        'level': 1,
         'canReply': '1',
       });
       await provider.publishComment(episodeTarget.replies('comment1'), 'reply');

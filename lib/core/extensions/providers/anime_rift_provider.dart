@@ -98,6 +98,11 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     accountHash: accountHash,
   );
 
+  Future<Map<String, dynamic>> clearCloudRating(
+    String id, {
+    required String accountHash,
+  }) => _api.clearAnimeRating(id, accountHash: accountHash);
+
   Future<AnimeRiftRating?> fetchCloudRating(String url) async {
     if (!await restoreAccountSession()) return null;
     final account = AnimeRiftLocalAccountScope.accountHash;
@@ -195,6 +200,7 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
           parentId: target.parentId,
         ),
         'page': page < 0 ? 0 : page,
+        'level': target.parentId == null ? 0 : 1,
         // The original /comment/all request always sends this query flag.
         'canReply': '1',
       },

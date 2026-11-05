@@ -105,8 +105,9 @@ Future<AnimeRiftRating?> loadRiftRating(
   }
   // Account scope may only be hydrated by restoreAccountSession on startup.
   if (AnimeRiftLocalAccountScope.accountHash == null) return null;
-  final pending = ref.read(riftAutoSyncProvider).pendingRating(item.url);
-  if (pending != null) return pending;
+  final sync = ref.read(riftAutoSyncProvider);
+  // Pending deletion is a tombstone: never resurrect the stale remote score.
+  if (sync.hasPendingRating(item.url)) return sync.pendingRating(item.url);
   return provider.fetchCloudRating(item.url);
 }
 
@@ -134,18 +135,35 @@ Future<AnimeRatingOutcome> openRiftRatingDialog(
   if (!context.mounted) return _unchanged;
   final selected = await showRiftRatingEditor(context, initial: current);
   if (selected == null || !context.mounted) return _unchanged;
+  final sync = ref.read(riftAutoSyncProvider);
   try {
-    await ref.read(riftAutoSyncProvider).queueRating(item.url, selected);
-    // Refresh is coalesced and scheduled automatically. The durable local edit
-    // is shown immediately even when the remote gateway is unavailable.
-    return (changed: true, rating: selected.general.round());
+    if (selected.clear) {
+      await sync.queueClearRating(item.url);
+    } else {
+      await sync.queueRating(item.url, selected.rating!);
+    }
   } catch (_) {
     _toast(ref, 'تعذر حفظ تقييم Anime Rift', info: false);
     return _unchanged;
   }
+  // Attempt the cloud write now, not only when the next background sync runs.
+  // If it fails, the desired state stays durably queued for a later retry.
+  try {
+    final confirmed = await sync.pushRatingNow(item.url);
+    if (!confirmed) {
+      _toast(ref, 'التقييم محفوظ محليًا وينتظر تأكيد السيرفر', info: false);
+    }
+  } catch (_) {
+    _toast(
+      ref,
+      'تعذر تأكيد السيرفر؛ سيُعاد إرسال التقييم تلقائيًا',
+      info: false,
+    );
+  }
+  return (changed: true, rating: selected.rating?.general.round());
 }
 
-Future<AnimeRiftRating?> showRiftRatingEditor(
+Future<({bool clear, AnimeRiftRating? rating})?> showRiftRatingEditor(
   BuildContext context, {
   AnimeRiftRating? initial,
 }) {
@@ -162,7 +180,7 @@ Future<AnimeRiftRating?> showRiftRatingEditor(
     animation: values[2],
     music: values[3],
   );
-  return showDialog<AnimeRiftRating>(
+  return showDialog<({bool clear, AnimeRiftRating? rating})>(
     context: context,
     builder: (dialogContext) => StatefulBuilder(
       builder: (context, refresh) => AlertDialog(
@@ -201,12 +219,19 @@ Future<AnimeRiftRating?> showRiftRatingEditor(
           ),
         ),
         actions: [
+          if (initial != null)
+            TextButton(
+              onPressed: () =>
+                  Navigator.pop(dialogContext, (clear: true, rating: null)),
+              child: const Text('حذف التقييم'),
+            ),
           TextButton(
             onPressed: () => Navigator.pop(dialogContext),
             child: const Text('إلغاء'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, rating()),
+            onPressed: () =>
+                Navigator.pop(dialogContext, (clear: false, rating: rating())),
             child: const Text('حفظ'),
           ),
         ],
