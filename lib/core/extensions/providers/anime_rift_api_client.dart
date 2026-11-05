@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../network/stale_connection_retry.dart';
 import '../../storage/anime_rift_account_scope.dart';
+import 'anime_rift_device_descriptor.dart';
 
 class AnimeRiftConfig {
   const AnimeRiftConfig({
@@ -173,12 +174,19 @@ class AnimeRiftApiClient {
     this.config = const AnimeRiftConfig(),
     Dio? dio,
     FlutterSecureStorage? secureStorage,
+    Future<AnimeRiftDeviceDescriptor> Function(String legacyBuildId)?
+    deviceDescriptorLoader,
   }) : _dio = dio ?? createAnimeWitcherDio(),
-       _secureStorage = secureStorage ?? _defaultSecureStorage;
+       _secureStorage = secureStorage ?? _defaultSecureStorage,
+       _loadDeviceDescriptor =
+           deviceDescriptorLoader ?? AnimeRiftDeviceDescriptor.detect;
 
   final AnimeRiftConfig config;
   final Dio _dio;
   final FlutterSecureStorage _secureStorage;
+  final Future<AnimeRiftDeviceDescriptor> Function(String legacyBuildId)
+  _loadDeviceDescriptor;
+  AnimeRiftDeviceDescriptor? _deviceDescriptor;
   static const _identityKey = 'animerift.api.installation.v1';
   static const _sessionKey = 'animerift.user.session.v1';
   static const _defaultBase = 'https://gateway.embrassme.top/api/v4';
@@ -402,6 +410,7 @@ class AnimeRiftApiClient {
   }
 
   Map<String, String> _headers(String scope, {bool includeUserToken = true}) {
+    final device = _deviceDescriptor!;
     String encode(Object value) =>
         base64Url.encode(utf8.encode(jsonEncode(value))).replaceAll('=', '');
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -416,13 +425,14 @@ class AnimeRiftApiClient {
         )
         .replaceAll('=', '');
     return {
-      'x-device-os-id': _identity!['buildId']!,
+      'x-device-os-id': device.osId,
       'user-agent': 'Dart/3.10 (dart:io)',
       'x-device-release-version': '3.13.5',
       'x-firebase-app-check': 'null',
       'authorization': 'Bearer ${includeUserToken ? _accessToken : null}',
       'content-type': 'application/json; charset=UTF-8',
-      'x-installation-source': 'IS_INSTALLED_FROM_PLAY_PACKAGE_INSTALLER',
+      if (device.installSource case final source?)
+        'x-installation-source': source,
       'integrity': 'Bearer $unsigned.$signature',
       'accept': 'application/json',
       'x-firebase-id': _identity!['fid']!,
@@ -430,7 +440,7 @@ class AnimeRiftApiClient {
       'x-device-timezone': DateTime.now().toIso8601String(),
       'x-device-language': 'ar',
       'x-platform': 'Mobile',
-      'x-os': 'android',
+      'x-os': device.os,
     };
   }
 
@@ -443,28 +453,10 @@ class AnimeRiftApiClient {
       // actions still surface the secure-storage failure to the user.
     }
     await _firebaseConfiguration();
-    final build = _identity!['buildId']!;
-    // Legacy gateway protocol descriptor, not a claim about the host platform.
-    // This compatibility path has not been verified on a physical iOS device.
-    final info = {
-      'model': 'Pixel 8 Pro',
-      'brand': 'google',
-      'manufacturer': 'Google',
-      'device': 'google',
-      'hardware': 'qcom',
-      'product': 'google',
-      'androidVersion': '14',
-      'sdkInt': 34,
-      'securityPatch': '2025-01-01',
-      'isPhysicalDevice': true,
-      'supportedAbis': ['arm64-v8a'],
-      'tags': 'release-keys',
-      'type': 'user',
-      'buildId': build,
-      'host': 'build-server-client',
-      'fingerprint':
-          'google/Pixel 8 Pro/google:14/$build/V.1e9a_client:user/release-keys',
-    };
+    // Read the actual Android/iOS platform information. The legacy synthetic
+    // Android descriptor remains in use only on other operating systems.
+    final device = await _loadDeviceDescriptor(_identity!['buildId']!);
+    _deviceDescriptor = device;
     await _send(
       '$_base/auth/register/device',
       headers: _headers('USER.AUTH.DEVICE.REGISTER'),
@@ -472,11 +464,11 @@ class AnimeRiftApiClient {
       body: {
         'deviceId': _identity!['deviceId'],
         'current_app_version': '3.13.5',
-        'device_os': 'android',
+        'device_os': device.os,
         'device_environment': 'production',
-        'device_info': jsonEncode(info),
-        'install_source': 'IS_INSTALLED_FROM_PLAY_PACKAGE_INSTALLER',
-        'deviceOsId': build,
+        'device_info': jsonEncode(device.details),
+        if (device.installSource case final source?) 'install_source': source,
+        'deviceOsId': device.osId,
         'firebaseInstallationId': _identity!['fid'],
         'apn_token': null,
         'install_mode': 2,

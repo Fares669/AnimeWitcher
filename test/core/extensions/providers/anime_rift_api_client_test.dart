@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_device_descriptor.dart';
 import 'package:animewitcher/core/storage/anime_rift_account_scope.dart';
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
@@ -716,6 +717,69 @@ void main() {
         'library/home_content',
         'ANIME.LIBRARY.HOME_CONTENT',
       );
+    },
+  );
+
+  test(
+    'registers actual Android and iOS devices, and synthetic desktop',
+    () async {
+      final profiles = [
+        const AnimeRiftDeviceDescriptor(
+          os: 'android',
+          osId: 'actual-android-build',
+          details: {'model': 'Samsung Galaxy S24', 'androidVersion': '16'},
+        ),
+        const AnimeRiftDeviceDescriptor(
+          os: 'ios',
+          osId: '26.1',
+          details: {
+            'model': 'iPhone 12 Pro Max',
+            'device': 'iPhone13,4',
+            'systemVersion': '26.1',
+          },
+        ),
+        AnimeRiftDeviceDescriptor.emulatedAndroid('desktop-build'),
+      ];
+      for (final descriptor in profiles) {
+        final registeredIds = <String>[];
+        final dio = fixtureDio((o) {
+          if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+          if (o.uri.path.endsWith('/auth/register/device')) {
+            final data = o.data as Map;
+            registeredIds.add(data['deviceId'] as String);
+            expect(o.headers['x-os'], descriptor.os);
+            expect(o.headers['x-device-os-id'], descriptor.osId);
+            expect(data['device_os'], descriptor.os);
+            expect(data['deviceOsId'], descriptor.osId);
+            expect(
+              jsonDecode(data['device_info'] as String),
+              descriptor.details,
+            );
+            if (descriptor.installSource == null) {
+              expect(data.containsKey('install_source'), isFalse);
+              expect(o.headers.containsKey('x-installation-source'), isFalse);
+            } else {
+              expect(data['install_source'], descriptor.installSource);
+            }
+            return reply(o, {'sessionKey': 'fixture'}, 201);
+          }
+          return reply(o, {});
+        });
+        for (var i = 0; i < 2; i++) {
+          await AnimeRiftApiClient(
+            config: fixtureConfig,
+            dio: dio,
+            deviceDescriptorLoader: (_) async => descriptor,
+          ).request('library/home_content', 'ANIME.LIBRARY.HOME_CONTENT');
+        }
+        expect(registeredIds, hasLength(2));
+        expect(
+          registeredIds.first,
+          registeredIds.last,
+          reason:
+              'changing the advertised model must not rotate session identity',
+        );
+      }
     },
   );
 
