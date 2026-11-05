@@ -328,15 +328,23 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   }
 
   void _applySearchSort(String selected) {
-    _setSearchSort(_isRiftAnime ? '${selected}_desc' : selected);
+    if (!_isRiftAnime) {
+      _setSearchSort(selected);
+      return;
+    }
+    // Direction is a global toggle, not a property of each menu option.
+    final direction =
+        ref.read(searchProviderFiltersProvider).sort.endsWith('_asc')
+        ? 'asc'
+        : 'desc';
+    _setSearchSort('${selected}_$direction');
   }
 
-  void _reverseRiftSort(String field) {
+  void _reverseRiftSort() {
     if (!_isRiftAnime) return;
     final current = ref.read(searchProviderFiltersProvider).sort;
-    final isSelected = RiftSearchSortField.selected(current) == field;
-    // A new field starts descending. The arrow beside it picks ascending.
-    final nextAscending = !isSelected || !current.endsWith('_asc');
+    final field = RiftSearchSortField.selected(current);
+    final nextAscending = !current.endsWith('_asc');
     _setSearchSort('${field}_${nextAscending ? 'asc' : 'desc'}');
   }
 
@@ -347,7 +355,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           AppleNativeMenuItem(
             value: field.value,
             label: field.label(context),
-            icon: Icons.sort_rounded,
+            icon: field.icon,
           ),
       ];
     }
@@ -376,13 +384,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       _isRiftAnime ? RiftSearchSortField.selected(value) : value;
 
   IconData _sortMenuIcon(String value) => _isRiftAnime
-      ? (value.endsWith('_asc')
-            ? Icons.arrow_upward_rounded
-            : Icons.arrow_downward_rounded)
+      ? RiftSearchSortField.values
+            .firstWhere(
+              (item) => item.value == RiftSearchSortField.selected(value),
+            )
+            .icon
       : _searchSortFallbackIcon(SearchSortOption.fromValue(value));
 
   String _sortMenuSystemImage(String value) => _isRiftAnime
-      ? (value.endsWith('_asc') ? 'arrow.up' : 'arrow.down')
+      ? 'line.3.horizontal.decrease'
       : _searchSortSystemImage(SearchSortOption.fromValue(value));
 
   String _searchSortSystemImage(SearchSortOption option) {
@@ -500,9 +510,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                         isCompact: false,
                         onShowFilters: _showSearchFilters,
                         onSortSelected: _applySearchSort,
-                        onSortDirectionSelected: _isRiftAnime
-                            ? _reverseRiftSort
-                            : null,
+                        onReverseSort: _isRiftAnime ? _reverseRiftSort : null,
                         sortAscending: ref
                             .watch(searchProviderFiltersProvider)
                             .sort
@@ -568,7 +576,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       sortValue: _sortMenuSelectedValue(activeFilters.sort),
       sortItems: _searchSortMenuItems(context),
       onSortSelected: _applySearchSort,
-      onSortDirectionSelected: _isRiftAnime ? _reverseRiftSort : null,
+      onReverseSort: _isRiftAnime ? _reverseRiftSort : null,
       sortAscending: activeFilters.sort.endsWith('_asc'),
       sortIcon: _sortMenuIcon(activeFilters.sort),
       sortSystemImage: _sortMenuSystemImage(activeFilters.sort),

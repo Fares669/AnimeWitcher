@@ -1,12 +1,63 @@
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/features/home/presentation/widgets/provider_search_filter_dialog.dart';
 import 'package:animewitcher/features/search/presentation/widgets/search_sort_dialog.dart';
+import 'package:animewitcher/features/search/presentation/widgets/search_action_buttons.dart';
 import 'package:animewitcher/shared/widgets/animated_sort_menu_button.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('Rift shows one reverse button outside the six sort rows', (
+    tester,
+  ) async {
+    var reversed = 0;
+    String? selected;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SearchActionButtons(
+              sortValue: 'release_year',
+              sortItems: [
+                for (final field in RiftSearchSortField.values)
+                  AppleNativeMenuItem(
+                    value: field.value,
+                    label: field.arabic,
+                    icon: field.icon,
+                  ),
+              ],
+              onSortSelected: (value) => selected = value,
+              onReverseSort: () => reversed++,
+              onFilterPressed: () {},
+              sortTooltip: 'Rift sort',
+              filterTooltip: 'Filter',
+              sortIcon: Icons.calendar_month_rounded,
+              sortSystemImage: 'line.3.horizontal.decrease',
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const ValueKey('rift-reverse-sort')));
+    expect(reversed, 1);
+    await tester.tap(find.byTooltip('Rift sort'));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('reverse-sort-release_year')),
+      findsNothing,
+    );
+    expect(find.text('التقييم'), findsOneWidget);
+    expect(
+      RiftSearchSortField.values.map((field) => field.icon).toSet(),
+      hasLength(RiftSearchSortField.values.length),
+    );
+    await tester.tap(find.text('التقييم'));
+    await tester.pumpAndSettle();
+    expect(selected, 'rating');
+    expect(reversed, 1);
+  });
+
   testWidgets('AnimeRift season and country work without selecting a year', (
     tester,
   ) async {

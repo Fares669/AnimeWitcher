@@ -90,7 +90,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('الردود 1'));
+    await tester.tap(find.byTooltip('الردود'));
     await tester.pumpAndSettle();
     expect(provider.targets.last.animeId, 'anime42');
     expect(provider.targets.last.episodeId, 'ep22');

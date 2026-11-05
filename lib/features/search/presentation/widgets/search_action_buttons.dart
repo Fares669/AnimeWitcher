@@ -13,7 +13,7 @@ class SearchActionButtons extends StatefulWidget {
     required this.sortValue,
     required this.sortItems,
     required this.onSortSelected,
-    this.onSortDirectionSelected,
+    this.onReverseSort,
     this.sortAscending = false,
     required this.onFilterPressed,
     required this.sortTooltip,
@@ -31,7 +31,7 @@ class SearchActionButtons extends StatefulWidget {
   final String sortValue;
   final List<AppleNativeMenuItem> sortItems;
   final ValueChanged<String> onSortSelected;
-  final ValueChanged<String>? onSortDirectionSelected;
+  final VoidCallback? onReverseSort;
   final bool sortAscending;
   final VoidCallback onFilterPressed;
   final String sortTooltip;
@@ -60,7 +60,9 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
     final tint = widget.tintColor ?? Theme.of(context).colorScheme.primary;
     final height = widget.height;
     final visibleControls =
-        (widget.showSort ? 1 : 0) + (widget.showFilter ? 1 : 0);
+        (widget.showSort ? 1 : 0) +
+        (widget.showFilter ? 1 : 0) +
+        (widget.showSort && widget.onReverseSort != null ? 1 : 0);
     final width = SearchActionButtons.groupWidthForHeight(
       height,
       visibleControls: visibleControls,
@@ -81,6 +83,21 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
+              if (widget.showSort && widget.onReverseSort != null)
+                Expanded(
+                  child: _ActionIcon(
+                    key: const ValueKey<String>('rift-reverse-sort'),
+                    tooltip: widget.sortAscending
+                        ? 'الترتيب التصاعدي — اضغط للتنازلي'
+                        : 'الترتيب التنازلي — اضغط للتصاعدي',
+                    icon: widget.sortAscending
+                        ? Icons.arrow_upward_rounded
+                        : Icons.arrow_downward_rounded,
+                    color: tint,
+                    size: height,
+                    onPressed: widget.onReverseSort,
+                  ),
+                ),
               if (widget.showSort)
                 Expanded(
                   child: AnimatedSortMenuButton(
@@ -88,8 +105,8 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
                     selectedValue: widget.sortValue,
                     items: widget.sortItems,
                     onSelected: widget.onSortSelected,
-                    onReverseSelected: widget.onSortDirectionSelected,
-                    reverseAscending: widget.sortAscending,
+                    // The shared menu selects a field only. The separate
+                    // button to its left is the sole direction control.
                     icon: widget.sortIcon,
                     systemImage: widget.sortSystemImage,
                     tintColor: tint,
@@ -120,6 +137,7 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
 
 class _ActionIcon extends StatelessWidget {
   const _ActionIcon({
+    super.key,
     required this.tooltip,
     required this.icon,
     required this.color,

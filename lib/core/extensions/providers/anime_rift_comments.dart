@@ -16,6 +16,9 @@ class AnimeRiftCommentTarget {
   final String? episodeId;
   final String? parentId;
 
+  /// AnimeRift indexes comments by event ID (anime or episode).
+  String get eventId => episodeId ?? animeId;
+
   static AnimeRiftCommentTarget? forAnime(MultimediaItem item) {
     if (item.provider != animeRiftProviderId) return null;
     final canonical = canonicalAnimeRiftCatalogUrl(item.url);
@@ -59,6 +62,7 @@ class AnimeRiftComment {
     required this.replies,
     required this.spoiler,
     this.createdAt,
+    this.photoUrl,
   });
 
   final String id;
@@ -68,6 +72,7 @@ class AnimeRiftComment {
   final int replies;
   final bool spoiler;
   final DateTime? createdAt;
+  final String? photoUrl;
 
   static AnimeRiftComment? fromJson(Object? value) {
     if (value is! Map) return null;
@@ -99,6 +104,12 @@ class AnimeRiftComment {
       replies: count(value['replies_count'] ?? value['replies']),
       spoiler: value['spoiler'] == true,
       createdAt: rawDate is String ? DateTime.tryParse(rawDate) : null,
+      photoUrl: switch (user['avatar'] ??
+          user['profile_picture'] ??
+          user['picture']) {
+        final String value when Uri.tryParse(value)?.scheme == 'https' => value,
+        _ => null,
+      },
     );
   }
 }
@@ -109,7 +120,12 @@ class AnimeRiftCommentPage {
   final bool hasMore;
 
   factory AnimeRiftCommentPage.fromJson(Map<String, dynamic> data) {
-    final raw = data['items'];
+    final envelope = data['items'];
+    final raw = envelope is List
+        ? envelope
+        : envelope is Map
+        ? envelope['items']
+        : null;
     if (raw is! List) {
       throw const FormatException('Invalid AnimeRift comments response');
     }
@@ -118,7 +134,9 @@ class AnimeRiftCommentPage {
         for (final entry in raw)
           if (AnimeRiftComment.fromJson(entry) case final comment?) comment,
       ],
-      hasMore: data['hasNext'] == true,
+      hasMore:
+          data['hasNext'] == true ||
+          (envelope is Map && envelope['hasNext'] == true),
     );
   }
 }

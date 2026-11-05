@@ -107,6 +107,53 @@ void main() {
 
   tearDown(() => messenger.setMockMethodCallHandler(secureChannel, null));
 
+  test(
+    'Rift comment creation sends only eventId and authenticated comment',
+    () async {
+      final writes = <RequestOptions>[];
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: fixtureDio((options) {
+          if (options.uri.host.endsWith('googleapis.com')) {
+            return reply(options, <String, dynamic>{}, 400);
+          }
+          if (options.uri.path.endsWith('/auth/register/device')) {
+            return reply(options, {'sessionKey': 'fixture'}, 201);
+          }
+          if (options.uri.path.endsWith('/auth/sign-in/with-code')) {
+            return reply(options, {
+              'items': {
+                'profile': {'_id': 'rift-comment-user'},
+                'token': 'rift-comment-token',
+              },
+            });
+          }
+          writes.add(options);
+          return reply(options, {'success': true}, 201);
+        }),
+      );
+      await client.signInWithCode('test-only-code');
+      await client.createComment(
+        animeId: 'anime42',
+        episodeId: 'episode7',
+        parentId: 'parent1',
+        text: ' hello ',
+      );
+      expect(writes, hasLength(1));
+      expect(writes.single.uri.path, '/api/v4/comment/create');
+      expect(writes.single.method, 'POST');
+      expect(writes.single.data, {
+        'eventId': 'episode7',
+        'parentId': 'parent1',
+        'comment': 'hello',
+      });
+      expect(
+        writes.single.headers['authorization'],
+        'Bearer rift-comment-token',
+      );
+    },
+  );
+
   test('Rift watched/unwatched and five-part rating send authenticated native PUTs', () async {
     final writes = <RequestOptions>[];
     final client = AnimeRiftApiClient(

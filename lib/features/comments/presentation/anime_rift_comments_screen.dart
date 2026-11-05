@@ -1,4 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
+import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
+
+import '../../../core/utils/relative_time.dart';
+import '../../../core/utils/avatar_image.dart';
 
 import '../../../core/extensions/providers/anime_rift_comments.dart';
 import '../../../core/extensions/providers/anime_rift_provider.dart';
@@ -22,6 +28,7 @@ class AnimeRiftCommentsScreen extends StatefulWidget {
 class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
   final TextEditingController _composer = TextEditingController();
   final ScrollController _scroll = ScrollController();
+  final Set<String> _revealedSpoilers = <String>{};
   List<AnimeRiftComment> _comments = const [];
   bool _initialLoading = true;
   bool _moreLoading = false;
@@ -40,6 +47,7 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
 
   @override
   void dispose() {
+    applePersistentGlassHeaderController.hide(this);
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
     _composer.dispose();
@@ -110,7 +118,9 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
   void _message(Object error) {
     final message = error is FormatException
         ? 'تعذر قراءة بيانات تعليقات AnimeRift.'
-        : error.toString();
+        : error is AnimeRiftAccessUnavailable
+        ? error.toString()
+        : 'تعذر تحميل التعليقات أو نشرها. حاول مرة أخرى.';
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text(message)));
   }
@@ -147,142 +157,333 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    if (appleUsesPersistentLiquidGlassHeader) {
+      final colors = Theme.of(context).colorScheme;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || ModalRoute.of(context)?.isCurrent == false) return;
+        applePersistentGlassHeaderController.show(
+          ApplePersistentGlassHeaderConfig(
+            owner: this,
+            route: ModalRoute.of(context),
+            onBack: () => Navigator.of(context).pop(),
+            backForegroundColor: colors.onSurface,
+            backFallbackColor: colors.surfaceContainerHigh,
+            allowInstantBoundaryMorph: true,
+          ),
+        );
+      });
+    }
     return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          widget.target.parentId == null
-              ? 'تعليقات ${widget.target.title}'
-              : 'الردود',
-        ),
+      extendBodyBehindAppBar: true,
+      appBar: AppPageAppBar(
+        title: widget.target.parentId == null ? 'التعليقات' : 'الردود',
+        onBack: () => Navigator.of(context).pop(),
       ),
       body: Column(
         children: [
-          Expanded(
-            child: _initialLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _error != null
-                ? Center(
+          Expanded(child: _buildCommentsBody(context)),
+          _buildComposer(context),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCommentsBody(BuildContext context) {
+    if (_initialLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null && _comments.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('تعذّر تحميل تعليقات AnimeRift.'),
+            const SizedBox(height: 12),
+            FilledButton(
+              onPressed: _reload,
+              child: const Text('إعادة المحاولة'),
+            ),
+          ],
+        ),
+      );
+    }
+    if (_comments.isEmpty) {
+      return MouseDragRefreshIndicator(
+        onRefresh: _reload,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.only(top: appPageHeaderContentTopInset(context)),
+          children: [
+            SizedBox(height: MediaQuery.sizeOf(context).height * 0.25),
+            Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                'لا توجد تعليقات منشورة بعد.',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    return MouseDragRefreshIndicator(
+      onRefresh: _reload,
+      child: ListView.separated(
+        controller: _scroll,
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.fromLTRB(
+          12,
+          appPageHeaderContentTopInset(context) + 12,
+          12,
+          24,
+        ),
+        itemCount: _comments.length + (_hasMore || _moreLoading ? 1 : 0),
+        separatorBuilder: (_, _) => const SizedBox(height: 8),
+        itemBuilder: (context, index) {
+          if (index >= _comments.length) {
+            return const Padding(
+              padding: EdgeInsets.symmetric(vertical: 18),
+              child: Center(
+                child: SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2.2),
+                ),
+              ),
+            );
+          }
+          return _buildCommentCard(context, _comments[index]);
+        },
+      ),
+    );
+  }
+
+  /// Same comment-card visual structure as AnimeWitcherCommentsScreen.
+  Widget _buildCommentCard(BuildContext context, AnimeRiftComment comment) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final photo = comment.photoUrl ?? '';
+    final reveal = !comment.spoiler || _revealedSpoilers.contains(comment.id);
+    return Material(
+      key: ValueKey('rift-comment-${comment.id}'),
+      color: colors.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(16),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Directionality(
+              textDirection: TextDirection.rtl,
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    radius: 20,
+                    backgroundColor: colors.surfaceContainerHighest,
+                    backgroundImage: avatarImage(context, photo, radius: 20),
+                    child: photo.isEmpty
+                        ? Icon(
+                            Icons.person_rounded,
+                            color: colors.onSurfaceVariant,
+                          )
+                        : null,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
                     child: Column(
-                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('تعذّر تحميل تعليقات AnimeRift.'),
-                        const SizedBox(height: 12),
-                        FilledButton(
-                          onPressed: _reload,
-                          child: const Text('إعادة المحاولة'),
+                        Text(
+                          comment.author,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          formatArabicRelativeTime(comment.createdAt),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colors.onSurfaceVariant,
+                          ),
                         ),
                       ],
-                    ),
-                  )
-                : RefreshIndicator(
-                    onRefresh: _reload,
-                    child: ListView.builder(
-                      controller: _scroll,
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      itemCount: _comments.length + 1,
-                      itemBuilder: (context, index) {
-                        if (index == _comments.length) {
-                          if (_moreLoading) {
-                            return const Padding(
-                              padding: EdgeInsets.all(14),
-                              child: Center(child: CircularProgressIndicator()),
-                            );
-                          }
-                          return _comments.isEmpty
-                              ? const Padding(
-                                  padding: EdgeInsets.all(32),
-                                  child: Center(
-                                    child: Text('لا توجد تعليقات بعد.'),
-                                  ),
-                                )
-                              : const SizedBox(height: 12);
-                        }
-                        final comment = _comments[index];
-                        return ListTile(
-                          key: ValueKey('rift-comment-${comment.id}'),
-                          title: Text(
-                            comment.author,
-                            style: theme.textTheme.titleSmall,
-                          ),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const SizedBox(height: 8),
-                              comment.spoiler
-                                  ? ExpansionTile(
-                                      tilePadding: EdgeInsets.zero,
-                                      title: const Text(
-                                        'تعليق يحتوي حرقًا — اضغط للعرض',
-                                      ),
-                                      children: [Text(comment.text)],
-                                    )
-                                  : Text(comment.text),
-                              const SizedBox(height: 6),
-                              Wrap(
-                                spacing: 12,
-                                crossAxisAlignment: WrapCrossAlignment.center,
-                                children: [
-                                  Text('👍 ${comment.likes}'),
-                                  TextButton.icon(
-                                    onPressed: () => _openReplies(comment),
-                                    icon: const Icon(
-                                      Icons.reply_rounded,
-                                      size: 17,
-                                    ),
-                                    label: Text('الردود ${comment.replies}'),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        );
-                      },
                     ),
                   ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+            if (reveal)
+              Directionality(
+                textDirection: TextDirection.rtl,
+                child: Text(
+                  comment.text,
+                  textAlign: TextAlign.start,
+                  style: theme.textTheme.bodyMedium?.copyWith(height: 1.45),
+                ),
+              )
+            else
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: () =>
+                      setState(() => _revealedSpoilers.add(comment.id)),
+                  icon: const Icon(Icons.local_fire_department_rounded),
+                  label: const Text('تعليق يحتوي على حرق — إظهار'),
+                ),
+              ),
+            const SizedBox(height: 8),
+            Directionality(
+              textDirection: TextDirection.rtl,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  _RiftReaction(
+                    icon: Icons.favorite_border_rounded,
+                    count: comment.likes,
+                    tooltip: 'الإعجابات',
+                  ),
+                  const SizedBox(width: 14),
+                  _RiftReaction(
+                    icon: Icons.chat_bubble_outline_rounded,
+                    count: comment.replies,
+                    tooltip: 'الردود',
+                    onTap: () => _openReplies(comment),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildComposer(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return SafeArea(
+      top: false,
+      child: Container(
+        decoration: BoxDecoration(
+          color: colors.surface,
+          border: Border(
+            top: BorderSide(color: Theme.of(context).dividerColor),
           ),
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-              child: _linked
-                  ? Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            key: const ValueKey('rift-comment-input'),
-                            controller: _composer,
-                            maxLength: 5000,
-                            maxLines: 3,
-                            minLines: 1,
-                            textInputAction: TextInputAction.newline,
-                            decoration: const InputDecoration(
-                              hintText: 'اكتب تعليقًا...',
-                              border: OutlineInputBorder(),
-                            ),
+        ),
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+        child: _linked
+            ? Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: TextField(
+                      key: const ValueKey('rift-comment-input'),
+                      controller: _composer,
+                      minLines: 1,
+                      maxLines: 4,
+                      maxLength: 5000,
+                      textDirection: TextDirection.rtl,
+                      decoration: InputDecoration(
+                        hintText: 'اكتب تعليقًا...',
+                        counterText: '',
+                        filled: true,
+                        fillColor: colors.surfaceContainerLow,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          borderSide: BorderSide.none,
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          borderSide: BorderSide.none,
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          borderSide: BorderSide(
+                            color: colors.primary,
+                            width: 1.5,
                           ),
                         ),
-                        IconButton(
-                          tooltip: 'نشر التعليق',
-                          onPressed: _posting ? null : _publish,
-                          icon: _posting
-                              ? const SizedBox.square(
-                                  dimension: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(Icons.send_rounded),
-                        ),
-                      ],
-                    )
-                  : const Text(
-                      'اربط حساب AnimeRift من الإعدادات لنشر التعليقات.',
-                      textAlign: TextAlign.center,
+                      ),
                     ),
-            ),
+                  ),
+                  const SizedBox(width: 6),
+                  IconButton.filled(
+                    tooltip: 'نشر التعليق',
+                    onPressed: _posting ? null : _publish,
+                    icon: _posting
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.send_rounded),
+                  ),
+                ],
+              )
+            : Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.lock_outline_rounded,
+                      size: 18,
+                      color: colors.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        'اربط حساب AnimeRift من الإعدادات لإضافة تعليق.',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodyMedium
+                            ?.copyWith(color: colors.onSurfaceVariant),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+      ),
+    );
+  }
+}
+
+class _RiftReaction extends StatelessWidget {
+  const _RiftReaction({
+    required this.icon,
+    required this.count,
+    required this.tooltip,
+    this.onTap,
+  });
+
+  final IconData icon;
+  final int count;
+  final String tooltip;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.onSurfaceVariant;
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 19, color: color),
+              const SizedBox(width: 5),
+              Text('$count', style: TextStyle(color: color)),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

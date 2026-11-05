@@ -22,7 +22,7 @@ class SearchHeaderBar extends ConsumerStatefulWidget {
   final ValueChanged<String> onChanged;
   final VoidCallback onShowFilters;
   final ValueChanged<String> onSortSelected;
-  final ValueChanged<String>? onSortDirectionSelected;
+  final VoidCallback? onReverseSort;
   final bool sortAscending;
   final String sortValue;
   final List<AppleNativeMenuItem> sortItems;
@@ -44,7 +44,7 @@ class SearchHeaderBar extends ConsumerStatefulWidget {
     required this.onChanged,
     required this.onShowFilters,
     required this.onSortSelected,
-    this.onSortDirectionSelected,
+    this.onReverseSort,
     this.sortAscending = false,
     required this.sortValue,
     required this.sortItems,
@@ -85,6 +85,7 @@ class _SearchHeaderBarState extends ConsumerState<SearchHeaderBar> {
     // Expanded search then consumes that freed slot (characters have no sort).
     final fullActionWidth = SearchActionButtons.groupWidthForHeight(
       SearchGlassSurface.height,
+      visibleControls: widget.onReverseSort == null ? 2 : 3,
     );
     return Padding(
       padding: EdgeInsets.symmetric(
@@ -165,7 +166,7 @@ class _SearchHeaderBarState extends ConsumerState<SearchHeaderBar> {
                       sortValue: widget.sortValue,
                       sortItems: widget.sortItems,
                       onSortSelected: widget.onSortSelected,
-                      onSortDirectionSelected: widget.onSortDirectionSelected,
+                      onReverseSort: widget.onReverseSort,
                       sortAscending: widget.sortAscending,
                       sortIcon: widget.sortIcon,
                       sortSystemImage: widget.sortSystemImage,

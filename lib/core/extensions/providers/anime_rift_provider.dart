@@ -174,8 +174,7 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
       'COMMENTS.VIEW',
       query: {
         ...AnimeRiftApiClient.commentTargetFields(
-          animeId: target.animeId,
-          episodeId: target.episodeId,
+          eventId: target.eventId,
           parentId: target.parentId,
         ),
         'page': page < 0 ? 0 : page,
@@ -416,10 +415,10 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     '+17': 'r',
   };
   static const _countries = {
-    'اليابان': 'JP',
-    'الصين': 'CN',
-    'كوريا': 'KR',
-    'تايوان': 'TW',
+    'اليابان': 'japan',
+    'الصين': 'china',
+    'كوريا': 'korea',
+    'تايوان': 'taiwan',
   };
   static const _sortFields = {
     'title',

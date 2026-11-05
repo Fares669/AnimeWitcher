@@ -202,7 +202,8 @@ void main() {
     expect(first.nextOffset, 1);
     expect(first.hasMore, isTrue);
     final next = await provider.getHomeSectionPage(
-      'الإصدارات الحديثة', offset: first.nextOffset,
+      'الإصدارات الحديثة',
+      offset: first.nextOffset,
     );
     expect(api.lastQuery?['page'], '1');
     expect(next.items.single.url, 'https://anime-rift.com/anime/next');
@@ -483,7 +484,7 @@ void main() {
         ),
       );
       expect(api.lastMethod, 'POST');
-      expect(api.lastBody!['country_origin'], 'CN');
+      expect(api.lastBody!['country_origin'], 'china');
       expect(api.lastBody!['multi_seasons'], ['winter']);
       expect(api.lastBody!.containsKey('multi_release_year'), isFalse);
       expect(api.lastBody!['multi_age_rating'], ['r+']);
@@ -492,6 +493,26 @@ void main() {
       expect(api.lastQuery!['sort_direction'], -1);
     },
   );
+
+  test('all four origin choices use the APK country values', () async {
+    final api = CatalogFixture();
+    final provider = AnimeRiftProvider(client: api);
+    const countries = {
+      'اليابان': 'japan',
+      'الصين': 'china',
+      'كوريا': 'korea',
+      'تايوان': 'taiwan',
+    };
+    for (final entry in countries.entries) {
+      await provider.searchPage(
+        '',
+        ProviderSearchFilters(countries: {entry.key}),
+      );
+      expect(api.lastMethod, 'POST');
+      expect(api.lastBody!['country_origin'], entry.value);
+      expect(api.lastBody!.containsKey('multi_release_year'), isFalse);
+    }
+  });
 
   test('filters map UI labels to backend enums and genre identities', () async {
     final api = CatalogFixture();
@@ -541,49 +562,52 @@ void main() {
       expect(api.calls, ['library/home_content']);
     },
   );
-  test('recent Rift releases show the actual latest released episode number', () async {
-    final api = CatalogFixture()
-      ..homePayload = {
-        'sections': [
-          {
-            'sectionTitle': 'الإصدارات الحديثة',
-            'items': [
-              {
-                '_id': 'show1',
-                'title': 'Latest',
-                'latest_episode_released': {'episode_number': 12},
-                'available_episodes': 50,
-              },
-              {
-                '_id': 'show2',
-                'title': 'No release',
-                'available_episodes': 21,
-              },
-              {
-                '_id': 'show3',
-                'title': 'Fractional episode',
-                'latest_episode_released': {'episode_number': 12.5},
-              },
-            ],
-          },
-          {
-            'sectionTitle': 'رائج الآن',
-            'items': [
-              {
-                '_id': 'show4',
-                'title': 'Not a latest-release rail',
-                'latest_episode_released': {'episode_number': 15},
-              },
-            ],
-          },
-        ],
-      };
-    final home = await AnimeRiftProvider(client: api).getHome();
-    expect(home['الإصدارات الحديثة']![0].episodeBadge, 'الحلقة 12');
-    expect(home['الإصدارات الحديثة']![1].episodeBadge, isNull);
-    expect(home['الإصدارات الحديثة']![2].episodeBadge, 'الحلقة 12.5');
-    expect(home['رائج الآن']!.single.episodeBadge, isNull);
-  });
+  test(
+    'recent Rift releases show the actual latest released episode number',
+    () async {
+      final api = CatalogFixture()
+        ..homePayload = {
+          'sections': [
+            {
+              'sectionTitle': 'الإصدارات الحديثة',
+              'items': [
+                {
+                  '_id': 'show1',
+                  'title': 'Latest',
+                  'latest_episode_released': {'episode_number': 12},
+                  'available_episodes': 50,
+                },
+                {
+                  '_id': 'show2',
+                  'title': 'No release',
+                  'available_episodes': 21,
+                },
+                {
+                  '_id': 'show3',
+                  'title': 'Fractional episode',
+                  'latest_episode_released': {'episode_number': 12.5},
+                },
+              ],
+            },
+            {
+              'sectionTitle': 'رائج الآن',
+              'items': [
+                {
+                  '_id': 'show4',
+                  'title': 'Not a latest-release rail',
+                  'latest_episode_released': {'episode_number': 15},
+                },
+              ],
+            },
+          ],
+        };
+      final home = await AnimeRiftProvider(client: api).getHome();
+      expect(home['الإصدارات الحديثة']![0].episodeBadge, 'الحلقة 12');
+      expect(home['الإصدارات الحديثة']![1].episodeBadge, isNull);
+      expect(home['الإصدارات الحديثة']![2].episodeBadge, 'الحلقة 12.5');
+      expect(home['رائج الآن']!.single.episodeBadge, isNull);
+    },
+  );
 
   test('recent dubbed releases retain their episode badge', () async {
     final api = CatalogFixture()

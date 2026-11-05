@@ -1072,8 +1072,8 @@ class AnimeRiftApiClient {
     );
   }
 
-  /// Rift APK strings: /comment/all (COMMENTS.VIEW), /comment/create
-  /// (COMMENTS.CREATE), and animeId / episodeId / parentId / comment.
+  /// Rift APK comment-create request uses eventId and comment: the comment
+  /// event is the anime ID or episode ID, not both catalogue filter IDs.
   /// Comment creation is always authenticated; the catalog account is never
   /// substituted for the separate AnimeRift identity.
   Future<Map<String, dynamic>> createComment({
@@ -1083,8 +1083,7 @@ class AnimeRiftApiClient {
     required String text,
   }) {
     final body = commentTargetFields(
-      animeId: animeId,
-      episodeId: episodeId,
+      eventId: episodeId ?? animeId,
       parentId: parentId,
     );
     final content = text.trim();
@@ -1100,21 +1099,15 @@ class AnimeRiftApiClient {
   }
 
   static Map<String, dynamic> commentTargetFields({
-    required String animeId,
-    String? episodeId,
+    required String eventId,
     String? parentId,
   }) {
     final valid = RegExp(r'^[A-Za-z0-9._~-]+$');
-    if (!valid.hasMatch(animeId) ||
-        (episodeId != null && !valid.hasMatch(episodeId)) ||
+    if (!valid.hasMatch(eventId) ||
         (parentId != null && !valid.hasMatch(parentId))) {
       throw ArgumentError('Invalid Anime Rift comment target');
     }
-    return {
-      'animeId': animeId,
-      if (episodeId != null) 'episodeId': episodeId,
-      if (parentId != null) 'parentId': parentId,
-    };
+    return {'eventId': eventId, if (parentId != null) 'parentId': parentId};
   }
 
   Future<Map<String, dynamic>> _readAccountData(

@@ -73,6 +73,15 @@ enum RiftSearchSortField {
   final String arabic;
   final String english;
 
+  IconData get icon => switch (this) {
+    RiftSearchSortField.name => Icons.sort_by_alpha_rounded,
+    RiftSearchSortField.rating => Icons.star_rounded,
+    RiftSearchSortField.popularity => Icons.trending_up_rounded,
+    RiftSearchSortField.likes => Icons.favorite_rounded,
+    RiftSearchSortField.releaseYear => Icons.calendar_month_rounded,
+    RiftSearchSortField.recentlyUpdated => Icons.update_rounded,
+  };
+
   String label(BuildContext context) =>
       appText(context, english: english, arabic: arabic);
 

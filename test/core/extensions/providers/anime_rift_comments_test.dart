@@ -3,7 +3,6 @@ import 'package:animewitcher/core/storage/provider_local_library.dart';
 import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart';
 import 'package:animewitcher/core/extensions/providers/anime_rift_comments.dart';
 import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
-import 'package:animewitcher/core/utils/anime_rift_identity.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -61,8 +60,7 @@ class CommentClientFixture extends AnimeRiftApiClient {
     required String text,
   }) async {
     createdTarget = AnimeRiftApiClient.commentTargetFields(
-      animeId: animeId,
-      episodeId: episodeId,
+      eventId: episodeId ?? animeId,
       parentId: parentId,
     );
     postedText = text;
@@ -113,19 +111,18 @@ void main() {
   });
 
   test('Rift comment API target values reject invalid identifiers', () {
-    expect(AnimeRiftApiClient.commentTargetFields(animeId: '42'), {
-      'animeId': '42',
+    expect(AnimeRiftApiClient.commentTargetFields(eventId: '42'), {
+      'eventId': '42',
     });
     expect(
       AnimeRiftApiClient.commentTargetFields(
-        animeId: '42',
-        episodeId: 'ep1',
+        eventId: 'ep1',
         parentId: 'comment1',
       ),
-      {'animeId': '42', 'episodeId': 'ep1', 'parentId': 'comment1'},
+      {'eventId': 'ep1', 'parentId': 'comment1'},
     );
     expect(
-      () => AnimeRiftApiClient.commentTargetFields(animeId: '../escape'),
+      () => AnimeRiftApiClient.commentTargetFields(eventId: '../escape'),
       throwsArgumentError,
     );
   });
@@ -171,22 +168,17 @@ void main() {
       expect(client.lastPath, 'comment/all');
       expect(client.lastScope, 'COMMENTS.VIEW');
       expect(client.lastMethod, 'GET');
-      expect(client.lastQuery, {'animeId': 'anime42', 'page': 0});
+      expect(client.lastQuery, {'eventId': 'anime42', 'page': 0});
 
       final episodeTarget = AnimeRiftCommentTarget.forEpisode(anime, episode)!;
       await provider.loadComments(episodeTarget.replies('comment1'), page: 2);
       expect(client.lastQuery, {
-        'animeId': 'anime42',
-        'episodeId': 'ep11',
+        'eventId': 'ep11',
         'parentId': 'comment1',
         'page': 2,
       });
       await provider.publishComment(episodeTarget.replies('comment1'), 'reply');
-      expect(client.createdTarget, {
-        'animeId': 'anime42',
-        'episodeId': 'ep11',
-        'parentId': 'comment1',
-      });
+      expect(client.createdTarget, {'eventId': 'ep11', 'parentId': 'comment1'});
       expect(client.postedText, 'reply');
     },
   );
