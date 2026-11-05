@@ -59,6 +59,21 @@ void main() {
     });
   });
 
+  test('comment diagnostics preserve linked state without an account ID', () {
+    final sink = InMemoryDownloadDiagnosticsV2();
+    final diagnostics = AppDiagnostics(sink: sink);
+    for (final linked in [true, false, 'private-account-id']) {
+      diagnostics.record('rift.comments.page', {
+        'active': linked,
+        'parentActive': false,
+        'count': 0,
+      });
+    }
+    expect(sink.transportEvents[0]['active'], isTrue);
+    expect(sink.transportEvents[1]['active'], isFalse);
+    expect(sink.transportEvents[2].containsKey('active'), isFalse);
+  });
+
   test('frame stutters are sampled, ordinary frames are not logged', () {
     var now = 100000;
     final sink = InMemoryDownloadDiagnosticsV2();

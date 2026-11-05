@@ -221,8 +221,16 @@ class AnimeRiftCloudSync {
         response = await loadPage(page);
       } on AnimeRiftAuthenticationRequired {
         rethrow;
-      } on AnimeRiftAccessUnavailable {
+      } on AnimeRiftAccessUnavailable catch (error) {
         _requireAccount(account);
+        // An expired session, access denial or rate limit is actionable. Do
+        // not hide it as an unsupported page parameter and report a partial
+        // sync as if it completed.
+        if (error.statusCode == 401 ||
+            error.statusCode == 403 ||
+            error.statusCode == 429) {
+          rethrow;
+        }
         break;
       }
       _requireAccount(account);
@@ -1079,9 +1087,13 @@ class AnimeRiftCloudSync {
       rethrow;
     } on AnimeRiftAccessUnavailable catch (error) {
       _requireAccount(accountHash);
-      if (error.statusCode == 401 || error.statusCode == 403) {
+      // Only an expired credential is an authentication failure. A 403 can be
+      // an access policy/device restriction while the linked session remains
+      // valid; surface it as an access failure instead of claiming sign-out.
+      if (error.statusCode == 401) {
         throw AnimeRiftAuthenticationRequired(statusCode: error.statusCode);
       }
+      if (error.statusCode == 403) rethrow;
       return (
         const AnimeRiftCloudResourceInspection(
           AnimeRiftCloudResponseShape.unavailable,

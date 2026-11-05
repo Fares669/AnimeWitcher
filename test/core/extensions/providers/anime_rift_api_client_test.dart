@@ -865,6 +865,61 @@ void main() {
     },
   );
 
+  test(
+    'account read HTTP 403 preserves the linked session as access failure',
+    () async {
+      var reads = 0;
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: fixtureDio((o) {
+          if (o.uri.host.endsWith('googleapis.com')) {
+            return reply(o, <String, dynamic>{}, 400);
+          }
+          if (o.uri.path.endsWith('/auth/register/device')) {
+            return reply(o, {'sessionKey': 'fixture'}, 201);
+          }
+          if (o.uri.path.endsWith('/auth/sign-in/with-code')) {
+            return reply(o, {
+              'items': {
+                'profile': {'_id': 'rift-user'},
+                'token': 'linked-token',
+              },
+            });
+          }
+          reads++;
+          return reply(o, {
+            'error': {'error_code': 'ACCESS_DENIED'},
+          }, 403);
+        }),
+      );
+      await client.signInWithCode('owner-code');
+
+      await expectLater(
+        client.fetchFavoriteAnime(),
+        throwsA(
+          isA<AnimeRiftAccessUnavailable>()
+              .having((error) => error.statusCode, 'status', 403)
+              .having(
+                (error) => error.knownReason,
+                'reason',
+                AnimeRiftServerReason.accessDenied,
+              )
+              .having(
+                (error) => error,
+                'not mislabeled as signed out',
+                isNot(isA<AnimeRiftAuthenticationRequired>()),
+              ),
+        ),
+      );
+      expect(reads, 1);
+      expect(client.isAccountLinked, isTrue);
+      expect(
+        secureValues['animerift.user.session.v1'],
+        contains('linked-token'),
+      );
+    },
+  );
+
   test('an account read cannot publish data after unlinking Rift', () async {
     final started = Completer<void>();
     final replyLater = Completer<Response<dynamic>>();

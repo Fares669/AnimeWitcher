@@ -186,6 +186,7 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
           .importHistoryToLocal(storage: storage, hydrate: getDetails);
 
   final _homeSectionRows = <String, Map<dynamic, dynamic>>{};
+  Future<Map<String, List<MultimediaItem>>>? _homeRequest;
 
   Future<AnimeRiftCommentPage> loadComments(
     AnimeRiftCommentTarget target, {
@@ -210,6 +211,7 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
           'page': page < 0 ? 0 : page,
           'level': target.parentId == null ? 0 : 1,
           'canReply': '1',
+          'sort_by': 'recently_added',
         },
       );
       final result = AnimeRiftCommentPage.fromJson(response);
@@ -246,7 +248,21 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
   }
 
   @override
-  Future<Map<String, List<MultimediaItem>>> getHome() async {
+  Future<Map<String, List<MultimediaItem>>> getHome() {
+    // Home and continue-watching cards can request the same rail concurrently.
+    // Share the in-flight read; otherwise one render can issue a burst of
+    // identical home_content calls and amplify server 403/429 responses.
+    final existing = _homeRequest;
+    if (existing != null) return existing;
+    late final Future<Map<String, List<MultimediaItem>>> request;
+    request = _fetchHome().whenComplete(() {
+      if (identical(_homeRequest, request)) _homeRequest = null;
+    });
+    _homeRequest = request;
+    return request;
+  }
+
+  Future<Map<String, List<MultimediaItem>>> _fetchHome() async {
     if (!_api.isConfigured) throw const AnimeRiftAccessUnavailable();
     final data = await _api.request(
       'library/home_content',

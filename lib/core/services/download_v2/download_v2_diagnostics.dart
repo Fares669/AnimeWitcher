@@ -359,6 +359,7 @@ const Set<String> _transportFieldAllowlist = <String>{
   'slotReserved',
   'completed',
   'result',
+  'active',
   'parentActive',
   'pauseRequested',
   'retryable',
@@ -377,7 +378,7 @@ Map<String, Object?> _sanitizeTransportFields(Map<String, Object?> fields) {
   for (final entry in fields.entries) {
     if (!_transportFieldAllowlist.contains(entry.key)) continue;
     final value = entry.value;
-    if (entry.key == 'retryable' && value is! bool) {
+    if ((entry.key == 'retryable' || entry.key == 'active') && value is! bool) {
       continue;
     }
     if (entry.key == 'memoryBytes' && (value is! int || value < 0)) {

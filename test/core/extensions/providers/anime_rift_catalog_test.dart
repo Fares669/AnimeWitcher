@@ -562,6 +562,25 @@ void main() {
       expect(api.calls, ['library/home_content']);
     },
   );
+
+  test('concurrent home renders share one catalogue request', () async {
+    final api = CatalogFixture();
+    final provider = AnimeRiftProvider(client: api);
+
+    final pages = await Future.wait([
+      provider.getHome(),
+      provider.getHome(),
+      provider.getHome(),
+    ]);
+
+    expect(
+      api.calls.where((path) => path == 'library/home_content'),
+      hasLength(1),
+    );
+    expect(pages[1], same(pages[0]));
+    expect(pages[2], same(pages[0]));
+  });
+
   test(
     'recent Rift releases show the actual latest released episode number',
     () async {

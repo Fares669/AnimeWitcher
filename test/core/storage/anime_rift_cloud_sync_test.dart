@@ -234,14 +234,25 @@ void main() {
     },
   );
 
-  test('raw HTTP 403 errors cannot be treated as offline data', () async {
-    AnimeRiftLocalAccountScope.activate('A');
-    final reader = _Reader();
-    reader.latestRequest = () async =>
-        throw const AnimeRiftAccessUnavailable(statusCode: 403);
-    await expectLater(
-      AnimeRiftCloudSync(reader).inspect(),
-      throwsA(isA<AnimeRiftAuthenticationRequired>()),
-    );
-  });
+  test(
+    'raw HTTP 403 remains an access failure, not an expired session',
+    () async {
+      AnimeRiftLocalAccountScope.activate('A');
+      final reader = _Reader();
+      reader.latestRequest = () async =>
+          throw const AnimeRiftAccessUnavailable(statusCode: 403);
+      await expectLater(
+        AnimeRiftCloudSync(reader).inspect(),
+        throwsA(
+          isA<AnimeRiftAccessUnavailable>()
+              .having((error) => error.statusCode, 'status', 403)
+              .having(
+                (error) => error,
+                'not mislabeled as signed out',
+                isNot(isA<AnimeRiftAuthenticationRequired>()),
+              ),
+        ),
+      );
+    },
+  );
 }

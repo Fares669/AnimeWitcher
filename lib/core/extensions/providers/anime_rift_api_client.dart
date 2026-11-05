@@ -1622,7 +1622,11 @@ class AnimeRiftApiClient {
       requireSession();
       return response;
     } on AnimeRiftAccessUnavailable catch (error) {
-      if (error.statusCode == 401 || error.statusCode == 403) {
+      // A linked token can receive 403 for device suspension, entitlement, or
+      // an access policy. That is not proof the secure session is missing, so
+      // keep the session and preserve the status for an honest error. Only 401
+      // is an authentication failure.
+      if (error.statusCode == 401) {
         throw AnimeRiftAuthenticationRequired(statusCode: error.statusCode);
       }
       rethrow;

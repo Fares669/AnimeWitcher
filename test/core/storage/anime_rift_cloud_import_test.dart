@@ -42,6 +42,7 @@ class _CloudReader
   int? pageSize;
   int pageBase = 1;
   int? failOnPage;
+  Object? pageFailure;
   bool ignorePage = false;
   Completer<Map<String, dynamic>>? pageGate;
 
@@ -94,7 +95,9 @@ class _CloudReader
     int page,
   ) async {
     requests.add('$category:page:$page');
-    if (page == failOnPage) throw const AnimeRiftAccessUnavailable();
+    if (page == failOnPage) {
+      throw pageFailure ?? const AnimeRiftAccessUnavailable();
+    }
     if (pageGate != null) return pageGate!.future;
     return _paged(lists[category] ?? <Object>[], page: page);
   }
@@ -102,7 +105,9 @@ class _CloudReader
   @override
   Future<Map<String, dynamic>> fetchFavoriteAnimePage(int page) async {
     requests.add('favorite:page:$page');
-    if (page == failOnPage) throw const AnimeRiftAccessUnavailable();
+    if (page == failOnPage) {
+      throw pageFailure ?? const AnimeRiftAccessUnavailable();
+    }
     return _paged(favorites, page: page);
   }
 
@@ -319,6 +324,39 @@ void main() {
       expect(
         ProviderLocalLibrary(storage, _rift).items(LibraryCategory.completed),
         hasLength(30),
+      );
+    },
+  );
+
+  test(
+    'page access denial is surfaced instead of reported as a partial success',
+    () async {
+      AnimeRiftLocalAccountScope.activate('alice');
+      final reader = _CloudReader()
+        ..pageSize = 30
+        ..failOnPage = 2
+        ..pageFailure = const AnimeRiftAccessUnavailable(statusCode: 403)
+        ..lists['finished'] = [
+          for (var n = 0; n < 60; n++)
+            {
+              'anime': {'_id': 'denied$n', 'title': 'Denied $n'},
+            },
+        ];
+
+      await expectLater(
+        AnimeRiftCloudSync(reader).importSelectedList(
+          storage: _MemoryStorage(),
+          category: LibraryCategory.completed,
+        ),
+        throwsA(
+          isA<AnimeRiftAccessUnavailable>()
+              .having((error) => error.statusCode, 'status', 403)
+              .having(
+                (error) => error,
+                'not mislabeled as signed out',
+                isNot(isA<AnimeRiftAuthenticationRequired>()),
+              ),
+        ),
       );
     },
   );

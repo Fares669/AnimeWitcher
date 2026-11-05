@@ -74,7 +74,7 @@ class AnimeRiftComment {
   static AnimeRiftComment? fromJson(Object? value) {
     if (value is! Map) return null;
     final id = value['_id'] ?? value['id'];
-    final content = value['comment'];
+    final content = value['comment'] ?? value['text'];
     if (id is! String ||
         !RegExp(r'^[A-Za-z0-9._~-]+$').hasMatch(id) ||
         content is! String ||

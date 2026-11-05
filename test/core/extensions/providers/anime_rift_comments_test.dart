@@ -167,6 +167,36 @@ void main() {
     );
   });
 
+  test('Rift response reader accepts the live comment schema', () {
+    final page = AnimeRiftCommentPage.fromJson({
+      'items': [
+        {
+          '_id': 'fixture',
+          '_user': {
+            'id': 'fixture',
+            'name': 'fixture',
+            'user_name': 'fixture',
+            'avatar': 'fixture',
+            'isAdmin': false,
+            'isPremium': false,
+            '_id': 'fixture',
+          },
+          'text': 'fixture',
+          'is_review': false,
+          'createdAt': '2026-11-05T00:00:00Z',
+          'reactions_counts': {'thumbsUp': 0},
+          'replies_count': 0,
+        },
+      ],
+    });
+    expect(page.items, hasLength(1));
+    expect(page.items.single.id, 'fixture');
+    expect(page.items.single.text, 'fixture');
+    expect(page.items.single.author, 'fixture');
+    expect(page.items.single.likes, 0);
+    expect(page.items.single.replies, 0);
+  });
+
   test('Rift comments expose only the server account presence, never ID', () {
     final guest = AnimeRiftCommentPage.fromJson({
       'items': <Object>[],
@@ -199,6 +229,7 @@ void main() {
         'page': 0,
         'level': 0,
         'canReply': '1',
+        'sort_by': 'recently_added',
       });
 
       final episodeTarget = AnimeRiftCommentTarget.forEpisode(anime, episode)!;
@@ -210,6 +241,7 @@ void main() {
         'page': 2,
         'level': 1,
         'canReply': '1',
+        'sort_by': 'recently_added',
       });
       await provider.publishComment(episodeTarget.replies('comment1'), 'reply');
       expect(client.createdTarget, {
