@@ -1367,11 +1367,10 @@ class AnimeRiftApiClient {
     );
   }
 
-  /// Rift has five independent rating dimensions, not Witcher's single
-  /// rating. The AOT emits doubles for all five fields and optional review.
+  /// Native Rift derives general_rating from the four editable dimensions.
+  /// The AOT emits their mean and the individual doubles for this PUT.
   Future<Map<String, dynamic>> rateAnime(
     String animeId, {
-    required num general,
     required num story,
     required num characters,
     required num animation,
@@ -1381,7 +1380,7 @@ class AnimeRiftApiClient {
     if (!RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(animeId)) {
       throw ArgumentError('Invalid Rift anime ID');
     }
-    final scores = [general, story, characters, animation, music];
+    final scores = [story, characters, animation, music];
     if (scores.any((score) => !score.isFinite || score < 1 || score > 10)) {
       throw ArgumentError('Rift rating dimensions must each be 1–10');
     }
@@ -1391,7 +1390,7 @@ class AnimeRiftApiClient {
       method: 'PUT',
       body: {
         'animeId': animeId,
-        'general_rating': general.toDouble(),
+        'general_rating': (story + characters + animation + music) / 4,
         'story_rating': story.toDouble(),
         'characters_rating': characters.toDouble(),
         'animation_rating': animation.toDouble(),
@@ -1457,8 +1456,9 @@ class AnimeRiftApiClient {
     );
   }
 
-  /// Rift APK comment-create request uses eventId and comment: the comment
-  /// event is the anime ID or episode ID, not both catalogue filter IDs.
+  /// The original APK's /comment/create builds a body with optional animeId,
+  /// episodeId, characterId, eventId and comment. An anime/episode comment
+  /// uses its own IDs; eventId is reserved for an actual event target.
   /// Comment creation is always authenticated; the catalog account is never
   /// substituted for the separate AnimeRift identity.
   Future<Map<String, dynamic>> createComment({
@@ -1468,9 +1468,14 @@ class AnimeRiftApiClient {
     required String text,
   }) {
     final body = commentTargetFields(
-      eventId: episodeId ?? animeId,
+      animeId: animeId,
+      episodeId: episodeId,
       parentId: parentId,
     );
+    // Native /comment/create serializes reply ancestry as `_parent`, while
+    // /comment/all uses `parentId` as a query filter.
+    body.remove('parentId');
+    body['_parent'] = parentId;
     final content = text.trim();
     if (content.isEmpty || content.length > 5000) {
       throw ArgumentError('Invalid Anime Rift comment');
@@ -1484,15 +1489,24 @@ class AnimeRiftApiClient {
   }
 
   static Map<String, dynamic> commentTargetFields({
-    required String eventId,
+    required String animeId,
+    String? episodeId,
     String? parentId,
+    String? eventId,
   }) {
     final valid = RegExp(r'^[A-Za-z0-9._~-]+$');
-    if (!valid.hasMatch(eventId) ||
+    if (!valid.hasMatch(animeId) ||
+        (episodeId != null && !valid.hasMatch(episodeId)) ||
+        (eventId != null && !valid.hasMatch(eventId)) ||
         (parentId != null && !valid.hasMatch(parentId))) {
       throw ArgumentError('Invalid Anime Rift comment target');
     }
-    return {'eventId': eventId, if (parentId != null) 'parentId': parentId};
+    return {
+      'animeId': animeId,
+      if (episodeId != null) 'episodeId': episodeId,
+      if (eventId != null) 'eventId': eventId,
+      if (parentId != null) 'parentId': parentId,
+    };
   }
 
   Future<Map<String, dynamic>> _readAccountData(

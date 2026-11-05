@@ -13,7 +13,8 @@ void main() {
       },
     });
     expect(rating, isNotNull);
-    expect(rating!.general, 8.5);
+    // AnimeRift's native editor derives the general score from these four.
+    expect(rating!.general, (9 + 7.5 + 8 + 6) / 4);
     expect(rating.characters, 7.5);
     expect(rating.toJson()['music_rating'], 6.0);
     expect(
@@ -25,6 +26,25 @@ void main() {
         'interactions': {'general_rating': 8},
       }),
       isNull,
+    );
+    expect(
+      AnimeRiftRating.fromMap({
+        'story_rating': 8,
+        'characters_rating': 7,
+        'animation_rating': 9,
+        'music_rating': 6,
+        'general_rating': 1, // Old server values cannot override the mean.
+      })?.general,
+      7.5,
+    );
+    expect(
+      AnimeRiftRating.fromMap({
+        'story_rating': 8,
+        'characters_rating': 7,
+        'animation_rating': 9,
+        'music_rating': 6,
+      })?.general,
+      7.5,
     );
   });
 }

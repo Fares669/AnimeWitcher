@@ -16,9 +16,6 @@ class AnimeRiftCommentTarget {
   final String? episodeId;
   final String? parentId;
 
-  /// AnimeRift indexes comments by event ID (anime or episode).
-  String get eventId => episodeId ?? animeId;
-
   static AnimeRiftCommentTarget? forAnime(MultimediaItem item) {
     if (item.provider != animeRiftProviderId) return null;
     final canonical = canonicalAnimeRiftCatalogUrl(item.url);
@@ -129,11 +126,17 @@ class AnimeRiftCommentPage {
     if (raw is! List) {
       throw const FormatException('Invalid AnimeRift comments response');
     }
+    final comments = <AnimeRiftComment>[
+      for (final entry in raw)
+        if (AnimeRiftComment.fromJson(entry) case final comment?) comment,
+    ];
+    // A nonempty server page must not turn into a false 'no comments' state
+    // just because the server model changed and our parser rejected every row.
+    if (raw.isNotEmpty && comments.isEmpty) {
+      throw const FormatException('Unrecognized AnimeRift comment items');
+    }
     return AnimeRiftCommentPage(
-      items: [
-        for (final entry in raw)
-          if (AnimeRiftComment.fromJson(entry) case final comment?) comment,
-      ],
+      items: comments,
       hasMore:
           data['hasNext'] == true ||
           (envelope is Map && envelope['hasNext'] == true),

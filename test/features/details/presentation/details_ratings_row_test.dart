@@ -247,7 +247,7 @@ Map<String, String> _ratedSync({
 
 void main() {
   testWidgets(
-    'Rift rating editor preserves five independently selected scores',
+    'Rift rating editor computes general and edits only four scores',
     (tester) async {
       AnimeRiftRating? result;
       final service = _FakeAccountService(signedIn: true);
@@ -259,7 +259,6 @@ void main() {
               onPressed: () async => result = await showRiftRatingEditor(
                 context,
                 initial: const AnimeRiftRating(
-                  general: 8,
                   story: 6,
                   characters: 7,
                   animation: 9,
@@ -273,24 +272,26 @@ void main() {
       );
       await tester.tap(find.text('edit rift'));
       await tester.pumpAndSettle();
-      expect(find.byType(Slider), findsNWidgets(5));
+      expect(find.byType(Slider), findsNWidgets(4));
+      expect(find.byKey(const ValueKey('rift-rating-general')), findsOneWidget);
       final slider = tester.widget<Slider>(
         find.byKey(const ValueKey('rift-rating-0')),
       );
       slider.onChanged!(8.5);
       await tester.pump();
+      expect(find.textContaining('7.38/10'), findsOneWidget);
       await tester.tap(find.text('حفظ'));
       await tester.pumpAndSettle();
       expect(
         result,
         const AnimeRiftRating(
-          general: 8.5,
-          story: 6,
+          story: 8.5,
           characters: 7,
           animation: 9,
           music: 5,
         ),
       );
+      expect(result!.general, (8.5 + 7 + 9 + 5) / 4);
       expect(service.writes, isEmpty);
     },
   );

@@ -91,7 +91,6 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     required String accountHash,
   }) => _api.rateAnime(
     id,
-    general: rating.general,
     story: rating.story,
     characters: rating.characters,
     animation: rating.animation,
@@ -191,10 +190,13 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
       'COMMENTS.VIEW',
       query: {
         ...AnimeRiftApiClient.commentTargetFields(
-          eventId: target.eventId,
+          animeId: target.animeId,
+          episodeId: target.episodeId,
           parentId: target.parentId,
         ),
         'page': page < 0 ? 0 : page,
+        // The original /comment/all request always sends this query flag.
+        'canReply': '1',
       },
     );
     return AnimeRiftCommentPage.fromJson(response);

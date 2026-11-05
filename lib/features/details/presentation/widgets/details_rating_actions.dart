@@ -91,19 +91,20 @@ Future<AnimeRatingOutcome> openAnimeRatingDialog(
   }
 }
 
-/// Reads the five independent Rift scores from the active Rift account.
+/// Reads the four editable Rift scores from the active Rift account.
 /// A newer local edit always takes precedence over a stale server response.
 Future<AnimeRiftRating?> loadRiftRating(
   WidgetRef ref,
   MultimediaItem item,
 ) async {
   if (item.provider != animeRiftProviderId) return null;
-  if (AnimeRiftLocalAccountScope.accountHash == null) return null;
   final provider = ref.read(activeProviderProvider);
   if (provider is! AnimeRiftProvider ||
       !await provider.restoreAccountSession()) {
     return null;
   }
+  // Account scope may only be hydrated by restoreAccountSession on startup.
+  if (AnimeRiftLocalAccountScope.accountHash == null) return null;
   final pending = ref.read(riftAutoSyncProvider).pendingRating(item.url);
   if (pending != null) return pending;
   return provider.fetchCloudRating(item.url);
@@ -128,7 +129,7 @@ Future<AnimeRatingOutcome> openRiftRatingDialog(
     current = await loadRiftRating(ref, item);
   } catch (_) {
     // A temporarily unavailable read does not prevent the user from saving
-    // a complete, explicitly chosen five-dimensional score.
+    // a complete, explicitly chosen four-dimensional score.
   }
   if (!context.mounted) return _unchanged;
   final selected = await showRiftRatingEditor(context, initial: current);
@@ -149,19 +150,18 @@ Future<AnimeRiftRating?> showRiftRatingEditor(
   AnimeRiftRating? initial,
 }) {
   final values = <double>[
-    initial?.general ?? 5,
     initial?.story ?? 5,
     initial?.characters ?? 5,
     initial?.animation ?? 5,
     initial?.music ?? 5,
   ];
-  const labels = [
-    'التقييم العام',
-    'القصة',
-    'الشخصيات',
-    'الأنيميشن',
-    'الموسيقى',
-  ];
+  const labels = ['القصة', 'الشخصيات', 'الأنيميشن', 'الموسيقى'];
+  AnimeRiftRating rating() => AnimeRiftRating(
+    story: values[0],
+    characters: values[1],
+    animation: values[2],
+    music: values[3],
+  );
   return showDialog<AnimeRiftRating>(
     context: context,
     builder: (dialogContext) => StatefulBuilder(
@@ -173,6 +173,12 @@ Future<AnimeRiftRating?> showRiftRatingEditor(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                Text(
+                  'التقييم العام: ${rating().general.toStringAsFixed(2).replaceFirst(RegExp(r'0$'), '')}/10',
+                  key: const ValueKey('rift-rating-general'),
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 12),
                 for (var index = 0; index < values.length; index++)
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -200,16 +206,7 @@ Future<AnimeRiftRating?> showRiftRatingEditor(
             child: const Text('إلغاء'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(
-              dialogContext,
-              AnimeRiftRating(
-                general: values[0],
-                story: values[1],
-                characters: values[2],
-                animation: values[3],
-                music: values[4],
-              ),
-            ),
+            onPressed: () => Navigator.pop(dialogContext, rating()),
             child: const Text('حفظ'),
           ),
         ],

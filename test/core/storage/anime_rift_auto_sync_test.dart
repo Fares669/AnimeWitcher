@@ -270,44 +270,46 @@ void main() {
     },
   );
 
-  test('Rift rating is queued until all five remote scores match', () async {
-    final storage = _MemoryStorage();
-    final provider = _FakeRift('alice');
-    await provider.restoreAccountSession();
-    const rating = AnimeRiftRating(
-      general: 8,
-      story: 9,
-      characters: 7,
-      animation: 8,
-      music: 6,
-    );
-    AnimeRiftRating? remote;
-    final sent = <AnimeRiftRating>[];
-    final sync = AnimeRiftAutoSyncCoordinator(
-      storage: storage,
-      activeRift: () => provider,
-      verifiedWriter: AnimeRiftCloudWriter(
-        _FavoriteClient().setFavoriteAnime,
-        setRating: (id, score, {required accountHash}) async {
-          AnimeRiftCloudPendingJournal.requireAccount(accountHash);
-          expect(id, 'safe1');
-          sent.add(score);
-          return {};
-        },
-        readRating: (url) async => remote,
-      ),
-      debounce: const Duration(days: 1),
-    );
-    addTearDown(sync.dispose);
-    await sync.queueRating(_title, rating);
-    expect(sync.pendingRating(_title), rating);
-    await sync.refresh();
-    expect(sent, [rating]);
-    expect(sync.pendingRating(_title), rating);
-    remote = rating;
-    await sync.refresh();
-    expect(sync.pendingRating(_title), isNull);
-  });
+  test(
+    'Rift rating syncs derived general and all four editable scores',
+    () async {
+      final storage = _MemoryStorage();
+      final provider = _FakeRift('alice');
+      await provider.restoreAccountSession();
+      const rating = AnimeRiftRating(
+        story: 9,
+        characters: 7,
+        animation: 8,
+        music: 6,
+      );
+      AnimeRiftRating? remote;
+      final sent = <AnimeRiftRating>[];
+      final sync = AnimeRiftAutoSyncCoordinator(
+        storage: storage,
+        activeRift: () => provider,
+        verifiedWriter: AnimeRiftCloudWriter(
+          _FavoriteClient().setFavoriteAnime,
+          setRating: (id, score, {required accountHash}) async {
+            AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+            expect(id, 'safe1');
+            sent.add(score);
+            return {};
+          },
+          readRating: (url) async => remote,
+        ),
+        debounce: const Duration(days: 1),
+      );
+      addTearDown(sync.dispose);
+      await sync.queueRating(_title, rating);
+      expect(sync.pendingRating(_title), rating);
+      await sync.refresh();
+      expect(sent, [rating]);
+      expect(sync.pendingRating(_title), rating);
+      remote = rating;
+      await sync.refresh();
+      expect(sync.pendingRating(_title), isNull);
+    },
+  );
 
   test('verified favorite writer flushes favorites while preserving unsupported edits', () async {
     final storage = _MemoryStorage();

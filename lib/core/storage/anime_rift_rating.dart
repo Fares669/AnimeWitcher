@@ -1,22 +1,22 @@
-/// AnimeRift stores five independent scores. They must never be replaced by
-/// one AnimeWitcher account rating duplicated into all fields.
+/// AnimeRift's four editable rating dimensions. The native APK computes the
+/// displayed general score as their arithmetic mean (sum divided by four).
 class AnimeRiftRating {
   const AnimeRiftRating({
-    required this.general,
     required this.story,
     required this.characters,
     required this.animation,
     required this.music,
   });
 
-  final double general;
   final double story;
   final double characters;
   final double animation;
   final double music;
 
+  /// This is derived, never separately editable or persisted as user input.
+  double get general => (story + characters + animation + music) / 4;
+
   bool get isValid => [
-    general,
     story,
     characters,
     animation,
@@ -42,20 +42,17 @@ class AnimeRiftRating {
       return number >= 1 && number <= 10 ? number : null;
     }
 
-    final general = score('general_rating');
     final story = score('story_rating');
     final characters = score('characters_rating');
     final animation = score('animation_rating');
     final music = score('music_rating');
-    if (general == null ||
-        story == null ||
+    if (story == null ||
         characters == null ||
         animation == null ||
         music == null) {
       return null;
     }
     return AnimeRiftRating(
-      general: general,
       story: story,
       characters: characters,
       animation: animation,
@@ -83,12 +80,11 @@ class AnimeRiftRating {
   @override
   bool operator ==(Object other) =>
       other is AnimeRiftRating &&
-      general == other.general &&
       story == other.story &&
       characters == other.characters &&
       animation == other.animation &&
       music == other.music;
 
   @override
-  int get hashCode => Object.hash(general, story, characters, animation, music);
+  int get hashCode => Object.hash(story, characters, animation, music);
 }

@@ -108,7 +108,7 @@ void main() {
   tearDown(() => messenger.setMockMethodCallHandler(secureChannel, null));
 
   test(
-    'Rift comment creation sends only eventId and authenticated comment',
+    'Rift comment creation sends anime/episode IDs and authenticated text',
     () async {
       final writes = <RequestOptions>[];
       final client = AnimeRiftApiClient(
@@ -143,14 +143,22 @@ void main() {
       expect(writes.single.uri.path, '/api/v4/comment/create');
       expect(writes.single.method, 'POST');
       expect(writes.single.data, {
-        'eventId': 'episode7',
-        'parentId': 'parent1',
+        'animeId': 'anime42',
+        'episodeId': 'episode7',
+        '_parent': 'parent1',
         'comment': 'hello',
       });
       expect(
         writes.single.headers['authorization'],
         'Bearer rift-comment-token',
       );
+      await client.createComment(animeId: 'anime42', text: 'top-level');
+      expect(writes, hasLength(2));
+      expect(writes.last.data, {
+        'animeId': 'anime42',
+        '_parent': null,
+        'comment': 'top-level',
+      });
     },
   );
 
@@ -183,7 +191,6 @@ void main() {
     await client.setEpisodeViewed('anime-42', 3, false, accountHash: account);
     await client.rateAnime(
       'anime-42',
-      general: 8,
       story: 9,
       characters: 7,
       animation: 8,
@@ -209,7 +216,7 @@ void main() {
     });
     expect(writes[2].data, {
       'animeId': 'anime-42',
-      'general_rating': 8.0,
+      'general_rating': 7.5,
       'story_rating': 9.0,
       'characters_rating': 7.0,
       'animation_rating': 8.0,
@@ -239,8 +246,7 @@ void main() {
     expect(
       () => client.rateAnime(
         'anime-42',
-        general: -1,
-        story: 8,
+        story: -1,
         characters: 8,
         animation: 8,
         music: 8,
