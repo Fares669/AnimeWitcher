@@ -304,7 +304,12 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     return id;
   }
 
-  static const _statuses = {'مستمر': 'on_going', 'مكتمل': 'finished'};
+  static const _statuses = {
+    'مستمر': 'on_going',
+    'مكتمل': 'finished',
+    'توقف مؤقت': 'hiatus',
+    'القادمة': 'upcoming',
+  };
   static const _types = {
     'مسلسل': 'tv',
     'فيلم': 'movie',
@@ -312,7 +317,31 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     'اونا': 'ona',
     'خاصة': 'special',
   };
-  static const _ages = {'+13': 'pg_13', '+17': 'r', 'لجميع الأعمار': 'g'};
+  static const _ages = {
+    'G': 'g',
+    'PG': 'pg',
+    'PG-13': 'pg_13',
+    'R': 'r',
+    'R+': 'r+',
+    // Accept the former UI labels in previously selected filter state.
+    'لجميع الأعمار': 'g',
+    '+13': 'pg_13',
+    '+17': 'r',
+  };
+  static const _countries = {
+    'اليابان': 'JP',
+    'الصين': 'CN',
+    'كوريا': 'KR',
+    'تايوان': 'TW',
+  };
+  static const _sortFields = {
+    'title',
+    'rating',
+    'popularity',
+    'likes',
+    'release_year',
+    'recently_updated',
+  };
   static const _seasons = {
     'شتاء': 'winter',
     'ربيع': 'spring',
@@ -366,7 +395,8 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     return ProviderSearchFilterOptions(
       statuses: _statuses.keys.toList(),
       types: _types.keys.toList(),
-      ageRatings: _ages.keys.toList(),
+      ageRatings: _ages.keys.take(5).toList(),
+      countries: _countries.keys.toList(),
       seasons: _seasons.keys.toList(),
       years: [for (var y = DateTime.now().year + 1; y >= 1900; y--) '$y'],
       genres: labels[0].keys.toList(),
@@ -407,8 +437,20 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     int limit = 30,
     CancelToken? cancelToken,
   }) async {
-    if (!const {'', 'year_asc', 'year_desc'}.contains(filters.sort)) {
-      throw UnsupportedError('هذه الفلاتر غير مدعومة حاليًا في Anime Rift.');
+    // Old saved year_asc/year_desc values remain readable after the UI
+    // switches to a single item per field with a reversible direction.
+    final rawSort = filters.sort.isEmpty ? 'year_asc' : filters.sort;
+    final ascending = rawSort.endsWith('_asc');
+    final field = rawSort == 'year_asc' || rawSort == 'year_desc'
+        ? 'release_year'
+        : rawSort.endsWith('_asc') || rawSort.endsWith('_desc')
+        ? rawSort.substring(0, rawSort.lastIndexOf('_'))
+        : '';
+    if (!_sortFields.contains(field)) {
+      throw UnsupportedError('ترتيب غير مدعوم في Anime Rift.');
+    }
+    if (filters.countries.length > 1) {
+      throw UnsupportedError('اختر بلد منشأ واحدًا فقط في Anime Rift.');
     }
     final body = <String, dynamic>{
       'query': query,
@@ -416,6 +458,8 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
         'multi_release_status': _filterValues(filters.statuses, _statuses),
       if (filters.types.isNotEmpty)
         'multi_content_types': _filterValues(filters.types, _types),
+      if (filters.countries.isNotEmpty)
+        'country_origin': _filterValues(filters.countries, _countries).single,
       if (filters.ageRatings.isNotEmpty)
         'multi_age_rating': _filterValues(filters.ageRatings, _ages),
       if (filters.seasons.isNotEmpty)
@@ -445,8 +489,8 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
       body: body,
       query: {
         'page': page,
-        'sort_by': 'release_year',
-        'sort_direction': filters.sort == 'year_desc' ? -1 : 1,
+        'sort_by': field,
+        'sort_direction': ascending ? 1 : -1,
         'text_direction': 'jp',
       },
       cancelToken: cancelToken,

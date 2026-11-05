@@ -51,11 +51,13 @@ class ProviderSearchFilterDialog extends StatefulWidget {
     this.optionsFor,
     this.onCategoryApplied,
     this.asSheet = false,
+    this.allowSeasonWithoutYear = false,
   });
 
   /// Shown by [showProviderSearchFilterSheet]: the whole screen, risen from
   /// the bottom, with a handle to drag it back down.
   final bool asSheet;
+  final bool allowSeasonWithoutYear;
 
   @override
   State<ProviderSearchFilterDialog> createState() =>
@@ -67,6 +69,7 @@ class _ProviderSearchFilterDialogState
   late Set<String> _statuses;
   late Set<String> _types;
   late Set<String> _ageRatings;
+  late Set<String> _countries;
   late Set<String> _years;
   late Set<String> _seasons;
   late Set<String> _genres;
@@ -79,7 +82,11 @@ class _ProviderSearchFilterDialogState
 
   String _t(String english, String arabic) => arabic;
 
-  bool get _seasonRequiresYear => _seasons.isNotEmpty && _years.isEmpty;
+  bool get _seasonRequiresYear =>
+      _seasons.isNotEmpty &&
+      _years.isEmpty &&
+      (!widget.allowSeasonWithoutYear ||
+          (widget.categories.isNotEmpty && _category != 'anime'));
 
   @override
   void initState() {
@@ -87,6 +94,7 @@ class _ProviderSearchFilterDialogState
     _statuses = {...widget.initialValue.statuses};
     _types = {...widget.initialValue.types};
     _ageRatings = {...widget.initialValue.ageRatings};
+    _countries = {...widget.initialValue.countries};
     _years = {...widget.initialValue.years};
     _seasons = {...widget.initialValue.seasons};
     _genres = {...widget.initialValue.genres};
@@ -122,6 +130,18 @@ class _ProviderSearchFilterDialogState
     });
   }
 
+  void _toggleCountry(String value) {
+    setState(() {
+      if (_countries.contains(value)) {
+        _countries.clear();
+      } else {
+        _countries
+          ..clear()
+          ..add(value);
+      }
+    });
+  }
+
   void _toggleSeason(String value) {
     setState(() {
       if (_seasons.contains(value)) {
@@ -139,6 +159,7 @@ class _ProviderSearchFilterDialogState
       _statuses.clear();
       _types.clear();
       _ageRatings.clear();
+      _countries.clear();
       _years.clear();
       _seasons.clear();
       _genres.clear();
@@ -160,6 +181,7 @@ class _ProviderSearchFilterDialogState
       statuses: keep(_statuses, options?.statuses),
       types: keep(_types, options?.types),
       ageRatings: keep(_ageRatings, options?.ageRatings),
+      countries: keep(_countries, options?.countries),
       years: keep(_years, options?.years),
       seasons: keep(_seasons, options?.seasons),
       genres: keep(_genres, options?.genres),
@@ -351,6 +373,16 @@ class _ProviderSearchFilterDialogState
             values: options.seasons,
             selected: _seasons,
             onToggle: _toggleSeason,
+          ),
+        ),
+      if (options.countries.isNotEmpty)
+        _FilterCard(
+          key: const ValueKey<String>('filterCard-country'),
+          title: _t('Country of origin', 'بلد المنشأ'),
+          child: _ChipWrap(
+            values: options.countries,
+            selected: _countries,
+            onToggle: _toggleCountry,
           ),
         ),
       if (options.ageRatings.isNotEmpty)

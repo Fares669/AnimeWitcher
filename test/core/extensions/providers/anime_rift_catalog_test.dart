@@ -400,6 +400,99 @@ void main() {
       expect(page.nextOffset, 3);
     },
   );
+  test(
+    'Rift exposes all source filters and rejects unknown sort/country',
+    () async {
+      final api = CatalogFixture();
+      final provider = AnimeRiftProvider(client: api);
+      final options = await provider.getSearchFilterOptions();
+      expect(options.countries, ['اليابان', 'الصين', 'كوريا', 'تايوان']);
+      expect(options.ageRatings, ['G', 'PG', 'PG-13', 'R', 'R+']);
+      expect(
+        options.statuses,
+        containsAll(['مستمر', 'مكتمل', 'توقف مؤقت', 'القادمة']),
+      );
+      await expectLater(
+        provider.searchPage(
+          '',
+          const ProviderSearchFilters(sort: 'unknown_desc'),
+        ),
+        throwsUnsupportedError,
+      );
+      await expectLater(
+        provider.searchPage(
+          '',
+          const ProviderSearchFilters(countries: {'unknown'}),
+        ),
+        throwsUnsupportedError,
+      );
+      await expectLater(
+        provider.searchPage(
+          '',
+          const ProviderSearchFilters(countries: {'اليابان', 'الصين'}),
+        ),
+        throwsUnsupportedError,
+      );
+    },
+  );
+
+  test(
+    'Rift uses a single sort field and a reversible request direction',
+    () async {
+      final api = CatalogFixture();
+      final provider = AnimeRiftProvider(client: api);
+      for (final field in [
+        'title',
+        'rating',
+        'popularity',
+        'likes',
+        'release_year',
+        'recently_updated',
+      ]) {
+        for (final (suffix, direction) in [('desc', -1), ('asc', 1)]) {
+          await provider.searchPage(
+            'test',
+            ProviderSearchFilters(sort: '${field}_$suffix'),
+          );
+          expect(api.lastQuery!['sort_by'], field);
+          expect(api.lastQuery!['sort_direction'], direction);
+          expect(api.lastBody!['query'], 'test');
+        }
+      }
+      await provider.searchPage(
+        '',
+        const ProviderSearchFilters(sort: 'year_asc'),
+      );
+      expect(api.lastQuery!['sort_by'], 'release_year');
+      expect(api.lastQuery!['sort_direction'], 1);
+    },
+  );
+
+  test(
+    'country, season and expanded age/status filters are sent independently',
+    () async {
+      final api = CatalogFixture();
+      await AnimeRiftProvider(client: api).searchPage(
+        '',
+        const ProviderSearchFilters(
+          countries: {'الصين'},
+          seasons: {'شتاء'},
+          ageRatings: {'R+'},
+          statuses: {'توقف مؤقت'},
+          sort: 'recently_updated_desc',
+        ),
+      );
+      expect(api.lastMethod, 'POST');
+      expect(api.lastBody!['country_origin'], 'CN');
+      expect(api.lastBody!['multi_seasons'], ['winter']);
+      expect(api.lastBody!.containsKey('multi_release_year'), isFalse);
+      expect(api.lastBody!['multi_age_rating'], ['r+']);
+      expect(api.lastBody!['multi_release_status'], ['hiatus']);
+      expect(api.lastQuery!['sort_by'], 'recently_updated');
+      expect(api.lastQuery!['sort_direction'], -1);
+    },
+  );
+
   test('filters map UI labels to backend enums and genre identities', () async {
     final api = CatalogFixture();
     final provider = AnimeRiftProvider(client: api);

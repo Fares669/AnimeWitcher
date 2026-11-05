@@ -18,6 +18,7 @@ class ProviderSearchFilterOptions {
   final List<String> statuses;
   final List<String> types;
   final List<String> ageRatings;
+  final List<String> countries;
   final List<String> years;
   final List<String> seasons;
   final List<String> genres;
@@ -27,6 +28,7 @@ class ProviderSearchFilterOptions {
     this.statuses = const <String>[],
     this.types = const <String>[],
     this.ageRatings = const <String>[],
+    this.countries = const <String>[],
     this.years = const <String>[],
     this.seasons = const <String>[],
     this.genres = const <String>[],
@@ -37,6 +39,7 @@ class ProviderSearchFilterOptions {
       statuses.isEmpty &&
       types.isEmpty &&
       ageRatings.isEmpty &&
+      countries.isEmpty &&
       years.isEmpty &&
       seasons.isEmpty &&
       genres.isEmpty &&
@@ -57,6 +60,7 @@ class ProviderSearchFilterOptions {
       statuses: read('statuses'),
       types: read('types'),
       ageRatings: read('ageRatings'),
+      countries: read('countries'),
       years: read('years'),
       seasons: read('seasons'),
       genres: read('genres'),
@@ -69,6 +73,7 @@ class ProviderSearchFilters {
   final Set<String> statuses;
   final Set<String> types;
   final Set<String> ageRatings;
+  final Set<String> countries;
   final Set<String> years;
   final Set<String> seasons;
   final Set<String> genres;
@@ -79,6 +84,7 @@ class ProviderSearchFilters {
     this.statuses = const <String>{},
     this.types = const <String>{},
     this.ageRatings = const <String>{},
+    this.countries = const <String>{},
     this.years = const <String>{},
     this.seasons = const <String>{},
     this.genres = const <String>{},
@@ -93,6 +99,7 @@ class ProviderSearchFilters {
       statuses.length +
       types.length +
       ageRatings.length +
+      countries.length +
       years.length +
       seasons.length +
       genres.length +
@@ -103,6 +110,7 @@ class ProviderSearchFilters {
       'statuses': statuses.toList(growable: false),
       'types': types.toList(growable: false),
       'ageRatings': ageRatings.toList(growable: false),
+      if (countries.isNotEmpty) 'countries': countries.toList(growable: false),
       'years': years.toList(growable: false),
       'seasons': seasons.toList(growable: false),
       'genres': genres.toList(growable: false),
@@ -115,6 +123,7 @@ class ProviderSearchFilters {
     Set<String>? statuses,
     Set<String>? types,
     Set<String>? ageRatings,
+    Set<String>? countries,
     Set<String>? years,
     Set<String>? seasons,
     Set<String>? genres,
@@ -125,6 +134,7 @@ class ProviderSearchFilters {
       statuses: statuses ?? this.statuses,
       types: types ?? this.types,
       ageRatings: ageRatings ?? this.ageRatings,
+      countries: countries ?? this.countries,
       years: years ?? this.years,
       seasons: seasons ?? this.seasons,
       genres: genres ?? this.genres,

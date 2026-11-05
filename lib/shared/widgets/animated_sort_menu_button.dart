@@ -14,6 +14,8 @@ class AnimatedSortMenuButton extends StatefulWidget {
     required this.selectedValue,
     required this.items,
     required this.onSelected,
+    this.onReverseSelected,
+    this.reverseAscending = false,
     required this.icon,
     required this.systemImage,
     this.tintColor,
@@ -25,6 +27,8 @@ class AnimatedSortMenuButton extends StatefulWidget {
   final String selectedValue;
   final List<AppleNativeMenuItem> items;
   final ValueChanged<String> onSelected;
+  final ValueChanged<String>? onReverseSelected;
+  final bool reverseAscending;
   final IconData icon;
   final String? systemImage;
   final Color? tintColor;
@@ -124,6 +128,14 @@ class _AnimatedSortMenuButtonState extends State<AnimatedSortMenuButton> {
           child: BlurredMenuPanel(
             items: widget.items,
             selectedValue: widget.selectedValue,
+            reverseAscending: widget.reverseAscending,
+            onReverseSelected: widget.onReverseSelected == null
+                ? null
+                : (value) {
+                    Navigator.of(menuContext).pop();
+                    _setMenuOpen(false);
+                    widget.onReverseSelected!(value);
+                  },
             tint: tint,
             fallbackIcon: widget.fallbackIcon,
             leadingBuilder: (item, color) => _glyph(

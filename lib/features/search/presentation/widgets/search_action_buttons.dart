@@ -13,6 +13,8 @@ class SearchActionButtons extends StatefulWidget {
     required this.sortValue,
     required this.sortItems,
     required this.onSortSelected,
+    this.onSortDirectionSelected,
+    this.sortAscending = false,
     required this.onFilterPressed,
     required this.sortTooltip,
     required this.filterTooltip,
@@ -29,6 +31,8 @@ class SearchActionButtons extends StatefulWidget {
   final String sortValue;
   final List<AppleNativeMenuItem> sortItems;
   final ValueChanged<String> onSortSelected;
+  final ValueChanged<String>? onSortDirectionSelected;
+  final bool sortAscending;
   final VoidCallback onFilterPressed;
   final String sortTooltip;
   final String filterTooltip;
@@ -84,6 +88,8 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
                     selectedValue: widget.sortValue,
                     items: widget.sortItems,
                     onSelected: widget.onSortSelected,
+                    onReverseSelected: widget.onSortDirectionSelected,
+                    reverseAscending: widget.sortAscending,
                     icon: widget.sortIcon,
                     systemImage: widget.sortSystemImage,
                     tintColor: tint,
@@ -110,7 +116,6 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
       ),
     );
   }
-
 }
 
 class _ActionIcon extends StatelessWidget {
@@ -221,4 +226,3 @@ class SearchFilterBadge extends StatelessWidget {
     );
   }
 }
-

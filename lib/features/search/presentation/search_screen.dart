@@ -228,6 +228,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       final sheet = _isPhone(context);
       Widget filters(BuildContext dialogContext) => ProviderSearchFilterDialog(
         asSheet: sheet,
+        allowSeasonWithoutYear: animeProvider is AnimeRiftProvider,
         options: options,
         initialValue: ref.read(searchProviderFiltersProvider),
         categories: [
@@ -292,6 +293,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         statuses: {...current.statuses}..remove(value),
       ),
       'types' => current.copyWith(types: {...current.types}..remove(value)),
+      'countries' => current.copyWith(
+        countries: {...current.countries}..remove(value),
+      ),
       'ageRatings' => current.copyWith(
         ageRatings: {...current.ageRatings}..remove(value),
       ),
@@ -309,29 +313,46 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     ref.read(searchFilterProvider.notifier).set(SearchFilter.content);
   }
 
-  void _applySearchSort(String selected) {
-    final current = ref.read(searchProviderFiltersProvider);
-    if (selected == current.sort) return;
+  bool get _isRiftAnime =>
+      ref.read(searchDomainProvider) == SearchDomain.anime &&
+      ref.read(activeProviderProvider) is AnimeRiftProvider;
 
+  void _setSearchSort(String value) {
+    final current = ref.read(searchProviderFiltersProvider);
+    if (value == current.sort) return;
     _resetResultsScrollPosition();
     ref
         .read(searchProviderFiltersProvider.notifier)
-        .set(current.copyWith(sort: selected));
+        .set(current.copyWith(sort: value));
     ref.read(searchFilterProvider.notifier).set(SearchFilter.content);
   }
 
+  void _applySearchSort(String selected) {
+    _setSearchSort(_isRiftAnime ? '${selected}_desc' : selected);
+  }
+
+  void _reverseRiftSort(String field) {
+    if (!_isRiftAnime) return;
+    final current = ref.read(searchProviderFiltersProvider).sort;
+    final isSelected = RiftSearchSortField.selected(current) == field;
+    // A new field starts descending. The arrow beside it picks ascending.
+    final nextAscending = !isSelected || !current.endsWith('_asc');
+    _setSearchSort('${field}_${nextAscending ? 'asc' : 'desc'}');
+  }
+
   List<AppleNativeMenuItem> _searchSortMenuItems(BuildContext context) {
-    final isRiftAnime =
-        ref.read(searchDomainProvider) == SearchDomain.anime &&
-        ref.read(activeProviderProvider) is AnimeRiftProvider;
-    final options = isRiftAnime
-        ? [
-            SearchSortOption.productionDateAscending,
-            SearchSortOption.productionDateDescending,
-          ]
-        : SearchSortOption.values;
+    if (_isRiftAnime) {
+      return [
+        for (final field in RiftSearchSortField.values)
+          AppleNativeMenuItem(
+            value: field.value,
+            label: field.label(context),
+            icon: Icons.sort_rounded,
+          ),
+      ];
+    }
     return <AppleNativeMenuItem>[
-      for (final option in options)
+      for (final option in SearchSortOption.values)
         AppleNativeMenuItem(
           value: option.value,
           label: option.label(context),
@@ -340,6 +361,29 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         ),
     ];
   }
+
+  String _sortLabel(BuildContext context, String value) {
+    if (_isRiftAnime) {
+      final field = RiftSearchSortField.selected(value);
+      return RiftSearchSortField.values
+          .firstWhere((item) => item.value == field)
+          .label(context);
+    }
+    return SearchSortOption.fromValue(value).label(context);
+  }
+
+  String _sortMenuSelectedValue(String value) =>
+      _isRiftAnime ? RiftSearchSortField.selected(value) : value;
+
+  IconData _sortMenuIcon(String value) => _isRiftAnime
+      ? (value.endsWith('_asc')
+            ? Icons.arrow_upward_rounded
+            : Icons.arrow_downward_rounded)
+      : _searchSortFallbackIcon(SearchSortOption.fromValue(value));
+
+  String _sortMenuSystemImage(String value) => _isRiftAnime
+      ? (value.endsWith('_asc') ? 'arrow.up' : 'arrow.down')
+      : _searchSortSystemImage(SearchSortOption.fromValue(value));
 
   String _searchSortSystemImage(SearchSortOption option) {
     return switch (option) {
@@ -456,23 +500,26 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                         isCompact: false,
                         onShowFilters: _showSearchFilters,
                         onSortSelected: _applySearchSort,
-                        sortValue: ref
+                        onSortDirectionSelected: _isRiftAnime
+                            ? _reverseRiftSort
+                            : null,
+                        sortAscending: ref
                             .watch(searchProviderFiltersProvider)
-                            .sort,
-                        sortItems: _searchSortMenuItems(context),
-                        sortIcon: _searchSortFallbackIcon(
-                          SearchSortOption.fromValue(
-                            ref.watch(searchProviderFiltersProvider).sort,
-                          ),
+                            .sort
+                            .endsWith('_asc'),
+                        sortValue: _sortMenuSelectedValue(
+                          ref.watch(searchProviderFiltersProvider).sort,
                         ),
-                        sortSystemImage: _searchSortSystemImage(
-                          SearchSortOption.fromValue(
-                            ref.watch(searchProviderFiltersProvider).sort,
-                          ),
+                        sortItems: _searchSortMenuItems(context),
+                        sortIcon: _sortMenuIcon(
+                          ref.watch(searchProviderFiltersProvider).sort,
+                        ),
+                        sortSystemImage: _sortMenuSystemImage(
+                          ref.watch(searchProviderFiltersProvider).sort,
                         ),
                         sortTooltip:
                             '${appText(context, english: 'Sort by', arabic: 'الترتيب حسب')}: '
-                            '${SearchSortOption.fromValue(ref.watch(searchProviderFiltersProvider).sort).label(context)}',
+                            '${_sortLabel(context, ref.watch(searchProviderFiltersProvider).sort)}',
                         activeFilterCount: domainCapabilities.showFilter
                             ? ref.watch(searchProviderFiltersProvider).count
                             : 0,
@@ -509,7 +556,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
   Widget _buildMobileSearchActionGroup(BuildContext context) {
     final activeFilters = ref.watch(searchProviderFiltersProvider);
-    final sortOption = SearchSortOption.fromValue(activeFilters.sort);
     final domain = ref.watch(searchDomainProvider);
     final capabilities = domain.capabilities;
 
@@ -519,13 +565,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       showFilter: true,
       filterCount: capabilities.showFilter ? activeFilters.count : 0,
       isFilterLoading: _isLoadingProviderFilters,
-      sortValue: activeFilters.sort,
+      sortValue: _sortMenuSelectedValue(activeFilters.sort),
       sortItems: _searchSortMenuItems(context),
       onSortSelected: _applySearchSort,
-      sortIcon: _searchSortFallbackIcon(sortOption),
-      sortSystemImage: _searchSortSystemImage(sortOption),
+      onSortDirectionSelected: _isRiftAnime ? _reverseRiftSort : null,
+      sortAscending: activeFilters.sort.endsWith('_asc'),
+      sortIcon: _sortMenuIcon(activeFilters.sort),
+      sortSystemImage: _sortMenuSystemImage(activeFilters.sort),
       sortTooltip:
-          '${appText(context, english: 'Sort by', arabic: 'الترتيب حسب')}: ${sortOption.label(context)}',
+          '${appText(context, english: 'Sort by', arabic: 'الترتيب حسب')}: ${_sortLabel(context, activeFilters.sort)}',
       filterTooltip: appText(context, english: 'Filters', arabic: 'الفلاتر'),
       // Match the library filter's theme accent.
       tintColor: Theme.of(context).colorScheme.primary,
@@ -1273,6 +1321,7 @@ class _ActiveSearchFilterChips extends StatelessWidget {
     ...filters.years.map((value) => ('years', value)),
     ...filters.seasons.map((value) => ('seasons', value)),
     ...filters.ageRatings.map((value) => ('ageRatings', value)),
+    ...filters.countries.map((value) => ('countries', value)),
     ...filters.types.map((value) => ('types', value)),
     ...filters.statuses.map((value) => ('statuses', value)),
   ];

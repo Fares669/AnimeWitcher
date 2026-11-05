@@ -22,6 +22,8 @@ class SearchHeaderBar extends ConsumerStatefulWidget {
   final ValueChanged<String> onChanged;
   final VoidCallback onShowFilters;
   final ValueChanged<String> onSortSelected;
+  final ValueChanged<String>? onSortDirectionSelected;
+  final bool sortAscending;
   final String sortValue;
   final List<AppleNativeMenuItem> sortItems;
   final IconData sortIcon;
@@ -42,6 +44,8 @@ class SearchHeaderBar extends ConsumerStatefulWidget {
     required this.onChanged,
     required this.onShowFilters,
     required this.onSortSelected,
+    this.onSortDirectionSelected,
+    this.sortAscending = false,
     required this.sortValue,
     required this.sortItems,
     required this.sortIcon,
@@ -161,6 +165,8 @@ class _SearchHeaderBarState extends ConsumerState<SearchHeaderBar> {
                       sortValue: widget.sortValue,
                       sortItems: widget.sortItems,
                       onSortSelected: widget.onSortSelected,
+                      onSortDirectionSelected: widget.onSortDirectionSelected,
+                      sortAscending: widget.sortAscending,
                       sortIcon: widget.sortIcon,
                       sortSystemImage: widget.sortSystemImage,
                       sortTooltip: widget.sortTooltip,
