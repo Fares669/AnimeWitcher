@@ -19,6 +19,9 @@ import '../../characters/presentation/anime_characters_screen.dart';
 import '../../characters/presentation/character_details_screen.dart';
 import 'related_anime_screen.dart';
 import '../../comments/presentation/animewitcher_comments_screen.dart';
+import '../../comments/presentation/anime_rift_comments_screen.dart';
+import '../../../core/extensions/providers/anime_rift_provider.dart';
+import '../../../core/extensions/providers/anime_rift_comments.dart';
 import '../../../core/utils/window_controls_inset.dart';
 import '../../../core/utils/image_fallbacks.dart';
 import '../../../core/utils/resume_episode.dart';
@@ -210,6 +213,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     const favoriteRed = Color(0xFFFF3B30);
     final colors = Theme.of(context).colorScheme;
     final commentTarget = animeWitcherAnimeCommentTarget(item);
+    final riftCommentTarget = AnimeRiftCommentTarget.forAnime(item);
     final LibraryCategory? currentCategory =
         (item.provider == animeRiftProviderId
                 ? libraryNotifier.itemCategory(
@@ -220,12 +224,15 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
             as LibraryCategory?;
 
     return <AppleLiquidGlassToolbarButton>[
-      if (includeComments && commentTarget != null)
+      if (includeComments &&
+          (commentTarget != null || riftCommentTarget != null))
         AppleLiquidGlassToolbarButton(
           tooltip: appText(context, english: 'Comments', arabic: 'التعليقات'),
           icon: Icons.chat_bubble_outline_rounded,
           color: foregroundColor,
-          onPressed: () => _openAnimeComments(context, commentTarget),
+          onPressed: () => commentTarget != null
+              ? _openAnimeComments(context, commentTarget)
+              : _openRiftComments(context, riftCommentTarget!),
         ),
       AppleLiquidGlassToolbarButton(
         tooltip: isFavorite
@@ -371,6 +378,14 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
             fallbackColor: fallbackColor,
             onPressed: () => _openAnimeComments(context, target),
           ),
+        if (AnimeRiftCommentTarget.forAnime(item) case final target?)
+          DetailsHeroIconButton(
+            icon: Icons.chat_bubble_outline_rounded,
+            tooltip: appText(context, english: 'Comments', arabic: 'التعليقات'),
+            foregroundColor: foregroundColor,
+            fallbackColor: fallbackColor,
+            onPressed: () => _openRiftComments(context, target),
+          ),
         DetailsHeroIconButton(
           icon: (_userRating ?? 0) > 0
               ? Icons.star_rounded
@@ -435,6 +450,23 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     );
     if (!mounted || !appleUsesPersistentLiquidGlassHeader) return;
     setState(() {});
+  }
+
+  Future<void> _openRiftComments(
+    BuildContext context,
+    AnimeRiftCommentTarget target,
+  ) async {
+    final provider = ref
+        .read(extensionManagerProvider.notifier)
+        .getProvider(animeRiftProviderId);
+    if (provider is! AnimeRiftProvider) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            AnimeRiftCommentsScreen(provider: provider, target: target),
+      ),
+    );
+    if (mounted && appleUsesPersistentLiquidGlassHeader) setState(() {});
   }
 
   String _libraryCategoryLabel(BuildContext context, LibraryCategory category) {

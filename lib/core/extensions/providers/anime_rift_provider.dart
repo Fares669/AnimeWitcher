@@ -9,6 +9,7 @@ import '../../storage/storage_service.dart';
 import '../base_provider.dart';
 import '../../utils/anime_rift_identity.dart';
 import 'anime_rift_api_client.dart';
+import 'anime_rift_comments.dart';
 import 'anime_rift_streams.dart';
 export 'anime_rift_streams.dart'
     show AnimeRiftPlaybackUnavailable, AnimeRiftAuthenticationRequired;
@@ -163,6 +164,37 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
           .importToLocal(storage: storage, hydrate: getDetails);
 
   final _homeSectionRows = <String, Map<dynamic, dynamic>>{};
+
+  Future<AnimeRiftCommentPage> loadComments(
+    AnimeRiftCommentTarget target, {
+    int page = 0,
+  }) async {
+    final response = await _api.request(
+      'comment/all',
+      'COMMENTS.VIEW',
+      query: {
+        ...AnimeRiftApiClient.commentTargetFields(
+          animeId: target.animeId,
+          episodeId: target.episodeId,
+          parentId: target.parentId,
+        ),
+        'page': page < 0 ? 0 : page,
+      },
+    );
+    return AnimeRiftCommentPage.fromJson(response);
+  }
+
+  Future<void> publishComment(
+    AnimeRiftCommentTarget target,
+    String text,
+  ) async {
+    await _api.createComment(
+      animeId: target.animeId,
+      episodeId: target.episodeId,
+      parentId: target.parentId,
+      text: text,
+    );
+  }
 
   @override
   Future<Map<String, List<MultimediaItem>>> getHome() async {

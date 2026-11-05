@@ -884,6 +884,51 @@ class AnimeRiftApiClient {
     );
   }
 
+  /// Rift APK strings: /comment/all (COMMENTS.VIEW), /comment/create
+  /// (COMMENTS.CREATE), and animeId / episodeId / parentId / comment.
+  /// Comment creation is always authenticated; the catalog account is never
+  /// substituted for the separate AnimeRift identity.
+  Future<Map<String, dynamic>> createComment({
+    required String animeId,
+    String? episodeId,
+    String? parentId,
+    required String text,
+  }) {
+    final body = commentTargetFields(
+      animeId: animeId,
+      episodeId: episodeId,
+      parentId: parentId,
+    );
+    final content = text.trim();
+    if (content.isEmpty || content.length > 5000) {
+      throw ArgumentError('Invalid Anime Rift comment');
+    }
+    return _readAccountData(
+      'comment/create',
+      'COMMENTS.CREATE',
+      method: 'POST',
+      body: {...body, 'comment': content},
+    );
+  }
+
+  static Map<String, dynamic> commentTargetFields({
+    required String animeId,
+    String? episodeId,
+    String? parentId,
+  }) {
+    final valid = RegExp(r'^[A-Za-z0-9._~-]+$');
+    if (!valid.hasMatch(animeId) ||
+        (episodeId != null && !valid.hasMatch(episodeId)) ||
+        (parentId != null && !valid.hasMatch(parentId))) {
+      throw ArgumentError('Invalid Anime Rift comment target');
+    }
+    return {
+      'animeId': animeId,
+      if (episodeId != null) 'episodeId': episodeId,
+      if (parentId != null) 'parentId': parentId,
+    };
+  }
+
   Future<Map<String, dynamic>> _readAccountData(
     String path,
     String scope, {
@@ -949,6 +994,7 @@ class AnimeRiftApiClient {
   }) async {
     final allowedPath =
         RegExp(r'^library/[A-Za-z0-9_/-]+$').hasMatch(path) ||
+        path == 'comment/all' && method == 'GET' ||
         path == 'character/all' ||
         RegExp(r'^character/details/[A-Za-z0-9_-]+$').hasMatch(path);
     if (!allowedPath || path.contains('..')) {

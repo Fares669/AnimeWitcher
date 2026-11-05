@@ -12,6 +12,10 @@ import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_comment_models.dart';
 import 'package:animewitcher/features/comments/presentation/animewitcher_comments_screen.dart';
+import 'package:animewitcher/features/comments/presentation/anime_rift_comments_screen.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_comments.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
+import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/storage/history_repository.dart';
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
 import 'package:animewitcher/core/utils/download_progress_data.dart'
@@ -622,13 +626,11 @@ class EpisodeCard extends HookConsumerWidget {
       hasOwnedProgressIdentity,
       details,
     );
-    if (rawDownload == null) return const SizedBox.shrink();
-
-    final Widget downloadAction;
-    // On desktop/TV the download icon stays visible for mouse clicks but
-    // is NOT a separate D-pad focus target. Downloads are triggered via
-    // Menu key or long-press OK (handled in the outer Focus.onKeyEvent).
-    if (context.isDesktop) {
+    final Widget? downloadAction;
+    // No download permission must not also hide the independent comments.
+    if (rawDownload == null) {
+      downloadAction = null;
+    } else if (context.isDesktop) {
       downloadAction = ExcludeFocus(child: rawDownload);
     } else {
       downloadAction = _FocusableActionWrapper(
@@ -641,7 +643,13 @@ class EpisodeCard extends HookConsumerWidget {
     final commentsTarget = isAnimeWitcherCommentItem(parentItem)
         ? animeWitcherEpisodeCommentTarget(parentItem, episode)
         : null;
-    if (commentsTarget == null) return downloadAction;
+    final riftCommentsTarget = AnimeRiftCommentTarget.forEpisode(
+      parentItem,
+      episode,
+    );
+    if (commentsTarget == null && riftCommentsTarget == null) {
+      return downloadAction ?? const SizedBox.shrink();
+    }
 
     final commentsButton = EpisodeActionChip(
       tooltip: 'تعليقات الحلقة',
@@ -649,12 +657,29 @@ class EpisodeCard extends HookConsumerWidget {
       onPressed: () {
         Navigator.of(context).push(
           MaterialPageRoute<void>(
-            builder: (_) => AnimeWitcherCommentsScreen(target: commentsTarget),
+            builder: (_) {
+              if (commentsTarget != null) {
+                return AnimeWitcherCommentsScreen(target: commentsTarget);
+              }
+              final provider = ref
+                  .read(extensionManagerProvider.notifier)
+                  .getProvider(parentItem.provider ?? '');
+              if (provider is! AnimeRiftProvider) {
+                return const Scaffold(
+                  body: Center(child: Text('مزوّد AnimeRift غير نشط.')),
+                );
+              }
+              return AnimeRiftCommentsScreen(
+                provider: provider,
+                target: riftCommentsTarget!,
+              );
+            },
           ),
         );
       },
     );
 
+    if (downloadAction == null) return ExcludeFocus(child: commentsButton);
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
