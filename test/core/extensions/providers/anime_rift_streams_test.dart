@@ -139,6 +139,34 @@ class StreamFixture extends AnimeRiftApiClient {
 }
 
 void main() {
+  test(
+    'direct link uses distinct native player and offline-download flags',
+    () async {
+      final api = StreamFixture();
+      final provider = AnimeRiftProvider(client: api);
+
+      final playback = (await provider.loadStreamSources(episodeUrl)).first;
+      await provider.loadStreams(playback.url);
+      final playRequest = api.calls
+          .singleWhere((c) => c.path.endsWith('/direct_link'))
+          .body!;
+      expect(playRequest['with_internal_player'], '1');
+      expect(playRequest.containsKey('action'), isFalse);
+      expect(playRequest.containsKey('offline_download'), isFalse);
+
+      api.calls.clear();
+      final offline = (await provider.loadDownloadStreamSources(episodeUrl))
+          .first;
+      await provider.loadDownloadStreams(offline.url);
+      final downloadRequest = api.calls
+          .singleWhere((c) => c.path.endsWith('/direct_link'))
+          .body!;
+      expect(downloadRequest['action'], 'download');
+      expect(downloadRequest['offline_download'], '1');
+      expect(downloadRequest.containsKey('with_internal_player'), isFalse);
+    },
+  );
+
   test('download discovery restores the linked session before checking entitlement', () async {
     final api = StreamFixture()..requireRestoredDownloadSession = true;
     final provider = AnimeRiftProvider(client: api);

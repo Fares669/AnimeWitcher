@@ -265,6 +265,7 @@ class AnimeRiftApiClient {
     Object? body,
     Map<String, dynamic>? query,
     CancelToken? cancelToken,
+    int? expectedStatus,
   }) async {
     final stage = _requestStage(url);
     try {
@@ -283,7 +284,9 @@ class AnimeRiftApiClient {
         ),
       );
       final status = response.statusCode ?? 0;
-      if (status < 200 || status >= 300) {
+      if (status < 200 ||
+          status >= 300 ||
+          (expectedStatus != null && status != expectedStatus)) {
         throw AnimeRiftAccessUnavailable(statusCode: status, stage: stage);
       }
       final dynamic value = response.data is String
@@ -677,6 +680,7 @@ class AnimeRiftApiClient {
       'favorite',
       'currently',
       'want_to',
+      'finished',
       'later',
       'dropped',
     }.contains(category)) {
@@ -714,33 +718,72 @@ class AnimeRiftApiClient {
     cancelToken: cancelToken,
   );
 
+  /// Native AOT 0xaafb8c -> 0xaae770 -> 0x5c6d90: PUT, not POST.
+  /// Follow/unfollow are desired-state operations, never a toggle on retry.
+  Future<Map<String, dynamic>> setFavoriteAnime(
+    String animeId,
+    bool favorite, {
+    required String accountHash,
+  }) {
+    if (!RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(animeId)) {
+      throw ArgumentError('Invalid Anime Rift anime ID');
+    }
+    return _readAccountData(
+      'favorite/anime/${favorite ? 'follow' : 'un_follow'}',
+      'USER.FAVORITES.ANIME.FOLLOW',
+      method: 'PUT',
+      body: {'animeId': animeId},
+      accountHash: accountHash,
+      expectedStatus: 202,
+    );
+  }
+
   Future<Map<String, dynamic>> _readAccountData(
     String path,
     String scope, {
     Map<String, dynamic>? query,
     CancelToken? cancelToken,
+    String method = 'GET',
+    Map<String, dynamic>? body,
+    String? accountHash,
+    int? expectedStatus,
   }) async {
     if (cancelToken?.isCancelled == true) throw cancelToken!.cancelError!;
     // Reject guests before performing gateway registration or network requests.
     if (!await restoreAccountSession()) {
       throw const AnimeRiftAuthenticationRequired();
     }
-    await _ensureReady();
-    if (cancelToken?.isCancelled == true) throw cancelToken!.cancelError!;
     final token = _accessToken;
     if (token == null) throw const AnimeRiftAuthenticationRequired();
     final epoch = _sessionEpoch;
+    void requireSession() {
+      final identity = _accountIdentity;
+      if (epoch != _sessionEpoch ||
+          _accessToken != token ||
+          (accountHash != null &&
+              (identity == null ||
+                  sha256.convert(utf8.encode(identity.id.trim())).toString() !=
+                      accountHash))) {
+        throw const AnimeRiftAuthenticationRequired();
+      }
+    }
+
+    requireSession();
+    await _ensureReady();
+    requireSession();
+    if (cancelToken?.isCancelled == true) throw cancelToken!.cancelError!;
     try {
       final response = await _send(
         '$_base/$path',
+        method: method,
+        body: body,
         headers: _headers(scope),
+        expectedStatus: expectedStatus,
         query: query,
         cancelToken: cancelToken,
       );
       // Never expose data fetched for a previous Rift account after a switch.
-      if (epoch != _sessionEpoch || _accessToken != token) {
-        throw const AnimeRiftAuthenticationRequired();
-      }
+      requireSession();
       return response;
     } on AnimeRiftAccessUnavailable catch (error) {
       if (error.statusCode == 401 || error.statusCode == 403) {

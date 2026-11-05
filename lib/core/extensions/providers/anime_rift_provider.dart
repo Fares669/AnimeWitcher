@@ -56,6 +56,12 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
   bool get isAccountLinked => _api.isAccountLinked;
   AnimeRiftAccountIdentity? get accountIdentity => _api.accountIdentity;
 
+  Future<Map<String, dynamic>> setCloudFavorite(
+    String id,
+    bool favorite, {
+    required String accountHash,
+  }) => _api.setFavoriteAnime(id, favorite, accountHash: accountHash);
+
   Future<bool> restoreAccountSession() async {
     final previous = _api.accountIdentity?.id;
     final restored = await _api.restoreAccountSession();
@@ -109,7 +115,8 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
       descriptors[title] = Map<dynamic, dynamic>.of(row)..remove('items');
       final items = _items(
         row['items'],
-        recentReleases: row['filterBy'] == 'recent_releases' ||
+        recentReleases:
+            row['filterBy'] == 'recent_releases' ||
             _isRecentReleaseSection(title),
       );
       if (items.isNotEmpty) sections.putIfAbsent(title, () => []).addAll(items);
@@ -133,10 +140,18 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     if (row == null ||
         !const {'library', 'recent_releases'}.contains(filter) ||
         !const {
-          'recently_updated', 'recently_added', 'popularity', 'rating', 'likes',
+          'recently_updated',
+          'recently_added',
+          'popularity',
+          'rating',
+          'likes',
         }.contains(sort)) {
       // An unknown descriptor must not silently become an unrelated catalogue.
-      return super.getHomeSectionPage(sectionName, offset: offset, limit: limit);
+      return super.getHomeSectionPage(
+        sectionName,
+        offset: offset,
+        limit: limit,
+      );
     }
     final page = offset < 0 ? 0 : offset;
     final query = <String, dynamic>{
@@ -153,6 +168,7 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
       if (value is! String) throw const AnimeRiftAccessUnavailable();
       target[to] = value;
     }
+
     copyString(query, 'contentType', 'content_type');
     if (row['filterByDubReleases'] == true) {
       copyString(query, 'dubLang', 'dub');
@@ -178,8 +194,11 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     // Original AOT: 0xabf340 -> 0xa8a278 -> POST at 0x58ac80.
     // Paging/sort belong in the query; genre/season/year belong in JSON.
     final data = await _api.request(
-      'library/all', 'ANIME.LIBRARY.ALL',
-      method: 'POST', body: body, query: query,
+      'library/all',
+      'ANIME.LIBRARY.ALL',
+      method: 'POST',
+      body: body,
+      query: query,
     );
     if (data['items'] is! List) throw const AnimeRiftAccessUnavailable();
     return ProviderMediaPage(

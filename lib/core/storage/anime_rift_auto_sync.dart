@@ -11,12 +11,37 @@ import 'library_category.dart';
 import 'storage_service.dart';
 
 /// A transport with a separately verified HTTP method, body and permissions.
-/// Nothing in the shipped app currently implements this interface: recovered
-/// endpoint strings alone are not proof of an authorized write contract.
+/// Unsupported mutations remain queued instead of being falsely acknowledged.
 abstract class AnimeRiftVerifiedCloudWriter {
   /// Implementations must bind [accountHash] to the authenticated session
   /// before sending, and reject a switch rather than sending A's edit as B.
-  Future<void> write(String accountHash, AnimeRiftCloudPendingChange change);
+  Future<bool> write(String accountHash, AnimeRiftCloudPendingChange change);
+}
+
+class AnimeRiftCloudWriter implements AnimeRiftVerifiedCloudWriter {
+  AnimeRiftCloudWriter(this._favorite);
+
+  final Future<Map<String, dynamic>> Function(
+    String,
+    bool, {
+    required String accountHash,
+  })
+  _favorite;
+
+  @override
+  Future<bool> write(
+    String accountHash,
+    AnimeRiftCloudPendingChange change,
+  ) async {
+    if (change.kind != 'favorite') return false;
+    AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+    final url = Uri.parse(AnimeRiftCloudPendingJournal.catalogUrl(change.url));
+    final favorite = change.value['favorite'];
+    if (favorite is! bool) throw const FormatException('Invalid Rift favorite');
+    await _favorite(url.pathSegments.last, favorite, accountHash: accountHash);
+    AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+    return true;
+  }
 }
 
 /// Account-scoped automatic pull and durable local-change journal. Never reads
@@ -205,7 +230,7 @@ class AnimeRiftAutoSyncCoordinator {
     for (final change in changes) {
       AnimeRiftCloudPendingJournal.requireAccount(account);
       if (change.kind == 'rescan') continue;
-      await writer.write(account, change);
+      if (!await writer.write(account, change)) continue;
       AnimeRiftCloudPendingJournal.requireAccount(account);
       await _journal.acknowledge(account, change);
     }
@@ -221,12 +246,23 @@ class AnimeRiftAutoSyncCoordinator {
 /// account state remains unrelated and untouched. The app shell also calls
 /// refresh() on startup/resume; mutation controllers call the typed queue hooks.
 final riftAutoSyncProvider = Provider<AnimeRiftAutoSyncCoordinator>((ref) {
+  AnimeRiftProvider? activeRift() {
+    final provider = ref.read(activeProviderProvider);
+    return provider is AnimeRiftProvider ? provider : null;
+  }
+
   final coordinator = AnimeRiftAutoSyncCoordinator(
     storage: ref.read(storageServiceProvider),
-    activeRift: () {
-      final provider = ref.read(activeProviderProvider);
-      return provider is AnimeRiftProvider ? provider : null;
-    },
+    activeRift: activeRift,
+    verifiedWriter: AnimeRiftCloudWriter((
+      id,
+      favorite, {
+      required accountHash,
+    }) {
+      final provider = activeRift();
+      if (provider == null) throw StateError('Rift provider changed');
+      return provider.setCloudFavorite(id, favorite, accountHash: accountHash);
+    }),
     onImported: () => ref.read(accountDataRevisionProvider.notifier).bump(),
   );
   ref.onDispose(coordinator.dispose);

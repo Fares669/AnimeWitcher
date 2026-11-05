@@ -72,6 +72,28 @@ class _CloudReader implements AnimeRiftCloudAccountReader {
 void main() {
   tearDown(AnimeRiftLocalAccountScope.reset);
 
+  test(
+    'native finished list imports into the completed library category',
+    () async {
+      AnimeRiftLocalAccountScope.activate('alice');
+      final storage = _MemoryStorage();
+      final reader = _CloudReader()
+        ..lists['finished'] = [
+          {
+            'anime': {'_id': 'done1', 'title': 'Finished anime'},
+          },
+        ];
+      await AnimeRiftCloudSync(reader).importToLocal(storage: storage);
+      expect(
+        ProviderLocalLibrary(
+          storage,
+          _rift,
+        ).category('https://anime-rift.com/anime/done1'),
+        LibraryCategory.completed,
+      );
+    },
+  );
+
   test('imports real cloud favorites, categories and watched titles', () async {
     AnimeRiftLocalAccountScope.activate('alice');
     final storage = _MemoryStorage();

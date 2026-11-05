@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart';
 import 'package:animewitcher/core/storage/anime_rift_account_scope.dart';
 import 'package:animewitcher/core/storage/anime_rift_auto_sync.dart';
 import 'package:animewitcher/core/storage/anime_rift_cloud_pending.dart';
@@ -126,18 +127,56 @@ class _FakeVerifiedWriter implements AnimeRiftVerifiedCloudWriter {
   Completer<void>? gate;
 
   @override
-  Future<void> write(
+  Future<bool> write(
     String accountHash,
     AnimeRiftCloudPendingChange change,
   ) async {
     AnimeRiftCloudPendingJournal.requireAccount(accountHash);
     sent.add(change);
     await gate?.future;
+    return true;
+  }
+}
+
+class _FavoriteClient extends AnimeRiftApiClient {
+  final sent = <String>[];
+
+  @override
+  Future<Map<String, dynamic>> setFavoriteAnime(
+    String id,
+    bool favorite, {
+    required String accountHash,
+  }) async {
+    AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+    sent.add('$id:$favorite');
+    return {'success': true};
   }
 }
 
 void main() {
   tearDown(AnimeRiftLocalAccountScope.reset);
+
+  test('verified favorite writer flushes favorites while preserving unsupported edits', () async {
+    final storage = _MemoryStorage();
+    final provider = _FakeRift('alice');
+    await provider.restoreAccountSession();
+    final client = _FavoriteClient();
+    final sync = AnimeRiftAutoSyncCoordinator(
+      storage: storage,
+      activeRift: () => provider,
+      verifiedWriter: AnimeRiftCloudWriter(client.setFavoriteAnime),
+      debounce: const Duration(days: 1),
+    );
+    addTearDown(sync.dispose);
+    await sync.queueHistory(_title, false);
+    await sync.queueFavorite(_title, false);
+    await sync.refresh();
+    expect(client.sent, ['safe1:false']);
+    final pending = AnimeRiftCloudPendingJournal(storage)
+        .pending(AnimeRiftLocalAccountScope.accountHash!);
+    expect(pending.map((change) => change.kind), ['history']);
+    expect(provider.pullCalls, 1);
+  });
 
   test(
     'guest and native provider changes never enter the Rift cloud queue',

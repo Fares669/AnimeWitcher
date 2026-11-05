@@ -278,7 +278,11 @@ class AnimeRiftStreams {
       body: {
         'id': ref.host,
         if (ref.quality != null) 'quality': ref.quality,
-        'with_internal_player': '1',
+        // The native Rift client sends distinct flags for offline downloads.
+        // Keep working player resolution unchanged.
+        if (ref.download) 'action': 'download',
+        if (ref.download) 'offline_download': '1',
+        if (!ref.download) 'with_internal_player': '1',
         'sessionId': session,
       },
     );

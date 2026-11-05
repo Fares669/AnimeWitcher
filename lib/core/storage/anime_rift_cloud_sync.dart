@@ -146,6 +146,7 @@ class AnimeRiftCloudSync {
     'favorite',
     'currently',
     'want_to',
+    'finished',
     'later',
     'dropped',
   ];
@@ -153,6 +154,7 @@ class AnimeRiftCloudSync {
   static const _categoryForList = <String, LibraryCategory>{
     'currently': LibraryCategory.watching,
     'want_to': LibraryCategory.planToWatch,
+    'finished': LibraryCategory.completed,
     'later': LibraryCategory.continueLater,
     'dropped': LibraryCategory.notInterested,
   };
