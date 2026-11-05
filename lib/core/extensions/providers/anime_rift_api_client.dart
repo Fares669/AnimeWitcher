@@ -766,6 +766,124 @@ class AnimeRiftApiClient {
     );
   }
 
+  /// Verified in the shipped AOT at 0xaaea38-0xaaeb98: four required fields,
+  /// PUT /watch_history/watch, with the user's own Rift bearer credential.
+  /// Sending viewed=false unmarks this episode (not the whole anime).
+  Future<Map<String, dynamic>> setEpisodeViewed(
+    String animeId,
+    int episodeNumber,
+    bool viewed, {
+    required String accountHash,
+  }) {
+    if (!RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(animeId) ||
+        episodeNumber <= 0 ||
+        episodeNumber > 100000) {
+      throw ArgumentError('Invalid Rift anime or episode number');
+    }
+    return _readAccountData(
+      'watch_history/watch',
+      'USER.WATCH_HISTORY.WATCHED',
+      method: 'PUT',
+      body: {
+        'animeId': animeId,
+        'viewed': viewed,
+        'episode_number': episodeNumber,
+        'useLastInteractedEpisode': false,
+      },
+      accountHash: accountHash,
+    );
+  }
+
+  /// Rift has five independent rating dimensions, not Witcher's single
+  /// rating. The AOT emits doubles for all five fields and optional review.
+  Future<Map<String, dynamic>> rateAnime(
+    String animeId, {
+    required num general,
+    required num story,
+    required num characters,
+    required num animation,
+    required num music,
+    required String accountHash,
+  }) {
+    if (!RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(animeId)) {
+      throw ArgumentError('Invalid Rift anime ID');
+    }
+    final scores = [general, story, characters, animation, music];
+    if (scores.any((score) => !score.isFinite || score < 1 || score > 10)) {
+      throw ArgumentError('Rift rating dimensions must each be 1–10');
+    }
+    return _readAccountData(
+      'my_list/rate',
+      'USER.MY_LIST.RATE',
+      method: 'PUT',
+      body: {
+        'animeId': animeId,
+        'general_rating': general.toDouble(),
+        'story_rating': story.toDouble(),
+        'characters_rating': characters.toDouble(),
+        'animation_rating': animation.toDouble(),
+        'music_rating': music.toDouble(),
+      },
+      accountHash: accountHash,
+    );
+  }
+
+  Future<Map<String, dynamic>> fetchAnimeRating(
+    String animeId, {
+    required String accountHash,
+  }) {
+    if (!RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(animeId)) {
+      throw ArgumentError('Invalid Anime Rift anime ID');
+    }
+    // Use the account-authenticated details, not the cached guest catalog
+    // response: the original APK exposes per-user interactions here.
+    return _readAccountData(
+      'library/details/$animeId',
+      'ANIME.LIBRARY.DETAILS',
+      accountHash: accountHash,
+    );
+  }
+
+  /// Native AOT 0xad6898-0xad6910: PUT clear/one; id is the watch-history
+  /// record ID (not the anime ID). check_last_episode is true in the APK.
+  Future<Map<String, dynamic>> removeWatchHistoryRecord(
+    String recordId,
+    String animeId, {
+    required String accountHash,
+  }) {
+    final safeId = RegExp(r'^[A-Za-z0-9_-]+$');
+    if (!safeId.hasMatch(recordId) || !safeId.hasMatch(animeId)) {
+      throw ArgumentError('Invalid Rift history record/anime IDs');
+    }
+    return _readAccountData(
+      'watch_history/clear/one',
+      'USER.WATCH_HISTORY.CLEAR_ONE',
+      method: 'PUT',
+      body: {'id': recordId, 'animeId': animeId, 'check_last_episode': true},
+      accountHash: accountHash,
+    );
+  }
+
+  /// Native AOT 0xad91d4-0xad9254: PUT clear/multi with the selected
+  /// history record IDs. Do not attempt this with unverified IDs.
+  Future<Map<String, dynamic>> removeWatchHistoryMany(
+    List<String> recordIds, {
+    required String accountHash,
+  }) {
+    if (recordIds.isEmpty ||
+        recordIds.length > 10000 ||
+        recordIds.any((id) => !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(id))) {
+      throw ArgumentError('Invalid Rift history record IDs');
+    }
+    return _readAccountData(
+      'watch_history/clear/multi',
+      'USER.WATCH_HISTORY.CLEAR_MANY',
+      method: 'PUT',
+      body: {'ids': recordIds},
+      accountHash: accountHash,
+    );
+  }
+
   Future<Map<String, dynamic>> _readAccountData(
     String path,
     String scope, {

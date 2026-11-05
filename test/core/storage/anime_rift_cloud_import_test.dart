@@ -217,6 +217,38 @@ void main() {
     },
   );
 
+  test(
+    'Rift watched episode arrays import without overriding unuploaded unmarks',
+    () async {
+      AnimeRiftLocalAccountScope.activate('alice');
+      final storage = _MemoryStorage();
+      final reader = _CloudReader()
+        ..history.add({
+          'anime': {'_id': 'resume9', 'title': 'Remote watched'},
+          'last_episode_viewed': 9,
+          'watched_episodes': [7, 9],
+          'not_watched_episodes': [8],
+        });
+      final cloud = AnimeRiftCloudSync(reader);
+      final local = ProviderLocalHistory(storage, _rift);
+      final url = 'https://anime-rift.com/anime/resume9';
+      Episode numbered(int number) => Episode(
+        name: 'Episode $number',
+        url: '$url/episode/opaque-$number',
+        episode: number,
+      );
+      await cloud.importToLocal(storage: storage);
+      expect(local.isWatched(url, numbered(7)), isTrue);
+      expect(local.isWatched(url, numbered(8)), isFalse);
+      expect(local.isWatched(url, numbered(9)), isTrue);
+
+      await local.setWatched(url, numbered(9), false);
+      await AnimeRiftCloudPendingJournal(storage).queueWatched(url, 9, false);
+      await cloud.importToLocal(storage: storage);
+      expect(local.isWatched(url, numbered(9)), isFalse);
+    },
+  );
+
   test('imports real cloud favorites, categories and watched titles', () async {
     AnimeRiftLocalAccountScope.activate('alice');
     final storage = _MemoryStorage();
@@ -261,6 +293,34 @@ void main() {
     await AnimeRiftCloudSync(reader).importToLocal(storage: storage);
     expect(library.allItems(), hasLength(3));
     expect(history.history(), hasLength(1));
+  });
+
+  test('Rift last watched episode appears in Continue Watching without inventing seconds', () async {
+    AnimeRiftLocalAccountScope.activate('alice');
+    final storage = _MemoryStorage();
+    final reader = _CloudReader()
+      ..history.add({
+        'anime': {'_id': 'resume7', 'title': 'Remote resume'},
+        'last_episode_viewed': 7,
+      });
+    await AnimeRiftCloudSync(reader).importToLocal(storage: storage);
+    final history = ProviderLocalHistory(storage, _rift);
+    expect(history.history().single.episode, 7);
+    final entry = history.continueWatching().single;
+    expect(entry.item.title, 'Remote resume');
+    expect(entry.episode, 7);
+    expect(entry.lastEpisodeUrl?.isEmpty ?? true, isTrue);
+    expect(entry.position, 0);
+    expect(entry.duration, 0);
+
+    // Existing precise device playback must not be replaced by remote title
+    // and episode metadata that do not include a position in seconds.
+    final item = entry.item;
+    await history.saveProgress(item, 123, 456, episode: 8);
+    await AnimeRiftCloudSync(reader).importToLocal(storage: storage);
+    expect(history.continueWatching().single.episode, 8);
+    expect(history.continueWatching().single.position, 123);
+    expect(history.continueWatching().single.duration, 456);
   });
 
   test(

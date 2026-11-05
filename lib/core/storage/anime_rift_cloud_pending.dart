@@ -5,6 +5,7 @@ import '../extensions/providers/anime_rift_api_client.dart';
 import '../utils/anime_rift_identity.dart';
 import 'anime_rift_account_scope.dart';
 import 'library_category.dart';
+import 'anime_rift_rating.dart';
 import 'storage_service.dart';
 
 /// A desired local state, not an HTTP request. No server write contract has
@@ -22,7 +23,11 @@ class AnimeRiftCloudPendingChange {
   final Map<String, Object?> value;
   final int revision;
 
-  String get key => jsonEncode([kind, url, value['episodeIdentity'] ?? '']);
+  String get key => jsonEncode([
+    kind,
+    url,
+    value['episode_number'] ?? value['episodeIdentity'] ?? '',
+  ]);
 
   Map<String, Object?> toJson() => {
     'kind': kind,
@@ -127,6 +132,21 @@ class AnimeRiftCloudPendingJournal {
 
   Future<void> queueFavorite(String url, bool favorite) =>
       _upsert('favorite', catalogUrl(url), {'favorite': favorite});
+
+  Future<void> queueWatched(String url, int episodeNumber, bool viewed) {
+    if (episodeNumber <= 0 || episodeNumber > 100000) {
+      throw ArgumentError.value(episodeNumber, 'episodeNumber');
+    }
+    return _upsert('watched', catalogUrl(url), {
+      'episode_number': episodeNumber,
+      'viewed': viewed,
+    });
+  }
+
+  Future<void> queueRating(String url, AnimeRiftRating rating) {
+    if (!rating.isValid) throw ArgumentError('Invalid Rift rating');
+    return _upsert('rating', catalogUrl(url), rating.toJson());
+  }
 
   Future<void> queueCategory(String url, LibraryCategory? category) {
     if (category == LibraryCategory.favorite) {

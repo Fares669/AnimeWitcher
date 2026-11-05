@@ -76,6 +76,8 @@ final episodeWatchRepositoryProvider = Provider<EpisodeWatchRepository>((ref) {
     ref.watch(animeWitcherAccountServiceProvider),
     () => ref.read(episodeWatchRevisionProvider.notifier).bump(),
     () => ref.read(riftAutoSyncProvider).scheduleLocalChange(),
+    (url, number, watched) =>
+        ref.read(riftAutoSyncProvider).queueWatched(url, number, watched),
   );
 });
 
@@ -86,6 +88,7 @@ class EpisodeWatchRepository {
     this._accountService,
     this._notifyChanged, [
     this._onRiftLocalChange,
+    this._onRiftWatchedChange,
   ]);
 
   final StorageService _storageService;
@@ -93,6 +96,8 @@ class EpisodeWatchRepository {
   final AnimeWitcherAccountService _accountService;
   final void Function() _notifyChanged;
   final Future<void> Function()? _onRiftLocalChange;
+  final Future<void> Function(String url, int episodeNumber, bool watched)?
+  _onRiftWatchedChange;
 
   static const String _legacyStorageKey = 'episode_watch_overrides_v1';
   static const String _storageKey = 'episode_watch_states_v2';
@@ -242,7 +247,11 @@ class EpisodeWatchRepository {
     }
     await _local().setWatched(item.url, episode, watched);
     _notifyChanged();
-    await _onRiftLocalChange?.call();
+    if (episode.episode > 0 && _onRiftWatchedChange != null) {
+      await _onRiftWatchedChange(item.url, episode.episode, watched);
+    } else {
+      await _onRiftLocalChange?.call();
+    }
   }
 
   Future<void> setManyWatchedFor(
@@ -253,9 +262,19 @@ class EpisodeWatchRepository {
     if (item.provider != animeRiftProviderId) {
       return setManyWatched(item.url, episodes, watched);
     }
-    await _local().setManyWatched(item.url, episodes, watched);
+    final selectedEpisodes = episodes.toList(growable: false);
+    await _local().setManyWatched(item.url, selectedEpisodes, watched);
     _notifyChanged();
-    await _onRiftLocalChange?.call();
+    if (_onRiftWatchedChange == null) {
+      await _onRiftLocalChange?.call();
+      return;
+    }
+    for (final number
+        in selectedEpisodes.map((episode) => episode.episode).toSet()) {
+      if (number > 0) {
+        await _onRiftWatchedChange(item.url, number, watched);
+      }
+    }
   }
 
   bool? getExplicitState(String mainUrl, Episode episode) {

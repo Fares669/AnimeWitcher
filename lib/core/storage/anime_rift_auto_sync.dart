@@ -8,6 +8,7 @@ import '../extensions/providers/anime_rift_provider.dart';
 import 'anime_rift_account_scope.dart';
 import 'anime_rift_cloud_pending.dart';
 import 'library_category.dart';
+import 'anime_rift_rating.dart';
 import 'storage_service.dart';
 
 /// A transport with a separately verified HTTP method, body and permissions.
@@ -29,9 +30,41 @@ class AnimeRiftCloudWriter implements AnimeRiftVerifiedCloudWriter {
     setCategory,
     Future<Map<String, dynamic>> Function(String)? readCategory,
     Future<Map<String, dynamic>> Function()? readFavorites,
+    Future<Map<String, dynamic>> Function(
+      String,
+      int,
+      bool, {
+      required String accountHash,
+    })?
+    setWatched,
+    Future<Map<String, dynamic>> Function(
+      String,
+      AnimeRiftRating, {
+      required String accountHash,
+    })?
+    setRating,
+    Future<AnimeRiftRating?> Function(String)? readRating,
+    Future<Map<String, dynamic>> Function()? readHistory,
+    Future<Map<String, dynamic>> Function(
+      String,
+      String, {
+      required String accountHash,
+    })?
+    clearHistoryOne,
+    Future<Map<String, dynamic>> Function(
+      List<String>, {
+      required String accountHash,
+    })?
+    clearHistoryMany,
   }) : _setCategory = setCategory,
        _readCategory = readCategory,
-       _readFavorites = readFavorites;
+       _readFavorites = readFavorites,
+       _setWatched = setWatched,
+       _setRating = setRating,
+       _readRating = readRating,
+       _readHistory = readHistory,
+       _clearHistoryOne = clearHistoryOne,
+       _clearHistoryMany = clearHistoryMany;
 
   final Future<Map<String, dynamic>> Function(
     String,
@@ -47,6 +80,32 @@ class AnimeRiftCloudWriter implements AnimeRiftVerifiedCloudWriter {
   _setCategory;
   final Future<Map<String, dynamic>> Function(String)? _readCategory;
   final Future<Map<String, dynamic>> Function()? _readFavorites;
+  final Future<Map<String, dynamic>> Function(
+    String,
+    int,
+    bool, {
+    required String accountHash,
+  })?
+  _setWatched;
+  final Future<Map<String, dynamic>> Function(
+    String,
+    AnimeRiftRating, {
+    required String accountHash,
+  })?
+  _setRating;
+  final Future<AnimeRiftRating?> Function(String)? _readRating;
+  final Future<Map<String, dynamic>> Function()? _readHistory;
+  final Future<Map<String, dynamic>> Function(
+    String,
+    String, {
+    required String accountHash,
+  })?
+  _clearHistoryOne;
+  final Future<Map<String, dynamic>> Function(
+    List<String>, {
+    required String accountHash,
+  })?
+  _clearHistoryMany;
 
   static const _categoryKeys = {
     LibraryCategory.watching: 'currently',
@@ -84,13 +143,95 @@ class AnimeRiftCloudWriter implements AnimeRiftVerifiedCloudWriter {
     return ids;
   }
 
+  /// A history record has its own ID and its anime's catalog ID. Never send a
+  /// catalogue ID as a history-record ID, or delete on a partial response.
+  static List<(String recordId, String animeId)>? _historyRows(
+    Map<String, dynamic> response,
+  ) {
+    final payload = response['items'];
+    final rows = payload is Map
+        ? payload['items'] ?? payload['data'] ?? payload['results']
+        : payload;
+    if (rows is! List ||
+        response['hasNext'] == true ||
+        (payload is Map && payload['hasNext'] == true)) {
+      return null;
+    }
+    final result = <(String, String)>[];
+    final safe = RegExp(r'^[A-Za-z0-9_-]+$');
+    for (final row in rows) {
+      if (row is! Map) return null;
+      final embedded = row['anime'] is Map
+          ? row['anime'] as Map
+          : row['_anime'] is Map
+          ? row['_anime'] as Map
+          : null;
+      final recordId = row['_id'] ?? row['id'];
+      final animeId =
+          embedded?['_id'] ??
+          embedded?['anime_id'] ??
+          row['anime_id'] ??
+          row['animeId'];
+      if (recordId is! String ||
+          animeId is! String ||
+          !safe.hasMatch(recordId) ||
+          !safe.hasMatch(animeId)) {
+        return null;
+      }
+      result.add((recordId, animeId));
+    }
+    return result;
+  }
+
   @override
   Future<bool> write(
     String accountHash,
     AnimeRiftCloudPendingChange change,
   ) async {
-    if (change.kind != 'favorite' && change.kind != 'category') return false;
+    if (change.kind != 'favorite' &&
+        change.kind != 'category' &&
+        change.kind != 'watched' &&
+        change.kind != 'rating' &&
+        change.kind != 'history' &&
+        change.kind != 'history-clear') {
+      return false;
+    }
     AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+    if (change.kind == 'history-clear' ||
+        (change.kind == 'history' && change.value['present'] == false)) {
+      final reader = _readHistory;
+      if (reader == null) return false;
+      final remote = _historyRows(await reader());
+      AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+      if (remote == null) return false;
+      if (change.kind == 'history-clear') {
+        final clearMany = _clearHistoryMany;
+        if (clearMany == null) return false;
+        if (remote.isNotEmpty) {
+          await clearMany(
+            remote.map((row) => row.$1).toList(),
+            accountHash: accountHash,
+          );
+          AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+        }
+        final verified = _historyRows(await reader());
+        AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+        return verified != null && verified.isEmpty;
+      }
+      final id = Uri.parse(AnimeRiftCloudPendingJournal.catalogUrl(change.url))
+          .pathSegments
+          .last;
+      final remove = _clearHistoryOne;
+      if (remove == null) return false;
+      for (final row in remote.where((row) => row.$2 == id)) {
+        await remove(row.$1, id, accountHash: accountHash);
+        AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+      }
+      final verified = _historyRows(await reader());
+      AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+      return verified != null && !verified.any((row) => row.$2 == id);
+    }
+    if (change.kind == 'history') return false;
     final url = Uri.parse(AnimeRiftCloudPendingJournal.catalogUrl(change.url));
     final id = url.pathSegments.last;
     if (change.kind == 'favorite') {
@@ -105,6 +246,30 @@ class AnimeRiftCloudWriter implements AnimeRiftVerifiedCloudWriter {
         AnimeRiftCloudPendingJournal.requireAccount(accountHash);
         return current != null && current.contains(id) == favorite;
       }
+    } else if (change.kind == 'watched') {
+      final setter = _setWatched;
+      if (setter == null) return false;
+      final number = change.value['episode_number'];
+      final viewed = change.value['viewed'];
+      if (number is! int || number <= 0 || viewed is! bool) {
+        throw const FormatException('Invalid Rift watched episode state');
+      }
+      await setter(id, number, viewed, accountHash: accountHash);
+      AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+      // The native endpoint acknowledges the desired episode state. Remote
+      // episode-by-episode GET verification is not guaranteed by this API.
+      return true;
+    } else if (change.kind == 'rating') {
+      final setter = _setRating;
+      final readback = _readRating;
+      if (setter == null || readback == null) return false;
+      final rating = AnimeRiftRating.fromMap(change.value);
+      if (rating == null) throw const FormatException('Invalid Rift rating');
+      await setter(id, rating, accountHash: accountHash);
+      AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+      final remote = await readback(change.url);
+      AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+      return remote == rating;
     } else {
       final setCategory = _setCategory;
       final readCategory = _readCategory;
@@ -233,6 +398,30 @@ class AnimeRiftAutoSyncCoordinator {
     _scheduleRefresh();
   }
 
+  Future<void> queueWatched(String url, int episodeNumber, bool viewed) async {
+    if (!_canRecordLocalChange) return;
+    await _journal.queueWatched(url, episodeNumber, viewed);
+    _scheduleRefresh();
+  }
+
+  Future<void> queueRating(String url, AnimeRiftRating rating) async {
+    if (!_canRecordLocalChange) return;
+    await _journal.queueRating(url, rating);
+    _scheduleRefresh();
+  }
+
+  AnimeRiftRating? pendingRating(String url) {
+    if (!_canRecordLocalChange) return null;
+    final account = AnimeRiftLocalAccountScope.accountHash!;
+    final canonical = AnimeRiftCloudPendingJournal.catalogUrl(url);
+    for (final change in _journal.pending(account)) {
+      if (change.kind == 'rating' && change.url == canonical) {
+        return AnimeRiftRating.fromMap(change.value);
+      }
+    }
+    return null;
+  }
+
   Future<void> queuePlayback(
     String url, {
     String? episodeIdentity,
@@ -268,6 +457,9 @@ class AnimeRiftAutoSyncCoordinator {
       season: season,
       episode: episode,
     );
+    if (nearCompletion && episode != null && episode > 0) {
+      await _journal.queueWatched(url, episode, true);
+    }
     _playbackSnapshots[key] = (when: now, position: position);
     if (_playbackSnapshots.length > 128) {
       _playbackSnapshots.remove(_playbackSnapshots.keys.first);
@@ -380,6 +572,48 @@ final riftAutoSyncProvider = Provider<AnimeRiftAutoSyncCoordinator>((ref) {
         final provider = activeRift();
         if (provider == null) throw StateError('Rift provider changed');
         return provider.fetchCloudFavorites();
+      },
+      setWatched: (id, number, viewed, {required accountHash}) {
+        final provider = activeRift();
+        if (provider == null) throw StateError('Rift provider changed');
+        return provider.setCloudEpisodeWatched(
+          id,
+          number,
+          viewed,
+          accountHash: accountHash,
+        );
+      },
+      setRating: (id, rating, {required accountHash}) {
+        final provider = activeRift();
+        if (provider == null) throw StateError('Rift provider changed');
+        return provider.setCloudRating(id, rating, accountHash: accountHash);
+      },
+      readRating: (url) {
+        final provider = activeRift();
+        if (provider == null) throw StateError('Rift provider changed');
+        return provider.fetchCloudRating(url);
+      },
+      readHistory: () {
+        final provider = activeRift();
+        if (provider == null) throw StateError('Rift provider changed');
+        return provider.fetchCloudWatchHistory();
+      },
+      clearHistoryOne: (recordId, animeId, {required accountHash}) {
+        final provider = activeRift();
+        if (provider == null) throw StateError('Rift provider changed');
+        return provider.clearCloudWatchHistoryRecord(
+          recordId,
+          animeId,
+          accountHash: accountHash,
+        );
+      },
+      clearHistoryMany: (ids, {required accountHash}) {
+        final provider = activeRift();
+        if (provider == null) throw StateError('Rift provider changed');
+        return provider.clearCloudWatchHistoryMany(
+          ids,
+          accountHash: accountHash,
+        );
       },
     ),
     onImported: () => ref.read(accountDataRevisionProvider.notifier).bump(),

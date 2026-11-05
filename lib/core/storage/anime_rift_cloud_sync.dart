@@ -239,10 +239,26 @@ class AnimeRiftCloudSync {
       }
       categories[entry.key] = mapped;
     }
-    final watched = <MultimediaItem>[];
+    final watched = <(MultimediaItem, int?, Map<int, bool>?)>[];
     for (final row in remoteHistory) {
       final item = await parse(row);
-      if (item != null) watched.add(item);
+      if (item != null) {
+        final raw = row is Map ? row['last_episode_viewed'] : null;
+        final number = raw is num
+            ? raw
+            : raw is Map
+            ? raw['episode_number']
+            : null;
+        final episode =
+            number is num &&
+                number.isFinite &&
+                number == number.toInt() &&
+                number > 0 &&
+                number <= 100000
+            ? number.toInt()
+            : null;
+        watched.add((item, episode, _remoteWatchedNumbers(row)));
+      }
     }
 
     _requireAccount(account);
@@ -365,15 +381,31 @@ class AnimeRiftCloudSync {
         .map((entry) => entry.item.url)
         .toSet();
     final historyWasCleared = pending.hasPending(account, '', 'history-clear');
-    for (final item in watched) {
+    for (final (item, episode, viewedStates) in watched) {
       _requireAccount(account);
       if (historyWasCleared ||
           pending.hasPending(account, item.url, 'history') ||
           pending.hasPending(account, item.url, 'playback')) {
         continue;
       }
+      if (viewedStates != null &&
+          !pending.hasPending(account, item.url, 'watched')) {
+        await history.importRemoteWatched(item.url, viewedStates);
+      }
       if (knownHistory.add(item.url)) {
-        await history.recordOpened(item);
+        if (episode != null) {
+          await history.importRemoteEpisode(item, episode);
+        } else {
+          await history.recordOpened(item);
+        }
+        changed++;
+      } else if (episode != null &&
+          !history.continueWatching().any(
+            (entry) => entry.item.url == item.url,
+          )) {
+        // An older title-only import can be enriched once the original Rift
+        // record exposes its last watched episode; preserve local progress.
+        await history.importRemoteEpisode(item, episode);
         changed++;
       }
     }
@@ -395,6 +427,34 @@ class AnimeRiftCloudSync {
     } on AnimeRiftAccessUnavailable {
       return _reader.fetchWatchHistoryLatest();
     }
+  }
+
+  Map<int, bool>? _remoteWatchedNumbers(Object? row) {
+    if (row is! Map) return null;
+    final watched = row['watched_episodes'];
+    final unviewed = row['not_watched_episodes'];
+    if (watched is! List && unviewed is! List) return null;
+    final states = <int, bool>{};
+    bool collect(List items, bool value) {
+      for (final item in items) {
+        final number = item is Map ? item['episode_number'] : item;
+        if (number is! num ||
+            !number.isFinite ||
+            number != number.toInt() ||
+            number <= 0 ||
+            number > 100000 ||
+            (states.containsKey(number.toInt()) &&
+                states[number.toInt()] != value)) {
+          return false;
+        }
+        states[number.toInt()] = value;
+      }
+      return true;
+    }
+
+    if (watched is List && !collect(watched, true)) return null;
+    if (unviewed is List && !collect(unviewed, false)) return null;
+    return states;
   }
 
   Map<String, String>? _storageSnapshot(String? raw) {

@@ -34,6 +34,37 @@ class _Memory extends StorageService {
 
 void main() {
   test(
+    'Rift episode watch toggles queue exact episode number and desired state',
+    () async {
+      final storage = _Memory();
+      final account = AnimeWitcherAccountService(
+        storage: storage,
+        secureStorage: SecureTokenStorage(storage),
+      );
+      final sent = <String>[];
+      final watched = EpisodeWatchRepository(
+        storage,
+        HistoryRepository(storage, account),
+        account,
+        () {},
+        () async {},
+        (url, number, value) async => sent.add('$url:$number:$value'),
+      );
+      final item = MultimediaItem(
+        title: 'Rift',
+        url: 'https://anime-rift.com/anime/watch-id',
+        posterUrl: '',
+        provider: animeRiftProviderId,
+      );
+      final episode = Episode(name: 'Episode 4', url: 'episode-4', episode: 4);
+      await watched.setWatchedFor(item, episode, true);
+      await watched.setWatchedFor(item, episode, false);
+      expect(sent, ['${item.url}:4:true', '${item.url}:4:false']);
+      expect(watched.isWatchedFor(item, episode), isFalse);
+    },
+  );
+
+  test(
     'Rift watched episodes remain local and ignore native account state',
     () async {
       final storage = _Memory();

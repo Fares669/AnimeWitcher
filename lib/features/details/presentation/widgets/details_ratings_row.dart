@@ -5,6 +5,7 @@ import '../../../../core/account/account_providers.dart';
 import '../../../../core/account/animewitcher_account_models.dart';
 import '../../../../core/account/animewitcher_comment_models.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
+import '../../../../core/storage/provider_local_library.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../comments/presentation/animewitcher_comments_screen.dart';
@@ -210,6 +211,25 @@ class _DetailsRatingsRowState extends ConsumerState<DetailsRatingsRow> {
   }
 
   Future<void> _loadUserRating() async {
+    if (widget.item.provider == animeRiftProviderId) {
+      final url = widget.item.url;
+      if (mounted) setState(() => _loadingRating = true);
+      int? rating;
+      try {
+        rating = (await loadRiftRating(ref, widget.item))?.general.round();
+      } catch (_) {
+        // Show the local editing surface even if the cloud is temporarily
+        // unavailable. Never attempt the unrelated Witcher account API.
+      }
+      if (!mounted || widget.item.url != url) return;
+      setState(() {
+        _userRating = rating;
+        _loadingRating = false;
+        _loadedRating = true;
+        _loadedAnimeId = url;
+      });
+      return;
+    }
     final service = ref.read(animeWitcherAccountServiceProvider);
     final animeId = _ratings.animeId;
     if (!service.isSignedIn || animeId.isEmpty) {
@@ -254,6 +274,13 @@ class _DetailsRatingsRowState extends ConsumerState<DetailsRatingsRow> {
   }
 
   Future<void> _onRatePressed() async {
+    if (widget.item.provider == animeRiftProviderId) {
+      final result = await openRiftRatingDialog(context, ref, widget.item);
+      if (mounted && result.changed) {
+        setState(() => _userRating = result.rating);
+      }
+      return;
+    }
     final service = ref.read(animeWitcherAccountServiceProvider);
     if (!service.isSignedIn) {
       _toast(kRateLoginRequiredToast);
@@ -290,6 +317,7 @@ class _DetailsRatingsRowState extends ConsumerState<DetailsRatingsRow> {
   }
 
   Future<void> _onReviewsPressed() async {
+    if (widget.item.provider == animeRiftProviderId) return;
     final ratings = _ratings;
     if (ratings.reviewsClosed) {
       _toast(kReviewsClosedToast);
@@ -319,12 +347,17 @@ class _DetailsRatingsRowState extends ConsumerState<DetailsRatingsRow> {
 
   @override
   Widget build(BuildContext context) {
-    final account = ref.watch(animeWitcherAccountControllerProvider);
+    final rift = widget.item.provider == animeRiftProviderId;
+    final account = rift
+        ? null
+        : ref.watch(animeWitcherAccountControllerProvider);
     final signedIn =
-        account.asData?.value.isSignedIn ??
-        ref.read(animeWitcherAccountServiceProvider).isSignedIn;
-    final animeId = _ratings.animeId;
-    if (signedIn &&
+        account?.asData?.value.isSignedIn ??
+        (rift
+            ? false
+            : ref.read(animeWitcherAccountServiceProvider).isSignedIn);
+    final animeId = rift ? widget.item.url : _ratings.animeId;
+    if ((signedIn || rift) &&
         !_loadingRating &&
         (!_loadedRating || _loadedAnimeId != animeId)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -357,7 +390,17 @@ class _DetailsRatingsRowState extends ConsumerState<DetailsRatingsRow> {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(child: _witcherColumn(context, ratings)),
+                    Expanded(
+                      child: rift
+                          ? Column(
+                              children: [
+                                const Text('تقييم Anime Rift'),
+                                if (_userRating != null)
+                                  Text('${_userRating!}/10'),
+                              ],
+                            )
+                          : _witcherColumn(context, ratings),
+                    ),
                     if (showExternal) ...[
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -382,7 +425,7 @@ class _DetailsRatingsRowState extends ConsumerState<DetailsRatingsRow> {
               textDirection: TextDirection.ltr,
               child: Row(
                 children: [
-                  if (ratings.canRate) ...[
+                  if (ratings.canRate || rift) ...[
                     Expanded(
                       child: _RatingsActionButton(
                         key: kDetailsRatingsRateButtonKey,
@@ -627,9 +670,8 @@ Future<int?> showAnimeRatingDialog(
                 children: [
                   Text(
                     '$rating /10',
-                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.w800,
-                    ),
+                    style: Theme.of(context).textTheme.headlineSmall
+                        ?.copyWith(fontWeight: FontWeight.w800),
                   ),
                   const SizedBox(height: 12),
                   FittedBox(

@@ -154,6 +154,9 @@ class ContinueWatchingNotifier extends Notifier<List<HistoryItem>> {
     await ref
         .read(historyRepositoryProvider)
         .clearContinueWatchingFor(providerId);
+    if (providerId == animeRiftProviderId) {
+      await ref.read(riftAutoSyncProvider).queueHistoryClear();
+    }
     refresh();
   }
 
@@ -162,6 +165,7 @@ class ContinueWatchingNotifier extends Notifier<List<HistoryItem>> {
     final id = ref.read(activeProviderProvider)?.packageName;
     if (id == animeRiftProviderId) {
       await repository.removeContinueWatchingFor(url, id);
+      await ref.read(riftAutoSyncProvider).queueHistory(url, false);
     } else {
       await repository.removeContinueWatching(url);
     }
@@ -172,6 +176,7 @@ class ContinueWatchingNotifier extends Notifier<List<HistoryItem>> {
     final repository = ref.read(historyRepositoryProvider);
     if (item.provider == animeRiftProviderId) {
       await repository.removeContinueWatchingFor(item.url, item.provider);
+      await ref.read(riftAutoSyncProvider).queueHistory(item.url, false);
     } else {
       await repository.removeContinueWatching(item.url);
     }

@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/router/app_router.dart';
 import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/providers/anime_rift_provider.dart';
 import '../../../core/extensions/item_provider_resolution.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../home/presentation/view_all_screen.dart';
@@ -658,6 +659,31 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   }
 
   Future<void> _loadUserRatingFor(MultimediaItem item) async {
+    if (item.provider == animeRiftProviderId) {
+      final id = item.url;
+      if (_loadingUserRating) return;
+      setState(() => _loadingUserRating = true);
+      int? rating;
+      var linked = false;
+      try {
+        rating = (await loadRiftRating(ref, item))?.general.round();
+        linked =
+            ref.read(activeProviderProvider) is AnimeRiftProvider &&
+            (ref.read(
+              activeProviderProvider,
+            ) as AnimeRiftProvider).isAccountLinked;
+      } catch (_) {
+        // Never query the Witcher session for a Rift item.
+      }
+      if (!mounted) return;
+      setState(() {
+        _userRating = rating;
+        _loadedUserRatingAnimeId = id;
+        _loadedUserRatingSignedIn = linked;
+        _loadingUserRating = false;
+      });
+      return;
+    }
     final service = _accountServiceOrNull();
     if (service == null) {
       if (!mounted) return;
@@ -707,8 +733,12 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   }
 
   void _ensureUserRatingLoaded(MultimediaItem item) {
-    final animeId = animeWitcherAnimeIdFromItem(item);
-    final signedIn = _accountServiceOrNull()?.isSignedIn ?? false;
+    final isRift = item.provider == animeRiftProviderId;
+    final animeId = isRift ? item.url : animeWitcherAnimeIdFromItem(item);
+    final active = isRift ? ref.read(activeProviderProvider) : null;
+    final signedIn = isRift
+        ? active is AnimeRiftProvider && active.isAccountLinked
+        : _accountServiceOrNull()?.isSignedIn ?? false;
     if (_loadingUserRating ||
         (_loadedUserRatingAnimeId == animeId &&
             _loadedUserRatingSignedIn == signedIn)) {
@@ -720,7 +750,8 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   }
 
   Future<void> _rateAnimeFromHero(MultimediaItem item) async {
-    final animeId = animeWitcherAnimeIdFromItem(item);
+    final isRift = item.provider == animeRiftProviderId;
+    final animeId = isRift ? item.url : animeWitcherAnimeIdFromItem(item);
     if (_loadedUserRatingAnimeId != animeId || !_loadedUserRatingSignedIn) {
       await _loadUserRatingFor(item);
     }
@@ -730,12 +761,15 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       ref,
       ratings: AnimeDetailsRatings.fromItem(item),
       initialRating: _userRating ?? 0,
+      item: item,
     );
     if (!mounted || !outcome.changed) return;
     setState(() {
       _userRating = outcome.rating;
-      _loadedUserRatingAnimeId = animeWitcherAnimeIdFromItem(item);
-      _loadedUserRatingSignedIn = _accountServiceOrNull()?.isSignedIn ?? false;
+      _loadedUserRatingAnimeId = animeId;
+      _loadedUserRatingSignedIn = isRift
+          ? ref.read(activeProviderProvider) is AnimeRiftProvider
+          : _accountServiceOrNull()?.isSignedIn ?? false;
     });
   }
 

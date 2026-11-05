@@ -6,6 +6,7 @@ import 'package:animewitcher/core/storage/anime_rift_account_scope.dart';
 import 'package:animewitcher/core/storage/anime_rift_auto_sync.dart';
 import 'package:animewitcher/core/storage/anime_rift_cloud_pending.dart';
 import 'package:animewitcher/core/storage/anime_rift_cloud_sync.dart';
+import 'package:animewitcher/core/storage/anime_rift_rating.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
 import 'package:animewitcher/core/storage/provider_local_history.dart';
 import 'package:animewitcher/core/storage/provider_local_library.dart';
@@ -156,6 +157,99 @@ class _FavoriteClient extends AnimeRiftApiClient {
 
 void main() {
   tearDown(AnimeRiftLocalAccountScope.reset);
+
+  test(
+    'Rift history remove/clear uses server record IDs and confirms deletion',
+    () async {
+      final storage = _MemoryStorage();
+      final provider = _FakeRift('alice');
+      await provider.restoreAccountSession();
+      var records = <Map<String, dynamic>>[
+        {
+          '_id': 'history-1',
+          'anime': {'_id': 'safe1'},
+        },
+        {
+          '_id': 'history-2',
+          'anime': {'_id': 'safe2'},
+        },
+      ];
+      final sent = <String>[];
+      final writer = AnimeRiftCloudWriter(
+        _FavoriteClient().setFavoriteAnime,
+        readHistory: () async => {'items': records},
+        clearHistoryOne: (record, anime, {required accountHash}) async {
+          AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+          sent.add('one:$record:$anime');
+          records.removeWhere((row) => row['_id'] == record);
+          return {};
+        },
+        clearHistoryMany: (ids, {required accountHash}) async {
+          AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+          sent.add('many:${ids.join(',')}');
+          records = [];
+          return {};
+        },
+      );
+      final sync = AnimeRiftAutoSyncCoordinator(
+        storage: storage,
+        activeRift: () => provider,
+        verifiedWriter: writer,
+        debounce: const Duration(days: 1),
+      );
+      addTearDown(sync.dispose);
+      await sync.queueHistory(_title, false);
+      await sync.refresh();
+      expect(sent, ['one:history-1:safe1']);
+      await sync.queueHistoryClear();
+      await sync.refresh();
+      expect(sent, ['one:history-1:safe1', 'many:history-2']);
+      expect(
+        AnimeRiftCloudPendingJournal(storage)
+            .pending(AnimeRiftLocalAccountScope.accountHash!),
+        isEmpty,
+      );
+    },
+  );
+
+  test('Rift rating is queued until all five remote scores match', () async {
+    final storage = _MemoryStorage();
+    final provider = _FakeRift('alice');
+    await provider.restoreAccountSession();
+    const rating = AnimeRiftRating(
+      general: 8,
+      story: 9,
+      characters: 7,
+      animation: 8,
+      music: 6,
+    );
+    AnimeRiftRating? remote;
+    final sent = <AnimeRiftRating>[];
+    final sync = AnimeRiftAutoSyncCoordinator(
+      storage: storage,
+      activeRift: () => provider,
+      verifiedWriter: AnimeRiftCloudWriter(
+        _FavoriteClient().setFavoriteAnime,
+        setRating: (id, score, {required accountHash}) async {
+          AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+          expect(id, 'safe1');
+          sent.add(score);
+          return {};
+        },
+        readRating: (url) async => remote,
+      ),
+      debounce: const Duration(days: 1),
+    );
+    addTearDown(sync.dispose);
+    await sync.queueRating(_title, rating);
+    expect(sync.pendingRating(_title), rating);
+    await sync.refresh();
+    expect(sent, [rating]);
+    expect(sync.pendingRating(_title), rating);
+    remote = rating;
+    await sync.refresh();
+    expect(sync.pendingRating(_title), isNull);
+  });
 
   test('verified favorite writer flushes favorites while preserving unsupported edits', () async {
     final storage = _MemoryStorage();
@@ -388,6 +482,74 @@ void main() {
           .value['favorite'],
       isFalse,
     );
+  });
+
+  test(
+    'Rift watched marks and unmarks are durable per episode and per account',
+    () async {
+      final storage = _MemoryStorage();
+      final journal = AnimeRiftCloudPendingJournal(storage);
+      AnimeRiftLocalAccountScope.activate('alice');
+      final alice = AnimeRiftLocalAccountScope.accountHash!;
+      await journal.queueWatched(_title, 2, true);
+      await journal.queueWatched(_title, 3, true);
+      await journal.queueWatched(_title, 2, false);
+      final changes = journal.pending(alice);
+      expect(changes, hasLength(2));
+      expect(
+        changes
+            .firstWhere((c) => c.value['episode_number'] == 2)
+            .value['viewed'],
+        false,
+      );
+      expect(
+        changes.firstWhere((c) => c.value['episode_number'] == 2).revision,
+        2,
+      );
+      expect(
+        changes
+            .firstWhere((c) => c.value['episode_number'] == 3)
+            .value['viewed'],
+        true,
+      );
+      AnimeRiftLocalAccountScope.activate('bob');
+      expect(journal.pending(AnimeRiftLocalAccountScope.accountHash!), isEmpty);
+      expect(() => journal.queueWatched(_title, -1, true), throwsArgumentError);
+      AnimeRiftLocalAccountScope.activate('alice');
+      expect(
+        AnimeRiftCloudPendingJournal(storage).pending(alice),
+        hasLength(2),
+      );
+    },
+  );
+
+  test('queued viewed and unviewed episode states flush without dropping other pending history', () async {
+    final storage = _MemoryStorage();
+    final provider = _FakeRift('alice');
+    await provider.restoreAccountSession();
+    final calls = <String>[];
+    final sync = AnimeRiftAutoSyncCoordinator(
+      storage: storage,
+      activeRift: () => provider,
+      verifiedWriter: AnimeRiftCloudWriter(
+        _FavoriteClient().setFavoriteAnime,
+        setWatched: (id, episode, viewed, {required accountHash}) async {
+          AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+          calls.add('$id:$episode:$viewed');
+          return {'success': true};
+        },
+      ),
+      debounce: const Duration(days: 1),
+    );
+    addTearDown(sync.dispose);
+    await sync.queueWatched(_title, 2, true);
+    await sync.queueWatched(_title, 3, false);
+    await sync.queueHistory(_title, false);
+    await sync.refresh();
+    expect(calls, ['safe1:2:true', 'safe1:3:false']);
+    final pending = AnimeRiftCloudPendingJournal(storage)
+        .pending(AnimeRiftLocalAccountScope.accountHash!);
+    expect(pending.map((entry) => entry.kind), ['history']);
   });
 
   test(

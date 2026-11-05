@@ -16,6 +16,12 @@ import '../../../../core/account/account_providers.dart';
 import '../../../../core/account/animewitcher_account_models.dart';
 import '../../../../core/account/animewitcher_comment_models.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
+import '../../../../core/extensions/extension_manager.dart';
+import '../../../../core/extensions/providers/anime_rift_provider.dart';
+import '../../../../core/storage/anime_rift_auto_sync.dart';
+import '../../../../core/storage/anime_rift_account_scope.dart';
+import '../../../../core/storage/anime_rift_rating.dart';
+import '../../../../core/storage/provider_local_library.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../../comments/presentation/animewitcher_comments_screen.dart';
 import '../details_ratings.dart';
@@ -50,7 +56,11 @@ Future<AnimeRatingOutcome> openAnimeRatingDialog(
   WidgetRef ref, {
   required AnimeDetailsRatings ratings,
   int initialRating = 0,
+  MultimediaItem? item,
 }) async {
+  if (item?.provider == animeRiftProviderId) {
+    return openRiftRatingDialog(context, ref, item!);
+  }
   if (!ratings.canRate) return _unchanged;
   final service = ref.read(animeWitcherAccountServiceProvider);
   if (!service.isSignedIn) {
@@ -79,6 +89,133 @@ Future<AnimeRatingOutcome> openAnimeRatingDialog(
     }
     return _unchanged;
   }
+}
+
+/// Reads the five independent Rift scores from the active Rift account.
+/// A newer local edit always takes precedence over a stale server response.
+Future<AnimeRiftRating?> loadRiftRating(
+  WidgetRef ref,
+  MultimediaItem item,
+) async {
+  if (item.provider != animeRiftProviderId) return null;
+  if (AnimeRiftLocalAccountScope.accountHash == null) return null;
+  final provider = ref.read(activeProviderProvider);
+  if (provider is! AnimeRiftProvider ||
+      !await provider.restoreAccountSession()) {
+    return null;
+  }
+  final pending = ref.read(riftAutoSyncProvider).pendingRating(item.url);
+  if (pending != null) return pending;
+  return provider.fetchCloudRating(item.url);
+}
+
+/// Separate Rift dialog: no Witcher credential, single-score fallback,
+/// or silent duplication of one score into unrelated rating dimensions.
+Future<AnimeRatingOutcome> openRiftRatingDialog(
+  BuildContext context,
+  WidgetRef ref,
+  MultimediaItem item,
+) async {
+  final provider = ref.read(activeProviderProvider);
+  if (provider is! AnimeRiftProvider ||
+      !await provider.restoreAccountSession()) {
+    _toast(ref, 'يجب ربط حساب Anime Rift');
+    return _unchanged;
+  }
+  if (!context.mounted) return _unchanged;
+  AnimeRiftRating? current;
+  try {
+    current = await loadRiftRating(ref, item);
+  } catch (_) {
+    // A temporarily unavailable read does not prevent the user from saving
+    // a complete, explicitly chosen five-dimensional score.
+  }
+  if (!context.mounted) return _unchanged;
+  final selected = await showRiftRatingEditor(context, initial: current);
+  if (selected == null || !context.mounted) return _unchanged;
+  try {
+    await ref.read(riftAutoSyncProvider).queueRating(item.url, selected);
+    // Refresh is coalesced and scheduled automatically. The durable local edit
+    // is shown immediately even when the remote gateway is unavailable.
+    return (changed: true, rating: selected.general.round());
+  } catch (_) {
+    _toast(ref, 'تعذر حفظ تقييم Anime Rift', info: false);
+    return _unchanged;
+  }
+}
+
+Future<AnimeRiftRating?> showRiftRatingEditor(
+  BuildContext context, {
+  AnimeRiftRating? initial,
+}) {
+  final values = <double>[
+    initial?.general ?? 5,
+    initial?.story ?? 5,
+    initial?.characters ?? 5,
+    initial?.animation ?? 5,
+    initial?.music ?? 5,
+  ];
+  const labels = [
+    'التقييم العام',
+    'القصة',
+    'الشخصيات',
+    'الأنيميشن',
+    'الموسيقى',
+  ];
+  return showDialog<AnimeRiftRating>(
+    context: context,
+    builder: (dialogContext) => StatefulBuilder(
+      builder: (context, refresh) => AlertDialog(
+        title: const Text('تقييم Anime Rift'),
+        content: SizedBox(
+          width: 420,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (var index = 0; index < values.length; index++)
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('${labels[index]}: ${values[index]}/10'),
+                      Slider(
+                        key: ValueKey('rift-rating-$index'),
+                        value: values[index],
+                        min: 1,
+                        max: 10,
+                        divisions: 18,
+                        label: '${values[index]}',
+                        onChanged: (next) =>
+                            refresh(() => values[index] = next),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(
+              dialogContext,
+              AnimeRiftRating(
+                general: values[0],
+                story: values[1],
+                characters: values[2],
+                animation: values[3],
+                music: values[4],
+              ),
+            ),
+            child: const Text('حفظ'),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 /// Opens the reviews for [item], unless they are closed.

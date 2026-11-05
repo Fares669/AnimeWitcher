@@ -107,6 +107,183 @@ void main() {
 
   tearDown(() => messenger.setMockMethodCallHandler(secureChannel, null));
 
+  test('Rift watched/unwatched and five-part rating send authenticated native PUTs', () async {
+    final writes = <RequestOptions>[];
+    final client = AnimeRiftApiClient(
+      config: fixtureConfig,
+      dio: fixtureDio((options) {
+        if (options.uri.host.endsWith('googleapis.com')) {
+          return reply(options, <String, dynamic>{}, 400);
+        }
+        if (options.uri.path.endsWith('/auth/register/device')) {
+          return reply(options, {'sessionKey': 'fixture'}, 201);
+        }
+        if (options.uri.path.endsWith('/auth/sign-in/with-code')) {
+          return reply(options, {
+            'items': {
+              'profile': {'_id': 'rift-user'},
+              'token': 'rift-user-token',
+            },
+          });
+        }
+        writes.add(options);
+        return reply(options, {'success': true}, 202);
+      }),
+    );
+    await client.signInWithCode('owner-issued-code');
+    final account = AnimeRiftLocalAccountScope.accountHash!;
+    await client.setEpisodeViewed('anime-42', 3, true, accountHash: account);
+    await client.setEpisodeViewed('anime-42', 3, false, accountHash: account);
+    await client.rateAnime(
+      'anime-42',
+      general: 8,
+      story: 9,
+      characters: 7,
+      animation: 8,
+      music: 6,
+      accountHash: account,
+    );
+    expect(writes.map((o) => o.uri.path), [
+      '/api/v4/watch_history/watch',
+      '/api/v4/watch_history/watch',
+      '/api/v4/my_list/rate',
+    ]);
+    expect(writes[0].data, {
+      'animeId': 'anime-42',
+      'viewed': true,
+      'episode_number': 3,
+      'useLastInteractedEpisode': false,
+    });
+    expect(writes[1].data, {
+      'animeId': 'anime-42',
+      'viewed': false,
+      'episode_number': 3,
+      'useLastInteractedEpisode': false,
+    });
+    expect(writes[2].data, {
+      'animeId': 'anime-42',
+      'general_rating': 8.0,
+      'story_rating': 9.0,
+      'characters_rating': 7.0,
+      'animation_rating': 8.0,
+      'music_rating': 6.0,
+    });
+    for (final options in writes) {
+      expect(options.method, 'PUT');
+      expect(options.headers['authorization'], 'Bearer rift-user-token');
+    }
+    for (final (index, scope) in const [
+      'USER.WATCH_HISTORY.WATCHED',
+      'USER.WATCH_HISTORY.WATCHED',
+      'USER.MY_LIST.RATE',
+    ].indexed) {
+      final jwt = (writes[index].headers['integrity'] as String)
+          .substring(7)
+          .split('.');
+      final payload = jsonDecode(
+        utf8.decode(base64Url.decode(base64Url.normalize(jwt[1]))),
+      ) as Map;
+      expect(payload['scope'], scope);
+    }
+    await expectLater(
+      client.setEpisodeViewed('anime-42', 3, true, accountHash: 'other'),
+      throwsA(isA<AnimeRiftAuthenticationRequired>()),
+    );
+    expect(
+      () => client.rateAnime(
+        'anime-42',
+        general: -1,
+        story: 8,
+        characters: 8,
+        animation: 8,
+        music: 8,
+        accountHash: account,
+      ),
+      throwsArgumentError,
+    );
+    expect(writes, hasLength(3));
+  });
+
+  test(
+    'Rift history deletion uses record IDs and the two original PUT scopes',
+    () async {
+      final writes = <RequestOptions>[];
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: fixtureDio((options) {
+          if (options.uri.host.endsWith('googleapis.com')) {
+            return reply(options, <String, dynamic>{}, 400);
+          }
+          if (options.uri.path.endsWith('/auth/register/device')) {
+            return reply(options, {'sessionKey': 'fixture'}, 201);
+          }
+          if (options.uri.path.endsWith('/auth/sign-in/with-code')) {
+            return reply(options, {
+              'items': {
+                'profile': {'_id': 'rift-user'},
+                'token': 'rift-user-token',
+              },
+            });
+          }
+          writes.add(options);
+          return reply(options, const <String, dynamic>{}, 202);
+        }),
+      );
+      await client.signInWithCode('owner-issued-code');
+      final account = AnimeRiftLocalAccountScope.accountHash!;
+      await client.removeWatchHistoryRecord(
+        'history-row-12',
+        'anime-7',
+        accountHash: account,
+      );
+      await client.removeWatchHistoryMany([
+        'history-row-13',
+        'history-row-14',
+      ], accountHash: account);
+      expect(writes.map((request) => request.uri.path), [
+        '/api/v4/watch_history/clear/one',
+        '/api/v4/watch_history/clear/multi',
+      ]);
+      expect(writes[0].data, {
+        'id': 'history-row-12',
+        'animeId': 'anime-7',
+        'check_last_episode': true,
+      });
+      expect(writes[1].data, {
+        'ids': ['history-row-13', 'history-row-14'],
+      });
+      for (final (index, scope) in const [
+        'USER.WATCH_HISTORY.CLEAR_ONE',
+        'USER.WATCH_HISTORY.CLEAR_MANY',
+      ].indexed) {
+        final request = writes[index];
+        expect(request.method, 'PUT');
+        expect(request.headers['authorization'], 'Bearer rift-user-token');
+        final token = (request.headers['integrity'] as String)
+            .substring(7)
+            .split('.');
+        final payload = jsonDecode(
+          utf8.decode(base64Url.decode(base64Url.normalize(token[1]))),
+        ) as Map;
+        expect(payload['scope'], scope);
+      }
+      await expectLater(
+        client.removeWatchHistoryRecord(
+          'history-row-12',
+          'anime-7',
+          accountHash: 'another-account',
+        ),
+        throwsA(isA<AnimeRiftAuthenticationRequired>()),
+      );
+      expect(
+        () =>
+            client.removeWatchHistoryMany(['../unsafe'], accountHash: account),
+        throwsArgumentError,
+      );
+      expect(writes, hasLength(2));
+    },
+  );
+
   test('AOT overview items counters retain the seven recovered keys', () {
     expect(
       parseMyListOverviewCounts({

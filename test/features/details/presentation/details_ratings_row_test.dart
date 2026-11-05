@@ -9,6 +9,7 @@ import 'package:animewitcher/core/account/firestore_rest_client.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/services/notification_service.dart';
 import 'package:animewitcher/core/storage/secure_token_storage.dart';
+import 'package:animewitcher/core/storage/anime_rift_rating.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/core/theme/app_theme.dart';
 import 'package:animewitcher/features/comments/presentation/animewitcher_comments_screen.dart';
@@ -245,6 +246,54 @@ Map<String, String> _ratedSync({
 }
 
 void main() {
+  testWidgets(
+    'Rift rating editor preserves five independently selected scores',
+    (tester) async {
+      AnimeRiftRating? result;
+      final service = _FakeAccountService(signedIn: true);
+      await tester.pumpWidget(
+        _app(
+          service: service,
+          child: Builder(
+            builder: (context) => TextButton(
+              onPressed: () async => result = await showRiftRatingEditor(
+                context,
+                initial: const AnimeRiftRating(
+                  general: 8,
+                  story: 6,
+                  characters: 7,
+                  animation: 9,
+                  music: 5,
+                ),
+              ),
+              child: const Text('edit rift'),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('edit rift'));
+      await tester.pumpAndSettle();
+      expect(find.byType(Slider), findsNWidgets(5));
+      final slider = tester.widget<Slider>(
+        find.byKey(const ValueKey('rift-rating-0')),
+      );
+      slider.onChanged!(8.5);
+      await tester.pump();
+      await tester.tap(find.text('حفظ'));
+      await tester.pumpAndSettle();
+      expect(
+        result,
+        const AnimeRiftRating(
+          general: 8.5,
+          story: 6,
+          characters: 7,
+          animation: 9,
+          music: 5,
+        ),
+      );
+      expect(service.writes, isEmpty);
+    },
+  );
   testWidgets('Rift ratings row never reads or writes Witcher account rating', (
     tester,
   ) async {
@@ -257,7 +306,7 @@ void main() {
     );
     await tester.pump();
     expect(service.reads, isEmpty);
-    expect(find.byKey(kDetailsRatingsRateButtonKey), findsNothing);
+    expect(find.byKey(kDetailsRatingsRateButtonKey), findsOneWidget);
     await tester.tap(find.byKey(kDetailsRatingsReviewsButtonKey));
     await tester.pump();
     expect(service.reviewChecks, isEmpty);

@@ -309,6 +309,23 @@ class ProviderLocalHistory {
     );
   });
 
+  /// Imports only the episode number supplied by Rift's remote watch history.
+  /// The server response does not establish a playback position in seconds,
+  /// so never overwrite an existing local resume position or tracking URL.
+  Future<void> importRemoteEpisode(MultimediaItem item, int number) {
+    if (number <= 0 || number > 100000) {
+      throw ArgumentError.value(number, 'number');
+    }
+    return _write((data) {
+      final url = _mainUrl(item.url);
+      final remote = _entry(item, season: 1, episode: number);
+      final savedHistory = (data['history'] as Map)[url];
+      if (savedHistory == null) (data['history'] as Map)[url] = remote;
+      final savedContinue = (data['continue'] as Map)[url];
+      if (savedContinue == null) (data['continue'] as Map)[url] = remote;
+    });
+  }
+
   Future<void> saveProgress(
     MultimediaItem item,
     int position,
@@ -380,8 +397,17 @@ class ProviderLocalHistory {
           ],
   ]);
 
-  bool? isWatched(String mainUrl, Episode episode) =>
-      (_read()['watched'] as Map)[_watchedKey(mainUrl, episode)] as bool?;
+  String _watchedNumberKey(String mainUrl, int number) =>
+      jsonEncode([_mainUrl(mainUrl), 'number', number]);
+
+  bool? isWatched(String mainUrl, Episode episode) {
+    final rows = _read()['watched'] as Map;
+    if (providerId == animeRiftProviderId && episode.episode > 0) {
+      final byNumber = rows[_watchedNumberKey(mainUrl, episode.episode)];
+      if (byNumber is bool) return byNumber;
+    }
+    return rows[_watchedKey(mainUrl, episode)] as bool?;
+  }
 
   Future<void> setWatched(String mainUrl, Episode episode, bool watched) =>
       setManyWatched(mainUrl, [episode], watched);
@@ -393,8 +419,24 @@ class ProviderLocalHistory {
   ) => _write((data) {
     for (final episode in episodes) {
       (data['watched'] as Map)[_watchedKey(mainUrl, episode)] = watched;
+      if (providerId == animeRiftProviderId && episode.episode > 0) {
+        (data['watched'] as Map)[_watchedNumberKey(mainUrl, episode.episode)] =
+            watched;
+      }
     }
   });
+
+  /// A verified server snapshot may include explicit per-episode booleans.
+  /// Call only if the account has no pending local toggles for this title.
+  Future<void> importRemoteWatched(String mainUrl, Map<int, bool> states) =>
+      _write((data) {
+        final watched = data['watched'] as Map;
+        for (final entry in states.entries) {
+          if (entry.key > 0 && entry.key <= 100000) {
+            watched[_watchedNumberKey(mainUrl, entry.key)] = entry.value;
+          }
+        }
+      });
 
   Future<void> clearContinueWatching() => _write((data) {
     (data['continue'] as Map).clear();

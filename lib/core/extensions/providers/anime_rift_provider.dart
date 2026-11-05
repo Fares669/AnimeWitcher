@@ -3,6 +3,8 @@ import 'package:dio/dio.dart';
 import '../../domain/entity/multimedia_item.dart';
 import '../../storage/provider_local_library.dart';
 import '../../storage/anime_rift_cloud_sync.dart';
+import '../../storage/anime_rift_rating.dart';
+import '../../storage/anime_rift_account_scope.dart';
 import '../../storage/storage_service.dart';
 import '../base_provider.dart';
 import '../../utils/anime_rift_identity.dart';
@@ -73,6 +75,59 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
 
   Future<Map<String, dynamic>> fetchCloudFavorites() =>
       _api.fetchFavoriteAnime();
+
+  Future<Map<String, dynamic>> setCloudEpisodeWatched(
+    String id,
+    int number,
+    bool watched, {
+    required String accountHash,
+  }) => _api.setEpisodeViewed(id, number, watched, accountHash: accountHash);
+
+  Future<Map<String, dynamic>> setCloudRating(
+    String id,
+    AnimeRiftRating rating, {
+    required String accountHash,
+  }) => _api.rateAnime(
+    id,
+    general: rating.general,
+    story: rating.story,
+    characters: rating.characters,
+    animation: rating.animation,
+    music: rating.music,
+    accountHash: accountHash,
+  );
+
+  Future<AnimeRiftRating?> fetchCloudRating(String url) async {
+    if (!await restoreAccountSession()) return null;
+    final account = AnimeRiftLocalAccountScope.accountHash;
+    if (account == null) return null;
+    final response = await _api.fetchAnimeRating(
+      _catalogId(url),
+      accountHash: account,
+    );
+    if (AnimeRiftLocalAccountScope.accountHash != account) {
+      throw const AnimeRiftAuthenticationRequired();
+    }
+    return AnimeRiftRating.fromServer(response);
+  }
+
+  Future<Map<String, dynamic>> fetchCloudWatchHistory() =>
+      _api.fetchWatchHistoryFull();
+
+  Future<Map<String, dynamic>> clearCloudWatchHistoryRecord(
+    String recordId,
+    String animeId, {
+    required String accountHash,
+  }) => _api.removeWatchHistoryRecord(
+    recordId,
+    animeId,
+    accountHash: accountHash,
+  );
+
+  Future<Map<String, dynamic>> clearCloudWatchHistoryMany(
+    List<String> recordIds, {
+    required String accountHash,
+  }) => _api.removeWatchHistoryMany(recordIds, accountHash: accountHash);
 
   Future<bool> restoreAccountSession() async {
     final previous = _api.accountIdentity?.id;
