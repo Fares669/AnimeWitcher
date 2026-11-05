@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
@@ -10,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../network/stale_connection_retry.dart';
 import '../../storage/anime_rift_account_scope.dart';
 import 'anime_rift_device_descriptor.dart';
+import 'anime_rift_auth_diagnostic_log.dart';
 
 class AnimeRiftConfig {
   const AnimeRiftConfig({
@@ -35,16 +37,23 @@ class AnimeRiftConfig {
 }
 
 class AnimeRiftAccessUnavailable implements Exception {
-  const AnimeRiftAccessUnavailable({this.statusCode, this.stage, this.failure});
+  const AnimeRiftAccessUnavailable({
+    this.statusCode,
+    this.stage,
+    this.failure,
+    this.knownReason,
+  });
   final int? statusCode;
   final AnimeRiftRequestStage? stage;
   final AnimeRiftFailureKind? failure;
+  final AnimeRiftServerReason? knownReason;
 
   /// Only known operation labels and an HTTP status are displayed. Never a
   /// gateway response, URL, session token, or request headers.
   String get _safeDiagnostic {
     final operation = switch (stage) {
       AnimeRiftRequestStage.deviceRegistration => 'تسجيل الجهاز',
+      AnimeRiftRequestStage.codeSignIn => 'تسجيل الدخول بالرمز',
       AnimeRiftRequestStage.episodeSources => 'قائمة مصادر الحلقة',
       AnimeRiftRequestStage.sourceAvailability => 'صلاحية التشغيل أو التنزيل',
       AnimeRiftRequestStage.directLink => 'استخراج رابط الحلقة',
@@ -54,6 +63,12 @@ class AnimeRiftAccessUnavailable implements Exception {
     final details = <String>[
       if (operation != null) operation,
       if (statusCode != null) 'HTTP $statusCode',
+      if (knownReason != null)
+        switch (knownReason!) {
+          AnimeRiftServerReason.installSourceNotSupported =>
+            'مصدر التثبيت غير مدعوم',
+          AnimeRiftServerReason.invalidCode => 'رمز الدخول غير صالح',
+        },
       if (failure != null)
         switch (failure!) {
           AnimeRiftFailureKind.configuration => 'إعدادات الربط غير مكتملة',
@@ -71,6 +86,7 @@ class AnimeRiftAccessUnavailable implements Exception {
 
 enum AnimeRiftRequestStage {
   deviceRegistration,
+  codeSignIn,
   episodeSources,
   sourceAvailability,
   directLink,
@@ -78,6 +94,46 @@ enum AnimeRiftRequestStage {
 }
 
 enum AnimeRiftFailureKind { configuration, transport, invalidResponse }
+
+/// Only explicit server error *codes* found in the original APK are accepted.
+enum AnimeRiftServerReason { installSourceNotSupported, invalidCode }
+
+/// Allowlisted authentication diagnostics: no request data, tokens, user
+/// identifiers, installation IDs, raw exceptions, URLs or response bodies.
+enum AnimeRiftAuthEvent {
+  registrationStart,
+  registrationRejected,
+  compatibilityRetry,
+  compatibilityAccepted,
+  compatibilityRejected,
+  registrationFailed,
+  registrationAccepted,
+  codeSignInStart,
+  codeSignInRejected,
+  codeSignInAccepted,
+  codeSignInInvalidResponse,
+}
+
+class AnimeRiftAuthDiagnostic {
+  const AnimeRiftAuthDiagnostic({
+    required this.event,
+    this.statusCode,
+    this.failure,
+    this.knownReason,
+  });
+
+  final AnimeRiftAuthEvent event;
+  final int? statusCode;
+  final AnimeRiftFailureKind? failure;
+  final AnimeRiftServerReason? knownReason;
+
+  @override
+  String toString() =>
+      'AnimeRift auth: ${event.name}'
+      '${statusCode == null ? '' : ' HTTP $statusCode'}'
+      '${failure == null ? '' : ' ${failure!.name}'}'
+      '${knownReason == null ? '' : ' ${knownReason!.name}'}';
+}
 
 class AnimeRiftAuthenticationRequired extends AnimeRiftAccessUnavailable {
   const AnimeRiftAuthenticationRequired({super.statusCode});
@@ -176,10 +232,12 @@ class AnimeRiftApiClient {
     FlutterSecureStorage? secureStorage,
     Future<AnimeRiftDeviceDescriptor> Function(String legacyBuildId)?
     deviceDescriptorLoader,
+    void Function(AnimeRiftAuthDiagnostic diagnostic)? onAuthDiagnostic,
   }) : _dio = dio ?? createAnimeWitcherDio(),
        _secureStorage = secureStorage ?? _defaultSecureStorage,
        _loadDeviceDescriptor =
-           deviceDescriptorLoader ?? AnimeRiftDeviceDescriptor.detect;
+           deviceDescriptorLoader ?? AnimeRiftDeviceDescriptor.detect,
+       _onAuthDiagnostic = onAuthDiagnostic;
 
   final AnimeRiftConfig config;
   final Dio _dio;
@@ -187,6 +245,26 @@ class AnimeRiftApiClient {
   final Future<AnimeRiftDeviceDescriptor> Function(String legacyBuildId)
   _loadDeviceDescriptor;
   AnimeRiftDeviceDescriptor? _deviceDescriptor;
+  final void Function(AnimeRiftAuthDiagnostic diagnostic)? _onAuthDiagnostic;
+
+  void _authLog(
+    AnimeRiftAuthEvent event, {
+    int? statusCode,
+    AnimeRiftFailureKind? failure,
+    AnimeRiftServerReason? knownReason,
+  }) {
+    final diagnostic = AnimeRiftAuthDiagnostic(
+      event: event,
+      statusCode: statusCode,
+      failure: failure,
+      knownReason: knownReason,
+    );
+    // Safe for release logs: only enum labels and a numeric HTTP status.
+    developer.log(diagnostic.toString(), name: 'anime_rift.auth');
+    AnimeRiftAuthDiagnosticLog.shared.record(diagnostic);
+    _onAuthDiagnostic?.call(diagnostic);
+  }
+
   static const _identityKey = 'animerift.api.installation.v1';
   static const _sessionKey = 'animerift.user.session.v1';
   static const _defaultBase = 'https://gateway.embrassme.top/api/v4';
@@ -295,7 +373,11 @@ class AnimeRiftApiClient {
       if (status < 200 ||
           status >= 300 ||
           (expectedStatus != null && status != expectedStatus)) {
-        throw AnimeRiftAccessUnavailable(statusCode: status, stage: stage);
+        throw AnimeRiftAccessUnavailable(
+          statusCode: status,
+          stage: stage,
+          knownReason: _recognizedServerReason(response.data),
+        );
       }
       final dynamic value = response.data is String
           ? jsonDecode(response.data as String)
@@ -324,11 +406,38 @@ class AnimeRiftApiClient {
     }
   }
 
+  static AnimeRiftServerReason? _recognizedServerReason(Object? value) {
+    Object? response = value;
+    if (response is String) {
+      try {
+        response = jsonDecode(response);
+      } catch (_) {
+        return null;
+      }
+    }
+    if (response is! Map) return null;
+    final error = response['error'];
+    final codes = <Object?>[
+      response['code'],
+      response['errorCode'],
+      response['error_code'],
+      error is Map ? error['code'] : error,
+    ];
+    for (final code in codes) {
+      if (code == 'INSTALL_SOURCE_NOT_SUPPORTED') {
+        return AnimeRiftServerReason.installSourceNotSupported;
+      }
+      if (code == 'invalidCode') return AnimeRiftServerReason.invalidCode;
+    }
+    return null;
+  }
+
   static AnimeRiftRequestStage _requestStage(String url) {
     final path = Uri.tryParse(url)?.path;
     return switch (path) {
       '/api/v4/auth/register/device' =>
         AnimeRiftRequestStage.deviceRegistration,
+      '/api/v4/auth/sign-in/with-code' => AnimeRiftRequestStage.codeSignIn,
       '/api/v4/library/episode/sources' => AnimeRiftRequestStage.episodeSources,
       '/api/v4/library/episode/source/can_play' =>
         AnimeRiftRequestStage.sourceAvailability,
@@ -453,10 +562,72 @@ class AnimeRiftApiClient {
       // actions still surface the secure-storage failure to the user.
     }
     await _firebaseConfiguration();
-    // Read the actual Android/iOS platform information. The legacy synthetic
-    // Android descriptor remains in use only on other operating systems.
-    final device = await _loadDeviceDescriptor(_identity!['buildId']!);
-    _deviceDescriptor = device;
+    // Keep the same local deviceId/FID regardless of which descriptor is
+    // accepted, so signing in or resuming downloads cannot rotate ownership.
+    final native = await _loadDeviceDescriptor(_identity!['buildId']!);
+    _deviceDescriptor = native;
+    _authLog(AnimeRiftAuthEvent.registrationStart);
+    try {
+      await _registerDevice(native);
+      _authLog(AnimeRiftAuthEvent.registrationAccepted);
+    } on AnimeRiftAccessUnavailable catch (error) {
+      _authLog(
+        AnimeRiftAuthEvent.registrationRejected,
+        statusCode: error.statusCode,
+        failure: error.failure,
+        knownReason: error.knownReason,
+      );
+      if (native.os != 'ios' || !_canRetryAndroidCompatibility(error)) {
+        _authLog(
+          AnimeRiftAuthEvent.registrationFailed,
+          statusCode: error.statusCode,
+          failure: error.failure,
+          knownReason: error.knownReason,
+        );
+        rethrow;
+      }
+      // One bounded compatibility attempt. Never retry sign-in with the
+      // same one-time code: only the device registration is retried.
+      final compatible = AnimeRiftDeviceDescriptor.emulatedAndroid(
+        _identity!['buildId']!,
+      );
+      _deviceDescriptor = compatible;
+      _authLog(
+        AnimeRiftAuthEvent.compatibilityRetry,
+        statusCode: error.statusCode,
+      );
+      try {
+        await _registerDevice(compatible);
+        _authLog(AnimeRiftAuthEvent.compatibilityAccepted);
+      } on AnimeRiftAccessUnavailable catch (retryError) {
+        _deviceDescriptor = native;
+        _authLog(
+          AnimeRiftAuthEvent.compatibilityRejected,
+          statusCode: retryError.statusCode,
+          failure: retryError.failure,
+          knownReason: retryError.knownReason,
+        );
+        rethrow;
+      }
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_identityKey, jsonEncode(_identity));
+    _registered = true;
+  }
+
+  /// Retry only an explicit protocol/client-side rejection. Never fallback
+  /// for offline errors, server faults, authentication or rate limiting.
+  static bool _canRetryAndroidCompatibility(AnimeRiftAccessUnavailable error) {
+    final status = error.statusCode;
+    return error.stage == AnimeRiftRequestStage.deviceRegistration &&
+        status != null &&
+        status >= 400 &&
+        status < 500 &&
+        status != 401 &&
+        status != 429;
+  }
+
+  Future<void> _registerDevice(AnimeRiftDeviceDescriptor device) async {
     await _send(
       '$_base/auth/register/device',
       headers: _headers('USER.AUTH.DEVICE.REGISTER'),
@@ -474,9 +645,6 @@ class AnimeRiftApiClient {
         'install_mode': 2,
       },
     );
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_identityKey, jsonEncode(_identity));
-    _registered = true;
   }
 
   Future<void> _ensureReady() async {
@@ -590,19 +758,38 @@ class AnimeRiftApiClient {
       throw ArgumentError('Invalid Anime Rift sign-in code');
     }
     final epoch = ++_sessionEpoch;
+    _authLog(AnimeRiftAuthEvent.codeSignInStart);
     await _ensureReady();
     if (epoch != _sessionEpoch) throw const AnimeRiftAccessUnavailable();
-    final response = await _send(
-      '$_base/auth/sign-in/with-code',
-      headers: _headers('USER.AUTH.SIGN_IN_WITH_CODE', includeUserToken: false),
-      method: 'POST',
-      body: {'code': value},
-    );
+    late final Map<String, dynamic> response;
+    try {
+      response = await _send(
+        '$_base/auth/sign-in/with-code',
+        headers: _headers(
+          'USER.AUTH.SIGN_IN_WITH_CODE',
+          includeUserToken: false,
+        ),
+        method: 'POST',
+        body: {'code': value},
+      );
+    } on AnimeRiftAccessUnavailable catch (error) {
+      _authLog(
+        AnimeRiftAuthEvent.codeSignInRejected,
+        statusCode: error.statusCode,
+        failure: error.failure,
+        knownReason: error.knownReason,
+      );
+      rethrow;
+    }
     final items = response['items'];
     final profile = items is Map ? items['profile'] : null;
     final token = items is Map ? items['token'] : null;
     if (profile is! Map || token is! String || !_validAccessToken(token)) {
-      throw const AnimeRiftAccessUnavailable();
+      _authLog(AnimeRiftAuthEvent.codeSignInInvalidResponse);
+      throw const AnimeRiftAccessUnavailable(
+        stage: AnimeRiftRequestStage.codeSignIn,
+        failure: AnimeRiftFailureKind.invalidResponse,
+      );
     }
     // The verified sign-in contract guarantees a profile map, but has not
     // established a required field name for its stable identifier.
@@ -634,6 +821,7 @@ class AnimeRiftApiClient {
       return true;
     });
     if (!applied) throw const AnimeRiftAccessUnavailable();
+    _authLog(AnimeRiftAuthEvent.codeSignInAccepted);
   }
 
   Future<void> signOut() async {

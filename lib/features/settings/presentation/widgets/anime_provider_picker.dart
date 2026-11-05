@@ -264,13 +264,21 @@ class _AnimeRiftAccountTileState extends ConsumerState<_AnimeRiftAccountTile> {
                                 'تحقق من إعدادات حماية الجهاز ثم أعد المحاولة.';
                           });
                         }
+                      } on AnimeRiftAccessUnavailable catch (e) {
+                        if (dialogContext.mounted) {
+                          setDialogState(() {
+                            busy = false;
+                            // Only a sanitized stage/HTTP code, never credentials.
+                            error = e.toString();
+                          });
+                        }
                       } catch (_) {
                         if (dialogContext.mounted) {
                           setDialogState(() {
                             busy = false;
                             error =
-                                'تعذر ربط الحساب. تحقق من الرمز واتصال الشبكة '
-                                'ثم أعد المحاولة.';
+                                'تعذر ربط الحساب بسبب خطأ غير متوقع. '
+                                'تحقق من سجل AnimeRift ثم أعد المحاولة.';
                           });
                         }
                       }

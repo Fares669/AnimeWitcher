@@ -996,6 +996,7 @@ void main() {
         const AnimeRiftDeviceDescriptor(
           os: 'ios',
           osId: '26.1',
+          installSource: 'IS_INSTALLED_FROM_APP_STORE',
           details: {
             'model': 'iPhone 12 Pro Max',
             'device': 'iPhone13,4',
@@ -1044,6 +1045,258 @@ void main() {
               'changing the advertised model must not rotate session identity',
         );
       }
+    },
+  );
+
+  test(
+    'iOS App Store rejection retries legacy Android descriptor once',
+    () async {
+      final diagnostics = <AnimeRiftAuthDiagnostic>[];
+      final registers = <RequestOptions>[];
+      var signInCalls = 0;
+      final dio = fixtureDio((o) {
+        if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+        if (o.uri.path.endsWith('/auth/register/device')) {
+          registers.add(o);
+          return reply(
+            o,
+            registers.length == 1
+                ? {'error': 'INSTALL_SOURCE_NOT_SUPPORTED'}
+                : {'sessionKey': 'fixture'},
+            registers.length == 1 ? 422 : 201,
+          );
+        }
+        if (o.uri.path.endsWith('/auth/sign-in/with-code')) {
+          signInCalls++;
+          expect(o.headers['x-os'], 'android');
+          return reply(o, {
+            'items': {
+              'profile': {'_id': 'account-1'},
+              'token': 'secret-session-token',
+            },
+          });
+        }
+        return reply(o, {'items': []});
+      });
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: dio,
+        onAuthDiagnostic: diagnostics.add,
+        deviceDescriptorLoader: (_) async => const AnimeRiftDeviceDescriptor(
+          os: 'ios',
+          osId: '26.1',
+          installSource: 'IS_INSTALLED_FROM_APP_STORE',
+          details: {'model': 'iPhone 12 Pro Max'},
+        ),
+      );
+      await client.signInWithCode('secret-one-time-code');
+      expect(client.isAccountLinked, isTrue);
+      expect(signInCalls, 1);
+      expect(registers, hasLength(2));
+      final ios = registers.first;
+      final android = registers.last;
+      expect(ios.headers['x-os'], 'ios');
+      expect(
+        ios.headers['x-installation-source'],
+        'IS_INSTALLED_FROM_APP_STORE',
+      );
+      expect(
+        (ios.data as Map)['install_source'],
+        'IS_INSTALLED_FROM_APP_STORE',
+      );
+      expect(android.headers['x-os'], 'android');
+      expect(
+        (android.data as Map)['install_source'],
+        'IS_INSTALLED_FROM_PLAY_PACKAGE_INSTALLER',
+      );
+      expect((android.data as Map)['device_os'], 'android');
+      expect(
+        jsonDecode((android.data as Map)['device_info'] as String)['model'],
+        'Pixel 8 Pro',
+      );
+      expect((ios.data as Map)['deviceId'], (android.data as Map)['deviceId']);
+      expect(
+        (ios.data as Map)['firebaseInstallationId'],
+        (android.data as Map)['firebaseInstallationId'],
+      );
+      expect(
+        diagnostics.map((d) => d.event),
+        containsAllInOrder([
+          AnimeRiftAuthEvent.registrationStart,
+          AnimeRiftAuthEvent.registrationRejected,
+          AnimeRiftAuthEvent.compatibilityRetry,
+          AnimeRiftAuthEvent.compatibilityAccepted,
+          AnimeRiftAuthEvent.codeSignInAccepted,
+        ]),
+      );
+      expect(diagnostics.any((d) => d.statusCode == 422), isTrue);
+      expect(
+        diagnostics.any(
+          (d) =>
+              d.knownReason == AnimeRiftServerReason.installSourceNotSupported,
+        ),
+        isTrue,
+      );
+      expect(diagnostics.join(' | '), isNot(contains('secret-one-time-code')));
+      expect(diagnostics.join(' | '), isNot(contains('secret-session-token')));
+      expect(diagnostics.join(' | '), isNot(contains('not logged')));
+      expect(
+        diagnostics.join(' | '),
+        isNot(contains('firebaseInstallationId')),
+      );
+    },
+  );
+
+  test('native iOS success never retries Android', () async {
+    final registers = <RequestOptions>[];
+    final client = AnimeRiftApiClient(
+      config: fixtureConfig,
+      dio: fixtureDio((o) {
+        if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+        if (o.uri.path.endsWith('/auth/register/device')) {
+          registers.add(o);
+          return reply(o, {}, 201);
+        }
+        return reply(o, {'items': []});
+      }),
+      deviceDescriptorLoader: (_) async => const AnimeRiftDeviceDescriptor(
+        os: 'ios',
+        osId: '26.1',
+        installSource: 'IS_INSTALLED_FROM_APP_STORE',
+        details: {'model': 'iPhone 12 Pro Max'},
+      ),
+    );
+    await client.request('library/home_content', 'ANIME.LIBRARY.HOME_CONTENT');
+    expect(registers, hasLength(1));
+    expect(registers.single.headers['x-os'], 'ios');
+  });
+
+  test(
+    'fallback rejection surfaces its own status and cannot sign in',
+    () async {
+      final diagnostics = <AnimeRiftAuthDiagnostic>[];
+      var registrations = 0;
+      var signInCalls = 0;
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: fixtureDio((o) {
+          if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+          if (o.uri.path.endsWith('/auth/register/device')) {
+            registrations++;
+            return reply(o, {}, registrations == 1 ? 400 : 403);
+          }
+          if (o.uri.path.endsWith('/auth/sign-in/with-code')) signInCalls++;
+          return reply(o, {});
+        }),
+        onAuthDiagnostic: diagnostics.add,
+        deviceDescriptorLoader: (_) async => const AnimeRiftDeviceDescriptor(
+          os: 'ios',
+          osId: '26.1',
+          details: {'model': 'iPhone'},
+        ),
+      );
+      await expectLater(
+        client.signInWithCode('one-time-code'),
+        throwsA(
+          isA<AnimeRiftAccessUnavailable>()
+              .having((e) => e.statusCode, 'final HTTP status', 403)
+              .having(
+                (e) => e.stage,
+                'stage',
+                AnimeRiftRequestStage.deviceRegistration,
+              ),
+        ),
+      );
+      expect(registrations, 2);
+      expect(signInCalls, 0);
+      expect(client.isAccountLinked, isFalse);
+      expect(diagnostics.last.event, AnimeRiftAuthEvent.compatibilityRejected);
+      expect(diagnostics.last.statusCode, 403);
+    },
+  );
+
+  test(
+    'never retries Android on 503, 429, 401, or native Android rejection',
+    () async {
+      for (final (os, status) in [
+        ('ios', 503),
+        ('ios', 429),
+        ('ios', 401),
+        ('android', 400),
+      ]) {
+        var registrationCalls = 0;
+        final client = AnimeRiftApiClient(
+          config: fixtureConfig,
+          dio: fixtureDio((o) {
+            if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+            if (o.uri.path.endsWith('/auth/register/device')) {
+              registrationCalls++;
+              return reply(o, {}, status);
+            }
+            return reply(o, {});
+          }),
+          deviceDescriptorLoader: (_) async => AnimeRiftDeviceDescriptor(
+            os: os,
+            osId: 'fixture',
+            details: {'model': 'device'},
+          ),
+        );
+        await expectLater(
+          client.request('library/home_content', 'ANIME.LIBRARY.HOME_CONTENT'),
+          throwsA(
+            isA<AnimeRiftAccessUnavailable>().having(
+              (e) => e.statusCode,
+              'status',
+              status,
+            ),
+          ),
+        );
+        expect(registrationCalls, 1);
+      }
+    },
+  );
+
+  test(
+    'sign-in code HTTP errors are logged without retrying registration',
+    () async {
+      final diagnostics = <AnimeRiftAuthDiagnostic>[];
+      var registrations = 0;
+      var signInCalls = 0;
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: fixtureDio((o) {
+          if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+          if (o.uri.path.endsWith('/auth/register/device')) {
+            registrations++;
+            return reply(o, {}, 201);
+          }
+          if (o.uri.path.endsWith('/auth/sign-in/with-code')) {
+            signInCalls++;
+            return reply(o, {'error': 'private-body'}, 400);
+          }
+          return reply(o, {});
+        }),
+        onAuthDiagnostic: diagnostics.add,
+        deviceDescriptorLoader: (_) async => const AnimeRiftDeviceDescriptor(
+          os: 'ios',
+          osId: '26.1',
+          details: {'model': 'iPhone'},
+        ),
+      );
+      await expectLater(
+        client.signInWithCode('private-auth-code'),
+        throwsA(
+          isA<AnimeRiftAccessUnavailable>()
+              .having((e) => e.stage, 'stage', AnimeRiftRequestStage.codeSignIn)
+              .having((e) => e.statusCode, 'HTTP status', 400),
+        ),
+      );
+      expect(registrations, 1);
+      expect(signInCalls, 1);
+      expect(diagnostics.last.event, AnimeRiftAuthEvent.codeSignInRejected);
+      expect(diagnostics.last.statusCode, 400);
+      expect(diagnostics.join(' | '), isNot(contains('private-auth-code')));
+      expect(diagnostics.join(' | '), isNot(contains('private-body')));
     },
   );
 

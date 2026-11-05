@@ -92,7 +92,7 @@ void main() {
         identity.details.toString(),
         isNot(contains('private-vendor-identifier')),
       );
-      expect(identity.installSource, isNull);
+      expect(identity.installSource, 'IS_INSTALLED_FROM_APP_STORE');
     },
   );
 

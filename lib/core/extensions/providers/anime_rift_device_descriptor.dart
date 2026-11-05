@@ -76,8 +76,10 @@ class AnimeRiftDeviceDescriptor {
         'isPhysicalDevice': info.isPhysicalDevice,
         'machine': info.utsname.machine,
       },
-      // No invented App Store install-source enum: the iOS gateway contract
-      // has not been captured and installation source is not device identity.
+      // iOS App Store attribution requested by the user. This value is not
+      // confirmed by the Android APK enum, so the registration client has a
+      // bounded compatibility fallback if the server rejects the request.
+      installSource: 'IS_INSTALLED_FROM_APP_STORE',
     );
   }
 
