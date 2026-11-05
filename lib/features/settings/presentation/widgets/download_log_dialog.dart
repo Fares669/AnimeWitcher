@@ -42,7 +42,9 @@ class _DownloadLogDialogState extends ConsumerState<DownloadLogDialog> {
     final enabled = ref.watch(generalSettingsProvider).downloadDiagnosticLog;
     final log = ref.read(downloadDiagnosticsFileV2Provider);
     return AlertDialog(
-      title: Text(text('سجل التنزيلات (Log)', 'Download log')),
+      title: Text(
+        text('سجل التطبيق والتنزيلات (Log)', 'Application and download logs'),
+      ),
       content: SizedBox(
         width: 480,
         child: SingleChildScrollView(
@@ -52,7 +54,9 @@ class _DownloadLogDialogState extends ConsumerState<DownloadLogDialog> {
             children: [
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
-                title: Text(text('تفعيل التتبع', 'Enable tracing')),
+                title: Text(
+                  text('تفعيل تتبع التنزيلات', 'Enable download tracing'),
+                ),
                 value: enabled,
                 onChanged: _busy
                     ? null
@@ -64,8 +68,8 @@ class _DownloadLogDialogState extends ConsumerState<DownloadLogDialog> {
               ),
               Text(
                 text(
-                  'فعّل السجل ثم أعد حدوث المشكلة. تُحفظ أحداث مدير التنزيل V2 أولًا بأول في مجلد log بصيغة JSONL، دون الروابط أو بيانات الدخول. إيقاف التتبع لا يحذف الملفات الموجودة.',
-                  'Enable logging, then reproduce the issue. Download Manager V2 events are flushed to the log folder as JSONL without URLs or credentials. Disabling logging preserves existing files.',
+                  'سجل التطبيق app.jsonl يعمل تلقائيًا لتسجيل الأخطاء وبطء الطلبات والإطارات والتنقل والمزامنة. زر التتبع يتحكم بسجل التنزيلات فقط. كل الملفات في مجلد log بصيغة JSONL دون روابط أو كلمات مرور أو رموز دخول، مع حذف السجلات القديمة تلقائيًا عند تجاوز الحجم.',
+                  'App logging runs automatically; this switch controls download tracing only. JSONL files share the log folder, exclude URLs and credentials, and rotate automatically.',
                 ),
               ),
               if (_error != null || log.lastError != null)

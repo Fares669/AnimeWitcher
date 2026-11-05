@@ -7,6 +7,7 @@ import '../../storage/anime_rift_cloud_sync.dart';
 import '../../storage/anime_rift_rating.dart';
 import '../../storage/anime_rift_account_scope.dart';
 import '../../storage/storage_service.dart';
+import '../../services/app_diagnostics.dart';
 import '../base_provider.dart';
 import '../../utils/anime_rift_identity.dart';
 import 'anime_rift_api_client.dart';
@@ -190,22 +191,43 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     AnimeRiftCommentTarget target, {
     int page = 0,
   }) async {
-    final response = await _api.request(
-      'comment/all',
-      'COMMENTS.VIEW',
-      query: {
-        ...AnimeRiftApiClient.commentTargetFields(
-          animeId: target.animeId,
-          episodeId: target.episodeId,
-          parentId: target.parentId,
-        ),
-        'page': page < 0 ? 0 : page,
-        'level': target.parentId == null ? 0 : 1,
-        // The original /comment/all request always sends this query flag.
-        'canReply': '1',
-      },
-    );
-    return AnimeRiftCommentPage.fromJson(response);
+    final elapsed = Stopwatch()..start();
+    final scope = target.parentId != null
+        ? 'replies'
+        : target.episodeId != null
+        ? 'episode'
+        : 'anime';
+    try {
+      final response = await _api.request(
+        'comment/all',
+        'COMMENTS.VIEW',
+        query: {
+          ...AnimeRiftApiClient.commentTargetFields(
+            animeId: target.animeId,
+            episodeId: target.episodeId,
+            parentId: target.parentId,
+          ),
+          'page': page < 0 ? 0 : page,
+          'level': target.parentId == null ? 0 : 1,
+          'canReply': '1',
+        },
+      );
+      final result = AnimeRiftCommentPage.fromJson(response);
+      appDiagnostics.record('rift.comments.page', {
+        'status': scope,
+        'durationMs': elapsed.elapsedMilliseconds,
+        'count': result.items.length,
+        'result': result.hasMore,
+      });
+      return result;
+    } catch (error) {
+      appDiagnostics.record('rift.comments.failure', {
+        'status': scope,
+        'durationMs': elapsed.elapsedMilliseconds,
+        'errorType': error.runtimeType.toString(),
+      });
+      rethrow;
+    }
   }
 
   Future<void> publishComment(

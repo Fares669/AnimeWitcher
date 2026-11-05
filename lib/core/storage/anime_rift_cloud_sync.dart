@@ -468,6 +468,7 @@ class AnimeRiftCloudSync {
     final rows = _cloudRows(await _readWatchHistory());
     _requireAccount(account);
     final history = ProviderLocalHistory(storage, animeRiftProviderId);
+    final library = ProviderLocalLibrary(storage, animeRiftProviderId);
     final pending = AnimeRiftCloudPendingJournal(storage);
     final existing = history.history().map((entry) => entry.item.url).toSet();
     final clearPending = pending.hasPending(account, '', 'history-clear');
@@ -475,7 +476,15 @@ class AnimeRiftCloudSync {
     var changed = 0;
     var skipped = 0;
     for (final row in rows) {
-      final item = await _cloudAnime(row, hydrate, hydrated);
+      // Long watch histories must not open hundreds of details connections in
+      // sequence on startup. Show the server title, saved item or verified ID
+      // immediately; the detail screen resolves richer metadata on demand.
+      final item = await _cloudAnime(
+        row,
+        rows.length > 30 ? null : hydrate,
+        hydrated,
+        cached: library.item,
+      );
       _requireAccount(account);
       if (item == null) {
         skipped++;
@@ -621,7 +630,7 @@ class AnimeRiftCloudSync {
     }
     final watched = <(MultimediaItem, int?, Map<int, bool>?)>[];
     for (final row in remoteHistory) {
-      final item = await parse(row);
+      final item = await parse(row, largeList: remoteHistory.length > 30);
       if (item != null) {
         final raw = row is Map ? row['last_episode_viewed'] : null;
         final number = raw is num

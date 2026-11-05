@@ -216,6 +216,63 @@ void main() {
     },
   );
 
+  test('background pending sync never refreshes every Rift shelf', () async {
+    final storage = _MemoryStorage();
+    final rift = _FakeRift('alice');
+    await rift.restoreAccountSession();
+    final writer = _FakeVerifiedWriter();
+    final sync = AnimeRiftAutoSyncCoordinator(
+      storage: storage,
+      activeRift: () => rift,
+      verifiedWriter: writer,
+      debounce: const Duration(days: 1),
+    );
+    addTearDown(sync.dispose);
+    await sync.queueWatched(_title, 2, true);
+    await sync.flushPending();
+    expect(writer.sent.single.kind, 'watched');
+    expect(rift.pullCalls, 0);
+    expect(rift.selectedPulls, isEmpty);
+    expect(rift.historyPulls, 0);
+    await sync.refreshCategory(LibraryCategory.watching);
+    expect(rift.selectedPulls, [LibraryCategory.watching]);
+  });
+
+  test('a rejected Rift edit does not block later independent edits', () async {
+    final storage = _MemoryStorage();
+    final rift = _FakeRift('alice');
+    await rift.restoreAccountSession();
+    final sent = <String>[];
+    final writer = AnimeRiftCloudWriter((
+      id,
+      favorite, {
+      required accountHash,
+    }) async {
+      AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+      if (id == 'rejected') {
+        throw const AnimeRiftAccessUnavailable(statusCode: 422);
+      }
+      sent.add(id);
+      return <String, dynamic>{};
+    });
+    final sync = AnimeRiftAutoSyncCoordinator(
+      storage: storage,
+      activeRift: () => rift,
+      verifiedWriter: writer,
+      debounce: const Duration(days: 1),
+    );
+    addTearDown(sync.dispose);
+    await sync.queueFavorite('https://anime-rift.com/anime/rejected', true);
+    await sync.queueFavorite('https://anime-rift.com/anime/accepted', true);
+    await sync.flushPending();
+    expect(sent, ['accepted']);
+    final pending = AnimeRiftCloudPendingJournal(storage)
+        .pending(AnimeRiftLocalAccountScope.accountHash!);
+    expect(pending.map((c) => c.url), [
+      'https://anime-rift.com/anime/rejected',
+    ]);
+  });
+
   test(
     'Rift history remove/clear uses server record IDs and confirms deletion',
     () async {

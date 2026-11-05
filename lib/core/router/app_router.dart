@@ -24,6 +24,7 @@ import '../account/animewitcher_comment_models.dart'
     show animeWitcherNativeProviderId;
 import '../storage/provider_local_library.dart' show animeRiftProviderId;
 import '../utils/anime_rift_identity.dart';
+import '../services/app_diagnostics.dart';
 
 part 'app_router.g.dart';
 
@@ -483,6 +484,7 @@ GoRouter appRouter(Ref ref) {
   return GoRouter(
     initialLocation: initial,
     navigatorKey: rootNavigatorKey,
+    observers: [AppNavigationDiagnosticsObserver()],
     debugLogDiagnostics: kDebugMode,
     routes: $appRoutes,
   );

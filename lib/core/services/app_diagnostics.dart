@@ -1,0 +1,144 @@
+import 'dart:io';
+import 'dart:ui' show FrameTiming;
+
+import 'package:flutter/widgets.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+
+import 'download_v2/download_v2_diagnostics.dart';
+
+/// Bounded, always-on application telemetry written locally, never uploaded.
+/// Reuses the download logger's field allowlist: no exceptions, URLs, headers,
+/// account IDs or arbitrary text can enter app.jsonl.
+class AppDiagnostics {
+  AppDiagnostics({DownloadDiagnosticsV2? sink, int Function()? clockMillis})
+    : _sink =
+          sink ??
+          FileDownloadDiagnosticsV2(
+            enabled: () => true,
+            fileName: 'app.jsonl',
+            maxBytes: 2 * 1024 * 1024,
+            maxFiles: 3,
+            directoryProvider: () async {
+              final documents = await getApplicationDocumentsDirectory();
+              return Directory(p.join(documents.path, 'log'));
+            },
+            buildIdentityProvider: () async {
+              final info = await PackageInfo.fromPlatform();
+              return (version: info.version, buildNumber: info.buildNumber);
+            },
+          ),
+      _clockMillis =
+          clockMillis ?? (() => DateTime.now().millisecondsSinceEpoch);
+
+  final DownloadDiagnosticsV2 _sink;
+  final int Function() _clockMillis;
+  int? _lastJankAt;
+
+  /// Classify by fixed API route components only: IDs and query strings never
+  /// leave this function. Unknown routes are a single safe 'other' category.
+  static String safeRiftOperation(String url) {
+    final segments = Uri.tryParse(url)?.pathSegments;
+    if (segments == null ||
+        segments.length < 4 ||
+        segments[0] != 'api' ||
+        segments[1] != 'v4') {
+      return 'other';
+    }
+    const operations = <String, Set<String>>{
+      'library': {
+        'all',
+        'search',
+        'home_content',
+        'details',
+        'episodes',
+        'episode',
+        'upcoming',
+      },
+      'comment': {'all', 'create'},
+      'my_list': {'all', 'rate', 'bookmark', 'overview'},
+      'watch_history': {'latest', 'watch', 'mark', 'un_mark', 'clear'},
+      'favorite': {'anime'},
+      'auth': {'register', 'sign-in'},
+      'character': {'all', 'details'},
+    };
+    final category = segments[2];
+    final operation = segments[3];
+    return operations[category]?.contains(operation) == true
+        ? '$category.$operation'
+        : 'other';
+  }
+
+  static String safeScreen(String route) {
+    final lower = route.toLowerCase();
+    for (final section in const <String>[
+      'player',
+      'details',
+      'search',
+      'library',
+      'downloads',
+      'settings',
+      'manga',
+      'home',
+      'history',
+    ]) {
+      if (lower == section ||
+          lower.startsWith('/$section') ||
+          lower.startsWith('${section}route')) {
+        return section;
+      }
+    }
+    return 'other';
+  }
+
+  void record(String event, [Map<String, Object?> fields = const {}]) {
+    _sink.recordTransport(event, fields);
+  }
+
+  /// Only the exception's class name is stored. Error text/stack may contain
+  /// credentials, URLs and personal content, so they are never serialized.
+  void recordException(String source, Object error) {
+    record('app.exception', {
+      'reason': source,
+      'errorType': error.runtimeType.toString(),
+    });
+  }
+
+  void recordFrameDuration(Duration duration) {
+    final millis = duration.inMilliseconds;
+    if (millis < 120) return;
+    final now = _clockMillis();
+    if (_lastJankAt != null && now - _lastJankAt! < 10000) return;
+    _lastJankAt = now;
+    record('app.frame.jank', {
+      'durationMs': millis,
+      'memoryBytes': ProcessInfo.currentRss,
+    });
+  }
+
+  void recordFrameTimings(List<FrameTiming> timings) {
+    for (final frame in timings) {
+      recordFrameDuration(frame.totalSpan);
+    }
+  }
+}
+
+final appDiagnostics = AppDiagnostics();
+
+/// Route names are normalized before logging: no IDs or query parameters.
+class AppNavigationDiagnosticsObserver extends NavigatorObserver {
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    appDiagnostics.record('app.navigation.push', {
+      'status': AppDiagnostics.safeScreen(route.settings.name ?? ''),
+    });
+  }
+
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    appDiagnostics.record('app.navigation.pop', {
+      'status': AppDiagnostics.safeScreen(route.settings.name ?? ''),
+    });
+  }
+}

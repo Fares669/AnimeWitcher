@@ -347,6 +347,7 @@ const Set<String> _transportFieldAllowlist = <String>{
   'lastStatusAgeMs',
   'freeBytes',
   'httpStatus',
+  'memoryBytes',
   'count',
   'progress',
   'speedMBps',
@@ -377,6 +378,9 @@ Map<String, Object?> _sanitizeTransportFields(Map<String, Object?> fields) {
     if (!_transportFieldAllowlist.contains(entry.key)) continue;
     final value = entry.value;
     if (entry.key == 'retryable' && value is! bool) {
+      continue;
+    }
+    if (entry.key == 'memoryBytes' && (value is! int || value < 0)) {
       continue;
     }
     if (const {'retryAttempt', 'delayMs', 'callbackAttempt', 'currentAttempt', 'draining', 'verifiedBytes'}

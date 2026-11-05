@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter_displaymode/flutter_displaymode.dart';
 import 'package:flutter/gestures.dart' show kDoubleTapSlop, kDoubleTapTimeout;
@@ -41,9 +42,23 @@ import 'shared/widgets/loading_indicator.dart';
 import 'features/settings/presentation/general_settings_provider.dart';
 import 'core/account/account_providers.dart';
 import 'core/storage/anime_rift_auto_sync.dart';
+import 'core/services/app_diagnostics.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // No exception strings, stacks or user identifiers are written to disk.
+  final previousFlutterError = FlutterError.onError;
+  FlutterError.onError = (details) {
+    appDiagnostics.recordException('flutter', details.exception);
+    previousFlutterError?.call(details);
+  };
+  final previousPlatformError = ui.PlatformDispatcher.instance.onError;
+  ui.PlatformDispatcher.instance.onError = (error, stack) {
+    appDiagnostics.recordException('platform', error);
+    return previousPlatformError?.call(error, stack) ?? false;
+  };
+  WidgetsBinding.instance.addTimingsCallback(appDiagnostics.recordFrameTimings);
+  appDiagnostics.record('app.start');
   await AppProgressiveHeaderBackdrop.preload();
   MediaKit.ensureInitialized();
 
@@ -175,6 +190,8 @@ class _AppRootState extends State<AppRoot> {
 
   Future<void> _init() async {
     _storageService = StorageService();
+    final started = Stopwatch()..start();
+    appDiagnostics.record('app.storage.init.start');
     try {
       await Future.wait([
         _storageService.init(),
@@ -220,7 +237,11 @@ class _AppRootState extends State<AppRoot> {
           _initialized = true;
         });
       }
+      appDiagnostics.record('app.storage.init.complete', {
+        'durationMs': started.elapsedMilliseconds,
+      });
     } catch (e, stack) {
+      appDiagnostics.recordException('startup', e);
       if (mounted) {
         setState(() {
           _error = e;
@@ -290,6 +311,7 @@ class MyApp extends ConsumerStatefulWidget {
 class _MyAppState extends ConsumerState<MyApp>
     with WindowListener, WidgetsBindingObserver {
   DateTime? _lastForegroundAccountSyncAt;
+  DateTime? _lastForegroundRiftSyncAt;
 
   @override
   void initState() {
@@ -301,6 +323,7 @@ class _MyAppState extends ConsumerState<MyApp>
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      _lastForegroundRiftSyncAt = DateTime.now();
       unawaited(
         ref.read(riftAutoSyncProvider).refresh().catchError((Object error) {
           if (kDebugMode) {
@@ -314,6 +337,7 @@ class _MyAppState extends ConsumerState<MyApp>
         ref.read(downloadManagerV2Provider).initialize().catchError((
           Object error,
         ) {
+          appDiagnostics.recordException('downloadStartup', error);
           if (kDebugMode) {
             debugPrint(
               '[DownloadManagerV2] Startup initialization deferred: $error',
@@ -339,15 +363,30 @@ class _MyAppState extends ConsumerState<MyApp>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    appDiagnostics.record('app.lifecycle', {
+      'status': state.name,
+      'memoryBytes': ProcessInfo.currentRss,
+    });
     if (state != AppLifecycleState.resumed) return;
+    final resumedAt = DateTime.now();
+    // A quick task switch must not re-download every cloud shelf. The active
+    // list already refreshes itself on opening, like AnimeWitcher's library.
+    final fullRiftRefresh =
+        _lastForegroundRiftSyncAt == null ||
+        resumedAt.difference(_lastForegroundRiftSyncAt!) >=
+            const Duration(minutes: 5);
+    if (fullRiftRefresh) _lastForegroundRiftSyncAt = resumedAt;
     unawaited(
-      ref.read(riftAutoSyncProvider).refresh().catchError((Object error) {
-        if (kDebugMode) {
-          debugPrint(
-            '[AnimeRiftSync] Foreground deferred (${error.runtimeType})',
-          );
-        }
-      }),
+      (fullRiftRefresh
+              ? ref.read(riftAutoSyncProvider).refresh()
+              : ref.read(riftAutoSyncProvider).flushPending())
+          .catchError((Object error) {
+            if (kDebugMode) {
+              debugPrint(
+                '[AnimeRiftSync] Foreground deferred (${error.runtimeType})',
+              );
+            }
+          }),
     );
     final account = ref
         .read(animeWitcherAccountControllerProvider)
@@ -367,6 +406,7 @@ class _MyAppState extends ConsumerState<MyApp>
           .read(animeWitcherAccountControllerProvider.notifier)
           .syncNow()
           .catchError((Object error) {
+            appDiagnostics.recordException('nativeSync', error);
             if (kDebugMode) {
               debugPrint(
                 '[AnimeWitcherAccount] Foreground sync deferred: $error',

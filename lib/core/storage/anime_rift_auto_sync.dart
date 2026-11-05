@@ -9,6 +9,7 @@ import 'anime_rift_account_scope.dart';
 import 'anime_rift_cloud_pending.dart';
 import 'library_category.dart';
 import 'anime_rift_rating.dart';
+import '../services/app_diagnostics.dart';
 import 'storage_service.dart';
 
 /// A transport with a separately verified HTTP method, body and permissions.
@@ -354,6 +355,7 @@ class AnimeRiftAutoSyncCoordinator {
   Future<void>? _inFlight;
   Timer? _debounceTimer;
   bool _refreshRequested = false;
+  bool _pendingFlushRequested = false;
   bool _ratingFlushRequested = false;
   final Set<String> _ratingFlushUrls = {};
   final Set<LibraryCategory> _requestedCategories = {};
@@ -396,6 +398,16 @@ class AnimeRiftAutoSyncCoordinator {
     _debounceTimer?.cancel();
     _debounceTimer = null;
     _requestedHistory = true;
+    return _beginRefresh();
+  }
+
+  /// Flush local edits without fetching all cloud shelves. Frequent playback
+  /// progress and favorite/rating changes must never trigger a full import.
+  Future<void> flushPending() {
+    if (_disposed) return Future<void>.value();
+    _debounceTimer?.cancel();
+    _debounceTimer = null;
+    _pendingFlushRequested = true;
     return _beginRefresh();
   }
 
@@ -558,7 +570,7 @@ class AnimeRiftAutoSyncCoordinator {
     _debounceTimer = Timer(_debounce, () {
       _debounceTimer = null;
       unawaited(
-        refresh().catchError((Object error, StackTrace _) {
+        flushPending().catchError((Object error, StackTrace _) {
           _lastError = error;
           // Safe to retry on the next change or lifecycle event. Do not print
           // errors that might contain a signed URL or an account credential.
@@ -568,14 +580,19 @@ class AnimeRiftAutoSyncCoordinator {
   }
 
   Future<void> _drain() async {
+    final elapsed = Stopwatch()..start();
+    var passes = 0;
     try {
       do {
+        passes++;
         final all = _refreshRequested;
         final categories = Set<LibraryCategory>.of(_requestedCategories);
         final history = _requestedHistory;
+        final pendingOnly = _pendingFlushRequested;
         final ratings = _ratingFlushRequested;
         final ratingUrls = Set<String>.of(_ratingFlushUrls);
         _refreshRequested = false;
+        _pendingFlushRequested = false;
         _ratingFlushRequested = false;
         _ratingFlushUrls.clear();
         _requestedCategories.clear();
@@ -587,6 +604,21 @@ class AnimeRiftAutoSyncCoordinator {
         final account = AnimeRiftLocalAccountScope.accountHash;
         if (account == null) continue;
 
+        appDiagnostics.record('rift.sync.phase', {
+          'status': all
+              ? 'full'
+              : categories.isNotEmpty
+              ? 'shelf'
+              : history
+              ? 'history'
+              : ratings
+              ? 'rating'
+              : pendingOnly
+              ? 'pending'
+              : 'idle',
+          'count': passes,
+        });
+
         // A verified writer flushes pending local changes BEFORE pulling,
         // preventing an older server snapshot from overriding a recent edit.
         // Without one, retain every mutation durably and only perform GETs.
@@ -594,7 +626,7 @@ class AnimeRiftAutoSyncCoordinator {
           await _pushPending(
             account,
             ratingUrls: ratings && !all ? ratingUrls : null,
-            kinds: all
+            kinds: all || pendingOnly
                 ? null
                 : {
                     if (categories.isNotEmpty) ...['favorite', 'category'],
@@ -630,12 +662,22 @@ class AnimeRiftAutoSyncCoordinator {
         }
         _lastError = null;
       } while ((_refreshRequested ||
+              _pendingFlushRequested ||
               _ratingFlushRequested ||
               _requestedCategories.isNotEmpty ||
               _requestedHistory) &&
           !_disposed);
+      appDiagnostics.record('rift.sync.complete', {
+        'durationMs': elapsed.elapsedMilliseconds,
+        'count': passes,
+      });
     } catch (error) {
       _lastError = error;
+      appDiagnostics.record('rift.sync.error', {
+        'durationMs': elapsed.elapsedMilliseconds,
+        'count': passes,
+        'errorType': error.runtimeType.toString(),
+      });
       rethrow;
     }
   }
@@ -657,7 +699,30 @@ class AnimeRiftAutoSyncCoordinator {
           !ratingUrls.contains(change.url)) {
         continue;
       }
-      if (!await writer.write(account, change)) continue;
+      bool acknowledged;
+      try {
+        acknowledged = await writer.write(account, change);
+      } on AnimeRiftAccessUnavailable catch (error) {
+        AnimeRiftCloudPendingJournal.requireAccount(account);
+        final status = error.statusCode;
+        // A non-auth 4xx rejection belongs to this one queued edit. Preserve
+        // it for inspection/retry, but don't starve unrelated library edits.
+        // Offline, rate-limit and server outages still stop the batch.
+        if (status == null ||
+            status < 400 ||
+            status >= 500 ||
+            status == 401 ||
+            status == 403 ||
+            status == 429) {
+          rethrow;
+        }
+        appDiagnostics.record('rift.sync.writeRejected', {
+          'status': change.kind,
+          'httpStatus': status,
+        });
+        continue;
+      }
+      if (!acknowledged) continue;
       AnimeRiftCloudPendingJournal.requireAccount(account);
       await _journal.acknowledge(account, change);
     }

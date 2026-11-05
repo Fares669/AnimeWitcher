@@ -429,6 +429,43 @@ void main() {
   );
 
   test(
+    'large Rift watch history does not issue a detail request per item',
+    () async {
+      AnimeRiftLocalAccountScope.activate('alice');
+      final storage = _MemoryStorage();
+      final reader = _CloudReader()
+        ..history.addAll([
+          for (var n = 0; n < 35; n++)
+            {
+              'anime': {'_id': 'watched$n'},
+              'last_episode_viewed': n + 1,
+            },
+        ]);
+      var details = 0;
+      Future<MultimediaItem?> hydrate(String url) async {
+        details++;
+        return MultimediaItem(
+          title: 'Loaded',
+          posterUrl: '',
+          url: url,
+          provider: _rift,
+        );
+      }
+
+      final cloud = AnimeRiftCloudSync(reader);
+      final result = await cloud.importHistoryToLocal(
+        storage: storage,
+        hydrate: hydrate,
+      );
+      expect(result.history, 35);
+      expect(details, 0);
+      await cloud.importToLocal(storage: storage, hydrate: hydrate);
+      expect(details, 0);
+      expect(ProviderLocalHistory(storage, _rift).history(), hasLength(35));
+    },
+  );
+
+  test(
     'account switching during a Rift shelf GET cannot import foreign rows',
     () async {
       AnimeRiftLocalAccountScope.activate('alice');

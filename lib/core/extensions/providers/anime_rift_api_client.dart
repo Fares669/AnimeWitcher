@@ -9,6 +9,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../network/stale_connection_retry.dart';
+import '../../services/app_diagnostics.dart';
 import '../../storage/anime_rift_account_scope.dart';
 import 'anime_rift_auth_log_cleanup.dart';
 import 'anime_rift_device_descriptor.dart';
@@ -484,6 +485,8 @@ class AnimeRiftApiClient {
   }) async {
     final stage = _requestStage(url);
     final stopwatch = Stopwatch()..start();
+    int? completedStatus;
+    String? failedKind;
     try {
       final response = await _dio.request<dynamic>(
         url,
@@ -500,6 +503,7 @@ class AnimeRiftApiClient {
         ),
       );
       final status = response.statusCode ?? 0;
+      completedStatus = status;
       if (status < 200 ||
           status >= 300 ||
           (expectedStatus != null && status != expectedStatus)) {
@@ -530,6 +534,7 @@ class AnimeRiftApiClient {
       }
       return Map<String, dynamic>.from(value);
     } on DioException catch (e) {
+      failedKind = e.type.name;
       if (CancelToken.isCancel(e)) rethrow;
       throw AnimeRiftAccessUnavailable(
         statusCode: e.response?.statusCode,
@@ -549,12 +554,27 @@ class AnimeRiftApiClient {
             : _retryAfterSeconds(e.response!.headers),
       );
     } on AnimeRiftAccessUnavailable {
+      failedKind = 'access';
       rethrow;
     } catch (_) {
+      failedKind = 'invalidResponse';
       throw AnimeRiftAccessUnavailable(
         stage: stage,
         failure: AnimeRiftFailureKind.invalidResponse,
       );
+    } finally {
+      final elapsed = stopwatch.elapsedMilliseconds;
+      // Most successful network calls need no disk write. Slow calls and all
+      // failures are actionable, and include only numeric/safe route labels.
+      if (elapsed >= 900 || failedKind != null) {
+        appDiagnostics.record('rift.api.complete', {
+          'status': AppDiagnostics.safeRiftOperation(url),
+          'action': method,
+          'durationMs': elapsed,
+          if (completedStatus != null) 'httpStatus': completedStatus,
+          if (failedKind != null) 'errorType': failedKind,
+        });
+      }
     }
   }
 
