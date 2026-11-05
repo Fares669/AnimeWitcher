@@ -167,6 +167,22 @@ void main() {
     );
   });
 
+  test('Rift comments expose only the server account presence, never ID', () {
+    final guest = AnimeRiftCommentPage.fromJson({
+      'items': <Object>[],
+      'userId': null,
+    });
+    final signedIn = AnimeRiftCommentPage.fromJson({
+      'items': <Object>[],
+      'userId': 'sensitive-account-id',
+    });
+    final unspecified = AnimeRiftCommentPage.fromJson({'items': <Object>[]});
+    expect(guest.serverUserIdPresent, isFalse);
+    expect(signedIn.serverUserIdPresent, isTrue);
+    expect(unspecified.serverUserIdPresent, isNull);
+    expect(signedIn.toString(), isNot(contains('sensitive-account-id')));
+  });
+
   test(
     'Rift provider sends anime and episode comment scopes independently',
     () async {

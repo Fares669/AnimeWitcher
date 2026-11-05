@@ -35,6 +35,7 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
   bool _hasMore = false;
   bool _posting = false;
   bool _linked = false;
+  bool? _serverUserIdPresent;
   int _nextPage = 0;
   Object? _error;
 
@@ -72,13 +73,24 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
     });
     try {
       final linked = await widget.provider.restoreAccountSession();
-      final page = await widget.provider.loadComments(widget.target);
+      var page = await widget.provider.loadComments(widget.target);
+      var nextPage = 1;
+      // An empty first page can still advertise further results (e.g. after
+      // server-side moderation). The empty-list UI has no scroll controller,
+      // so it could never reach page 1 without this bounded advance.
+      while (page.items.isEmpty && page.hasMore && nextPage <= 3) {
+        page = await widget.provider.loadComments(
+          widget.target,
+          page: nextPage++,
+        );
+      }
       if (!mounted) return;
       setState(() {
         _linked = linked;
+        _serverUserIdPresent = page.serverUserIdPresent;
         _comments = page.items;
         _hasMore = page.hasMore;
-        _nextPage = 1;
+        _nextPage = nextPage;
         _initialLoading = false;
       });
     } catch (error) {
@@ -218,7 +230,11 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
             Padding(
               padding: const EdgeInsets.all(24),
               child: Text(
-                'لا توجد تعليقات منشورة بعد.',
+                _linked && _serverUserIdPresent == false
+                    ? 'أعاد خادم AnimeRift قائمة تعليقات فارغة دون معرّف مستخدم، رغم وجود حساب مرتبط في التطبيق. جرّب إعادة ربط حساب AnimeRift ثم حدّث الصفحة.'
+                    : !_linked
+                    ? 'لم يعرض خادم AnimeRift تعليقات للضيف. جرّب ربط حساب AnimeRift ثم حدّث الصفحة.'
+                    : 'لا توجد تعليقات منشورة بعد.',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,

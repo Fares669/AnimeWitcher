@@ -43,7 +43,87 @@ class FakeRiftCommentsProvider extends AnimeRiftProvider {
   }
 }
 
+class EmptyFirstPageRiftProvider extends FakeRiftCommentsProvider {
+  final requestedPages = <int>[];
+
+  @override
+  Future<AnimeRiftCommentPage> loadComments(
+    AnimeRiftCommentTarget target, {
+    int page = 0,
+  }) async {
+    requestedPages.add(page);
+    if (page == 0) {
+      return const AnimeRiftCommentPage(items: [], hasMore: true);
+    }
+    return const AnimeRiftCommentPage(
+      items: [
+        AnimeRiftComment(
+          id: 'visible-on-page-two',
+          text: 'تعليق في الصفحة التالية',
+          author: 'مستخدم',
+          likes: 0,
+          replies: 0,
+          spoiler: false,
+        ),
+      ],
+      hasMore: false,
+    );
+  }
+}
+
+class UnrecognizedRiftSessionProvider extends FakeRiftCommentsProvider {
+  @override
+  Future<AnimeRiftCommentPage> loadComments(
+    AnimeRiftCommentTarget target, {
+    int page = 0,
+  }) async => const AnimeRiftCommentPage(
+    items: [],
+    hasMore: false,
+    serverUserIdPresent: false,
+  );
+}
+
 void main() {
+  testWidgets(
+    'linked account is not reported as zero published comments when server omits user ID',
+    (tester) async {
+      final provider = UnrecognizedRiftSessionProvider();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AnimeRiftCommentsScreen(
+            provider: provider,
+            target: const AnimeRiftCommentTarget(
+              animeId: 'anime42',
+              title: 'أنمي',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('دون معرّف مستخدم'), findsOneWidget);
+      expect(find.text('لا توجد تعليقات منشورة بعد.'), findsNothing);
+    },
+  );
+
+  testWidgets('Rift does not hide later pages when the first is empty', (
+    tester,
+  ) async {
+    final provider = EmptyFirstPageRiftProvider();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AnimeRiftCommentsScreen(
+          provider: provider,
+          target: const AnimeRiftCommentTarget(
+            animeId: 'anime42',
+            title: 'أنمي',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('تعليق في الصفحة التالية'), findsOneWidget);
+    expect(provider.requestedPages, [0, 1]);
+  });
   testWidgets(
     'AnimeRift anime comments show remote list and post with own account',
     (tester) async {

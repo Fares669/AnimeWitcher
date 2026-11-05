@@ -222,6 +222,57 @@ void main() {
     },
   );
 
+  test(
+    'linked Rift comment reads use the user token, not guest headers',
+    () async {
+      final reads = <RequestOptions>[];
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: fixtureDio((options) {
+          if (options.uri.host.endsWith('googleapis.com')) {
+            return reply(options, <String, dynamic>{}, 400);
+          }
+          if (options.uri.path.endsWith('/auth/register/device')) {
+            return reply(options, {'sessionKey': 'fixture'}, 201);
+          }
+          if (options.uri.path.endsWith('/auth/sign-in/with-code')) {
+            return reply(options, {
+              'items': {
+                'profile': {'_id': 'rift-comment-user'},
+                'token': 'rift-comment-token',
+              },
+            });
+          }
+          reads.add(options);
+          return reply(options, {
+            'items': <Object>[],
+            'userId': 'rift-comment-user',
+          });
+        }),
+      );
+      await client.signInWithCode('test-only-code');
+      await client.request(
+        'comment/all',
+        'COMMENTS.VIEW',
+        query: {'animeId': 'anime42', 'page': 0},
+      );
+      expect(reads, hasLength(1));
+      expect(reads.single.method, 'GET');
+      expect(
+        reads.single.headers['authorization'],
+        'Bearer rift-comment-token',
+      );
+      expect(reads.single.queryParameters['animeId'], 'anime42');
+      final jwt = (reads.single.headers['integrity'] as String)
+          .substring(7)
+          .split('.');
+      final payload = jsonDecode(
+        utf8.decode(base64Url.decode(base64Url.normalize(jwt[1]))),
+      ) as Map;
+      expect(payload['scope'], 'COMMENTS.VIEW');
+    },
+  );
+
   test('Rift watched/unwatched and five-part rating send authenticated native PUTs', () async {
     final writes = <RequestOptions>[];
     final client = AnimeRiftApiClient(

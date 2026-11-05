@@ -218,6 +218,9 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
         'durationMs': elapsed.elapsedMilliseconds,
         'count': result.items.length,
         'result': result.hasMore,
+        'active': _api.isAccountLinked,
+        if (result.serverUserIdPresent case final account?)
+          'parentActive': account,
       });
       return result;
     } catch (error) {

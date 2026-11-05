@@ -112,9 +112,17 @@ class AnimeRiftComment {
 }
 
 class AnimeRiftCommentPage {
-  const AnimeRiftCommentPage({required this.items, required this.hasMore});
+  const AnimeRiftCommentPage({
+    required this.items,
+    required this.hasMore,
+    this.serverUserIdPresent,
+  });
   final List<AnimeRiftComment> items;
   final bool hasMore;
+
+  /// `userId` is included by /comment/all on the real gateway. Retain only
+  /// whether the server supplied an identity, never the user identifier.
+  final bool? serverUserIdPresent;
 
   factory AnimeRiftCommentPage.fromJson(Map<String, dynamic> data) {
     final envelope = data['items'];
@@ -137,6 +145,9 @@ class AnimeRiftCommentPage {
     }
     return AnimeRiftCommentPage(
       items: comments,
+      serverUserIdPresent: data.containsKey('userId')
+          ? data['userId'] != null && data['userId'] != ''
+          : null,
       hasMore:
           data['hasNext'] == true ||
           (envelope is Map && envelope['hasNext'] == true),
