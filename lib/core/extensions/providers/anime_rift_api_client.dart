@@ -305,11 +305,13 @@ class AnimeRiftApiClient {
     deviceDescriptorLoader,
     void Function(AnimeRiftAuthDiagnostic diagnostic)? onAuthDiagnostic,
     DateTime Function()? clock,
+    AppDiagnostics? diagnostics,
   }) : _dio = dio ?? createAnimeWitcherDio(),
        _secureStorage = secureStorage ?? _defaultSecureStorage,
        _loadDeviceDescriptor =
            deviceDescriptorLoader ?? AnimeRiftDeviceDescriptor.detect,
        _onAuthDiagnostic = onAuthDiagnostic,
+       _appDiagnostics = diagnostics ?? appDiagnostics,
        _clock = clock ?? DateTime.now {
     // Previous releases created this standalone auth diagnostic file. Remove
     // it after upgrading; never touch the separate download diagnostic logs.
@@ -323,6 +325,7 @@ class AnimeRiftApiClient {
   _loadDeviceDescriptor;
   AnimeRiftDeviceDescriptor? _deviceDescriptor;
   final void Function(AnimeRiftAuthDiagnostic diagnostic)? _onAuthDiagnostic;
+  final AppDiagnostics _appDiagnostics;
   final DateTime Function() _clock;
 
   void _authLog(
@@ -355,7 +358,24 @@ class AnimeRiftApiClient {
       attempt: attempt,
       cooldownSeconds: cooldownSeconds,
     );
-    // In-memory callback for tests only; never write authentication logs.
+    // Persist allowlisted auth metadata in the *same* app.jsonl under the
+    // shared download log folder. Never persist serverCode, messages, raw
+    // request/response data, user identity, bearer tokens or device IDs.
+    try {
+      _appDiagnostics.record('rift.auth.${event.name}', {
+        'status': knownReason?.name ?? failure?.name ?? 'ok',
+        if (statusCode != null) 'httpStatus': statusCode,
+        if (responseKind != null) 'reason': responseKind.name,
+        if (transportKind != null) 'errorType': transportKind.name,
+        if (durationMs != null) 'durationMs': durationMs,
+        if (mode != null) 'action': mode.name,
+        if (attempt != null) 'retryAttempt': attempt,
+        if (cooldownSeconds != null) 'delayMs': cooldownSeconds * 1000,
+        'result': edgeRejected,
+      });
+    } catch (_) {
+      // Diagnostics must never interrupt registration or its cooldown logic.
+    }
     _onAuthDiagnostic?.call(diagnostic);
   }
 
@@ -388,11 +408,11 @@ class AnimeRiftApiClient {
       'animerift.api.registration.android.v1';
   static const _registrationBlockedKey =
       'animerift.api.registration.blockedUntil.v1';
-  static const _registrationFailuresKey =
-      'animerift.api.registration.failures.v1';
   static const _registrationForcedAtKey =
       'animerift.api.registration.forcedAt.v1';
   static const _registrationReuseMs = 5 * 60 * 1000;
+  static const _registrationCooldownSeconds = 60;
+  static const _maxRegistrationCooldownMs = _registrationCooldownSeconds * 1000;
   // Serializes registrations from separate client instances in the same app.
   static Future<void> _registrationGate = Future<void>.value();
   static const _sessionKey = 'animerift.user.session.v1';
@@ -805,18 +825,6 @@ class AnimeRiftApiClient {
       ? AnimeRiftRegistrationMode.nativeIos
       : AnimeRiftRegistrationMode.nativeAndroid;
 
-  int _cooldownFor(AnimeRiftAccessUnavailable error, int failures) {
-    final base = switch (error.statusCode) {
-      429 => 1800,
-      403 => 600,
-      int status when status >= 400 && status < 500 => 300,
-      int status when status >= 500 => 90,
-      _ => 60,
-    };
-    final multiplier = 1 << (failures - 1).clamp(0, 2);
-    return max(min(base * multiplier, 3600), error.retryAfterSeconds ?? 0);
-  }
-
   Future<void> _initialize() async {
     await _loadIdentity();
     try {
@@ -831,7 +839,14 @@ class AnimeRiftApiClient {
     await _serializeRegistration(() async {
       final prefs = await SharedPreferences.getInstance();
       final nowMs = _clock().toUtc().millisecondsSinceEpoch;
-      final blockedUntil = prefs.getInt(_registrationBlockedKey) ?? 0;
+      var blockedUntil = prefs.getInt(_registrationBlockedKey) ?? 0;
+      // Old releases persisted exponential 10–60 minute cooldowns. Upgrade
+      // those entries in place so users do not keep seeing 17 minutes after
+      // installing the fix. The new deadline is never more than 60s away.
+      if (blockedUntil - nowMs > _maxRegistrationCooldownMs) {
+        blockedUntil = nowMs + _maxRegistrationCooldownMs;
+        await prefs.setInt(_registrationBlockedKey, blockedUntil);
+      }
       if (nowMs < blockedUntil) {
         final seconds = ((blockedUntil - nowMs) / 1000).ceil();
         _authLog(
@@ -853,9 +868,9 @@ class AnimeRiftApiClient {
         final forcedAt = prefs.getInt(_registrationForcedAtKey);
         if (forcedAt != null &&
             nowMs >= forcedAt &&
-            nowMs - forcedAt < _registrationReuseMs) {
-          final seconds = ((_registrationReuseMs - (nowMs - forcedAt)) / 1000)
-              .ceil();
+            nowMs - forcedAt < _maxRegistrationCooldownMs) {
+          final seconds =
+              ((_maxRegistrationCooldownMs - (nowMs - forcedAt)) / 1000).ceil();
           _authLog(
             AnimeRiftAuthEvent.registrationDeferred,
             failure: AnimeRiftFailureKind.registrationCooldown,
@@ -948,9 +963,9 @@ class AnimeRiftApiClient {
           }
         }
       } on AnimeRiftAccessUnavailable catch (error) {
-        final failures = (prefs.getInt(_registrationFailuresKey) ?? 0) + 1;
-        final seconds = _cooldownFor(error, failures);
-        await prefs.setInt(_registrationFailuresKey, failures);
+        // Only this client's local retry delay is capped. The server may
+        // enforce a separate restriction, including Retry-After > 60s.
+        const seconds = _registrationCooldownSeconds;
         await prefs.setInt(
           _registrationBlockedKey,
           _clock().toUtc().millisecondsSinceEpoch + seconds * 1000,
@@ -973,7 +988,6 @@ class AnimeRiftApiClient {
         mode == AnimeRiftRegistrationMode.androidFallback,
       );
       await prefs.remove(_registrationBlockedKey);
-      await prefs.remove(_registrationFailuresKey);
       await prefs.setString(_identityKey, jsonEncode(_identity));
     });
     _registered = true;

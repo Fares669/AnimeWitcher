@@ -5,10 +5,9 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 
 import '../../domain/entity/manga.dart';
+import '../application_log_directory.dart';
 import '../../account/account_providers.dart';
 import '../../extensions/base_provider.dart';
 import '../../extensions/extension_manager.dart';
@@ -82,10 +81,7 @@ final downloadDiagnosticsFileV2Provider = Provider<FileDownloadDiagnosticsV2>((
       final info = await PackageInfo.fromPlatform();
       return (version: info.version, buildNumber: info.buildNumber);
     },
-    directoryProvider: () async {
-      final documents = await getApplicationDocumentsDirectory();
-      return Directory(p.join(documents.path, 'log'));
-    },
+    directoryProvider: applicationLogDirectory,
   );
 });
 

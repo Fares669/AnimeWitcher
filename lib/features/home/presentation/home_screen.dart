@@ -32,6 +32,7 @@ import '../../../l10n/generated/app_localizations.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
 import 'package:animewitcher/core/router/app_router.dart';
 
 import '../../../shared/widgets/shimmer_placeholder.dart';
@@ -473,11 +474,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           slivers: [
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.all(24),
+                padding: EdgeInsets.fromLTRB(
+                  24,
+                  MediaQuery.viewPaddingOf(context).top + 80,
+                  24,
+                  24,
+                ),
                 child: Text(message, textAlign: TextAlign.center),
               ),
             ),
-            if (latestManga.isNotEmpty)
+            if (latestManga.isNotEmpty && activeProvider is! AnimeRiftProvider)
               SliverToBoxAdapter(
                 child: LatestMangaChaptersSection(
                   title: l10n.latestChapters,

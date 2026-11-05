@@ -134,6 +134,11 @@ class HomeData extends _$HomeData {
       return;
     }
 
+    // Rift is an anime-only selection. Its home must not display chapters
+    // fetched from AnimeWitcher when registration fails (or succeeds).
+    // Manga has its own tab/source and remains available there independently.
+    final includeMangaOnHome = activeProvider is! AnimeRiftProvider;
+
     // News and the new manga chapters are asked for alongside the anime
     // rows, but the page does not wait for them: it shows as soon as its own
     // rows are in, and the other two join it when they land. Held back, the
@@ -152,7 +157,7 @@ class HomeData extends _$HomeData {
             )
             .firstOrNull ??
         mangaProviders.firstOrNull;
-    final manga = mangaProvider == null
+    final manga = !includeMangaOnHome || mangaProvider == null
         ? Future<MangaLatestChapterPage?>.value(null)
         : _orNull(() => mangaProvider.getLatestMangaPage(limit: 20));
     MangaLatestChapterPage? mangaPage;
@@ -187,13 +192,17 @@ class HomeData extends _$HomeData {
       state = HomeSuccess(
         items,
         news: previous is HomeSuccess ? previous.news : const <NewsItem>[],
-        latestManga: mangaPage?.items ?? previousManga,
+        latestManga: includeMangaOnHome
+            ? mangaPage?.items ?? previousManga
+            : const <MangaLatestChapter>[],
       );
     } on AnimeRiftAccessUnavailable catch (error) {
       if (!ref.mounted || generation != _fetchGeneration) return;
       state = HomeProviderUnavailable(
         error.toString(),
-        latestManga: mangaPage?.items ?? previousManga,
+        latestManga: includeMangaOnHome
+            ? mangaPage?.items ?? previousManga
+            : const <MangaLatestChapter>[],
       );
       return;
     } catch (e) {

@@ -3,6 +3,8 @@ import 'dart:convert';
 
 import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart';
 import 'package:animewitcher/core/extensions/providers/anime_rift_device_descriptor.dart';
+import 'package:animewitcher/core/services/app_diagnostics.dart';
+import 'package:animewitcher/core/services/download_v2/download_v2_diagnostics.dart';
 import 'package:animewitcher/core/storage/anime_rift_account_scope.dart';
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
@@ -1399,6 +1401,7 @@ void main() {
     var time = DateTime.utc(2026, 11, 5, 12);
     var registrations = 0;
     final diagnostics = <AnimeRiftAuthDiagnostic>[];
+    final safeLog = InMemoryDownloadDiagnosticsV2();
     final dio = fixtureDio((options) {
       if (options.uri.host.endsWith('googleapis.com')) {
         return reply(options, {}, 400);
@@ -1424,6 +1427,7 @@ void main() {
       dio: dio,
       clock: () => time,
       onAuthDiagnostic: diagnostics.add,
+      diagnostics: AppDiagnostics(sink: safeLog),
       deviceDescriptorLoader: (_) async => const AnimeRiftDeviceDescriptor(
         os: 'ios',
         osId: 'private-id',
@@ -1456,14 +1460,29 @@ void main() {
     expect(rejected.edgeRejected, true);
     expect(rejected.mode, AnimeRiftRegistrationMode.nativeIos);
     expect(rejected.attempt, 1);
-    expect(diagnostics.last.cooldownSeconds, 600);
+    expect(diagnostics.last.cooldownSeconds, 60);
+    expect(
+      safeLog.transportEvents.any(
+        (event) =>
+            event['event'] == 'rift.auth.registrationFailed' &&
+            event['status'] == 'deviceSuspended' &&
+            event['httpStatus'] == 403 &&
+            event['delayMs'] == 60000,
+      ),
+      isTrue,
+      reason: 'safe registration failure diagnostics belong to app.jsonl',
+    );
+    expect(
+      safeLog.transportEvents.toString(),
+      isNot(contains('secret-server-payload')),
+    );
     expect(diagnostics.join(), isNot(contains('secret-server-payload')));
     expect(
       diagnostics.any((d) => d.event == AnimeRiftAuthEvent.compatibilityRetry),
       isFalse,
     );
 
-    time = time.add(const Duration(minutes: 1));
+    time = time.add(const Duration(seconds: 30));
     await expectLater(
       read(client()),
       throwsA(
@@ -1481,18 +1500,58 @@ void main() {
     );
     expect(diagnostics.last.event, AnimeRiftAuthEvent.registrationDeferred);
 
-    time = time.add(const Duration(minutes: 10));
+    time = time.add(const Duration(seconds: 31));
     await expectLater(
       read(client()),
       throwsA(isA<AnimeRiftAccessUnavailable>()),
     );
     expect(registrations, 2);
-    expect(
-      diagnostics.last.cooldownSeconds,
-      1200,
-      reason: 'repeated failures use exponential cooldown',
-    );
+    expect(diagnostics.last.cooldownSeconds, 60);
   });
+
+  test(
+    'old 17-minute persisted Rift cooldown is limited to one minute',
+    () async {
+      var now = DateTime.utc(2026, 11, 5, 12);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(
+        'animerift.api.registration.blockedUntil.v1',
+        now.millisecondsSinceEpoch + const Duration(minutes: 17).inMilliseconds,
+      );
+      var attempts = 0;
+      AnimeRiftApiClient client() => AnimeRiftApiClient(
+        config: fixtureConfig,
+        clock: () => now,
+        dio: fixtureDio((options) {
+          if (options.uri.host.endsWith('googleapis.com')) {
+            return reply(options, {}, 400);
+          }
+          if (options.uri.path.endsWith('/auth/register/device')) {
+            attempts++;
+            return reply(options, {'ok': true}, 201);
+          }
+          return reply(options, {'items': <Object>[]});
+        }),
+      );
+      await expectLater(
+        client().request('library/home_content', 'ANIME.LIBRARY.HOME_CONTENT'),
+        throwsA(
+          isA<AnimeRiftAccessUnavailable>().having(
+            (error) => error.retryAfterSeconds,
+            'retry after',
+            60,
+          ),
+        ),
+      );
+      expect(attempts, 0);
+      now = now.add(const Duration(seconds: 61));
+      await client().request(
+        'library/home_content',
+        'ANIME.LIBRARY.HOME_CONTENT',
+      );
+      expect(attempts, 1);
+    },
+  );
 
   test(
     'independent concurrent clients do not duplicate device registration',

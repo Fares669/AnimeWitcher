@@ -3,9 +3,8 @@ import 'dart:ui' show FrameTiming;
 
 import 'package:flutter/widgets.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 
+import 'application_log_directory.dart';
 import 'download_v2/download_v2_diagnostics.dart';
 
 /// Bounded, always-on application telemetry written locally, never uploaded.
@@ -20,10 +19,7 @@ class AppDiagnostics {
             fileName: 'app.jsonl',
             maxBytes: 2 * 1024 * 1024,
             maxFiles: 3,
-            directoryProvider: () async {
-              final documents = await getApplicationDocumentsDirectory();
-              return Directory(p.join(documents.path, 'log'));
-            },
+            directoryProvider: applicationLogDirectory,
             buildIdentityProvider: () async {
               final info = await PackageInfo.fromPlatform();
               return (version: info.version, buildNumber: info.buildNumber);
@@ -95,6 +91,12 @@ class AppDiagnostics {
   void record(String event, [Map<String, Object?> fields = const {}]) {
     _sink.recordTransport(event, fields);
   }
+
+  /// Flush diagnostics before the user exports the common log folder.
+  Future<void> flush() => switch (_sink) {
+    FileDownloadDiagnosticsV2 file => file.flush(),
+    _ => Future<void>.value(),
+  };
 
   /// Only the exception's class name is stored. Error text/stack may contain
   /// credentials, URLs and personal content, so they are never serialized.

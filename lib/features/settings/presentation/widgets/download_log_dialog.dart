@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/services/download_v2/download_v2_provider.dart';
+import '../../../../core/services/app_diagnostics.dart';
 import '../general_settings_provider.dart';
 
 class DownloadLogDialog extends ConsumerStatefulWidget {
@@ -103,7 +104,8 @@ class _DownloadLogDialogState extends ConsumerState<DownloadLogDialog> {
                 },
               ),
               FutureBuilder(
-                future: log.flush().then((_) => log.listFiles()),
+                future: Future.wait([log.flush(), appDiagnostics.flush()])
+                    .then((_) => log.listFiles()),
                 builder: (context, snapshot) {
                   if (snapshot.hasError) {
                     return Text(
@@ -126,6 +128,7 @@ class _DownloadLogDialogState extends ConsumerState<DownloadLogDialog> {
                                 ? null
                                 : () => run(() async {
                                     await log.flush();
+                                    await appDiagnostics.flush();
                                     final bytes = await file.readAsBytes();
                                     await FilePicker.saveFile(
                                       fileName: file.uri.pathSegments.last,
