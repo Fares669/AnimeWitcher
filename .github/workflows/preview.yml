@@ -33,11 +33,35 @@ on:
         required: true
         default: true
         type: boolean
+      diagnose_comments:
+        description: 'Run read-only AnimeRift comment contract probe'
+        required: false
+        default: false
+        type: boolean
 
   push:
     branches: [fix/download-manager-performance-v2, feat/animerift-multi-provider]
 
 jobs:
+  animerift_comment_probe:
+    name: AnimeRift comment contract (read-only)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnose_comments && inputs.branch == 'feat/animerift-multi-provider' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.branch }}
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+      - run: flutter pub get && dart run build_runner build --delete-conflicting-outputs
+      - name: Probe public comment listing without user credentials
+        env:
+          ANIMERIFT_FIREBASE_API_KEY: ${{ secrets.ANIMERIFT_FIREBASE_API_KEY }}
+          ANIMERIFT_FIREBASE_APP_ID: ${{ secrets.ANIMERIFT_FIREBASE_APP_ID }}
+          ANIMERIFT_JWT_SECRET: ${{ secrets.ANIMERIFT_JWT_SECRET }}
+        run: flutter test --no-pub test/integration/anime_rift_comments_live_test.dart --reporter expanded
+
   android:
     name: Android Build
     if: ${{ github.event.inputs.build_android == 'true' }}
