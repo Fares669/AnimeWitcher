@@ -529,7 +529,22 @@ class AnimeRiftAutoSyncCoordinator {
         // A verified writer flushes pending local changes BEFORE pulling,
         // preventing an older server snapshot from overriding a recent edit.
         // Without one, retain every mutation durably and only perform GETs.
-        if (_writer != null) await _pushPending(account);
+        if (_writer != null) {
+          await _pushPending(
+            account,
+            kinds: all
+                ? null
+                : {
+                    if (categories.isNotEmpty) ...['favorite', 'category'],
+                    if (history) ...[
+                      'history',
+                      'history-clear',
+                      'watched',
+                      'playback',
+                    ],
+                  },
+          );
+        }
         AnimeRiftCloudPendingJournal.requireAccount(account);
         if (all) {
           final result = await provider.importCloudLibrary(_storage);
@@ -561,13 +576,14 @@ class AnimeRiftAutoSyncCoordinator {
     }
   }
 
-  Future<void> _pushPending(String account) async {
+  Future<void> _pushPending(String account, {Set<String>? kinds}) async {
     final writer = _writer;
     if (writer == null) return;
     final changes = _journal.pending(account);
     for (final change in changes) {
       AnimeRiftCloudPendingJournal.requireAccount(account);
       if (change.kind == 'rescan') continue;
+      if (kinds != null && !kinds.contains(change.kind)) continue;
       if (!await writer.write(account, change)) continue;
       AnimeRiftCloudPendingJournal.requireAccount(account);
       await _journal.acknowledge(account, change);

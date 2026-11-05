@@ -95,6 +95,8 @@ class _FakeRift extends AnimeRiftProvider {
   int maxActivePulls = 0;
   Completer<void>? pullGate;
   int changed = 0;
+  final selectedPulls = <LibraryCategory>[];
+  int historyPulls = 0;
 
   @override
   Future<bool> restoreAccountSession() async {
@@ -121,6 +123,35 @@ class _FakeRift extends AnimeRiftProvider {
     } finally {
       activePulls--;
     }
+  }
+
+  @override
+  Future<AnimeRiftCloudImportResult> importCloudLibraryCategory(
+    StorageService storage,
+    LibraryCategory category,
+  ) async {
+    selectedPulls.add(category);
+    return const AnimeRiftCloudImportResult(
+      favorites: 0,
+      categories: 0,
+      history: 0,
+      skipped: 0,
+      changed: 0,
+    );
+  }
+
+  @override
+  Future<AnimeRiftCloudImportResult> importCloudHistory(
+    StorageService storage,
+  ) async {
+    historyPulls++;
+    return const AnimeRiftCloudImportResult(
+      favorites: 0,
+      categories: 0,
+      history: 0,
+      skipped: 0,
+      changed: 0,
+    );
   }
 }
 
@@ -157,6 +188,33 @@ class _FavoriteClient extends AnimeRiftApiClient {
 
 void main() {
   tearDown(AnimeRiftLocalAccountScope.reset);
+
+  test(
+    'Rift visible shelf flushes only library edits and history only on demand',
+    () async {
+      final storage = _MemoryStorage();
+      final provider = _FakeRift('alice');
+      await provider.restoreAccountSession();
+      final writer = _FakeVerifiedWriter();
+      final coordinator = AnimeRiftAutoSyncCoordinator(
+        storage: storage,
+        activeRift: () => provider,
+        verifiedWriter: writer,
+        debounce: const Duration(days: 1),
+      );
+      addTearDown(coordinator.dispose);
+      await coordinator.queueCategory(_title, LibraryCategory.completed);
+      await coordinator.queueHistory(_title, false);
+      await coordinator.refreshCategory(LibraryCategory.watching);
+      expect(provider.selectedPulls, [LibraryCategory.watching]);
+      expect(provider.pullCalls, 0);
+      expect(provider.historyPulls, 0);
+      expect(writer.sent.map((entry) => entry.kind), ['category']);
+      await coordinator.refreshHistory();
+      expect(provider.historyPulls, 1);
+      expect(writer.sent.map((entry) => entry.kind), ['category', 'history']);
+    },
+  );
 
   test(
     'Rift history remove/clear uses server record IDs and confirms deletion',
