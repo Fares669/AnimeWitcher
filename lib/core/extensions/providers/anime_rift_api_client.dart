@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:developer' as developer;
 import 'dart:io';
 import 'dart:math';
 
@@ -11,8 +10,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../network/stale_connection_retry.dart';
 import '../../storage/anime_rift_account_scope.dart';
+import 'anime_rift_auth_log_cleanup.dart';
 import 'anime_rift_device_descriptor.dart';
-import 'anime_rift_auth_diagnostic_log.dart';
 
 class AnimeRiftConfig {
   const AnimeRiftConfig({
@@ -142,8 +141,6 @@ enum AnimeRiftResponseKind { json, html, text, other }
 
 enum AnimeRiftRegistrationMode { nativeIos, nativeAndroid, androidFallback }
 
-enum AnimeRiftDeviceModelKind { iphone, pixel8Pro, other, unknown }
-
 /// Allowlisted authentication diagnostics: no request data, tokens, user
 /// identifiers, installation IDs, raw exceptions, URLs or response bodies.
 enum AnimeRiftAuthEvent {
@@ -160,9 +157,6 @@ enum AnimeRiftAuthEvent {
   codeSignInInvalidResponse,
   registrationReused,
   registrationDeferred,
-  sessionIdentityChecked,
-  serverSessionsChecked,
-  serverSessionsCheckFailed,
 }
 
 class AnimeRiftAuthDiagnostic {
@@ -180,14 +174,6 @@ class AnimeRiftAuthDiagnostic {
     this.mode,
     this.attempt,
     this.cooldownSeconds,
-    this.nativeMode,
-    this.localModel,
-    this.advertisedModel,
-    this.deviceMismatch,
-    this.serverSessionCount,
-    this.serverIphoneCount,
-    this.serverPixel8ProCount,
-    this.serverUnknownCount,
   });
 
   final AnimeRiftAuthEvent event;
@@ -203,14 +189,6 @@ class AnimeRiftAuthDiagnostic {
   final AnimeRiftRegistrationMode? mode;
   final int? attempt;
   final int? cooldownSeconds;
-  final AnimeRiftRegistrationMode? nativeMode;
-  final AnimeRiftDeviceModelKind? localModel;
-  final AnimeRiftDeviceModelKind? advertisedModel;
-  final bool? deviceMismatch;
-  final int? serverSessionCount;
-  final int? serverIphoneCount;
-  final int? serverPixel8ProCount;
-  final int? serverUnknownCount;
 
   @override
   String toString() =>
@@ -224,15 +202,7 @@ class AnimeRiftAuthDiagnostic {
       '${transportKind == null ? '' : ' transport=${transportKind!.name}'}'
       '${durationMs == null ? '' : ' durationMs=$durationMs'}'
       '${mode == null ? '' : ' mode=${mode!.name}'}'
-      '${cooldownSeconds == null ? '' : ' cooldownSeconds=$cooldownSeconds'}'
-      '${nativeMode == null ? '' : ' nativeMode=${nativeMode!.name}'}'
-      '${localModel == null ? '' : ' localModel=${localModel!.name}'}'
-      '${advertisedModel == null ? '' : ' advertisedModel=${advertisedModel!.name}'}'
-      '${deviceMismatch == null ? '' : ' deviceMismatch=$deviceMismatch'}'
-      '${serverSessionCount == null ? '' : ' serverSessions=$serverSessionCount'}'
-      '${serverIphoneCount == null ? '' : ' serverIphones=$serverIphoneCount'}'
-      '${serverPixel8ProCount == null ? '' : ' serverPixels=$serverPixel8ProCount'}'
-      '${serverUnknownCount == null ? '' : ' serverUnknown=$serverUnknownCount'}';
+      '${cooldownSeconds == null ? '' : ' cooldownSeconds=$cooldownSeconds'}';
 }
 
 class AnimeRiftAuthenticationRequired extends AnimeRiftAccessUnavailable {
@@ -339,7 +309,11 @@ class AnimeRiftApiClient {
        _loadDeviceDescriptor =
            deviceDescriptorLoader ?? AnimeRiftDeviceDescriptor.detect,
        _onAuthDiagnostic = onAuthDiagnostic,
-       _clock = clock ?? DateTime.now;
+       _clock = clock ?? DateTime.now {
+    // Previous releases created this standalone auth diagnostic file. Remove
+    // it after upgrading; never touch the separate download diagnostic logs.
+    removeLegacyAnimeRiftAuthLogOnce();
+  }
 
   final AnimeRiftConfig config;
   final Dio _dio;
@@ -347,8 +321,6 @@ class AnimeRiftApiClient {
   final Future<AnimeRiftDeviceDescriptor> Function(String legacyBuildId)
   _loadDeviceDescriptor;
   AnimeRiftDeviceDescriptor? _deviceDescriptor;
-  AnimeRiftDeviceDescriptor? _nativeDeviceDescriptor;
-  AnimeRiftRegistrationMode? _registrationMode;
   final void Function(AnimeRiftAuthDiagnostic diagnostic)? _onAuthDiagnostic;
   final DateTime Function() _clock;
 
@@ -366,14 +338,6 @@ class AnimeRiftApiClient {
     AnimeRiftRegistrationMode? mode,
     int? attempt,
     int? cooldownSeconds,
-    AnimeRiftRegistrationMode? nativeMode,
-    AnimeRiftDeviceModelKind? localModel,
-    AnimeRiftDeviceModelKind? advertisedModel,
-    bool? deviceMismatch,
-    int? serverSessionCount,
-    int? serverIphoneCount,
-    int? serverPixel8ProCount,
-    int? serverUnknownCount,
   }) {
     final diagnostic = AnimeRiftAuthDiagnostic(
       event: event,
@@ -389,18 +353,8 @@ class AnimeRiftApiClient {
       mode: mode,
       attempt: attempt,
       cooldownSeconds: cooldownSeconds,
-      nativeMode: nativeMode,
-      localModel: localModel,
-      advertisedModel: advertisedModel,
-      deviceMismatch: deviceMismatch,
-      serverSessionCount: serverSessionCount,
-      serverIphoneCount: serverIphoneCount,
-      serverPixel8ProCount: serverPixel8ProCount,
-      serverUnknownCount: serverUnknownCount,
     );
-    // Safe for release logs: only enum labels and a numeric HTTP status.
-    developer.log(diagnostic.toString(), name: 'anime_rift.auth');
-    AnimeRiftAuthDiagnosticLog.shared.record(diagnostic);
+    // In-memory callback for tests only; never write authentication logs.
     _onAuthDiagnostic?.call(diagnostic);
   }
 
@@ -527,7 +481,6 @@ class AnimeRiftApiClient {
     Map<String, dynamic>? query,
     CancelToken? cancelToken,
     int? expectedStatus,
-    Duration? diagnosticTimeout,
   }) async {
     final stage = _requestStage(url);
     final stopwatch = Stopwatch()..start();
@@ -541,8 +494,8 @@ class AnimeRiftApiClient {
           method: method,
           headers: headers,
           followRedirects: false,
-          sendTimeout: diagnosticTimeout ?? const Duration(seconds: 15),
-          receiveTimeout: diagnosticTimeout ?? const Duration(seconds: 30),
+          sendTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 30),
           validateStatus: (_) => true,
         ),
       );
@@ -827,127 +780,6 @@ class AnimeRiftApiClient {
       ? AnimeRiftRegistrationMode.nativeIos
       : AnimeRiftRegistrationMode.nativeAndroid;
 
-  /// Map device model data to a fixed category, never a name provided by the
-  /// device or gateway (which may include a user's personal device name).
-  static AnimeRiftDeviceModelKind _modelKind(Object? input) {
-    Object? data = input;
-    if (data is Map) {
-      data =
-          data['model'] ??
-          data['modelName'] ??
-          data['deviceName'] ??
-          data['deviceInfo'];
-    }
-    if (data is! String) return AnimeRiftDeviceModelKind.unknown;
-    final value = data.trim();
-    if (value.isEmpty || value.length > 4096) {
-      return AnimeRiftDeviceModelKind.unknown;
-    }
-    if (value.startsWith('{')) {
-      try {
-        return _modelKind(jsonDecode(value));
-      } catch (_) {
-        return AnimeRiftDeviceModelKind.unknown;
-      }
-    }
-    final lowered = value.toLowerCase();
-    if (lowered.contains('pixel 8 pro')) {
-      return AnimeRiftDeviceModelKind.pixel8Pro;
-    }
-    if (lowered.startsWith('iphone')) {
-      return AnimeRiftDeviceModelKind.iphone;
-    }
-    return AnimeRiftDeviceModelKind.other;
-  }
-
-  void _logDeviceIdentity() {
-    final native = _nativeDeviceDescriptor;
-    final advertised = _deviceDescriptor;
-    if (native == null || advertised == null) return;
-    _authLog(
-      AnimeRiftAuthEvent.sessionIdentityChecked,
-      nativeMode: _nativeMode(native),
-      mode: _registrationMode,
-      localModel: _modelKind(native.details),
-      advertisedModel: _modelKind(advertised.details),
-      deviceMismatch:
-          native.os != advertised.os ||
-          _modelKind(native.details) != _modelKind(advertised.details),
-    );
-  }
-
-  /// Original Rift AOT references GET /sessions/all with this scope. It is a
-  /// one-time read-only diagnostic after linking on iOS, not a registration
-  /// attempt. Aggregate only known device categories; no session IDs or names.
-  Future<void> _checkServerSessionModels(int epoch, String token) async {
-    if (_nativeDeviceDescriptor?.os != 'ios' ||
-        epoch != _sessionEpoch ||
-        _accessToken != token)
-      return;
-    try {
-      final data = await _send(
-        '$_base/sessions/all',
-        headers: _headers('SETTINGS.SESSIONS.ALL'),
-        diagnosticTimeout: const Duration(seconds: 5),
-      );
-      if (epoch != _sessionEpoch || _accessToken != token) return;
-      final value = data['items'];
-      final Object? records = value is List
-          ? value
-          : value is Map
-          ? value['items'] ?? value['sessions']
-          : data['sessions'];
-      if (records is! List) {
-        _authLog(
-          AnimeRiftAuthEvent.serverSessionsCheckFailed,
-          failure: AnimeRiftFailureKind.invalidResponse,
-        );
-        return;
-      }
-      var iphones = 0;
-      var pixels = 0;
-      var unknown = 0;
-      for (final record in records) {
-        final kind = record is Map
-            ? _modelKind(record['deviceInfo'])
-            : AnimeRiftDeviceModelKind.unknown;
-        switch (kind) {
-          case AnimeRiftDeviceModelKind.iphone:
-            iphones++;
-          case AnimeRiftDeviceModelKind.pixel8Pro:
-            pixels++;
-          case AnimeRiftDeviceModelKind.unknown:
-            unknown++;
-          case AnimeRiftDeviceModelKind.other:
-            break;
-        }
-      }
-      _authLog(
-        AnimeRiftAuthEvent.serverSessionsChecked,
-        serverSessionCount: records.length,
-        serverIphoneCount: iphones,
-        serverPixel8ProCount: pixels,
-        serverUnknownCount: unknown,
-      );
-    } on AnimeRiftAccessUnavailable catch (error) {
-      if (epoch != _sessionEpoch || _accessToken != token) return;
-      _authLog(
-        AnimeRiftAuthEvent.serverSessionsCheckFailed,
-        statusCode: error.statusCode,
-        failure: error.failure,
-        knownReason: error.knownReason,
-        serverCode: error.serverCode,
-        transportKind: error.transportKind,
-      );
-    } catch (_) {
-      if (epoch != _sessionEpoch || _accessToken != token) return;
-      _authLog(
-        AnimeRiftAuthEvent.serverSessionsCheckFailed,
-        failure: AnimeRiftFailureKind.invalidResponse,
-      );
-    }
-  }
-
   int _cooldownFor(AnimeRiftAccessUnavailable error, int failures) {
     final base = switch (error.statusCode) {
       429 => 1800,
@@ -970,7 +802,6 @@ class AnimeRiftApiClient {
     }
     await _firebaseConfiguration();
     final native = await _loadDeviceDescriptor(_identity!['buildId']!);
-    _nativeDeviceDescriptor = native;
     _deviceDescriptor = native;
     await _serializeRegistration(() async {
       final prefs = await SharedPreferences.getInstance();
@@ -1024,9 +855,6 @@ class AnimeRiftApiClient {
             _identity!['buildId']!,
           );
         }
-        _registrationMode = reusedFallback
-            ? AnimeRiftRegistrationMode.androidFallback
-            : _nativeMode(native);
         _authLog(
           AnimeRiftAuthEvent.registrationReused,
           mode: reusedFallback
@@ -1122,10 +950,8 @@ class AnimeRiftApiClient {
       await prefs.remove(_registrationBlockedKey);
       await prefs.remove(_registrationFailuresKey);
       await prefs.setString(_identityKey, jsonEncode(_identity));
-      _registrationMode = mode;
     });
     _registered = true;
-    _logDeviceIdentity();
   }
 
   /// Generic HTTP 403 can be a device ban: retrying it as Android doubles
@@ -1336,10 +1162,6 @@ class AnimeRiftApiClient {
     });
     if (!applied) throw const AnimeRiftAccessUnavailable();
     _authLog(AnimeRiftAuthEvent.codeSignInAccepted);
-    _logDeviceIdentity();
-    // A diagnostic failure never blocks a successful sign-in or alters the
-    // account session. It performs no registration or destructive operation.
-    unawaited(_checkServerSessionModels(epoch, token));
   }
 
   Future<void> signOut() async {
