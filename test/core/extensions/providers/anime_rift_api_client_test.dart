@@ -1053,6 +1053,7 @@ void main() {
         AnimeRiftDeviceDescriptor.emulatedAndroid('desktop-build'),
       ];
       for (final descriptor in profiles) {
+        SharedPreferences.setMockInitialValues({});
         final registeredIds = <String>[];
         final dio = fixtureDio((o) {
           if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
@@ -1084,12 +1085,10 @@ void main() {
             deviceDescriptorLoader: (_) async => descriptor,
           ).request('library/home_content', 'ANIME.LIBRARY.HOME_CONTENT');
         }
-        expect(registeredIds, hasLength(2));
         expect(
-          registeredIds.first,
-          registeredIds.last,
-          reason:
-              'changing the advertised model must not rotate session identity',
+          registeredIds,
+          hasLength(1),
+          reason: 'A second client must reuse a recent successful registration',
         );
       }
     },
@@ -1218,6 +1217,149 @@ void main() {
     expect(registers.single.headers['x-os'], 'ios');
   });
 
+  test('device suspension does not trigger Android fallback and cools down across restarts', () async {
+    var time = DateTime.utc(2026, 11, 5, 12);
+    var registrations = 0;
+    final diagnostics = <AnimeRiftAuthDiagnostic>[];
+    final dio = fixtureDio((options) {
+      if (options.uri.host.endsWith('googleapis.com')) {
+        return reply(options, {}, 400);
+      }
+      if (options.uri.path.endsWith('/auth/register/device')) {
+        registrations++;
+        return Response<dynamic>(
+          requestOptions: options,
+          statusCode: 403,
+          headers: Headers.fromMap({
+            'server': ['cloudflare'],
+          }),
+          data: {
+            'error': {'error_code': 'DEVICE_SUSPENDED'},
+            'message': 'Bearer secret-server-payload',
+          },
+        );
+      }
+      return reply(options, {});
+    });
+    AnimeRiftApiClient client() => AnimeRiftApiClient(
+      config: fixtureConfig,
+      dio: dio,
+      clock: () => time,
+      onAuthDiagnostic: diagnostics.add,
+      deviceDescriptorLoader: (_) async => const AnimeRiftDeviceDescriptor(
+        os: 'ios',
+        osId: 'private-id',
+        installSource: 'IS_INSTALLED_FROM_APP_STORE',
+        details: {'model': 'iPhone'},
+      ),
+    );
+    Future<void> read(AnimeRiftApiClient api) async {
+      await api.request('library/home_content', 'ANIME.LIBRARY.HOME_CONTENT');
+    }
+
+    await expectLater(
+      read(client()),
+      throwsA(
+        isA<AnimeRiftAccessUnavailable>()
+            .having((e) => e.statusCode, 'status', 403)
+            .having(
+              (e) => e.knownReason,
+              'code',
+              AnimeRiftServerReason.deviceSuspended,
+            ),
+      ),
+    );
+    expect(registrations, 1);
+    final rejected = diagnostics.firstWhere(
+      (d) => d.event == AnimeRiftAuthEvent.registrationRejected,
+    );
+    expect(rejected.serverCode, 'DEVICE_SUSPENDED');
+    expect(rejected.responseKind, AnimeRiftResponseKind.json);
+    expect(rejected.edgeRejected, true);
+    expect(rejected.mode, AnimeRiftRegistrationMode.nativeIos);
+    expect(rejected.attempt, 1);
+    expect(diagnostics.last.cooldownSeconds, 600);
+    expect(diagnostics.join(), isNot(contains('secret-server-payload')));
+    expect(
+      diagnostics.any((d) => d.event == AnimeRiftAuthEvent.compatibilityRetry),
+      isFalse,
+    );
+
+    time = time.add(const Duration(minutes: 1));
+    await expectLater(
+      read(client()),
+      throwsA(
+        isA<AnimeRiftAccessUnavailable>().having(
+          (e) => e.failure,
+          'failure',
+          AnimeRiftFailureKind.registrationCooldown,
+        ),
+      ),
+    );
+    expect(
+      registrations,
+      1,
+      reason: 'cold restart must not bypass persistent cooldown',
+    );
+    expect(diagnostics.last.event, AnimeRiftAuthEvent.registrationDeferred);
+
+    time = time.add(const Duration(minutes: 10));
+    await expectLater(
+      read(client()),
+      throwsA(isA<AnimeRiftAccessUnavailable>()),
+    );
+    expect(registrations, 2);
+    expect(
+      diagnostics.last.cooldownSeconds,
+      1200,
+      reason: 'repeated failures use exponential cooldown',
+    );
+  });
+
+  test(
+    'independent concurrent clients do not duplicate device registration',
+    () async {
+      final started = Completer<void>();
+      final release = Completer<void>();
+      final reused = <AnimeRiftAuthDiagnostic>[];
+      var registrations = 0;
+      final dio = fixtureDio((request) async {
+        if (request.uri.host.endsWith('googleapis.com')) {
+          return reply(request, {}, 400);
+        }
+        if (request.uri.path.endsWith('/auth/register/device')) {
+          registrations++;
+          if (!started.isCompleted) started.complete();
+          await release.future;
+          return reply(request, {'sessionKey': 'fixture'}, 201);
+        }
+        return reply(request, {'items': []});
+      });
+      final first = AnimeRiftApiClient(config: fixtureConfig, dio: dio);
+      final second = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: dio,
+        onAuthDiagnostic: reused.add,
+      );
+      final firstRequest = first.request(
+        'library/home_content',
+        'ANIME.LIBRARY.HOME_CONTENT',
+      );
+      await started.future;
+      final secondRequest = second.request(
+        'library/home_content',
+        'ANIME.LIBRARY.HOME_CONTENT',
+      );
+      release.complete();
+      await Future.wait([firstRequest, secondRequest]);
+      expect(registrations, 1);
+      expect(
+        reused.any((d) => d.event == AnimeRiftAuthEvent.registrationReused),
+        isTrue,
+      );
+    },
+  );
+
   test(
     'fallback rejection surfaces its own status and cannot sign in',
     () async {
@@ -1230,7 +1372,13 @@ void main() {
           if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
           if (o.uri.path.endsWith('/auth/register/device')) {
             registrations++;
-            return reply(o, {}, registrations == 1 ? 400 : 403);
+            return reply(
+              o,
+              registrations == 1
+                  ? {'error': 'INSTALL_SOURCE_NOT_SUPPORTED'}
+                  : {},
+              registrations == 1 ? 422 : 403,
+            );
           }
           if (o.uri.path.endsWith('/auth/sign-in/with-code')) signInCalls++;
           return reply(o, {});
@@ -1257,7 +1405,11 @@ void main() {
       expect(registrations, 2);
       expect(signInCalls, 0);
       expect(client.isAccountLinked, isFalse);
-      expect(diagnostics.last.event, AnimeRiftAuthEvent.compatibilityRejected);
+      expect(
+        diagnostics[diagnostics.length - 2].event,
+        AnimeRiftAuthEvent.compatibilityRejected,
+      );
+      expect(diagnostics.last.event, AnimeRiftAuthEvent.registrationFailed);
       expect(diagnostics.last.statusCode, 403);
     },
   );
@@ -1271,6 +1423,7 @@ void main() {
         ('ios', 401),
         ('android', 400),
       ]) {
+        SharedPreferences.setMockInitialValues({});
         var registrationCalls = 0;
         final client = AnimeRiftApiClient(
           config: fixtureConfig,
@@ -1363,6 +1516,7 @@ void main() {
         await AnimeRiftApiClient(
           config: fixtureConfig,
           dio: dio,
+          clock: () => DateTime.utc(2026, 11, 5, 11, i * 6),
         ).request('library/home_content', 'ANIME.LIBRARY.HOME_CONTENT');
       }
       expect(identities, hasLength(2));

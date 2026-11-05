@@ -63,7 +63,12 @@ class AnimeRiftDeviceDescriptor {
   static AnimeRiftDeviceDescriptor fromIos(IosDeviceInfo info) {
     return AnimeRiftDeviceDescriptor(
       os: 'ios',
-      osId: info.systemVersion,
+      // The iOS system version is shared by millions of devices and is not a
+      // device OS identity. Prefer Apple's vendor-scoped stable identifier;
+      // this affects only registration metadata, not our persisted deviceId.
+      osId: info.identifierForVendor?.isNotEmpty == true
+          ? info.identifierForVendor!
+          : info.utsname.release,
       details: {
         'model': info.modelName.isEmpty ? info.model : info.modelName,
         'brand': 'Apple',

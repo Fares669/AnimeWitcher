@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as developer;
+import 'dart:io';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
@@ -42,11 +43,25 @@ class AnimeRiftAccessUnavailable implements Exception {
     this.stage,
     this.failure,
     this.knownReason,
+    this.serverCode,
+    this.responseKind,
+    this.edgeRejected = false,
+    this.transportKind,
+    this.durationMs,
+    this.retryAfterSeconds,
   });
   final int? statusCode;
   final AnimeRiftRequestStage? stage;
   final AnimeRiftFailureKind? failure;
   final AnimeRiftServerReason? knownReason;
+
+  /// A restricted server error identifier, never a free-form server message.
+  final String? serverCode;
+  final AnimeRiftResponseKind? responseKind;
+  final bool edgeRejected;
+  final DioExceptionType? transportKind;
+  final int? durationMs;
+  final int? retryAfterSeconds;
 
   /// Only known operation labels and an HTTP status are displayed. Never a
   /// gateway response, URL, session token, or request headers.
@@ -68,13 +83,25 @@ class AnimeRiftAccessUnavailable implements Exception {
           AnimeRiftServerReason.installSourceNotSupported =>
             'مصدر التثبيت غير مدعوم',
           AnimeRiftServerReason.invalidCode => 'رمز الدخول غير صالح',
+          AnimeRiftServerReason.unsupportedPlatform => 'المنصة غير مدعومة',
+          AnimeRiftServerReason.deviceSuspended => 'الجهاز موقوف',
+          AnimeRiftServerReason.integrityVerificationFailed =>
+            'فشل التحقق من سلامة التطبيق',
+          AnimeRiftServerReason.accessDenied => 'الوصول مرفوض',
+          AnimeRiftServerReason.deviceSessionExpired =>
+            'انتهت صلاحية جلسة الجهاز',
         },
       if (failure != null)
         switch (failure!) {
           AnimeRiftFailureKind.configuration => 'إعدادات الربط غير مكتملة',
           AnimeRiftFailureKind.transport => 'تعذر الوصول إلى الشبكة',
           AnimeRiftFailureKind.invalidResponse => 'استجابة غير صالحة',
+          AnimeRiftFailureKind.registrationCooldown =>
+            'تم تأجيل تسجيل الجهاز لتجنب حظر السيرفر',
         },
+      if (retryAfterSeconds != null &&
+          failure == AnimeRiftFailureKind.registrationCooldown)
+        'أعد المحاولة بعد ${((retryAfterSeconds! + 59) ~/ 60)} دقيقة',
     ];
     return details.isEmpty ? '' : ' (${details.join('، ')})';
   }
@@ -93,10 +120,27 @@ enum AnimeRiftRequestStage {
   other,
 }
 
-enum AnimeRiftFailureKind { configuration, transport, invalidResponse }
+enum AnimeRiftFailureKind {
+  configuration,
+  transport,
+  invalidResponse,
+  registrationCooldown,
+}
 
 /// Only explicit server error *codes* found in the original APK are accepted.
-enum AnimeRiftServerReason { installSourceNotSupported, invalidCode }
+enum AnimeRiftServerReason {
+  installSourceNotSupported,
+  invalidCode,
+  unsupportedPlatform,
+  deviceSuspended,
+  integrityVerificationFailed,
+  accessDenied,
+  deviceSessionExpired,
+}
+
+enum AnimeRiftResponseKind { json, html, text, other }
+
+enum AnimeRiftRegistrationMode { nativeIos, nativeAndroid, androidFallback }
 
 /// Allowlisted authentication diagnostics: no request data, tokens, user
 /// identifiers, installation IDs, raw exceptions, URLs or response bodies.
@@ -112,6 +156,8 @@ enum AnimeRiftAuthEvent {
   codeSignInRejected,
   codeSignInAccepted,
   codeSignInInvalidResponse,
+  registrationReused,
+  registrationDeferred,
 }
 
 class AnimeRiftAuthDiagnostic {
@@ -120,19 +166,44 @@ class AnimeRiftAuthDiagnostic {
     this.statusCode,
     this.failure,
     this.knownReason,
+    this.serverCode,
+    this.responseKind,
+    this.edgeRejected = false,
+    this.transportKind,
+    this.durationMs,
+    this.retryAfterSeconds,
+    this.mode,
+    this.attempt,
+    this.cooldownSeconds,
   });
 
   final AnimeRiftAuthEvent event;
   final int? statusCode;
   final AnimeRiftFailureKind? failure;
   final AnimeRiftServerReason? knownReason;
+  final String? serverCode;
+  final AnimeRiftResponseKind? responseKind;
+  final bool edgeRejected;
+  final DioExceptionType? transportKind;
+  final int? durationMs;
+  final int? retryAfterSeconds;
+  final AnimeRiftRegistrationMode? mode;
+  final int? attempt;
+  final int? cooldownSeconds;
 
   @override
   String toString() =>
       'AnimeRift auth: ${event.name}'
       '${statusCode == null ? '' : ' HTTP $statusCode'}'
       '${failure == null ? '' : ' ${failure!.name}'}'
-      '${knownReason == null ? '' : ' ${knownReason!.name}'}';
+      '${knownReason == null ? '' : ' ${knownReason!.name}'}'
+      '${serverCode == null ? '' : ' serverCode=$serverCode'}'
+      '${responseKind == null ? '' : ' response=${responseKind!.name}'}'
+      '${edgeRejected ? ' edgeRejected' : ''}'
+      '${transportKind == null ? '' : ' transport=${transportKind!.name}'}'
+      '${durationMs == null ? '' : ' durationMs=$durationMs'}'
+      '${mode == null ? '' : ' mode=${mode!.name}'}'
+      '${cooldownSeconds == null ? '' : ' cooldownSeconds=$cooldownSeconds'}';
 }
 
 class AnimeRiftAuthenticationRequired extends AnimeRiftAccessUnavailable {
@@ -233,11 +304,13 @@ class AnimeRiftApiClient {
     Future<AnimeRiftDeviceDescriptor> Function(String legacyBuildId)?
     deviceDescriptorLoader,
     void Function(AnimeRiftAuthDiagnostic diagnostic)? onAuthDiagnostic,
+    DateTime Function()? clock,
   }) : _dio = dio ?? createAnimeWitcherDio(),
        _secureStorage = secureStorage ?? _defaultSecureStorage,
        _loadDeviceDescriptor =
            deviceDescriptorLoader ?? AnimeRiftDeviceDescriptor.detect,
-       _onAuthDiagnostic = onAuthDiagnostic;
+       _onAuthDiagnostic = onAuthDiagnostic,
+       _clock = clock ?? DateTime.now;
 
   final AnimeRiftConfig config;
   final Dio _dio;
@@ -246,18 +319,37 @@ class AnimeRiftApiClient {
   _loadDeviceDescriptor;
   AnimeRiftDeviceDescriptor? _deviceDescriptor;
   final void Function(AnimeRiftAuthDiagnostic diagnostic)? _onAuthDiagnostic;
+  final DateTime Function() _clock;
 
   void _authLog(
     AnimeRiftAuthEvent event, {
     int? statusCode,
     AnimeRiftFailureKind? failure,
     AnimeRiftServerReason? knownReason,
+    String? serverCode,
+    AnimeRiftResponseKind? responseKind,
+    bool edgeRejected = false,
+    DioExceptionType? transportKind,
+    int? durationMs,
+    int? retryAfterSeconds,
+    AnimeRiftRegistrationMode? mode,
+    int? attempt,
+    int? cooldownSeconds,
   }) {
     final diagnostic = AnimeRiftAuthDiagnostic(
       event: event,
       statusCode: statusCode,
       failure: failure,
       knownReason: knownReason,
+      serverCode: serverCode,
+      responseKind: responseKind,
+      edgeRejected: edgeRejected,
+      transportKind: transportKind,
+      durationMs: durationMs,
+      retryAfterSeconds: retryAfterSeconds,
+      mode: mode,
+      attempt: attempt,
+      cooldownSeconds: cooldownSeconds,
     );
     // Safe for release logs: only enum labels and a numeric HTTP status.
     developer.log(diagnostic.toString(), name: 'anime_rift.auth');
@@ -265,7 +357,42 @@ class AnimeRiftApiClient {
     _onAuthDiagnostic?.call(diagnostic);
   }
 
+  void _logRegistrationError(
+    AnimeRiftAuthEvent event,
+    AnimeRiftAccessUnavailable error, {
+    required AnimeRiftRegistrationMode mode,
+    required int attempt,
+    int? cooldownSeconds,
+  }) => _authLog(
+    event,
+    statusCode: error.statusCode,
+    failure: error.failure,
+    knownReason: error.knownReason,
+    serverCode: error.serverCode,
+    responseKind: error.responseKind,
+    edgeRejected: error.edgeRejected,
+    transportKind: error.transportKind,
+    durationMs: error.durationMs,
+    retryAfterSeconds: error.retryAfterSeconds,
+    mode: mode,
+    attempt: attempt,
+    cooldownSeconds: cooldownSeconds,
+  );
+
   static const _identityKey = 'animerift.api.installation.v1';
+  static const _registrationSuccessKey =
+      'animerift.api.registration.successAt.v1';
+  static const _registrationAndroidKey =
+      'animerift.api.registration.android.v1';
+  static const _registrationBlockedKey =
+      'animerift.api.registration.blockedUntil.v1';
+  static const _registrationFailuresKey =
+      'animerift.api.registration.failures.v1';
+  static const _registrationForcedAtKey =
+      'animerift.api.registration.forcedAt.v1';
+  static const _registrationReuseMs = 5 * 60 * 1000;
+  // Serializes registrations from separate client instances in the same app.
+  static Future<void> _registrationGate = Future<void>.value();
   static const _sessionKey = 'animerift.user.session.v1';
   static const _defaultBase = 'https://gateway.embrassme.top/api/v4';
   static const _defaultSecureStorage = FlutterSecureStorage(
@@ -296,6 +423,7 @@ class AnimeRiftApiClient {
   bool _sessionRestoreAttempted = false;
   Future<void>? _initializing;
   bool _registered = false;
+  bool _forceRegistration = false;
   bool get isConfigured => config.isConfigured;
   bool get isAccountLinked => _accessToken != null;
   AnimeRiftAccountIdentity? get accountIdentity => _accountIdentity;
@@ -354,6 +482,7 @@ class AnimeRiftApiClient {
     int? expectedStatus,
   }) async {
     final stage = _requestStage(url);
+    final stopwatch = Stopwatch()..start();
     try {
       final response = await _dio.request<dynamic>(
         url,
@@ -377,6 +506,11 @@ class AnimeRiftApiClient {
           statusCode: status,
           stage: stage,
           knownReason: _recognizedServerReason(response.data),
+          serverCode: _serverErrorCode(response.data),
+          responseKind: _responseKind(response.data),
+          edgeRejected: _isEdgeRejected(response.headers),
+          durationMs: stopwatch.elapsedMilliseconds,
+          retryAfterSeconds: _retryAfterSeconds(response.headers),
         );
       }
       final dynamic value = response.data is String
@@ -395,6 +529,18 @@ class AnimeRiftApiClient {
         statusCode: e.response?.statusCode,
         stage: stage,
         failure: e.response == null ? AnimeRiftFailureKind.transport : null,
+        knownReason: _recognizedServerReason(e.response?.data),
+        serverCode: _serverErrorCode(e.response?.data),
+        responseKind: e.response == null
+            ? null
+            : _responseKind(e.response?.data),
+        edgeRejected:
+            e.response != null && _isEdgeRejected(e.response!.headers),
+        transportKind: e.type,
+        durationMs: stopwatch.elapsedMilliseconds,
+        retryAfterSeconds: e.response == null
+            ? null
+            : _retryAfterSeconds(e.response!.headers),
       );
     } on AnimeRiftAccessUnavailable {
       rethrow;
@@ -407,6 +553,24 @@ class AnimeRiftApiClient {
   }
 
   static AnimeRiftServerReason? _recognizedServerReason(Object? value) {
+    final code = _serverErrorCode(value);
+    return switch (code) {
+      'INSTALL_SOURCE_NOT_SUPPORTED' =>
+        AnimeRiftServerReason.installSourceNotSupported,
+      'UNSUPPORTED_PLATFORM' => AnimeRiftServerReason.unsupportedPlatform,
+      'DEVICE_SUSPENDED' => AnimeRiftServerReason.deviceSuspended,
+      'INTEGRITY_VERIFICATION_FAILED' =>
+        AnimeRiftServerReason.integrityVerificationFailed,
+      'ACCESS_DENIED' => AnimeRiftServerReason.accessDenied,
+      'DEVICE_SESSION_EXPIRED' => AnimeRiftServerReason.deviceSessionExpired,
+      'invalidCode' => AnimeRiftServerReason.invalidCode,
+      _ => null,
+    };
+  }
+
+  /// Accept a short error *identifier* only; never persist response messages,
+  /// headers, raw bodies, arbitrary IDs or diagnostic traces.
+  static String? _serverErrorCode(Object? value) {
     Object? response = value;
     if (response is String) {
       try {
@@ -422,14 +586,57 @@ class AnimeRiftApiClient {
       response['errorCode'],
       response['error_code'],
       error is Map ? error['code'] : error,
+      if (error is Map) error['errorCode'],
+      if (error is Map) error['error_code'],
     ];
-    for (final code in codes) {
-      if (code == 'INSTALL_SOURCE_NOT_SUPPORTED') {
-        return AnimeRiftServerReason.installSourceNotSupported;
+    for (final candidate in codes) {
+      if (candidate == 'invalidCode') return 'invalidCode';
+      if (candidate is! String) continue;
+      final code = candidate.trim();
+      // A secret (JWT, token, arbitrary message) must not become a log entry.
+      if (code.length < 3 ||
+          code.length > 64 ||
+          !RegExp(r'^[A-Z][A-Z0-9_]*$').hasMatch(code) ||
+          !code.contains('_') ||
+          RegExp(r'TOKEN|PASSWORD|SECRET|API_KEY|JWT|BEARER|AUTHORIZATION')
+              .hasMatch(code)) {
+        continue;
       }
-      if (code == 'invalidCode') return AnimeRiftServerReason.invalidCode;
+      return code;
     }
     return null;
+  }
+
+  static AnimeRiftResponseKind _responseKind(Object? response) {
+    if (response is Map) return AnimeRiftResponseKind.json;
+    if (response is String) {
+      final text = response.trimLeft();
+      if (text.startsWith('<!DOCTYPE') ||
+          text.startsWith('<html') ||
+          text.startsWith('<HTML'))
+        return AnimeRiftResponseKind.html;
+      if (text.startsWith('{')) return AnimeRiftResponseKind.json;
+      return AnimeRiftResponseKind.text;
+    }
+    return AnimeRiftResponseKind.other;
+  }
+
+  static bool _isEdgeRejected(Headers headers) =>
+      (headers.value('server') ?? '').toLowerCase() == 'cloudflare';
+
+  int? _retryAfterSeconds(Headers headers) {
+    final value = headers.value('retry-after')?.trim();
+    if (value == null || value.length > 80) return null;
+    final seconds = int.tryParse(value);
+    if (seconds != null) return seconds.clamp(0, 86400);
+    DateTime? date;
+    try {
+      date = HttpDate.parse(value);
+    } on FormatException {
+      // HTTP Retry-After permits either seconds or an RFC 7231 date.
+    }
+    if (date == null) return null;
+    return (date.difference(_clock().toUtc()).inSeconds).clamp(0, 86400);
   }
 
   static AnimeRiftRequestStage _requestStage(String url) {
@@ -553,6 +760,37 @@ class AnimeRiftApiClient {
     };
   }
 
+  /// Prevent separate provider instances from performing overlapping register
+  /// requests, even if they initialize on the same frame.
+  static Future<T> _serializeRegistration<T>(Future<T> Function() task) async {
+    final preceding = _registrationGate;
+    final done = Completer<void>();
+    _registrationGate = done.future;
+    await preceding;
+    try {
+      return await task();
+    } finally {
+      done.complete();
+    }
+  }
+
+  static AnimeRiftRegistrationMode _nativeMode(AnimeRiftDeviceDescriptor d) =>
+      d.os == 'ios'
+      ? AnimeRiftRegistrationMode.nativeIos
+      : AnimeRiftRegistrationMode.nativeAndroid;
+
+  int _cooldownFor(AnimeRiftAccessUnavailable error, int failures) {
+    final base = switch (error.statusCode) {
+      429 => 1800,
+      403 => 600,
+      int status when status >= 400 && status < 500 => 300,
+      int status when status >= 500 => 90,
+      _ => 60,
+    };
+    final multiplier = 1 << (failures - 1).clamp(0, 2);
+    return max(min(base * multiplier, 3600), error.retryAfterSeconds ?? 0);
+  }
+
   Future<void> _initialize() async {
     await _loadIdentity();
     try {
@@ -562,69 +800,170 @@ class AnimeRiftApiClient {
       // actions still surface the secure-storage failure to the user.
     }
     await _firebaseConfiguration();
-    // Keep the same local deviceId/FID regardless of which descriptor is
-    // accepted, so signing in or resuming downloads cannot rotate ownership.
     final native = await _loadDeviceDescriptor(_identity!['buildId']!);
     _deviceDescriptor = native;
-    _authLog(AnimeRiftAuthEvent.registrationStart);
-    try {
-      await _registerDevice(native);
-      _authLog(AnimeRiftAuthEvent.registrationAccepted);
-    } on AnimeRiftAccessUnavailable catch (error) {
-      _authLog(
-        AnimeRiftAuthEvent.registrationRejected,
-        statusCode: error.statusCode,
-        failure: error.failure,
-        knownReason: error.knownReason,
-      );
-      if (native.os != 'ios' || !_canRetryAndroidCompatibility(error)) {
+    await _serializeRegistration(() async {
+      final prefs = await SharedPreferences.getInstance();
+      final nowMs = _clock().toUtc().millisecondsSinceEpoch;
+      final blockedUntil = prefs.getInt(_registrationBlockedKey) ?? 0;
+      if (nowMs < blockedUntil) {
+        final seconds = ((blockedUntil - nowMs) / 1000).ceil();
         _authLog(
-          AnimeRiftAuthEvent.registrationFailed,
-          statusCode: error.statusCode,
-          failure: error.failure,
-          knownReason: error.knownReason,
+          AnimeRiftAuthEvent.registrationDeferred,
+          failure: AnimeRiftFailureKind.registrationCooldown,
+          mode: _nativeMode(native),
+          cooldownSeconds: seconds,
         );
-        rethrow;
+        throw AnimeRiftAccessUnavailable(
+          stage: AnimeRiftRequestStage.deviceRegistration,
+          failure: AnimeRiftFailureKind.registrationCooldown,
+          retryAfterSeconds: seconds,
+        );
       }
-      // One bounded compatibility attempt. Never retry sign-in with the
-      // same one-time code: only the device registration is retried.
-      final compatible = AnimeRiftDeviceDescriptor.emulatedAndroid(
-        _identity!['buildId']!,
-      );
-      _deviceDescriptor = compatible;
+      // Reuse a recent *successful* registration; refreshing the UI or
+      // reopening the app must not flood the gateway with identical requests.
+      final succeededAt = prefs.getInt(_registrationSuccessKey);
+      if (_forceRegistration) {
+        final forcedAt = prefs.getInt(_registrationForcedAtKey);
+        if (forcedAt != null &&
+            nowMs >= forcedAt &&
+            nowMs - forcedAt < _registrationReuseMs) {
+          final seconds = ((_registrationReuseMs - (nowMs - forcedAt)) / 1000)
+              .ceil();
+          _authLog(
+            AnimeRiftAuthEvent.registrationDeferred,
+            failure: AnimeRiftFailureKind.registrationCooldown,
+            mode: _nativeMode(native),
+            cooldownSeconds: seconds,
+          );
+          throw AnimeRiftAccessUnavailable(
+            stage: AnimeRiftRequestStage.deviceRegistration,
+            failure: AnimeRiftFailureKind.registrationCooldown,
+            retryAfterSeconds: seconds,
+          );
+        }
+        await prefs.setInt(_registrationForcedAtKey, nowMs);
+      }
+      if (!_forceRegistration &&
+          succeededAt != null &&
+          nowMs >= succeededAt &&
+          nowMs - succeededAt < _registrationReuseMs) {
+        final reusedFallback = prefs.getBool(_registrationAndroidKey) == true;
+        if (reusedFallback) {
+          _deviceDescriptor = AnimeRiftDeviceDescriptor.emulatedAndroid(
+            _identity!['buildId']!,
+          );
+        }
+        _authLog(
+          AnimeRiftAuthEvent.registrationReused,
+          mode: reusedFallback
+              ? AnimeRiftRegistrationMode.androidFallback
+              : _nativeMode(native),
+        );
+        return;
+      }
+      final nativeMode = _nativeMode(native);
+      var mode = nativeMode;
+      var attempt = 1;
       _authLog(
-        AnimeRiftAuthEvent.compatibilityRetry,
-        statusCode: error.statusCode,
+        AnimeRiftAuthEvent.registrationStart,
+        mode: nativeMode,
+        attempt: 1,
       );
       try {
-        await _registerDevice(compatible);
-        _authLog(AnimeRiftAuthEvent.compatibilityAccepted);
-      } on AnimeRiftAccessUnavailable catch (retryError) {
-        _deviceDescriptor = native;
-        _authLog(
-          AnimeRiftAuthEvent.compatibilityRejected,
-          statusCode: retryError.statusCode,
-          failure: retryError.failure,
-          knownReason: retryError.knownReason,
+        try {
+          await _registerDevice(native);
+          _authLog(
+            AnimeRiftAuthEvent.registrationAccepted,
+            mode: nativeMode,
+            attempt: 1,
+          );
+        } on AnimeRiftAccessUnavailable catch (error) {
+          _logRegistrationError(
+            AnimeRiftAuthEvent.registrationRejected,
+            error,
+            mode: nativeMode,
+            attempt: 1,
+          );
+          if (native.os != 'ios' || !_canRetryAndroidCompatibility(error)) {
+            rethrow;
+          }
+          // Only a server-confirmed platform/install-source mismatch allows
+          // one Android compatibility request. Generic 403 does not.
+          mode = AnimeRiftRegistrationMode.androidFallback;
+          attempt = 2;
+          _deviceDescriptor = AnimeRiftDeviceDescriptor.emulatedAndroid(
+            _identity!['buildId']!,
+          );
+          _authLog(
+            AnimeRiftAuthEvent.compatibilityRetry,
+            statusCode: error.statusCode,
+            knownReason: error.knownReason,
+            serverCode: error.serverCode,
+            mode: mode,
+            attempt: 2,
+          );
+          try {
+            await _registerDevice(_deviceDescriptor!);
+            _authLog(
+              AnimeRiftAuthEvent.compatibilityAccepted,
+              mode: mode,
+              attempt: 2,
+            );
+          } on AnimeRiftAccessUnavailable catch (fallbackError) {
+            _deviceDescriptor = native;
+            _logRegistrationError(
+              AnimeRiftAuthEvent.compatibilityRejected,
+              fallbackError,
+              mode: mode,
+              attempt: 2,
+            );
+            rethrow;
+          }
+        }
+      } on AnimeRiftAccessUnavailable catch (error) {
+        final failures = (prefs.getInt(_registrationFailuresKey) ?? 0) + 1;
+        final seconds = _cooldownFor(error, failures);
+        await prefs.setInt(_registrationFailuresKey, failures);
+        await prefs.setInt(
+          _registrationBlockedKey,
+          _clock().toUtc().millisecondsSinceEpoch + seconds * 1000,
+        );
+        _logRegistrationError(
+          AnimeRiftAuthEvent.registrationFailed,
+          error,
+          mode: mode,
+          attempt: attempt,
+          cooldownSeconds: seconds,
         );
         rethrow;
       }
-    }
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_identityKey, jsonEncode(_identity));
+      await prefs.setInt(
+        _registrationSuccessKey,
+        _clock().toUtc().millisecondsSinceEpoch,
+      );
+      await prefs.setBool(
+        _registrationAndroidKey,
+        mode == AnimeRiftRegistrationMode.androidFallback,
+      );
+      await prefs.remove(_registrationBlockedKey);
+      await prefs.remove(_registrationFailuresKey);
+      await prefs.setString(_identityKey, jsonEncode(_identity));
+    });
     _registered = true;
   }
 
-  /// Retry only an explicit protocol/client-side rejection. Never fallback
-  /// for offline errors, server faults, authentication or rate limiting.
+  /// Generic HTTP 403 can be a device ban: retrying it as Android doubles
+  /// suspicious traffic. Only known platform/install-source errors qualify.
   static bool _canRetryAndroidCompatibility(AnimeRiftAccessUnavailable error) {
-    final status = error.statusCode;
     return error.stage == AnimeRiftRequestStage.deviceRegistration &&
-        status != null &&
-        status >= 400 &&
-        status < 500 &&
-        status != 401 &&
-        status != 429;
+        error.statusCode != null &&
+        error.statusCode! >= 400 &&
+        error.statusCode! < 500 &&
+        error.statusCode != 401 &&
+        error.statusCode != 429 &&
+        (error.knownReason == AnimeRiftServerReason.installSourceNotSupported ||
+            error.knownReason == AnimeRiftServerReason.unsupportedPlatform);
   }
 
   Future<void> _registerDevice(AnimeRiftDeviceDescriptor device) async {
@@ -1221,7 +1560,12 @@ class AnimeRiftApiClient {
         rethrow;
       }
       _registered = false;
-      await _ensureReady();
+      _forceRegistration = true;
+      try {
+        await _ensureReady();
+      } finally {
+        _forceRegistration = false;
+      }
       requireSameSession();
       if (cancelToken?.isCancelled == true) throw cancelToken!.cancelError!;
       try {

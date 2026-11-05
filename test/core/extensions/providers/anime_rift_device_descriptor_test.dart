@@ -80,7 +80,7 @@ void main() {
       });
       final identity = AnimeRiftDeviceDescriptor.fromIos(ios);
       expect(identity.os, 'ios');
-      expect(identity.osId, '26.1');
+      expect(identity.osId, 'private-vendor-identifier');
       expect(identity.details['model'], 'iPhone 12 Pro Max');
       expect(identity.details['device'], 'iPhone13,4');
       expect(identity.details['systemName'], 'iOS');

@@ -53,6 +53,53 @@ void main() {
     },
   );
 
+  test('diagnostics include safe rejection details but never arbitrary server data', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'rift-auth-detail-',
+    );
+    try {
+      final journal = AnimeRiftAuthDiagnosticLog(
+        directory: () async => directory,
+      );
+      journal.record(
+        const AnimeRiftAuthDiagnostic(
+          event: AnimeRiftAuthEvent.registrationFailed,
+          statusCode: 403,
+          knownReason: AnimeRiftServerReason.deviceSuspended,
+          serverCode: 'DEVICE_SUSPENDED',
+          responseKind: AnimeRiftResponseKind.json,
+          edgeRejected: true,
+          mode: AnimeRiftRegistrationMode.nativeIos,
+          attempt: 1,
+          durationMs: 124,
+          cooldownSeconds: 600,
+        ),
+      );
+      journal.record(
+        const AnimeRiftAuthDiagnostic(
+          event: AnimeRiftAuthEvent.registrationRejected,
+          serverCode: 'Bearer very-private-token',
+        ),
+      );
+      await journal.flush();
+      final raw = await File('${directory.path}/animerift_auth.jsonl')
+          .readAsString();
+      final lines = raw.trim().split('\n').map(jsonDecode).toList();
+      expect(lines[0], containsPair('serverCode', 'DEVICE_SUSPENDED'));
+      expect(lines[0], containsPair('knownReason', 'deviceSuspended'));
+      expect(lines[0], containsPair('responseKind', 'json'));
+      expect(lines[0], containsPair('edgeRejected', true));
+      expect(lines[0], containsPair('mode', 'nativeIos'));
+      expect(lines[0], containsPair('durationMs', 124));
+      expect(lines[0], containsPair('cooldownSeconds', 600));
+      expect(lines[1], isNot(contains('serverCode')));
+      expect(raw, isNot(contains('very-private')));
+      expect(raw, isNot(contains('://')));
+    } finally {
+      await directory.delete(recursive: true);
+    }
+  });
+
   test('moves previous Application Support log into Documents/log', () async {
     final root = await Directory.systemTemp.createTemp('rift-auth-migrate-');
     final legacy = Directory(

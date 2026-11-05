@@ -8,9 +8,8 @@ import 'anime_rift_api_client.dart' show AnimeRiftAuthDiagnostic;
 
 /// Small, bounded, best-effort authentication diagnostic journal.
 ///
-/// Accepts *only* sanitized diagnostic events (known enum, status number,
-/// known failure enum). There is no entry point for URLs, codes, tokens,
-/// arbitrary server replies, device identifiers or error.toString().
+/// Accepts only sanitized diagnostic events, bounded server error identifiers
+/// and known enums; never stores response bodies, tokens or device identifiers.
 class AnimeRiftAuthDiagnosticLog {
   AnimeRiftAuthDiagnosticLog({
     Future<Directory> Function()? directory,
@@ -26,6 +25,17 @@ class AnimeRiftAuthDiagnosticLog {
   bool _migrationChecked = false;
   static const _fileName = 'animerift_auth.jsonl';
   static const _maxBytes = 256 * 1024;
+
+  static String? _safeServerCode(String? code) {
+    if (code == null || code.length < 3 || code.length > 64) return null;
+    if (!RegExp(r'^[A-Z][A-Z0-9_]*$').hasMatch(code) ||
+        !code.contains('_') ||
+        RegExp(r'TOKEN|PASSWORD|SECRET|API_KEY|JWT|BEARER|AUTHORIZATION')
+            .hasMatch(code)) {
+      return null;
+    }
+    return code;
+  }
 
   static final AnimeRiftAuthDiagnosticLog shared = AnimeRiftAuthDiagnosticLog();
 
@@ -72,12 +82,24 @@ class AnimeRiftAuthDiagnosticLog {
   }
 
   void record(AnimeRiftAuthDiagnostic diagnostic) {
+    final serverCode = _safeServerCode(diagnostic.serverCode);
     final line = jsonEncode(<String, Object?>{
       'time': DateTime.now().toUtc().toIso8601String(),
       'event': diagnostic.event.name,
       if (diagnostic.statusCode case final code?) 'httpStatus': code,
       if (diagnostic.failure case final failure?) 'failure': failure.name,
       if (diagnostic.knownReason case final reason?) 'knownReason': reason.name,
+      if (serverCode != null) 'serverCode': serverCode,
+      if (diagnostic.responseKind case final kind?) 'responseKind': kind.name,
+      if (diagnostic.edgeRejected) 'edgeRejected': true,
+      if (diagnostic.transportKind case final kind?) 'transportKind': kind.name,
+      if (diagnostic.durationMs case final duration?) 'durationMs': duration,
+      if (diagnostic.retryAfterSeconds case final retry?)
+        'retryAfterSeconds': retry,
+      if (diagnostic.mode case final mode?) 'mode': mode.name,
+      if (diagnostic.attempt case final attempt?) 'attempt': attempt,
+      if (diagnostic.cooldownSeconds case final cooldown?)
+        'cooldownSeconds': cooldown,
     });
     _pending = _pending.then((_) async {
       try {
