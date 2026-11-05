@@ -36,7 +36,7 @@ class WatchHistory extends _$WatchHistory {
   Future<void> refreshFromServer() async {
     final repository = ref.read(historyRepositoryProvider);
     if (ref.read(activeProviderProvider)?.packageName == animeRiftProviderId) {
-      await ref.read(riftAutoSyncProvider).refresh();
+      await ref.read(riftAutoSyncProvider).refreshHistory();
     } else {
       await repository.syncRecentWatched();
     }

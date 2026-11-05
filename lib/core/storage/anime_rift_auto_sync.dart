@@ -335,6 +335,8 @@ class AnimeRiftAutoSyncCoordinator {
   Future<void>? _inFlight;
   Timer? _debounceTimer;
   bool _refreshRequested = false;
+  final Set<LibraryCategory> _requestedCategories = {};
+  bool _requestedHistory = false;
   bool _disposed = false;
   Object? _lastError;
 
@@ -355,6 +357,28 @@ class AnimeRiftAutoSyncCoordinator {
     _debounceTimer?.cancel();
     _debounceTimer = null;
     _refreshRequested = true;
+    return _beginRefresh();
+  }
+
+  /// Refresh just the visible shelf. Requests are serialized with full
+  /// background sync and pending mutations are uploaded before each pull.
+  Future<void> refreshCategory(LibraryCategory category) {
+    if (_disposed) return Future<void>.value();
+    _debounceTimer?.cancel();
+    _debounceTimer = null;
+    _requestedCategories.add(category);
+    return _beginRefresh();
+  }
+
+  Future<void> refreshHistory() {
+    if (_disposed) return Future<void>.value();
+    _debounceTimer?.cancel();
+    _debounceTimer = null;
+    _requestedHistory = true;
+    return _beginRefresh();
+  }
+
+  Future<void> _beginRefresh() {
     final running = _inFlight;
     if (running != null) return running;
     final operation = _drain();
@@ -489,7 +513,12 @@ class AnimeRiftAutoSyncCoordinator {
   Future<void> _drain() async {
     try {
       do {
+        final all = _refreshRequested;
+        final categories = Set<LibraryCategory>.of(_requestedCategories);
+        final history = _requestedHistory;
         _refreshRequested = false;
+        _requestedCategories.clear();
+        _requestedHistory = false;
         final provider = _activeRift();
         if (provider == null || !await provider.restoreAccountSession()) {
           continue;
@@ -502,11 +531,30 @@ class AnimeRiftAutoSyncCoordinator {
         // Without one, retain every mutation durably and only perform GETs.
         if (_writer != null) await _pushPending(account);
         AnimeRiftCloudPendingJournal.requireAccount(account);
-        final result = await provider.importCloudLibrary(_storage);
-        AnimeRiftCloudPendingJournal.requireAccount(account);
-        if (!_disposed && result.changed > 0) _onImported?.call();
+        if (all) {
+          final result = await provider.importCloudLibrary(_storage);
+          AnimeRiftCloudPendingJournal.requireAccount(account);
+          if (!_disposed && result.changed > 0) _onImported?.call();
+        } else {
+          for (final category in categories) {
+            final result = await provider.importCloudLibraryCategory(
+              _storage,
+              category,
+            );
+            AnimeRiftCloudPendingJournal.requireAccount(account);
+            if (!_disposed && result.changed > 0) _onImported?.call();
+          }
+          if (history) {
+            final result = await provider.importCloudHistory(_storage);
+            AnimeRiftCloudPendingJournal.requireAccount(account);
+            if (!_disposed && result.changed > 0) _onImported?.call();
+          }
+        }
         _lastError = null;
-      } while (_refreshRequested && !_disposed);
+      } while ((_refreshRequested ||
+              _requestedCategories.isNotEmpty ||
+              _requestedHistory) &&
+          !_disposed);
     } catch (error) {
       _lastError = error;
       rethrow;

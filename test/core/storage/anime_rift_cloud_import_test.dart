@@ -37,6 +37,7 @@ class _CloudReader implements AnimeRiftCloudAccountReader {
   final history = <Object>[];
   Completer<Map<String, dynamic>>? favoritesGate;
   bool completeOverview = true;
+  final requests = <String>[];
 
   @override
   Future<bool> restoreAccountSession() async {
@@ -61,27 +62,202 @@ class _CloudReader implements AnimeRiftCloudAccountReader {
   };
 
   @override
-  Future<Map<String, dynamic>> fetchFavoriteAnime() =>
-      favoritesGate?.future ?? Future.value({'items': favorites});
+  Future<Map<String, dynamic>> fetchFavoriteAnime() => (() {
+    requests.add('favorite');
+    return favoritesGate?.future ?? Future.value({'items': favorites});
+  })();
 
   @override
-  Future<Map<String, dynamic>> fetchMyList(String category) async => {
-    'items': lists[category] ?? <Object>[],
-  };
+  Future<Map<String, dynamic>> fetchMyList(String category) async {
+    requests.add(category);
+    return {'items': lists[category] ?? <Object>[]};
+  }
 
   @override
-  Future<Map<String, dynamic>> fetchWatchHistoryLatest() async => {
-    'items': history,
-  };
+  Future<Map<String, dynamic>> fetchWatchHistoryLatest() async {
+    requests.add('history-latest');
+    return {'items': history};
+  }
 
   @override
-  Future<Map<String, dynamic>> fetchWatchHistoryFull() async => {
-    'items': history,
-  };
+  Future<Map<String, dynamic>> fetchWatchHistoryFull() async {
+    requests.add('history-full');
+    return {'items': history};
+  }
 }
 
 void main() {
   tearDown(AnimeRiftLocalAccountScope.reset);
+
+  test(
+    'opening one Rift shelf reads only that shelf and leaves others cached',
+    () async {
+      AnimeRiftLocalAccountScope.activate('alice');
+      final storage = _MemoryStorage();
+      final reader = _CloudReader()
+        ..lists['currently'] = [
+          {
+            'anime': {'_id': 'watch1', 'title': 'Currently watching'},
+          },
+        ]
+        ..lists['finished'] = [
+          {
+            'anime': {'_id': 'finish1', 'title': 'Finished already'},
+          },
+        ];
+      final cloud = AnimeRiftCloudSync(reader);
+      final library = ProviderLocalLibrary(storage, _rift);
+      await cloud.importSelectedList(
+        storage: storage,
+        category: LibraryCategory.watching,
+      );
+      expect(reader.requests, ['currently']);
+      expect(
+        library.items(LibraryCategory.watching).single.title,
+        'Currently watching',
+      );
+      expect(library.items(LibraryCategory.completed), isEmpty);
+
+      reader.requests.clear();
+      await cloud.importSelectedList(
+        storage: storage,
+        category: LibraryCategory.completed,
+      );
+      expect(reader.requests, ['finished']);
+      expect(
+        library.items(LibraryCategory.watching).single.title,
+        'Currently watching',
+      );
+      expect(
+        library.items(LibraryCategory.completed).single.title,
+        'Finished already',
+      );
+    },
+  );
+
+  test(
+    'Rift history refresh does not fetch every cloud library list',
+    () async {
+      AnimeRiftLocalAccountScope.activate('alice');
+      final storage = _MemoryStorage();
+      final reader = _CloudReader()
+        ..history.add({
+          'anime': {'_id': 'history-one', 'title': 'From Rift'},
+          'last_episode_viewed': 4,
+        })
+        ..lists['currently'] = [
+          {
+            'anime': {'_id': 'watch1', 'title': 'Watching'},
+          },
+        ];
+      final result = await AnimeRiftCloudSync(reader)
+          .importHistoryToLocal(storage: storage);
+      expect(reader.requests, ['history-full']);
+      expect(result.history, 1);
+      final history = ProviderLocalHistory(storage, _rift);
+      expect(history.continueWatching().single.episode, 4);
+      expect(
+        ProviderLocalLibrary(storage, _rift).items(LibraryCategory.watching),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'account switching during a Rift shelf GET cannot import foreign rows',
+    () async {
+      AnimeRiftLocalAccountScope.activate('alice');
+      final storage = _MemoryStorage();
+      final reader = _CloudReader()
+        ..favoritesGate = Completer<Map<String, dynamic>>();
+      final cloud = AnimeRiftCloudSync(reader);
+      final loading = cloud.importSelectedList(
+        storage: storage,
+        category: LibraryCategory.favorite,
+      );
+      // Wait for the request to enter its first awaited HTTP read.
+      await Future<void>.delayed(Duration.zero);
+      expect(reader.requests, ['favorite']);
+      AnimeRiftLocalAccountScope.activate('bob');
+      reader.favoritesGate!.complete({
+        'items': [
+          {
+            'anime': {'_id': 'alice-only', 'title': 'Private'},
+          },
+        ],
+      });
+      await expectLater(
+        loading,
+        throwsA(isA<AnimeRiftAuthenticationRequired>()),
+      );
+      expect(
+        ProviderLocalLibrary(storage, _rift).items(LibraryCategory.favorite),
+        isEmpty,
+      );
+    },
+  );
+
+  test('Rift list cache stays intact offline and incomplete snapshots cannot delete', () async {
+    AnimeRiftLocalAccountScope.activate('alice');
+    final storage = _MemoryStorage();
+    final reader = _CloudReader()
+      ..lists['currently'] = [
+        {
+          'anime': {'_id': 'cached1', 'title': 'Cached anime'},
+        },
+      ];
+    final cloud = AnimeRiftCloudSync(reader);
+    final library = ProviderLocalLibrary(storage, _rift);
+    final url = 'https://anime-rift.com/anime/cached1';
+    await cloud.importSelectedList(
+      storage: storage,
+      category: LibraryCategory.watching,
+    );
+    reader.lists['currently'] = [];
+    reader.completeOverview = false;
+    await cloud.importSelectedList(
+      storage: storage,
+      category: LibraryCategory.watching,
+    );
+    expect(library.category(url), LibraryCategory.watching);
+    reader.completeOverview = true;
+    await cloud.importSelectedList(
+      storage: storage,
+      category: LibraryCategory.watching,
+    );
+    expect(library.category(url), isNull);
+  });
+
+  test('Rift direct shelf refresh preserves local pending edits and account isolation', () async {
+    AnimeRiftLocalAccountScope.activate('alice');
+    final storage = _MemoryStorage();
+    final reader = _CloudReader()
+      ..lists['currently'] = [
+        {
+          'anime': {'_id': 'shared', 'title': 'Remote version'},
+        },
+      ];
+    final url = 'https://anime-rift.com/anime/shared';
+    final library = ProviderLocalLibrary(storage, _rift);
+    final local = MultimediaItem(
+      title: 'Local version',
+      url: url,
+      posterUrl: '',
+      provider: _rift,
+    );
+    await library.setCategory(local, LibraryCategory.completed);
+    await AnimeRiftCloudPendingJournal(storage)
+        .queueCategory(url, LibraryCategory.completed);
+    await AnimeRiftCloudSync(
+      reader,
+    ).importSelectedList(storage: storage, category: LibraryCategory.watching);
+    expect(library.category(url), LibraryCategory.completed);
+    AnimeRiftLocalAccountScope.activate('bob');
+    expect(
+      ProviderLocalLibrary(storage, _rift).items(LibraryCategory.completed),
+      isEmpty,
+    );
+  });
 
   test(
     'native finished list imports into the completed library category',

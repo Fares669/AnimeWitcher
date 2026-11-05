@@ -148,6 +148,8 @@ final class _Write {
 
 final class _Firestore extends FirestoreRestClient {
   final List<_Write> writes = <_Write>[];
+  final List<String> queries = <String>[];
+  bool offline = false;
   final List<_ArrayTransform> arrayTransforms = <_ArrayTransform>[];
   bool failArrayTransforms = false;
   final List<String> deletes = <String>[];
@@ -185,9 +187,13 @@ final class _Firestore extends FirestoreRestClient {
     String orderField = 'date',
     bool descending = true,
     int pageSize = 100,
-  }) async => List<FirestoreDocument>.from(
-    collections[collectionPath] ?? const <FirestoreDocument>[],
-  );
+  }) async {
+    queries.add(collectionPath);
+    if (offline) throw StateError('offline');
+    return List<FirestoreDocument>.from(
+      collections[collectionPath] ?? const <FirestoreDocument>[],
+    );
+  }
 
   @override
   Future<void> transformArrayFieldValues(
@@ -279,6 +285,76 @@ FirestoreDocument _remote({
 }) => FirestoreDocument(id: path.split('/').last, path: path, fields: fields);
 
 void main() {
+  test(
+    'opening Witcher anime library requests only native anime shelves',
+    () async {
+      final firestore = _Firestore();
+      final service = await _signedInService(firestore);
+
+      await service.refreshLibraryForDisplay();
+
+      expect(firestore.queries, [
+        'users/profile-1/fav_anime',
+        'users/profile-1/user_anime',
+      ]);
+      expect(firestore.writes, isEmpty);
+    },
+  );
+
+  test(
+    'opening Witcher manga library does not synchronize unrelated account data',
+    () async {
+      final firestore = _Firestore();
+      final service = await _signedInService(firestore);
+
+      await service.refreshLibraryForDisplay(manga: true);
+
+      expect(firestore.queries, [
+        'users/profile-1/fav_manga',
+        'users/profile-1/user_manga',
+      ]);
+      expect(firestore.writes, isEmpty);
+    },
+  );
+
+  test(
+    'repeated Witcher shelf requests coalesce onto one cloud read',
+    () async {
+      final firestore = _Firestore();
+      final service = await _signedInService(firestore);
+      await Future.wait([
+        service.refreshLibraryForDisplay(),
+        service.refreshLibraryForDisplay(),
+      ]);
+      expect(firestore.queries, [
+        'users/profile-1/fav_anime',
+        'users/profile-1/user_anime',
+      ]);
+    },
+  );
+
+  test(
+    'Witcher library cache stays intact when the network is offline',
+    () async {
+      final firestore = _Firestore()..offline = true;
+      final storage = _Storage();
+      final cached = _manga();
+      await storage.addToLibrary(
+        cached,
+        category: LibraryCategory.watching.storageKey,
+      );
+      final service = await _signedInService(firestore, storage: storage);
+      await expectLater(
+        service.refreshLibraryForDisplay(manga: true),
+        throwsStateError,
+      );
+      expect(storage.library[cached.url], cached);
+      expect(
+        storage.categories[cached.url],
+        LibraryCategory.watching.storageKey,
+      );
+    },
+  );
   test(
     'manga list write uses user_manga and official reference fields',
     () async {

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:animewitcher/core/account/account_providers.dart';
 
@@ -7,6 +9,7 @@ import '../../../../core/storage/library_repository.dart';
 import '../../../../core/storage/storage_service.dart';
 import '../../../../core/storage/provider_local_library.dart';
 import '../../../../core/storage/anime_rift_auto_sync.dart';
+import '../../../../core/storage/anime_rift_account_scope.dart';
 import '../../../../core/extensions/extension_manager.dart';
 
 import './library_auth.dart';
@@ -80,6 +83,49 @@ class Library extends _$Library {
     return state;
   }
 
+  /// Stale-while-revalidate: cached rows render synchronously through build()
+  /// and refresh(); a background GET fetches only the visible cloud shelf.
+  /// Offline errors never clear cached rows. Changes are applied only to the
+  /// account/provider that initiated the read.
+  Future<void> refreshVisibleFromServer({
+    LibraryCategory? category,
+    LibraryMediaKind? mediaKind,
+  }) async {
+    final kind = mediaKind ?? state.mediaKind;
+    final shelf = category ?? state.category;
+    final providerId = ref.read(activeProviderProvider)?.packageName;
+    final isRift =
+        providerId == animeRiftProviderId && kind == LibraryMediaKind.anime;
+    final service = ref.read(animeWitcherAccountServiceProvider);
+    final account = isRift
+        ? AnimeRiftLocalAccountScope.accountHash
+        : service.accountUid;
+    if (account == null) return;
+    try {
+      if (isRift) {
+        await ref.read(riftAutoSyncProvider).refreshCategory(shelf);
+      } else {
+        await service.refreshLibraryForDisplay(
+          manga: kind == LibraryMediaKind.manga,
+        );
+      }
+      if (!ref.mounted ||
+          providerId != ref.read(activeProviderProvider)?.packageName ||
+          account !=
+              (isRift
+                  ? AnimeRiftLocalAccountScope.accountHash
+                  : service.accountUid)) {
+        return;
+      }
+      // The import has already persisted the new cache. Notify all shelf
+      // views, including counts and the phone's sorted in-memory list cache.
+      ref.read(accountDataRevisionProvider.notifier).bump();
+    } catch (_) {
+      // Keep cached library items visible while offline or after a transient
+      // authentication/transport error; the next opening retries the GET.
+    }
+  }
+
   Future<void> selectCategory(LibraryCategory category) async {
     final generation = ++_selectionGeneration;
     final kind = state.mediaKind;
@@ -89,6 +135,7 @@ class Library extends _$Library {
         generation == _selectionGeneration &&
         ref.read(activeProviderProvider)?.packageName == providerId) {
       refresh(category: category);
+      unawaited(refreshVisibleFromServer(category: category, mediaKind: kind));
     }
   }
 
@@ -107,6 +154,9 @@ class Library extends _$Library {
         generation == _selectionGeneration &&
         ref.read(activeProviderProvider)?.packageName == providerId) {
       refresh(category: category, mediaKind: mediaKind);
+      unawaited(
+        refreshVisibleFromServer(category: category, mediaKind: mediaKind),
+      );
     }
   }
 
@@ -120,6 +170,12 @@ class Library extends _$Library {
         generation == _selectionGeneration &&
         ref.read(activeProviderProvider)?.packageName == providerId) {
       refresh(category: _categoryFor(mediaKind), mediaKind: mediaKind);
+      unawaited(
+        refreshVisibleFromServer(
+          category: state.category,
+          mediaKind: mediaKind,
+        ),
+      );
     }
   }
 

@@ -169,6 +169,231 @@ class AnimeRiftCloudSync {
     'dropped': 'my_list_dropped',
   };
 
+  /// The native Rift library fetches a single list when selected. Refresh
+  /// only that shelf, retaining cached items while the GET runs. A remote
+  /// deletion is applied only to previously imported items and only if the
+  /// response has every row reported by the server's overview.
+  Future<AnimeRiftCloudImportResult> importSelectedList({
+    required StorageService storage,
+    required LibraryCategory category,
+    Future<MultimediaItem?> Function(String catalogUrl)? hydrate,
+  }) async {
+    final previous = AnimeRiftLocalAccountScope.accountHash;
+    if (!await _reader.restoreAccountSession()) {
+      throw const AnimeRiftAuthenticationRequired();
+    }
+    final account = AnimeRiftLocalAccountScope.accountHash;
+    if (account == null || (previous != null && previous != account)) {
+      throw const AnimeRiftAuthenticationRequired();
+    }
+    final list = category == LibraryCategory.favorite
+        ? 'favorite'
+        : _categoryForList.entries
+              .firstWhere((entry) => entry.value == category)
+              .key;
+    final response = list == 'favorite'
+        ? await _reader.fetchFavoriteAnime()
+        : await _reader.fetchMyList(list);
+    _requireAccount(account);
+    final rows = _cloudRows(response);
+    Map<String, int> counts = const {};
+    try {
+      counts = parseMyListOverviewCounts(await _reader.fetchMyListOverview());
+      _requireAccount(account);
+    } on AnimeRiftAccessUnavailable {
+      _requireAccount(account);
+    }
+    final hydrated = <String, MultimediaItem?>{};
+    final received = <String, MultimediaItem>{};
+    var skipped = 0;
+    for (final row in rows) {
+      final item = await _cloudAnime(row, hydrate, hydrated);
+      _requireAccount(account);
+      if (item == null) {
+        skipped++;
+      } else {
+        received[item.url] = item;
+      }
+    }
+    final library = ProviderLocalLibrary(storage, animeRiftProviderId);
+    final journal = AnimeRiftCloudPendingJournal(storage);
+    var changed = 0;
+    for (final item in received.values) {
+      _requireAccount(account);
+      final kind = category == LibraryCategory.favorite
+          ? 'favorite'
+          : 'category';
+      if (journal.hasPending(account, item.url, kind)) continue;
+      if (category == LibraryCategory.favorite) {
+        if (!library.isFavorite(item.url)) {
+          await library.setFavorite(item, true);
+          changed++;
+        }
+      } else if (library.category(item.url) != category) {
+        await library.setCategory(item, category);
+        changed++;
+      }
+    }
+    final countKey = category == LibraryCategory.favorite
+        ? 'my_list_favorites'
+        : _overviewForList[list]!;
+    final complete =
+        counts[countKey] == rows.length &&
+        received.length == rows.length &&
+        !_hasMore(response);
+    if (complete) {
+      final isFavorite = category == LibraryCategory.favorite;
+      final key = isFavorite
+          ? 'animerift_cloud_favorites_v1:$account'
+          : 'animerift_cloud_categories_v1:$account';
+      Set<String> previousFavorites = {};
+      Map<String, String> previousCategories = {};
+      try {
+        if (isFavorite) {
+          previousFavorites = _favoriteSnapshot(storage.getString(key)) ?? {};
+        } else {
+          previousCategories = _storageSnapshot(storage.getString(key)) ?? {};
+        }
+      } on Object {
+        // A corrupt old snapshot cannot authorize a remote deletion.
+      }
+      final prior = isFavorite
+          ? previousFavorites
+          : {
+              for (final entry in previousCategories.entries)
+                if (entry.value == category.storageKey) entry.key,
+            };
+      for (final url in prior.difference(received.keys.toSet())) {
+        _requireAccount(account);
+        if (journal.hasPending(
+          account,
+          url,
+          isFavorite ? 'favorite' : 'category',
+        )) {
+          continue;
+        }
+        if (isFavorite) {
+          final item = library.item(url);
+          if (item != null && library.isFavorite(url)) {
+            await library.setFavorite(item, false);
+            changed++;
+          }
+        } else if (library.category(url) == category) {
+          await library.clearCategory(url);
+          changed++;
+        }
+      }
+      _requireAccount(account);
+      if (isFavorite) {
+        await storage.setString(
+          key,
+          jsonEncode({
+            'version': 1,
+            'favorites': received.keys.toList()..sort(),
+          }),
+        );
+      } else {
+        final merged = Map<String, String>.from(previousCategories)
+          ..removeWhere((_, value) => value == category.storageKey);
+        for (final url in received.keys) {
+          merged[url] = category.storageKey;
+        }
+        await storage.setString(
+          key,
+          jsonEncode({'version': 1, 'categories': merged}),
+        );
+      }
+      _requireAccount(account);
+    }
+    return AnimeRiftCloudImportResult(
+      favorites: category == LibraryCategory.favorite ? received.length : 0,
+      categories: category == LibraryCategory.favorite ? 0 : received.length,
+      history: 0,
+      skipped: skipped,
+      changed: changed,
+    );
+  }
+
+  /// Read the Rift watch-history endpoint independently of library shelves.
+  /// History and resume remain cached, and local playback seconds are never
+  /// overwritten by the remote last-episode number.
+  Future<AnimeRiftCloudImportResult> importHistoryToLocal({
+    required StorageService storage,
+    Future<MultimediaItem?> Function(String catalogUrl)? hydrate,
+  }) async {
+    final previous = AnimeRiftLocalAccountScope.accountHash;
+    if (!await _reader.restoreAccountSession()) {
+      throw const AnimeRiftAuthenticationRequired();
+    }
+    final account = AnimeRiftLocalAccountScope.accountHash;
+    if (account == null || (previous != null && previous != account)) {
+      throw const AnimeRiftAuthenticationRequired();
+    }
+    final rows = _cloudRows(await _readWatchHistory());
+    _requireAccount(account);
+    final history = ProviderLocalHistory(storage, animeRiftProviderId);
+    final pending = AnimeRiftCloudPendingJournal(storage);
+    final existing = history.history().map((entry) => entry.item.url).toSet();
+    final clearPending = pending.hasPending(account, '', 'history-clear');
+    final hydrated = <String, MultimediaItem?>{};
+    var changed = 0;
+    var skipped = 0;
+    for (final row in rows) {
+      final item = await _cloudAnime(row, hydrate, hydrated);
+      _requireAccount(account);
+      if (item == null) {
+        skipped++;
+        continue;
+      }
+      if (clearPending ||
+          pending.hasPending(account, item.url, 'history') ||
+          pending.hasPending(account, item.url, 'playback')) {
+        continue;
+      }
+      final watched = _remoteWatchedNumbers(row);
+      if (watched != null &&
+          !pending.hasPending(account, item.url, 'watched')) {
+        await history.importRemoteWatched(item.url, watched);
+      }
+      final raw = row is Map ? row['last_episode_viewed'] : null;
+      final number = raw is num
+          ? raw
+          : raw is Map
+          ? raw['episode_number']
+          : null;
+      final episode =
+          number is num &&
+              number.isFinite &&
+              number == number.toInt() &&
+              number > 0 &&
+              number <= 100000
+          ? number.toInt()
+          : null;
+      if (existing.add(item.url)) {
+        if (episode != null) {
+          await history.importRemoteEpisode(item, episode);
+        } else {
+          await history.recordOpened(item);
+        }
+        changed++;
+      } else if (episode != null &&
+          !history.continueWatching().any(
+            (entry) => entry.item.url == item.url,
+          )) {
+        await history.importRemoteEpisode(item, episode);
+        changed++;
+      }
+    }
+    _requireAccount(account);
+    return AnimeRiftCloudImportResult(
+      favorites: 0,
+      categories: 0,
+      history: rows.length - skipped,
+      skipped: skipped,
+      changed: changed,
+    );
+  }
+
   /// Import authenticated lists into the matching Rift account's actual
   /// library and watch history. Existing local entries are preserved; an
   /// unavailable or unrecognized response cannot erase the user's data.

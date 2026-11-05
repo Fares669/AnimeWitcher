@@ -66,6 +66,7 @@ class AnimeWitcherAccountService {
   int _sessionGeneration = 0;
   Future<AnimeWitcherSession>? _refreshInFlight;
   Future<void>? _syncInFlight;
+  final Map<String, Future<void>> _displayLibraryInFlight = {};
   DateTime? _lastVerificationEmailSentAt;
 
   final Map<String, Set<String>> _watchedEpisodeCache = <String, Set<String>>{};
@@ -1920,6 +1921,27 @@ class AnimeWitcherAccountService {
     });
   }
 
+  /// Fetches only the cloud-backed library collection for the visible media
+  /// type, not the entire account (watched chapters, history, progress, etc).
+  /// The existing conflict resolver, pending deletes and local cache remain
+  /// in charge of protecting offline edits and account changes.
+  Future<void> refreshLibraryForDisplay({bool manga = false}) {
+    if (!isSignedIn || _profile == null) return Future<void>.value();
+    final accountSync = _syncInFlight;
+    if (accountSync != null) return accountSync;
+    // Never reuse a previous account's unfinished GET after an account switch.
+    final key = '${_profile!.uid}:${manga ? 'manga' : 'anime'}';
+    final running = _displayLibraryInFlight[key];
+    if (running != null) return running;
+    final operation = manga ? _syncMangaLibrary() : _syncLibrary();
+    _displayLibraryInFlight[key] = operation;
+    return operation.whenComplete(() {
+      if (identical(_displayLibraryInFlight[key], operation)) {
+        _displayLibraryInFlight.remove(key);
+      }
+    });
+  }
+
   Future<AnimeWitcherProfile> _resolveProfile(
     AnimeWitcherSession session, {
     required bool createIfMissing,
@@ -2200,6 +2222,7 @@ class AnimeWitcherAccountService {
     _lastSyncAt = null;
     _refreshInFlight = null;
     _syncInFlight = null;
+    _displayLibraryInFlight.clear();
     _watchedEpisodeCache.clear();
     _watchedMangaChapterCache.clear();
     _loadedWatchedManga.clear();

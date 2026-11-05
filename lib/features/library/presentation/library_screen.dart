@@ -95,8 +95,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
       for (final listKind in LibraryMediaKind.values)
         listKind: <LibraryCategory, int>{
           for (final listCategory in LibraryCategory.values)
-            listCategory: ref.read(libraryProvider.notifier)
-                .itemsForCategory(listKind, listCategory).length,
+            listCategory: ref
+                .read(libraryProvider.notifier)
+                .itemsForCategory(listKind, listCategory)
+                .length,
         },
     };
     final recentCount = libraryRecentFor(
@@ -136,10 +138,20 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                     recentCount: recentCount,
                     prefs: _prefs,
                     onFilter: () => _openFilter(kind),
-                    onRecent: () => setState(() {
-                      _recent = true;
-                      _characters = false;
-                    }),
+                    onRecent: () {
+                      setState(() {
+                        _recent = true;
+                        _characters = false;
+                      });
+                      // Server history is fetched on demand, not each time
+                      // the user opens a cached anime/manga library shelf.
+                      unawaited(
+                        ref
+                            .read(watchHistoryProvider.notifier)
+                            .refreshFromServer()
+                            .catchError((Object _) {}),
+                      );
+                    },
                     onSelect: (listKind, listCategory) {
                       setState(() {
                         _recent = false;

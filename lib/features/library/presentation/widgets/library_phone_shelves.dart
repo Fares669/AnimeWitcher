@@ -181,6 +181,8 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
     final category = tab.category;
     if (category != null) {
       unawaited(ref.read(libraryProvider.notifier).select(kind, category));
+    } else if (tab.key == LibraryShelfPrefs.recentKey) {
+      unawaited(_syncHistory());
     }
   }
 

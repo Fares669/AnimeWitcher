@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import '../../domain/entity/multimedia_item.dart';
 import '../../storage/provider_local_library.dart';
+import '../../storage/library_category.dart';
 import '../../storage/anime_rift_cloud_sync.dart';
 import '../../storage/anime_rift_rating.dart';
 import '../../storage/anime_rift_account_scope.dart';
@@ -162,6 +163,22 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
   ) =>
       AnimeRiftCloudSync(AnimeRiftCloudApiReader(_api))
           .importToLocal(storage: storage, hydrate: getDetails);
+
+  /// Read exactly the chosen Rift shelf, rather than all account lists/history.
+  Future<AnimeRiftCloudImportResult> importCloudLibraryCategory(
+    StorageService storage,
+    LibraryCategory category,
+  ) => AnimeRiftCloudSync(AnimeRiftCloudApiReader(_api)).importSelectedList(
+    storage: storage,
+    category: category,
+    hydrate: getDetails,
+  );
+
+  Future<AnimeRiftCloudImportResult> importCloudHistory(
+    StorageService storage,
+  ) =>
+      AnimeRiftCloudSync(AnimeRiftCloudApiReader(_api))
+          .importHistoryToLocal(storage: storage, hydrate: getDetails);
 
   final _homeSectionRows = <String, Map<dynamic, dynamic>>{};
 
