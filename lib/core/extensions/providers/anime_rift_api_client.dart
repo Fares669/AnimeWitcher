@@ -1214,6 +1214,51 @@ class AnimeRiftApiClient {
     );
   }
 
+  /// Optional read-only page request for accounts whose library lists exceed
+  /// one server response. The original endpoint and integrity scope are
+  /// unchanged; unsupported page parameters must not trigger a destructive
+  /// local reconciliation.
+  Future<Map<String, dynamic>> fetchMyListPage(
+    String category,
+    int page, {
+    CancelToken? cancelToken,
+  }) {
+    if (!const {
+      'favorite',
+      'currently',
+      'want_to',
+      'finished',
+      'later',
+      'dropped',
+    }.contains(category)) {
+      throw ArgumentError('Invalid Anime Rift list category');
+    }
+    if (page < 1 || page > 256) {
+      throw ArgumentError.value(page, 'page');
+    }
+    return _readAccountData(
+      'my_list/all',
+      'USER.MY_LIST.GET_ALL',
+      query: {'my_list': category, 'page': page},
+      cancelToken: cancelToken,
+    );
+  }
+
+  Future<Map<String, dynamic>> fetchFavoriteAnimePage(
+    int page, {
+    CancelToken? cancelToken,
+  }) {
+    if (page < 1 || page > 256) {
+      throw ArgumentError.value(page, 'page');
+    }
+    return _readAccountData(
+      'favorite/anime/all',
+      'USER.FAVORITES.ANIME.ALL',
+      query: {'page': page},
+      cancelToken: cancelToken,
+    );
+  }
+
   Future<Map<String, dynamic>> fetchMyListOverview({
     CancelToken? cancelToken,
   }) => _readAccountData(

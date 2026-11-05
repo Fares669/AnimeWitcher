@@ -12,7 +12,16 @@ frame for a full-account synchronization:
   counts, sorting, and phone shelf cache. Network errors keep cached data.
 - AnimeRift reads only the selected `favorite/anime/all` or
   `my_list/all?my_list=...` list plus `my_list/overview` (to verify whether a
-  response is complete). Watch history uses a **separate** full/latest GET.
+  response is complete). When the overview reports more than the initial list
+  (e.g. 290 completed anime versus the first 30 returned), the client attempts
+  bounded read-only `page` requests and deduplicates rows. Page numbering may
+  start at 0 or 1: one repeated first page is tolerated, while another
+  repeated page or rejected parameter stops safely. It does not mark a partial
+  list complete or delete older cached entries. Rows with a verified anime ID
+  are not discarded solely because a separate details request fails; locally
+  known title/poster metadata is reused where possible, otherwise the verified
+  ID appears temporarily until details are available. Watch history uses a
+  **separate** full/latest GET.
 - Native AnimeWitcher reads the Firestore anime collections `fav_anime` and
   `user_anime` for an anime shelf, or their manga equivalents for a manga
   shelf. Its server stores multiple categories in a shared collection, so one

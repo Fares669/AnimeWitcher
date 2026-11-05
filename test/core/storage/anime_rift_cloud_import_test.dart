@@ -29,7 +29,8 @@ class _MemoryStorage extends StorageService {
   }
 }
 
-class _CloudReader implements AnimeRiftCloudAccountReader {
+class _CloudReader
+    implements AnimeRiftCloudAccountReader, AnimeRiftCloudPagedReader {
   bool linked = true;
   String? restoredAccountId;
   final favorites = <Object>[];
@@ -38,6 +39,20 @@ class _CloudReader implements AnimeRiftCloudAccountReader {
   Completer<Map<String, dynamic>>? favoritesGate;
   bool completeOverview = true;
   final requests = <String>[];
+  int? pageSize;
+  int pageBase = 1;
+  int? failOnPage;
+  bool ignorePage = false;
+  Completer<Map<String, dynamic>>? pageGate;
+
+  Map<String, dynamic> _paged(List<Object> all, {int? page}) {
+    final limit = pageSize;
+    if (limit == null) return {'items': all};
+    final first = page == null || ignorePage;
+    final start = first ? 0 : ((page - pageBase) * limit).clamp(0, all.length);
+    final end = (start + limit).clamp(0, all.length);
+    return {'items': all.sublist(start, end), 'hasNext': end < all.length};
+  }
 
   @override
   Future<bool> restoreAccountSession() async {
@@ -70,7 +85,25 @@ class _CloudReader implements AnimeRiftCloudAccountReader {
   @override
   Future<Map<String, dynamic>> fetchMyList(String category) async {
     requests.add(category);
-    return {'items': lists[category] ?? <Object>[]};
+    return _paged(lists[category] ?? <Object>[]);
+  }
+
+  @override
+  Future<Map<String, dynamic>> fetchMyListPage(
+    String category,
+    int page,
+  ) async {
+    requests.add('$category:page:$page');
+    if (page == failOnPage) throw const AnimeRiftAccessUnavailable();
+    if (pageGate != null) return pageGate!.future;
+    return _paged(lists[category] ?? <Object>[], page: page);
+  }
+
+  @override
+  Future<Map<String, dynamic>> fetchFavoriteAnimePage(int page) async {
+    requests.add('favorite:page:$page');
+    if (page == failOnPage) throw const AnimeRiftAccessUnavailable();
+    return _paged(favorites, page: page);
   }
 
   @override
@@ -88,6 +121,238 @@ class _CloudReader implements AnimeRiftCloudAccountReader {
 
 void main() {
   tearDown(AnimeRiftLocalAccountScope.reset);
+
+  test(
+    'Rift completed 290 items spanning 30-item server pages all import',
+    () async {
+      AnimeRiftLocalAccountScope.activate('alice');
+      final storage = _MemoryStorage();
+      final reader = _CloudReader()
+        ..pageSize = 30
+        ..lists['finished'] = [
+          for (var n = 0; n < 290; n++)
+            {
+              'anime': {
+                '_id': 'anime$n',
+                'title': 'Series $n',
+                'main_picture': 'https://art.example/$n.webp',
+              },
+            },
+        ];
+      final cloud = AnimeRiftCloudSync(reader);
+      final result = await cloud.importSelectedList(
+        storage: storage,
+        category: LibraryCategory.completed,
+      );
+      expect(result.categories, 290);
+      expect(result.skipped, 0);
+      expect(
+        ProviderLocalLibrary(storage, _rift).items(LibraryCategory.completed),
+        hasLength(290),
+      );
+      // Default GET and explicit page=1 are intentionally identical for a
+      // one-based server; requesting page=2 must advance rather than stopping.
+      expect(
+        reader.requests,
+        containsAll([
+          'finished',
+          'finished:page:1',
+          'finished:page:2',
+          'finished:page:10',
+        ]),
+      );
+    },
+  );
+
+  test(
+    'Rift zero-based first page also advances without missing anime',
+    () async {
+      AnimeRiftLocalAccountScope.activate('alice');
+      final storage = _MemoryStorage();
+      final reader = _CloudReader()
+        ..pageSize = 30
+        ..pageBase = 0
+        ..lists['finished'] = [
+          for (var n = 0; n < 95; n++)
+            {
+              'anime': {'_id': 'zero$n', 'title': 'Episode show $n'},
+            },
+        ];
+      await AnimeRiftCloudSync(reader).importSelectedList(
+        storage: storage,
+        category: LibraryCategory.completed,
+      );
+      expect(
+        ProviderLocalLibrary(storage, _rift).items(LibraryCategory.completed),
+        hasLength(95),
+      );
+      expect(reader.requests, contains('finished:page:3'));
+    },
+  );
+
+  test(
+    'Rift startup sync also imports the full 290-item completed shelf',
+    () async {
+      AnimeRiftLocalAccountScope.activate('alice');
+      final storage = _MemoryStorage();
+      final reader = _CloudReader()
+        ..pageSize = 30
+        ..lists['finished'] = [
+          for (var n = 0; n < 290; n++)
+            {
+              'anime': {'_id': 'startup$n', 'name': 'Series $n'},
+            },
+        ];
+      final result = await AnimeRiftCloudSync(reader)
+          .importToLocal(storage: storage);
+      expect(result.categories, 290);
+      expect(
+        ProviderLocalLibrary(storage, _rift).items(LibraryCategory.completed),
+        hasLength(290),
+      );
+      expect(reader.requests, contains('finished:page:10'));
+    },
+  );
+
+  test(
+    'Rift account switch mid-page never imports another user\'s library',
+    () async {
+      AnimeRiftLocalAccountScope.activate('alice');
+      final storage = _MemoryStorage();
+      final reader = _CloudReader()
+        ..pageSize = 30
+        ..pageGate = Completer<Map<String, dynamic>>()
+        ..lists['finished'] = [
+          for (var n = 0; n < 60; n++)
+            {
+              'anime': {'_id': 'alice$n', 'title': 'Alice $n'},
+            },
+        ];
+      final pending = AnimeRiftCloudSync(reader).importSelectedList(
+        storage: storage,
+        category: LibraryCategory.completed,
+      );
+      final checked = expectLater(
+        pending,
+        throwsA(isA<AnimeRiftAuthenticationRequired>()),
+      );
+      for (
+        var attempt = 0;
+        attempt < 100 && !reader.requests.contains('finished:page:1');
+        attempt++
+      ) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(reader.requests, contains('finished:page:1'));
+      AnimeRiftLocalAccountScope.activate('bob');
+      reader.pageGate!.complete({
+        'items': [
+          {
+            'anime': {'_id': 'alice30', 'title': 'Alice 30'},
+          },
+        ],
+      });
+      await checked;
+      expect(
+        ProviderLocalLibrary(storage, _rift).items(LibraryCategory.completed),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'incomplete remote pages cannot clear already imported completed anime',
+    () async {
+      AnimeRiftLocalAccountScope.activate('alice');
+      final storage = _MemoryStorage();
+      final reader = _CloudReader()
+        ..pageSize = 30
+        ..lists['finished'] = [
+          for (var n = 0; n < 95; n++)
+            {
+              'anime': {'_id': 'saved$n', 'title': 'Saved $n'},
+            },
+        ];
+      final cloud = AnimeRiftCloudSync(reader);
+      await cloud.importSelectedList(
+        storage: storage,
+        category: LibraryCategory.completed,
+      );
+      reader.lists['finished'] = reader.lists['finished']!.take(70).toList();
+      reader.failOnPage = 3;
+      await cloud.importSelectedList(
+        storage: storage,
+        category: LibraryCategory.completed,
+      );
+      final library = ProviderLocalLibrary(storage, _rift);
+      expect(library.items(LibraryCategory.completed), hasLength(95));
+      expect(
+        library.category('https://anime-rift.com/anime/saved94'),
+        LibraryCategory.completed,
+      );
+    },
+  );
+
+  test(
+    'server ignoring page parameter stops without a request storm or deletion',
+    () async {
+      AnimeRiftLocalAccountScope.activate('alice');
+      final storage = _MemoryStorage();
+      final reader = _CloudReader()
+        ..pageSize = 30
+        ..ignorePage = true
+        ..lists['finished'] = [
+          for (var n = 0; n < 290; n++)
+            {
+              'anime': {'_id': 'ignored$n', 'title': 'Ignored $n'},
+            },
+        ];
+      await AnimeRiftCloudSync(reader).importSelectedList(
+        storage: storage,
+        category: LibraryCategory.completed,
+      );
+      expect(reader.requests, [
+        'finished',
+        'finished:page:1',
+        'finished:page:2',
+      ]);
+      expect(
+        ProviderLocalLibrary(storage, _rift).items(LibraryCategory.completed),
+        hasLength(30),
+      );
+    },
+  );
+
+  test(
+    'valid Rift catalog IDs without title no longer vanish after 30 details',
+    () async {
+      AnimeRiftLocalAccountScope.activate('alice');
+      final storage = _MemoryStorage();
+      var detailsCalls = 0;
+      final reader = _CloudReader()
+        ..lists['finished'] = [
+          for (var n = 0; n < 290; n++)
+            {
+              'anime': {'_id': 'id$n'},
+            },
+        ];
+      final result = await AnimeRiftCloudSync(reader).importSelectedList(
+        storage: storage,
+        category: LibraryCategory.completed,
+        hydrate: (url) async {
+          detailsCalls++;
+          throw const AnimeRiftAccessUnavailable();
+        },
+      );
+      expect(result.categories, 290);
+      expect(result.skipped, 0);
+      expect(detailsCalls, 0);
+      expect(
+        ProviderLocalLibrary(storage, _rift).items(LibraryCategory.completed),
+        hasLength(290),
+      );
+    },
+  );
 
   test(
     'opening one Rift shelf reads only that shelf and leaves others cached',
@@ -618,29 +883,33 @@ void main() {
     );
   });
 
-  test(
-    'one unavailable anime detail does not hide other valid favorites',
-    () async {
-      AnimeRiftLocalAccountScope.activate('alice');
-      final storage = _MemoryStorage();
-      final reader = _CloudReader()
-        ..favorites.add({'anime_id': 'offlineDetails'})
-        ..favorites.add({
-          'anime': {'_id': 'valid', 'title': 'Visible favorite'},
-        });
-      final result = await AnimeRiftCloudSync(reader).importToLocal(
-        storage: storage,
-        hydrate: (_) async => throw const AnimeRiftAccessUnavailable(),
-      );
-      expect(result.favorites, 1);
-      expect(result.skipped, 1);
-      expect(
-        ProviderLocalLibrary(
-          storage,
-          _rift,
-        ).isFavorite('https://anime-rift.com/anime/valid'),
-        isTrue,
-      );
-    },
-  );
+  test('one unavailable anime detail remains available by its confirmed catalog ID', () async {
+    AnimeRiftLocalAccountScope.activate('alice');
+    final storage = _MemoryStorage();
+    final reader = _CloudReader()
+      ..favorites.add({'anime_id': 'offlineDetails'})
+      ..favorites.add({
+        'anime': {'_id': 'valid', 'title': 'Visible favorite'},
+      });
+    final result = await AnimeRiftCloudSync(reader).importToLocal(
+      storage: storage,
+      hydrate: (_) async => throw const AnimeRiftAccessUnavailable(),
+    );
+    expect(result.favorites, 2);
+    expect(result.skipped, 0);
+    expect(
+      ProviderLocalLibrary(
+        storage,
+        _rift,
+      ).isFavorite('https://anime-rift.com/anime/offlineDetails'),
+      isTrue,
+    );
+    expect(
+      ProviderLocalLibrary(
+        storage,
+        _rift,
+      ).isFavorite('https://anime-rift.com/anime/valid'),
+      isTrue,
+    );
+  });
 }

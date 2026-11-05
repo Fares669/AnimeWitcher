@@ -565,6 +565,67 @@ void main() {
     },
   );
 
+  test(
+    'Rift large-library page GETs retain account authorization and scopes',
+    () async {
+      final reads = <RequestOptions>[];
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: fixtureDio((options) {
+          if (options.uri.host.endsWith('googleapis.com')) {
+            return reply(options, <String, dynamic>{}, 400);
+          }
+          if (options.uri.path.endsWith('/auth/register/device')) {
+            return reply(options, {'sessionKey': 'fixture'}, 201);
+          }
+          if (options.uri.path.endsWith('/auth/sign-in/with-code')) {
+            return reply(options, {
+              'items': {
+                'profile': {'_id': 'rift-user'},
+                'token': 'rift-user-token',
+              },
+            });
+          }
+          reads.add(options);
+          return reply(options, {'items': <Object>[]});
+        }),
+      );
+      await client.signInWithCode('owner-issued-code');
+      await client.fetchMyListPage('finished', 2);
+      await client.fetchFavoriteAnimePage(3);
+      expect(reads, hasLength(2));
+      expect(reads[0].uri.path, '/api/v4/my_list/all');
+      expect(reads[0].uri.queryParameters, {
+        'my_list': 'finished',
+        'page': '2',
+      });
+      expect(reads[1].uri.path, '/api/v4/favorite/anime/all');
+      expect(reads[1].uri.queryParameters, {'page': '3'});
+      for (final (index, scope) in const [
+        'USER.MY_LIST.GET_ALL',
+        'USER.FAVORITES.ANIME.ALL',
+      ].indexed) {
+        expect(reads[index].method, 'GET');
+        expect(reads[index].headers['authorization'], 'Bearer rift-user-token');
+        final jwt = (reads[index].headers['integrity'] as String)
+            .substring(7)
+            .split('.');
+        final payload = jsonDecode(
+          utf8.decode(base64Url.decode(base64Url.normalize(jwt[1]))),
+        ) as Map;
+        expect(payload['scope'], scope);
+      }
+      expect(() => client.fetchMyListPage('finished', 0), throwsArgumentError);
+      expect(
+        () => client.fetchMyListPage('finished', 257),
+        throwsArgumentError,
+      );
+      expect(() => client.fetchMyListPage('invalid', 2), throwsArgumentError);
+      expect(() => client.fetchFavoriteAnimePage(-1), throwsArgumentError);
+      expect(reads, hasLength(2));
+    },
+  );
+
   test('built-in list writes use scoped native bookmark PUT', () async {
     final writes = <RequestOptions>[];
     final client = AnimeRiftApiClient(

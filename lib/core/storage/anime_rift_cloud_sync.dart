@@ -25,8 +25,17 @@ abstract class AnimeRiftCloudAccountReader {
   Future<Map<String, dynamic>> fetchWatchHistoryFull();
 }
 
+/// The native list API may return a single page for large account libraries.
+/// This opt-in read-only interface avoids changing existing reader contracts.
+abstract class AnimeRiftCloudPagedReader {
+  Future<Map<String, dynamic>> fetchMyListPage(String category, int page);
+
+  Future<Map<String, dynamic>> fetchFavoriteAnimePage(int page);
+}
+
 /// Adapter for the authenticated, read-only endpoints of the real API client.
-class AnimeRiftCloudApiReader implements AnimeRiftCloudAccountReader {
+class AnimeRiftCloudApiReader
+    implements AnimeRiftCloudAccountReader, AnimeRiftCloudPagedReader {
   AnimeRiftCloudApiReader(this.api);
 
   final AnimeRiftApiClient api;
@@ -44,6 +53,14 @@ class AnimeRiftCloudApiReader implements AnimeRiftCloudAccountReader {
   @override
   Future<Map<String, dynamic>> fetchMyList(String category) =>
       api.fetchMyList(category);
+
+  @override
+  Future<Map<String, dynamic>> fetchMyListPage(String category, int page) =>
+      api.fetchMyListPage(category, page);
+
+  @override
+  Future<Map<String, dynamic>> fetchFavoriteAnimePage(int page) =>
+      api.fetchFavoriteAnimePage(page);
 
   @override
   Future<Map<String, dynamic>> fetchWatchHistoryLatest() =>
@@ -169,6 +186,104 @@ class AnimeRiftCloudSync {
     'dropped': 'my_list_dropped',
   };
 
+  /// Some account lists arrive as 30-item pages even when the overview
+  /// reports hundreds of entries. Fetch subsequent read-only pages before
+  /// reconciling an imported snapshot. The API's page origin is not documented:
+  /// the unpaged response may represent page 0 OR page 1. A duplicate first
+  /// page is tolerated once; subsequent repeated pages stop the scan.
+  ///
+  /// Crucially, a failed/unsupported page request produces a partial snapshot,
+  /// never a false empty response that could remove locally cached titles.
+  Future<Map<String, dynamic>> _expandAccountPages({
+    required Map<String, dynamic> first,
+    required String account,
+    required int? expectedCount,
+    required Future<Map<String, dynamic>> Function(int page)? loadPage,
+  }) async {
+    final rows = _cloudRows(first);
+    final keys = rows.map(_rowIdentity).toSet();
+    final more = _hasMore(first);
+    final expected = expectedCount;
+    if (!more && (expected == null || keys.length >= expected)) {
+      return first;
+    }
+    if (loadPage == null || (expected != null && expected > 20000)) {
+      return {'items': rows, 'hasNext': true};
+    }
+    var seenStalledPages = 0;
+    var lastHasNext = more;
+    var exhausted = false;
+    // Hard bound keeps untrusted server pagination from hammering the API.
+    for (var page = 1; page <= 256; page++) {
+      _requireAccount(account);
+      Map<String, dynamic> response;
+      try {
+        response = await loadPage(page);
+      } on AnimeRiftAuthenticationRequired {
+        rethrow;
+      } on AnimeRiftAccessUnavailable {
+        _requireAccount(account);
+        break;
+      }
+      _requireAccount(account);
+      List<Object?> incoming;
+      try {
+        incoming = _cloudRows(response);
+      } on AnimeRiftAccessUnavailable {
+        break;
+      }
+      if (incoming.isEmpty) {
+        exhausted = true;
+        break;
+      }
+      var added = 0;
+      for (final row in incoming) {
+        if (keys.add(_rowIdentity(row))) {
+          rows.add(row);
+          added++;
+        }
+      }
+      lastHasNext = _hasMore(response);
+      if (added == 0) {
+        // Default GET often resolves to page 1. Try page 2 once before
+        // concluding that the server ignores the page parameter.
+        if (++seenStalledPages >= 2) break;
+        continue;
+      }
+      seenStalledPages = 0;
+      if (!lastHasNext && (expected == null || keys.length >= expected)) {
+        exhausted = true;
+        break;
+      }
+    }
+    final complete =
+        (expected == null || keys.length == expected) &&
+        !lastHasNext &&
+        (exhausted || keys.length >= (expected ?? 0));
+    return {'items': rows, 'hasNext': !complete};
+  }
+
+  String _rowIdentity(Object? row) {
+    if (row is Map) {
+      final inner = row['anime'] is Map
+          ? row['anime'] as Map
+          : row['_anime'] is Map
+          ? row['_anime'] as Map
+          : row;
+      final id =
+          inner['anime_id'] ??
+          inner['animeId'] ??
+          inner['_id'] ??
+          inner['id'] ??
+          row['anime_id'] ??
+          row['animeId'];
+      if (id is String && RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(id)) {
+        return 'anime:$id';
+      }
+    }
+    return 'row:${jsonEncode(row)}';
+  }
+
   /// The native Rift library fetches a single list when selected. Refresh
   /// only that shelf, retaining cached items while the GET runs. A remote
   /// deletion is applied only to previously imported items and only if the
@@ -191,11 +306,10 @@ class AnimeRiftCloudSync {
         : _categoryForList.entries
               .firstWhere((entry) => entry.value == category)
               .key;
-    final response = list == 'favorite'
+    final first = list == 'favorite'
         ? await _reader.fetchFavoriteAnime()
         : await _reader.fetchMyList(list);
     _requireAccount(account);
-    final rows = _cloudRows(response);
     Map<String, int> counts = const {};
     try {
       counts = parseMyListOverviewCounts(await _reader.fetchMyListOverview());
@@ -203,11 +317,37 @@ class AnimeRiftCloudSync {
     } on AnimeRiftAccessUnavailable {
       _requireAccount(account);
     }
+    final countKey = category == LibraryCategory.favorite
+        ? 'my_list_favorites'
+        : _overviewForList[list]!;
+    final pagedReader = _reader is AnimeRiftCloudPagedReader
+        ? _reader as AnimeRiftCloudPagedReader
+        : null;
+    final response = await _expandAccountPages(
+      first: first,
+      account: account,
+      expectedCount: counts[countKey],
+      loadPage: pagedReader == null
+          ? null
+          : (page) => list == 'favorite'
+                ? pagedReader.fetchFavoriteAnimePage(page)
+                : pagedReader.fetchMyListPage(list, page),
+    );
+    _requireAccount(account);
+    final rows = _cloudRows(response);
+    final library = ProviderLocalLibrary(storage, animeRiftProviderId);
     final hydrated = <String, MultimediaItem?>{};
     final received = <String, MultimediaItem>{};
     var skipped = 0;
     for (final row in rows) {
-      final item = await _cloudAnime(row, hydrate, hydrated);
+      // Listing 290 items must not trigger 290 serial detail requests and
+      // silently drop the remainder if the catalog rate-limits them.
+      final item = await _cloudAnime(
+        row,
+        rows.length <= 30 ? hydrate : null,
+        hydrated,
+        cached: library.item,
+      );
       _requireAccount(account);
       if (item == null) {
         skipped++;
@@ -215,7 +355,6 @@ class AnimeRiftCloudSync {
         received[item.url] = item;
       }
     }
-    final library = ProviderLocalLibrary(storage, animeRiftProviderId);
     final journal = AnimeRiftCloudPendingJournal(storage);
     var changed = 0;
     for (final item in received.values) {
@@ -234,9 +373,6 @@ class AnimeRiftCloudSync {
         changed++;
       }
     }
-    final countKey = category == LibraryCategory.favorite
-        ? 'my_list_favorites'
-        : _overviewForList[list]!;
     final complete =
         counts[countKey] == rows.length &&
         received.length == rows.length &&
@@ -416,26 +552,40 @@ class AnimeRiftCloudSync {
 
     // Fetch before writing, so a failed request never looks like an empty
     // remote library and a changed session cannot import into another user.
-    final favoriteResponse = await _reader.fetchFavoriteAnime();
-    final remoteFavorites = _cloudRows(favoriteResponse);
-    _requireAccount(account);
-    final remoteLists = <LibraryCategory, List<Object?>>{};
-    final remoteResponses = <String, Map<String, dynamic>>{};
-    for (final entry in _categoryForList.entries) {
-      final response = await _reader.fetchMyList(entry.key);
-      remoteResponses[entry.key] = response;
-      remoteLists[entry.value] = _cloudRows(response);
-      _requireAccount(account);
-    }
-    // Only a complete snapshot may justify deletion. The original overview
-    // exposes per-list totals; a missing total, truncated page or malformed
-    // row must never be interpreted as an empty server list.
+    // The count from the overview is also the page-completeness boundary.
+    // Without it, the default first 30 rows may silently look like the
+    // entire library, especially on accounts with hundreds of completed anime.
     Map<String, int> counts = const {};
     try {
       counts = parseMyListOverviewCounts(await _reader.fetchMyListOverview());
       _requireAccount(account);
     } on AnimeRiftAccessUnavailable {
-      // Import known rows additively; never remove on failed completeness.
+      _requireAccount(account);
+    }
+    final pagedReader = _reader is AnimeRiftCloudPagedReader
+        ? _reader as AnimeRiftCloudPagedReader
+        : null;
+    final favoriteResponse = await _expandAccountPages(
+      first: await _reader.fetchFavoriteAnime(),
+      account: account,
+      expectedCount: counts['my_list_favorites'],
+      loadPage: pagedReader?.fetchFavoriteAnimePage,
+    );
+    final remoteFavorites = _cloudRows(favoriteResponse);
+    _requireAccount(account);
+    final remoteLists = <LibraryCategory, List<Object?>>{};
+    final remoteResponses = <String, Map<String, dynamic>>{};
+    for (final entry in _categoryForList.entries) {
+      final response = await _expandAccountPages(
+        first: await _reader.fetchMyList(entry.key),
+        account: account,
+        expectedCount: counts[_overviewForList[entry.key]],
+        loadPage: pagedReader == null
+            ? null
+            : (page) => pagedReader.fetchMyListPage(entry.key, page),
+      );
+      remoteResponses[entry.key] = response;
+      remoteLists[entry.value] = _cloudRows(response);
       _requireAccount(account);
     }
     final remoteHistory = _cloudRows(await _readWatchHistory());
@@ -443,8 +593,13 @@ class AnimeRiftCloudSync {
 
     final hydrated = <String, MultimediaItem?>{};
     var skipped = 0;
-    Future<MultimediaItem?> parse(Object? row) async {
-      final item = await _cloudAnime(row, hydrate, hydrated);
+    Future<MultimediaItem?> parse(Object? row, {bool largeList = false}) async {
+      final item = await _cloudAnime(
+        row,
+        largeList ? null : hydrate,
+        hydrated,
+        cached: library.item,
+      );
       _requireAccount(account);
       if (item == null) skipped++;
       return item;
@@ -452,14 +607,14 @@ class AnimeRiftCloudSync {
 
     final favorites = <MultimediaItem>[];
     for (final row in remoteFavorites) {
-      final item = await parse(row);
+      final item = await parse(row, largeList: remoteFavorites.length > 30);
       if (item != null) favorites.add(item);
     }
     final categories = <LibraryCategory, List<MultimediaItem>>{};
     for (final entry in remoteLists.entries) {
       final mapped = <MultimediaItem>[];
       for (final row in entry.value) {
-        final item = await parse(row);
+        final item = await parse(row, largeList: entry.value.length > 30);
         if (item != null) mapped.add(item);
       }
       categories[entry.key] = mapped;
@@ -745,8 +900,9 @@ class AnimeRiftCloudSync {
   Future<MultimediaItem?> _cloudAnime(
     Object? value,
     Future<MultimediaItem?> Function(String)? hydrate,
-    Map<String, MultimediaItem?> cache,
-  ) async {
+    Map<String, MultimediaItem?> cache, {
+    MultimediaItem? Function(String url)? cached,
+  }) async {
     if (value is! Map) return null;
     final embedded = value['anime'] is Map
         ? value['anime'] as Map
@@ -757,42 +913,67 @@ class AnimeRiftCloudSync {
     // A list-membership row can have its own `_id`. Its `anime_id` or
     // embedded anime identifies the actual catalog item.
     final id = embedded != null
-        ? row['_id'] ?? row['anime_id'] ?? row['animeId']
+        ? row['_id'] ?? row['anime_id'] ?? row['animeId'] ?? row['id']
         : value['anime_id'] ??
               value['animeId'] ??
               value['_anime'] ??
               value['anime'] ??
-              value['_id'];
+              value['_id'] ??
+              value['id'];
     if (id is! String || !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(id)) {
       return null;
     }
     final url = 'https://anime-rift.com/anime/$id';
-    final title = row['title'];
+    final title =
+        row['title'] ??
+        row['name'] ??
+        row['anime_title'] ??
+        row['english_title'] ??
+        row['title_en'];
+    final saved = cached?.call(url);
+    final picture = _safeArtwork(
+      row['main_picture'] ??
+          row['medium_picture'] ??
+          row['poster_url'] ??
+          row['poster'] ??
+          row['image'],
+    );
     if (title is String && title.trim().isNotEmpty) {
-      final image = row['main_picture'] ?? row['medium_picture'];
       return MultimediaItem(
         title: title.trim(),
         url: url,
-        posterUrl: _safeArtwork(image),
+        posterUrl: picture.isNotEmpty ? picture : saved?.posterUrl ?? '',
         provider: animeRiftProviderId,
         contentType: MultimediaContentType.anime,
       );
     }
-    if (hydrate == null) return null;
+    if (saved != null) return saved;
     MultimediaItem? resolved;
-    try {
-      resolved = await (cache.containsKey(url)
-          ? Future.value(cache[url])
-          : hydrate(url));
-    } on AnimeRiftAuthenticationRequired {
-      rethrow;
-    } on AnimeRiftAccessUnavailable {
-      return null;
+    if (hydrate != null) {
+      try {
+        resolved = await (cache.containsKey(url)
+            ? Future.value(cache[url])
+            : hydrate(url));
+      } on AnimeRiftAuthenticationRequired {
+        rethrow;
+      } on AnimeRiftAccessUnavailable {
+        // This row still identifies a real catalog anime. A failed details
+        // request must not silently remove it from the user's library.
+      }
     }
     cache[url] = resolved;
-    return resolved?.provider == animeRiftProviderId && resolved?.url == url
-        ? resolved
-        : null;
+    if (resolved?.provider == animeRiftProviderId && resolved?.url == url) {
+      return resolved;
+    }
+    // Use the verified catalog ID as a temporary label, never an unrelated
+    // title or invented poster. Opening the card fetches actual details.
+    return MultimediaItem(
+      title: id,
+      url: url,
+      posterUrl: picture,
+      provider: animeRiftProviderId,
+      contentType: MultimediaContentType.anime,
+    );
   }
 
   String _safeArtwork(Object? value) {
