@@ -53,8 +53,18 @@ void main() {
                 row['commentsCount'] ??
                 row['comment_count']
           : null;
+      final commentFlags = row is Map
+          ? row.entries
+                .where(
+                  (e) =>
+                      e.key.toString().toLowerCase().contains('comment') &&
+                      (e.value is bool || e.value is num),
+                )
+                .map((e) => '${e.key}=${e.value}')
+                .toList()
+          : <String>[];
       print(
-        'COMMENTS_DIAGNOSTIC title_index=$tested detail_comment_count=${knownCount is num ? knownCount : "absent"}',
+        'COMMENTS_DIAGNOSTIC title_index=$tested detail_comment_count=${knownCount is num ? knownCount : "absent"} flags=$commentFlags',
       );
       const variants = <String, Map<String, Object>>{
         'current': {'page': 0, 'level': 0, 'canReply': '1'},
@@ -63,12 +73,43 @@ void main() {
         'page_one': {'page': 1, 'level': 0, 'canReply': '1'},
         'no_can_reply': {'page': 0, 'level': 0},
       };
-      for (final entry in variants.entries) {
+      final probes = <String, Map<String, Object>>{
+        ...variants,
+        if (tested == 0) ...{
+          'bare_anime': {},
+          'sort_date': {
+            'page': 0,
+            'level': 0,
+            'canReply': '1',
+            'sort_by': 'date',
+          },
+          'sort_created': {
+            'page': 0,
+            'level': 0,
+            'canReply': '1',
+            'sort_by': 'createdAt',
+          },
+          'sort_top': {
+            'page': 0,
+            'level': 0,
+            'canReply': '1',
+            'sort_by': 'top',
+          },
+          'event_target': {'page': 0, 'level': 0, 'canReply': '1'},
+          'global': {'page': 0},
+        },
+      };
+      for (final entry in probes.entries) {
         try {
           final response = await client.request(
             'comment/all',
             'COMMENTS.VIEW',
-            query: {'animeId': id, ...entry.value},
+            query: {
+              if (entry.key != 'global' && entry.key != 'event_target')
+                'animeId': id,
+              if (entry.key == 'event_target') 'eventId': id,
+              ...entry.value,
+            },
           );
           final outer = response['items'];
           final items = outer is List

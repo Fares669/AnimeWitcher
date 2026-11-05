@@ -45,7 +45,7 @@ on:
 jobs:
   animerift_comment_probe:
     name: AnimeRift comment contract (read-only)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnose_comments && inputs.branch == 'feat/animerift-multi-provider' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnose_comments && (inputs.branch == 'feat/animerift-multi-provider' || inputs.branch == 'fix/animerift-comments-root-cause') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
