@@ -6,6 +6,7 @@ import 'package:animewitcher/core/storage/anime_rift_account_scope.dart';
 import 'package:animewitcher/core/storage/anime_rift_auto_sync.dart';
 import 'package:animewitcher/core/storage/anime_rift_cloud_pending.dart';
 import 'package:animewitcher/core/storage/anime_rift_cloud_sync.dart';
+import 'package:animewitcher/core/storage/library_category.dart';
 import 'package:animewitcher/core/storage/provider_local_history.dart';
 import 'package:animewitcher/core/storage/provider_local_library.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
@@ -177,6 +178,139 @@ void main() {
     expect(pending.map((change) => change.kind), ['history']);
     expect(provider.pullCalls, 1);
   });
+
+  test(
+    'favorite write is acknowledged only after the remote state confirms',
+    () async {
+      final storage = _MemoryStorage();
+      final provider = _FakeRift('alice');
+      await provider.restoreAccountSession();
+      var visibleRemotely = false;
+      final sync = AnimeRiftAutoSyncCoordinator(
+        storage: storage,
+        activeRift: () => provider,
+        verifiedWriter: AnimeRiftCloudWriter(
+          _FavoriteClient().setFavoriteAnime,
+          readFavorites: () async => {
+            'items': visibleRemotely
+                ? [
+                    {
+                      'anime': {'_id': 'safe1'},
+                    },
+                  ]
+                : <Object>[],
+          },
+        ),
+        debounce: const Duration(days: 1),
+      );
+      addTearDown(sync.dispose);
+      await sync.queueFavorite(_title, true);
+      await sync.refresh();
+      final account = AnimeRiftLocalAccountScope.accountHash!;
+      expect(
+        AnimeRiftCloudPendingJournal(storage).pending(account),
+        hasLength(1),
+      );
+      visibleRemotely = true;
+      await sync.refresh();
+      expect(AnimeRiftCloudPendingJournal(storage).pending(account), isEmpty);
+    },
+  );
+
+  test(
+    'every standard Rift list can be pushed, verified and removed',
+    () async {
+      final storage = _MemoryStorage();
+      final provider = _FakeRift('alice');
+      await provider.restoreAccountSession();
+      final sent = <String?>[];
+      String? serverCategory;
+      final writer = AnimeRiftCloudWriter(
+        _FavoriteClient().setFavoriteAnime,
+        setCategory: (id, category, {required accountHash}) async {
+          AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+          expect(id, 'safe1');
+          sent.add(category);
+          serverCategory = category;
+          return {'success': true};
+        },
+        readCategory: (key) async => {
+          'items': key == serverCategory
+              ? [
+                  {
+                    'anime': {'_id': 'safe1', 'title': 'Server confirmed'},
+                  },
+                ]
+              : <Object>[],
+        },
+      );
+      final sync = AnimeRiftAutoSyncCoordinator(
+        storage: storage,
+        activeRift: () => provider,
+        verifiedWriter: writer,
+        debounce: const Duration(days: 1),
+      );
+      addTearDown(sync.dispose);
+      final journal = AnimeRiftCloudPendingJournal(storage);
+      final account = AnimeRiftLocalAccountScope.accountHash!;
+      const mappings = {
+        LibraryCategory.watching: 'currently',
+        LibraryCategory.planToWatch: 'want_to',
+        LibraryCategory.completed: 'finished',
+        LibraryCategory.continueLater: 'later',
+        LibraryCategory.notInterested: 'dropped',
+      };
+      for (final entry in mappings.entries) {
+        await sync.queueCategory(_title, entry.key);
+        await sync.refresh();
+        expect(sent.last, entry.value);
+        expect(journal.pending(account), isEmpty);
+      }
+      await sync.queueCategory(_title, null);
+      await sync.refresh();
+      expect(sent.last, isNull);
+      expect(journal.pending(account), isEmpty);
+      expect(provider.pullCalls, mappings.length + 1);
+    },
+  );
+
+  test(
+    'unconfirmed category writes stay pending and protect newer changes',
+    () async {
+      final storage = _MemoryStorage();
+      final provider = _FakeRift('alice');
+      await provider.restoreAccountSession();
+      final sync = AnimeRiftAutoSyncCoordinator(
+        storage: storage,
+        activeRift: () => provider,
+        verifiedWriter: AnimeRiftCloudWriter(
+          _FavoriteClient().setFavoriteAnime,
+          setCategory: (id, category, {required accountHash}) async => {},
+          // A stale response reports the old category despite an accepted PUT.
+          readCategory: (key) async => {
+            'items': key == 'currently'
+                ? [
+                    {
+                      'anime': {'_id': 'safe1'},
+                    },
+                  ]
+                : <Object>[],
+          },
+        ),
+        debounce: const Duration(days: 1),
+      );
+      addTearDown(sync.dispose);
+      await sync.queueCategory(_title, LibraryCategory.completed);
+      await sync.refresh();
+      final account = AnimeRiftLocalAccountScope.accountHash!;
+      final pending = AnimeRiftCloudPendingJournal(storage).pending(account);
+      expect(pending, hasLength(1));
+      expect(
+        pending.single.value['category'],
+        LibraryCategory.completed.storageKey,
+      );
+    },
+  );
 
   test(
     'guest and native provider changes never enter the Rift cloud queue',

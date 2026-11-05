@@ -19,7 +19,19 @@ abstract class AnimeRiftVerifiedCloudWriter {
 }
 
 class AnimeRiftCloudWriter implements AnimeRiftVerifiedCloudWriter {
-  AnimeRiftCloudWriter(this._favorite);
+  AnimeRiftCloudWriter(
+    this._favorite, {
+    Future<Map<String, dynamic>> Function(
+      String,
+      String?, {
+      required String accountHash,
+    })?
+    setCategory,
+    Future<Map<String, dynamic>> Function(String)? readCategory,
+    Future<Map<String, dynamic>> Function()? readFavorites,
+  }) : _setCategory = setCategory,
+       _readCategory = readCategory,
+       _readFavorites = readFavorites;
 
   final Future<Map<String, dynamic>> Function(
     String,
@@ -27,18 +39,104 @@ class AnimeRiftCloudWriter implements AnimeRiftVerifiedCloudWriter {
     required String accountHash,
   })
   _favorite;
+  final Future<Map<String, dynamic>> Function(
+    String,
+    String?, {
+    required String accountHash,
+  })?
+  _setCategory;
+  final Future<Map<String, dynamic>> Function(String)? _readCategory;
+  final Future<Map<String, dynamic>> Function()? _readFavorites;
+
+  static const _categoryKeys = {
+    LibraryCategory.watching: 'currently',
+    LibraryCategory.planToWatch: 'want_to',
+    LibraryCategory.completed: 'finished',
+    LibraryCategory.continueLater: 'later',
+    LibraryCategory.notInterested: 'dropped',
+  };
+
+  // List readback must be complete and parseable before an outgoing change
+  // can be acknowledged. A partial page or unexpected row stays pending.
+  static Set<String>? _remoteIds(Map<String, dynamic> response) {
+    final payload = response['items'];
+    final items = payload is Map
+        ? payload['items'] ?? payload['data'] ?? payload['results']
+        : payload;
+    if (items is! List ||
+        response['hasNext'] == true ||
+        (payload is Map && payload['hasNext'] == true)) {
+      return null;
+    }
+    final ids = <String>{};
+    for (final row in items) {
+      if (row is! Map) return null;
+      final embedded = row['anime'];
+      final anime = embedded is Map ? embedded : row;
+      final rawId = embedded is Map
+          ? anime['_id'] ?? anime['anime_id'] ?? anime['animeId']
+          : row['anime_id'] ?? row['animeId'] ?? row['_anime'] ?? row['_id'];
+      if (rawId is! String || !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(rawId)) {
+        return null;
+      }
+      ids.add(rawId);
+    }
+    return ids;
+  }
 
   @override
   Future<bool> write(
     String accountHash,
     AnimeRiftCloudPendingChange change,
   ) async {
-    if (change.kind != 'favorite') return false;
+    if (change.kind != 'favorite' && change.kind != 'category') return false;
     AnimeRiftCloudPendingJournal.requireAccount(accountHash);
     final url = Uri.parse(AnimeRiftCloudPendingJournal.catalogUrl(change.url));
-    final favorite = change.value['favorite'];
-    if (favorite is! bool) throw const FormatException('Invalid Rift favorite');
-    await _favorite(url.pathSegments.last, favorite, accountHash: accountHash);
+    final id = url.pathSegments.last;
+    if (change.kind == 'favorite') {
+      final favorite = change.value['favorite'];
+      if (favorite is! bool) {
+        throw const FormatException('Invalid Rift favorite');
+      }
+      await _favorite(id, favorite, accountHash: accountHash);
+      AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+      if (_readFavorites != null) {
+        final current = _remoteIds(await _readFavorites());
+        AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+        return current != null && current.contains(id) == favorite;
+      }
+    } else {
+      final setCategory = _setCategory;
+      final readCategory = _readCategory;
+      if (setCategory == null || readCategory == null) return false;
+      final raw = change.value['category'];
+      if (raw != null && raw is! String) {
+        throw const FormatException('Invalid Rift category');
+      }
+      final desired = raw == null
+          ? null
+          : _categoryKeys[LibraryCategory.fromStorageKey(raw as String)];
+      if (raw != null && desired == null) {
+        throw const FormatException('Unrecognized Rift category');
+      }
+      await setCategory(id, desired, accountHash: accountHash);
+      AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+      // The native request's accepted status is not proof that the remote
+      // list actually changed. Confirm all built-in list memberships before
+      // acknowledging a move/removal, including after an eventual-consistency
+      // delay. Pending edits protect local state from a stale cloud pull.
+      final memberships = <String>[];
+      for (final key in _categoryKeys.values) {
+        final response = await readCategory(key);
+        AnimeRiftCloudPendingJournal.requireAccount(accountHash);
+        final ids = _remoteIds(response);
+        if (ids == null) return false;
+        if (ids.contains(id)) memberships.add(key);
+      }
+      return desired == null
+          ? memberships.isEmpty
+          : memberships.length == 1 && memberships.single == desired;
+    }
     AnimeRiftCloudPendingJournal.requireAccount(accountHash);
     return true;
   }
@@ -254,15 +352,36 @@ final riftAutoSyncProvider = Provider<AnimeRiftAutoSyncCoordinator>((ref) {
   final coordinator = AnimeRiftAutoSyncCoordinator(
     storage: ref.read(storageServiceProvider),
     activeRift: activeRift,
-    verifiedWriter: AnimeRiftCloudWriter((
-      id,
-      favorite, {
-      required accountHash,
-    }) {
-      final provider = activeRift();
-      if (provider == null) throw StateError('Rift provider changed');
-      return provider.setCloudFavorite(id, favorite, accountHash: accountHash);
-    }),
+    verifiedWriter: AnimeRiftCloudWriter(
+      (id, favorite, {required accountHash}) {
+        final provider = activeRift();
+        if (provider == null) throw StateError('Rift provider changed');
+        return provider.setCloudFavorite(
+          id,
+          favorite,
+          accountHash: accountHash,
+        );
+      },
+      setCategory: (id, category, {required accountHash}) {
+        final provider = activeRift();
+        if (provider == null) throw StateError('Rift provider changed');
+        return provider.setCloudCategory(
+          id,
+          category,
+          accountHash: accountHash,
+        );
+      },
+      readCategory: (category) {
+        final provider = activeRift();
+        if (provider == null) throw StateError('Rift provider changed');
+        return provider.fetchCloudCategory(category);
+      },
+      readFavorites: () {
+        final provider = activeRift();
+        if (provider == null) throw StateError('Rift provider changed');
+        return provider.fetchCloudFavorites();
+      },
+    ),
     onImported: () => ref.read(accountDataRevisionProvider.notifier).bump(),
   );
   ref.onDispose(coordinator.dispose);

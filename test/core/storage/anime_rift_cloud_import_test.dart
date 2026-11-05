@@ -4,6 +4,7 @@ import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart';
 import 'package:animewitcher/core/storage/anime_rift_account_scope.dart';
 import 'package:animewitcher/core/storage/anime_rift_cloud_sync.dart';
+import 'package:animewitcher/core/storage/anime_rift_cloud_pending.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
 import 'package:animewitcher/core/storage/provider_local_history.dart';
 import 'package:animewitcher/core/storage/provider_local_library.dart';
@@ -35,6 +36,7 @@ class _CloudReader implements AnimeRiftCloudAccountReader {
   final lists = <String, List<Object>>{};
   final history = <Object>[];
   Completer<Map<String, dynamic>>? favoritesGate;
+  bool completeOverview = true;
 
   @override
   Future<bool> restoreAccountSession() async {
@@ -46,7 +48,16 @@ class _CloudReader implements AnimeRiftCloudAccountReader {
 
   @override
   Future<Map<String, dynamic>> fetchMyListOverview() async => {
-    'items': {'my_list_favorites': favorites.length},
+    'items': {
+      'my_list_favorites': favorites.length,
+      if (completeOverview) ...{
+        'my_list_currently_watching': lists['currently']?.length ?? 0,
+        'my_list_plan_to_watch': lists['want_to']?.length ?? 0,
+        'my_list_finished_watching': lists['finished']?.length ?? 0,
+        'my_list_on_hold': lists['later']?.length ?? 0,
+        'my_list_dropped': lists['dropped']?.length ?? 0,
+      },
+    },
   };
 
   @override
@@ -91,6 +102,118 @@ void main() {
         ).category('https://anime-rift.com/anime/done1'),
         LibraryCategory.completed,
       );
+    },
+  );
+
+  test(
+    'remote category moves update local items without overriding pending edits',
+    () async {
+      AnimeRiftLocalAccountScope.activate('alice');
+      final storage = _MemoryStorage();
+      final reader = _CloudReader()
+        ..lists['currently'] = [
+          {
+            'anime': {'_id': 'move1', 'title': 'Moved'},
+          },
+        ];
+      final cloud = AnimeRiftCloudSync(reader);
+      final url = 'https://anime-rift.com/anime/move1';
+      final library = ProviderLocalLibrary(storage, _rift);
+      await cloud.importToLocal(storage: storage);
+      expect(library.category(url), LibraryCategory.watching);
+      reader.lists['currently'] = [];
+      reader.lists['finished'] = [
+        {
+          'anime': {'_id': 'move1', 'title': 'Moved'},
+        },
+      ];
+      await cloud.importToLocal(storage: storage);
+      expect(library.category(url), LibraryCategory.completed);
+
+      final pending = AnimeRiftCloudPendingJournal(storage);
+      await pending.queueCategory(url, LibraryCategory.planToWatch);
+      await library.setCategory(
+        library.item(url)!,
+        LibraryCategory.planToWatch,
+      );
+      reader.lists['finished'] = [];
+      reader.lists['dropped'] = [
+        {
+          'anime': {'_id': 'move1', 'title': 'Moved'},
+        },
+      ];
+      await cloud.importToLocal(storage: storage);
+      expect(library.category(url), LibraryCategory.planToWatch);
+    },
+  );
+
+  test(
+    'complete remote list removal clears only previously synced items',
+    () async {
+      AnimeRiftLocalAccountScope.activate('alice');
+      final storage = _MemoryStorage();
+      final reader = _CloudReader()
+        ..lists['currently'] = [
+          {
+            'anime': {'_id': 'old1', 'title': 'Server item'},
+          },
+        ];
+      final cloud = AnimeRiftCloudSync(reader);
+      final library = ProviderLocalLibrary(storage, _rift);
+      await cloud.importToLocal(storage: storage);
+      final oldUrl = 'https://anime-rift.com/anime/old1';
+      expect(library.category(oldUrl), LibraryCategory.watching);
+      final local = MultimediaItem(
+        title: 'Local only',
+        url: 'https://anime-rift.com/anime/local1',
+        posterUrl: '',
+        provider: _rift,
+      );
+      await library.setCategory(local, LibraryCategory.watching);
+
+      reader.lists['currently'] = [];
+      reader.completeOverview = false;
+      await cloud.importToLocal(storage: storage);
+      expect(
+        library.category(oldUrl),
+        LibraryCategory.watching,
+        reason: 'Missing server totals cannot authorize deletions',
+      );
+
+      reader.completeOverview = true;
+      await cloud.importToLocal(storage: storage);
+      expect(library.category(oldUrl), isNull);
+      expect(
+        library.category('https://anime-rift.com/anime/local1'),
+        LibraryCategory.watching,
+        reason: 'Unrelated local-only items must not be deleted',
+      );
+    },
+  );
+
+  test(
+    'complete remote favorite removal preserves other list memberships',
+    () async {
+      AnimeRiftLocalAccountScope.activate('alice');
+      final storage = _MemoryStorage();
+      final reader = _CloudReader()
+        ..favorites.add({
+          'anime': {'_id': 'fav2', 'title': 'Favorite item'},
+        })
+        ..lists['currently'] = [
+          {
+            'anime': {'_id': 'fav2', 'title': 'Favorite item'},
+          },
+        ];
+      final library = ProviderLocalLibrary(storage, _rift);
+      final cloud = AnimeRiftCloudSync(reader);
+      final url = 'https://anime-rift.com/anime/fav2';
+      await cloud.importToLocal(storage: storage);
+      expect(library.isFavorite(url), isTrue);
+      reader.favorites.clear();
+      await cloud.importToLocal(storage: storage);
+      expect(library.isFavorite(url), isFalse);
+      expect(library.category(url), LibraryCategory.watching);
     },
   );
 

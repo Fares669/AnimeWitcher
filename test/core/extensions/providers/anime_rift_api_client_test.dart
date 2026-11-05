@@ -341,6 +341,93 @@ void main() {
     },
   );
 
+  test('built-in list writes use scoped native bookmark PUT', () async {
+    final writes = <RequestOptions>[];
+    final client = AnimeRiftApiClient(
+      config: fixtureConfig,
+      dio: fixtureDio((o) {
+        if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+        if (o.uri.path.endsWith('/auth/register/device')) {
+          return reply(o, {'sessionKey': 'fixture'}, 201);
+        }
+        if (o.uri.path.endsWith('/auth/sign-in/with-code')) {
+          return reply(o, {
+            'items': {
+              'profile': {'_id': 'rift-user'},
+              'token': 'rift-user-token',
+            },
+          });
+        }
+        writes.add(o);
+        return reply(o, {}, 202);
+      }),
+    );
+    await client.signInWithCode('owner-issued-code');
+    final account = AnimeRiftLocalAccountScope.accountHash!;
+    for (final category in <String?>[
+      'currently',
+      'want_to',
+      'finished',
+      'later',
+      'dropped',
+      null,
+    ]) {
+      await client.setMyListCategory(
+        'anime-42',
+        category,
+        accountHash: account,
+      );
+    }
+    expect(writes, hasLength(6));
+    for (var index = 0; index < writes.length; index++) {
+      final request = writes[index];
+      expect(request.method, 'PUT');
+      expect(request.uri.path, '/api/v4/my_list/bookmark');
+      expect(request.data, {
+        'animeId': 'anime-42',
+        'is_my_list': <String?>[
+          'currently',
+          'want_to',
+          'finished',
+          'later',
+          'dropped',
+          null,
+        ][index],
+        'custom_list_id': null,
+      });
+      final jwt = (request.headers['integrity'] as String)
+          .substring(7)
+          .split('.');
+      final payload = jsonDecode(
+        utf8.decode(base64Url.decode(base64Url.normalize(jwt[1]))),
+      ) as Map;
+      expect(payload['scope'], 'USER.MY_LIST.BOOKMARK');
+      expect(request.headers['authorization'], 'Bearer rift-user-token');
+    }
+    await expectLater(
+      client.setMyListCategory(
+        'anime-42',
+        'currently',
+        accountHash: 'other-account',
+      ),
+      throwsA(isA<AnimeRiftAuthenticationRequired>()),
+    );
+    expect(
+      () => client.setMyListCategory(
+        '../unsafe',
+        'currently',
+        accountHash: account,
+      ),
+      throwsArgumentError,
+    );
+    expect(
+      () =>
+          client.setMyListCategory('anime-42', 'unknown', accountHash: account),
+      throwsArgumentError,
+    );
+    expect(writes, hasLength(6));
+  });
+
   test(
     'account read reports expired credentials without silently retrying',
     () async {

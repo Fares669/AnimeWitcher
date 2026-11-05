@@ -730,6 +730,42 @@ class AnimeRiftApiClient {
     );
   }
 
+  /// Native Rift AOT 0xab0728-0xab07c4: PUT /my_list/bookmark with
+  /// animeId/is_my_list/custom_list_id and USER.MY_LIST.BOOKMARK.
+  /// Only built-in lists are supported. A null list requests removal;
+  /// callers must verify the server's resulting membership before acking.
+  Future<Map<String, dynamic>> setMyListCategory(
+    String animeId,
+    String? category, {
+    required String accountHash,
+  }) {
+    if (!RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(animeId)) {
+      throw ArgumentError('Invalid Anime Rift anime ID');
+    }
+    if (category != null &&
+        !const {
+          'currently',
+          'want_to',
+          'finished',
+          'later',
+          'dropped',
+        }.contains(category)) {
+      throw ArgumentError('Invalid Anime Rift category');
+    }
+    return _readAccountData(
+      'my_list/bookmark',
+      'USER.MY_LIST.BOOKMARK',
+      method: 'PUT',
+      body: {
+        'animeId': animeId,
+        'is_my_list': category,
+        'custom_list_id': null,
+      },
+      accountHash: accountHash,
+      expectedStatus: 202,
+    );
+  }
+
   Future<Map<String, dynamic>> _readAccountData(
     String path,
     String scope, {

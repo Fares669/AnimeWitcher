@@ -62,6 +62,18 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     required String accountHash,
   }) => _api.setFavoriteAnime(id, favorite, accountHash: accountHash);
 
+  Future<Map<String, dynamic>> setCloudCategory(
+    String id,
+    String? category, {
+    required String accountHash,
+  }) => _api.setMyListCategory(id, category, accountHash: accountHash);
+
+  Future<Map<String, dynamic>> fetchCloudCategory(String category) =>
+      _api.fetchMyList(category);
+
+  Future<Map<String, dynamic>> fetchCloudFavorites() =>
+      _api.fetchFavoriteAnime();
+
   Future<bool> restoreAccountSession() async {
     final previous = _api.accountIdentity?.id;
     final restored = await _api.restoreAccountSession();

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../domain/entity/multimedia_item.dart';
 import '../extensions/providers/anime_rift_api_client.dart';
 import 'library_category.dart';
@@ -159,6 +161,14 @@ class AnimeRiftCloudSync {
     'dropped': LibraryCategory.notInterested,
   };
 
+  static const _overviewForList = <String, String>{
+    'currently': 'my_list_currently_watching',
+    'want_to': 'my_list_plan_to_watch',
+    'finished': 'my_list_finished_watching',
+    'later': 'my_list_on_hold',
+    'dropped': 'my_list_dropped',
+  };
+
   /// Import authenticated lists into the matching Rift account's actual
   /// library and watch history. Existing local entries are preserved; an
   /// unavailable or unrecognized response cannot erase the user's data.
@@ -181,13 +191,26 @@ class AnimeRiftCloudSync {
 
     // Fetch before writing, so a failed request never looks like an empty
     // remote library and a changed session cannot import into another user.
-    final remoteFavorites = _cloudRows(await _reader.fetchFavoriteAnime());
+    final favoriteResponse = await _reader.fetchFavoriteAnime();
+    final remoteFavorites = _cloudRows(favoriteResponse);
     _requireAccount(account);
     final remoteLists = <LibraryCategory, List<Object?>>{};
+    final remoteResponses = <String, Map<String, dynamic>>{};
     for (final entry in _categoryForList.entries) {
-      remoteLists[entry.value] = _cloudRows(
-        await _reader.fetchMyList(entry.key),
-      );
+      final response = await _reader.fetchMyList(entry.key);
+      remoteResponses[entry.key] = response;
+      remoteLists[entry.value] = _cloudRows(response);
+      _requireAccount(account);
+    }
+    // Only a complete snapshot may justify deletion. The original overview
+    // exposes per-list totals; a missing total, truncated page or malformed
+    // row must never be interpreted as an empty server list.
+    Map<String, int> counts = const {};
+    try {
+      counts = parseMyListOverviewCounts(await _reader.fetchMyListOverview());
+      _requireAccount(account);
+    } on AnimeRiftAccessUnavailable {
+      // Import known rows additively; never remove on failed completeness.
       _requireAccount(account);
     }
     final remoteHistory = _cloudRows(await _readWatchHistory());
@@ -233,17 +256,109 @@ class AnimeRiftCloudSync {
         changed++;
       }
     }
-    for (final entry in categories.entries) {
-      for (final item in entry.value) {
+    final completeFavorites =
+        counts['my_list_favorites'] == remoteFavorites.length &&
+        favorites.length == remoteFavorites.length &&
+        !_hasMore(favoriteResponse);
+    if (completeFavorites) {
+      final baselineKey = 'animerift_cloud_favorites_v1:$account';
+      Set<String> previous = {};
+      try {
+        previous = _favoriteSnapshot(storage.getString(baselineKey)) ?? {};
+      } on Object {
+        // Untrusted/corrupt snapshot never authorizes a local deletion.
+      }
+      final remote = favorites.map((item) => item.url).toSet();
+      for (final url in previous.difference(remote)) {
         _requireAccount(account);
-        if (pending.hasPending(account, item.url, 'category')) continue;
-        // Preserve the user's newer local changes when the remote state is
-        // older or the backend does not expose a comparable timestamp.
-        if (library.category(item.url) == null) {
-          await library.setCategory(item, entry.key);
+        if (pending.hasPending(account, url, 'favorite')) continue;
+        final item = library.item(url);
+        if (item != null && library.isFavorite(url)) {
+          await library.setFavorite(item, false);
           changed++;
         }
       }
+      _requireAccount(account);
+      await storage.setString(
+        baselineKey,
+        jsonEncode({'version': 1, 'favorites': remote.toList()..sort()}),
+      );
+      _requireAccount(account);
+    }
+    // A title moved on another device must change categories locally, not
+    // just appear the first time. A pending local edit always wins, and an
+    // ambiguous multi-list response must not choose a category arbitrarily.
+    final remoteCategories = <String, (MultimediaItem, LibraryCategory)>{};
+    final ambiguous = <String>{};
+    for (final entry in categories.entries) {
+      for (final item in entry.value) {
+        final previous = remoteCategories[item.url];
+        if (previous != null && previous.$2 != entry.key) {
+          ambiguous.add(item.url);
+        } else {
+          remoteCategories[item.url] = (item, entry.key);
+        }
+      }
+    }
+    final completeLists =
+        ambiguous.isEmpty &&
+        _categoryForList.entries.every((entry) {
+          final rows = remoteLists[entry.value]!;
+          final accepted = categories[entry.value]!;
+          final response = remoteResponses[entry.key]!;
+          return counts[_overviewForList[entry.key]] == rows.length &&
+              accepted.length == rows.length &&
+              !_hasMore(response);
+        });
+    final baselineKey = 'animerift_cloud_categories_v1:$account';
+    Map<String, String> previousSnapshot = {};
+    if (completeLists) {
+      try {
+        final raw = _storageSnapshot(storage.getString(baselineKey));
+        previousSnapshot = raw ?? {};
+      } on Object {
+        // Corrupt snapshots cannot authorize a remote delete.
+      }
+    }
+    for (final entry in remoteCategories.entries) {
+      _requireAccount(account);
+      if (ambiguous.contains(entry.key) ||
+          pending.hasPending(account, entry.key, 'category')) {
+        continue;
+      }
+      final (item, category) = entry.value;
+      if (library.category(item.url) != category) {
+        await library.setCategory(item, category);
+        changed++;
+      }
+    }
+    if (completeLists) {
+      for (final entry in previousSnapshot.entries) {
+        _requireAccount(account);
+        if (remoteCategories.containsKey(entry.key) ||
+            pending.hasPending(account, entry.key, 'category')) {
+          continue;
+        }
+        final previous = LibraryCategory.fromStorageKey(entry.value);
+        // Only remove an item this same account previously imported, when
+        // it still has exactly that remote category. Preserve local-only rows.
+        if (library.category(entry.key) == previous) {
+          await library.clearCategory(entry.key);
+          changed++;
+        }
+      }
+      _requireAccount(account);
+      await storage.setString(
+        baselineKey,
+        jsonEncode({
+          'version': 1,
+          'categories': {
+            for (final entry in remoteCategories.entries)
+              entry.key: entry.value.$2.storageKey,
+          },
+        }),
+      );
+      _requireAccount(account);
     }
     final knownHistory = history
         .history()
@@ -280,6 +395,54 @@ class AnimeRiftCloudSync {
     } on AnimeRiftAccessUnavailable {
       return _reader.fetchWatchHistoryLatest();
     }
+  }
+
+  Map<String, String>? _storageSnapshot(String? raw) {
+    if (raw == null) return null;
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map ||
+        decoded['version'] != 1 ||
+        decoded['categories'] is! Map) {
+      throw const FormatException('Invalid Rift cloud category snapshot');
+    }
+    final result = <String, String>{};
+    (decoded['categories'] as Map).forEach((dynamic url, dynamic value) {
+      if (url is! String ||
+          value is! String ||
+          AnimeRiftCloudPendingJournal.catalogUrl(url) != url ||
+          !LibraryCategory.primaryValues.any(
+            (category) => category.storageKey == value,
+          )) {
+        throw const FormatException('Invalid Rift cloud category entry');
+      }
+      result[url] = value;
+    });
+    return result;
+  }
+
+  bool _hasMore(Map<String, dynamic> response) {
+    final payload = response['items'];
+    return response['hasNext'] == true ||
+        (payload is Map && payload['hasNext'] == true);
+  }
+
+  Set<String>? _favoriteSnapshot(String? raw) {
+    if (raw == null) return null;
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map ||
+        decoded['version'] != 1 ||
+        decoded['favorites'] is! List) {
+      throw const FormatException('Invalid Rift cloud favorite snapshot');
+    }
+    final result = <String>{};
+    for (final url in decoded['favorites'] as List) {
+      if (url is! String ||
+          AnimeRiftCloudPendingJournal.catalogUrl(url) != url) {
+        throw const FormatException('Invalid Rift cloud favorite entry');
+      }
+      result.add(url);
+    }
+    return result;
   }
 
   List<Object?> _cloudRows(Map<String, dynamic> response) {
