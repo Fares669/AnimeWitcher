@@ -12,17 +12,63 @@ import 'anime_rift_api_client.dart' show AnimeRiftAuthDiagnostic;
 /// known failure enum). There is no entry point for URLs, codes, tokens,
 /// arbitrary server replies, device identifiers or error.toString().
 class AnimeRiftAuthDiagnosticLog {
-  AnimeRiftAuthDiagnosticLog({Future<Directory> Function()? directory})
-    : _directory = directory ?? _defaultDirectory;
+  AnimeRiftAuthDiagnosticLog({
+    Future<Directory> Function()? directory,
+    Future<Directory> Function()? legacyDirectory,
+  }) : _directory = directory ?? _defaultDirectory,
+       _legacyDirectory =
+           legacyDirectory ??
+           (directory == null ? _defaultLegacyDirectory : null);
 
   final Future<Directory> Function() _directory;
+  final Future<Directory> Function()? _legacyDirectory;
   Future<void> _pending = Future<void>.value();
+  bool _migrationChecked = false;
+  static const _fileName = 'animerift_auth.jsonl';
+  static const _maxBytes = 256 * 1024;
 
   static final AnimeRiftAuthDiagnosticLog shared = AnimeRiftAuthDiagnosticLog();
 
   static Future<Directory> _defaultDirectory() async {
+    final base = await getApplicationDocumentsDirectory();
+    return Directory('${base.path}${Platform.pathSeparator}log');
+  }
+
+  static Future<Directory> _defaultLegacyDirectory() async {
     final base = await getApplicationSupportDirectory();
     return Directory('${base.path}${Platform.pathSeparator}log');
+  }
+
+  /// Migrate an existing login journal from Application Support to Documents,
+  /// alongside Download V2 logs. A failed migration never deletes the old log.
+  Future<void> _migrateIfNeeded(Directory destination) async {
+    final legacyDirectory = _legacyDirectory;
+    if (_migrationChecked || legacyDirectory == null) return;
+    final legacy = await legacyDirectory();
+    final oldFile = File('${legacy.path}${Platform.pathSeparator}$_fileName');
+    if (!await oldFile.exists()) {
+      _migrationChecked = true;
+      return;
+    }
+    final newFile = File(
+      '${destination.path}${Platform.pathSeparator}$_fileName',
+    );
+    final previous = await oldFile.readAsBytes();
+    final current = await newFile.exists()
+        ? await newFile.readAsBytes()
+        : <int>[];
+    var merged = <int>[...previous, ...current];
+    // Retain complete recent JSONL records rather than splitting UTF-8 data.
+    if (merged.length > _maxBytes - 1024) {
+      final start = merged.length - (_maxBytes - 1024);
+      final firstNewline = merged.indexOf(10, start);
+      merged = firstNewline < 0 ? <int>[] : merged.sublist(firstNewline + 1);
+    }
+    final temporary = File('${newFile.path}.migration');
+    await temporary.writeAsBytes(merged, flush: true);
+    await temporary.rename(newFile.path);
+    await oldFile.delete();
+    _migrationChecked = true;
   }
 
   void record(AnimeRiftAuthDiagnostic diagnostic) {
@@ -37,11 +83,12 @@ class AnimeRiftAuthDiagnosticLog {
       try {
         final directory = await _directory();
         await directory.create(recursive: true);
+        await _migrateIfNeeded(directory);
         final file = File(
-          '${directory.path}${Platform.pathSeparator}animerift_auth.jsonl',
+          '${directory.path}${Platform.pathSeparator}$_fileName',
         );
         // Keep logs bounded on mobile. Old diagnostics are disposable.
-        if (await file.exists() && await file.length() >= 256 * 1024) {
+        if (await file.exists() && await file.length() >= _maxBytes) {
           await file.writeAsString('');
         }
         await file.writeAsString('$line\n', mode: FileMode.append);

@@ -53,6 +53,98 @@ void main() {
     },
   );
 
+  test('moves previous Application Support log into Documents/log', () async {
+    final root = await Directory.systemTemp.createTemp('rift-auth-migrate-');
+    final legacy = Directory(
+      'ROOT/Library/Application Support/log'.replaceFirst('ROOT', root.path),
+    );
+    final documents = Directory(
+      'ROOT/Documents/log'.replaceFirst('ROOT', root.path),
+    );
+    try {
+      await legacy.create(recursive: true);
+      final old = File(
+        'LEGACY/animerift_auth.jsonl'.replaceFirst('LEGACY', legacy.path),
+      );
+      await old.writeAsString('{"event":"registrationRejected"}\n');
+      final journal = AnimeRiftAuthDiagnosticLog(
+        directory: () async => documents,
+        legacyDirectory: () async => legacy,
+      );
+      journal.record(
+        const AnimeRiftAuthDiagnostic(
+          event: AnimeRiftAuthEvent.compatibilityAccepted,
+        ),
+      );
+      await journal.flush();
+      expect(await old.exists(), isFalse);
+      final current = File(
+        'DOCS/animerift_auth.jsonl'.replaceFirst('DOCS', documents.path),
+      );
+      final text = await current.readAsString();
+      final entries = text.trim().split('\n').map(jsonDecode).toList();
+      expect(entries, hasLength(2));
+      expect(entries.first['event'], 'registrationRejected');
+      expect(entries.last['event'], 'compatibilityAccepted');
+      journal.record(
+        const AnimeRiftAuthDiagnostic(
+          event: AnimeRiftAuthEvent.codeSignInAccepted,
+        ),
+      );
+      await journal.flush();
+      final next = await current.readAsLines();
+      expect(next, hasLength(3));
+    } finally {
+      await root.delete(recursive: true);
+    }
+  });
+
+  test(
+    'migrates and combines old log with a preexisting Documents log',
+    () async {
+      final root = await Directory.systemTemp.createTemp('rift-auth-combine-');
+      final legacy = Directory(
+        'ROOT/Library/Application Support/log'.replaceFirst('ROOT', root.path),
+      );
+      final documents = Directory(
+        'ROOT/Documents/log'.replaceFirst('ROOT', root.path),
+      );
+      try {
+        await legacy.create(recursive: true);
+        await documents.create(recursive: true);
+        final old = File(
+          'LEGACY/animerift_auth.jsonl'.replaceFirst('LEGACY', legacy.path),
+        );
+        final current = File(
+          'DOCS/animerift_auth.jsonl'.replaceFirst('DOCS', documents.path),
+        );
+        await old.writeAsString('{"event":"registrationStart"}\n');
+        await current.writeAsString('{"event":"registrationAccepted"}\n');
+        final journal = AnimeRiftAuthDiagnosticLog(
+          directory: () async => documents,
+          legacyDirectory: () async => legacy,
+        );
+        journal.record(
+          const AnimeRiftAuthDiagnostic(
+            event: AnimeRiftAuthEvent.codeSignInStart,
+          ),
+        );
+        await journal.flush();
+        final entries = (await current.readAsLines())
+            .map((line) => jsonDecode(line)['event'])
+            .toList();
+        expect(entries, [
+          'registrationStart',
+          'registrationAccepted',
+          'codeSignInStart',
+        ]);
+        expect(await old.exists(), isFalse);
+      } finally {
+        await root.delete(recursive: true);
+      }
+    },
+  );
+
   test('auth log failures do not prevent sign-in operations', () async {
     final journal = AnimeRiftAuthDiagnosticLog(
       directory: () async => throw const FileSystemException('unavailable'),
