@@ -100,6 +100,48 @@ void main() {
     }
   });
 
+  test('device-session diagnostics store categories only, never private device details', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'rift-session-log-',
+    );
+    try {
+      final journal = AnimeRiftAuthDiagnosticLog(
+        directory: () async => directory,
+      );
+      journal.record(
+        const AnimeRiftAuthDiagnostic(
+          event: AnimeRiftAuthEvent.sessionIdentityChecked,
+          nativeMode: AnimeRiftRegistrationMode.nativeIos,
+          mode: AnimeRiftRegistrationMode.androidFallback,
+          localModel: AnimeRiftDeviceModelKind.iphone,
+          advertisedModel: AnimeRiftDeviceModelKind.pixel8Pro,
+          deviceMismatch: true,
+        ),
+      );
+      journal.record(
+        const AnimeRiftAuthDiagnostic(
+          event: AnimeRiftAuthEvent.serverSessionsChecked,
+          serverSessionCount: 1,
+          serverIphoneCount: 0,
+          serverPixel8ProCount: 1,
+          serverUnknownCount: 0,
+        ),
+      );
+      await journal.flush();
+      final raw = await File('${directory.path}/animerift_auth.jsonl')
+          .readAsString();
+      final entries = raw.trim().split('\n').map(jsonDecode).toList();
+      expect(entries[0], containsPair('deviceMismatch', true));
+      expect(entries[0], containsPair('advertisedModel', 'pixel8Pro'));
+      expect(entries[1], containsPair('serverPixel8ProCount', 1));
+      expect(raw, isNot(contains('deviceId')));
+      expect(raw, isNot(contains('"sessionId":')));
+      expect(raw, isNot(contains('private')));
+    } finally {
+      await directory.delete(recursive: true);
+    }
+  });
+
   test('moves previous Application Support log into Documents/log', () async {
     final root = await Directory.systemTemp.createTemp('rift-auth-migrate-');
     final legacy = Directory(

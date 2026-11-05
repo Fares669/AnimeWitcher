@@ -100,6 +100,20 @@ class AnimeRiftAuthDiagnosticLog {
       if (diagnostic.attempt case final attempt?) 'attempt': attempt,
       if (diagnostic.cooldownSeconds case final cooldown?)
         'cooldownSeconds': cooldown,
+      if (diagnostic.nativeMode case final native?) 'nativeMode': native.name,
+      if (diagnostic.localModel case final model?) 'localModel': model.name,
+      if (diagnostic.advertisedModel case final model?)
+        'advertisedModel': model.name,
+      if (diagnostic.deviceMismatch case final mismatch?)
+        'deviceMismatch': mismatch,
+      if (diagnostic.serverSessionCount case final count?)
+        'serverSessionCount': count,
+      if (diagnostic.serverIphoneCount case final count?)
+        'serverIphoneCount': count,
+      if (diagnostic.serverPixel8ProCount case final count?)
+        'serverPixel8ProCount': count,
+      if (diagnostic.serverUnknownCount case final count?)
+        'serverUnknownCount': count,
     });
     _pending = _pending.then((_) async {
       try {
