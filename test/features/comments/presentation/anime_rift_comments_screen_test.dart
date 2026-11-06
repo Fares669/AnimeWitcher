@@ -6,6 +6,13 @@ import 'package:flutter_test/flutter_test.dart';
 
 class FakeRiftCommentsProvider extends AnimeRiftProvider {
   bool linked = true;
+  bool failPublish = false;
+  bool failReaction = false;
+  bool? termsAccepted;
+  bool? replyAllowed;
+  String? reactedId;
+  AnimeRiftCommentTarget? reactedTarget;
+  int loadCount = 0;
   final targets = <AnimeRiftCommentTarget>[];
   String? posted;
 
@@ -17,9 +24,12 @@ class FakeRiftCommentsProvider extends AnimeRiftProvider {
     AnimeRiftCommentTarget target, {
     int page = 0,
   }) async {
+    loadCount++;
     targets.add(target);
-    return const AnimeRiftCommentPage(
-      items: [
+    return AnimeRiftCommentPage(
+      termsAccepted: termsAccepted,
+      replyAllowed: replyAllowed,
+      items: const [
         AnimeRiftComment(
           id: 'comment1',
           text: 'تعليق من ريفت',
@@ -39,7 +49,18 @@ class FakeRiftCommentsProvider extends AnimeRiftProvider {
     String text,
   ) async {
     targets.add(target);
+    if (failPublish) throw StateError('Post failed');
     posted = text;
+  }
+
+  @override
+  Future<void> reactToComment(
+    AnimeRiftCommentTarget target,
+    String commentId,
+  ) async {
+    reactedTarget = target;
+    reactedId = commentId;
+    if (failReaction) throw StateError('Reaction failed');
   }
 }
 
@@ -175,6 +196,92 @@ void main() {
     expect(provider.targets.last.animeId, 'anime42');
     expect(provider.targets.last.episodeId, 'ep22');
     expect(provider.targets.last.parentId, 'comment1');
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(provider.loadCount, 3);
+  });
+
+  testWidgets('failed publish keeps draft and allows retry', (tester) async {
+    final provider = FakeRiftCommentsProvider()..failPublish = true;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AnimeRiftCommentsScreen(
+          provider: provider,
+          target: const AnimeRiftCommentTarget(
+            animeId: 'anime42',
+            title: 'أنمي',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    const draft = 'احتفظ بالنص عند الفشل';
+    await tester.enterText(
+      find.byKey(const ValueKey('rift-comment-input')),
+      draft,
+    );
+    await tester.tap(find.byTooltip('نشر التعليق'));
+    await tester.pumpAndSettle();
+    expect(find.text(draft), findsOneWidget);
+    expect(provider.posted, isNull);
+    provider.failPublish = false;
+    ScaffoldMessenger.of(
+      tester.element(find.byKey(const ValueKey('rift-comment-input'))),
+    ).removeCurrentSnackBar();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('نشر التعليق'));
+    await tester.pumpAndSettle();
+    expect(provider.posted, draft);
+    expect(find.text(draft), findsNothing);
+  });
+
+  testWidgets('like uses current comment identity and refreshes results', (
+    tester,
+  ) async {
+    final provider = FakeRiftCommentsProvider();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AnimeRiftCommentsScreen(
+          provider: provider,
+          target: const AnimeRiftCommentTarget(
+            animeId: 'anime42',
+            episodeId: 'episode17',
+            parentId: 'parent9',
+            title: 'الحلقة',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('الإعجابات'));
+    await tester.pumpAndSettle();
+    expect(provider.reactedId, 'comment1');
+    expect(provider.reactedTarget?.animeId, 'anime42');
+    expect(provider.reactedTarget?.episodeId, 'episode17');
+    expect(provider.reactedTarget?.parentId, 'parent9');
+    expect(provider.loadCount, 2);
+  });
+
+  testWidgets('reaction failure shows feedback without reloading', (
+    tester,
+  ) async {
+    final provider = FakeRiftCommentsProvider()..failReaction = true;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AnimeRiftCommentsScreen(
+          provider: provider,
+          target: const AnimeRiftCommentTarget(
+            animeId: 'anime42',
+            title: 'أنمي',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('الإعجابات'));
+    await tester.pumpAndSettle();
+    expect(provider.loadCount, 1);
+    expect(find.textContaining('تعذر إكمال العملية'), findsOneWidget);
   });
 
   testWidgets('guest can read comments but cannot compose as Witcher account', (
@@ -196,5 +303,50 @@ void main() {
     expect(find.text('تعليق من ريفت'), findsOneWidget);
     expect(find.byKey(const ValueKey('rift-comment-input')), findsNothing);
     expect(find.textContaining('اربط حساب AnimeRift'), findsOneWidget);
+  });
+
+  testWidgets(
+    'server refusal to accept guidelines blocks compose but not reading',
+    (tester) async {
+      final provider = FakeRiftCommentsProvider()..termsAccepted = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AnimeRiftCommentsScreen(
+            provider: provider,
+            target: const AnimeRiftCommentTarget(
+              animeId: 'anime42',
+              title: 'أنمي',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('تعليق من ريفت'), findsOneWidget);
+      expect(find.byKey(const ValueKey('rift-comment-input')), findsNothing);
+      expect(find.textContaining('قبول إرشادات المجتمع'), findsOneWidget);
+      expect(provider.posted, isNull);
+    },
+  );
+
+  testWidgets('explicit replyAllowed false disables reply composer only', (
+    tester,
+  ) async {
+    final provider = FakeRiftCommentsProvider()..replyAllowed = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AnimeRiftCommentsScreen(
+          provider: provider,
+          target: const AnimeRiftCommentTarget(
+            animeId: 'anime42',
+            parentId: 'parent9',
+            title: 'أنمي',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('تعليق من ريفت'), findsOneWidget);
+    expect(find.byKey(const ValueKey('rift-comment-input')), findsNothing);
+    expect(find.textContaining('لا يسمح بالرد'), findsOneWidget);
   });
 }

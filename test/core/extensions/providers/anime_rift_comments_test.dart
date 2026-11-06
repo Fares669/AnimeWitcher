@@ -14,6 +14,7 @@ class CommentClientFixture extends AnimeRiftApiClient {
   String? lastMethod;
   Map<String, dynamic>? lastQuery;
   String? postedText;
+  String? reactedCommentId;
   Map<String, dynamic>? createdTarget;
 
   CommentClientFixture()
@@ -65,6 +66,16 @@ class CommentClientFixture extends AnimeRiftApiClient {
       parentId: parentId,
     );
     postedText = text;
+    return {'success': true};
+  }
+
+  @override
+  Future<Map<String, dynamic>> reactToComment(
+    String commentId, {
+    String? animeId,
+    String? episodeId,
+  }) async {
+    reactedCommentId = commentId;
     return {'success': true};
   }
 }
@@ -213,6 +224,26 @@ void main() {
     expect(signedIn.toString(), isNot(contains('sensitive-account-id')));
   });
 
+  test('native comment permissions preserve explicit booleans only', () {
+    final page = AnimeRiftCommentPage.fromJson({
+      'items': <Object>[],
+      'termsAndConditionsAccepted': true,
+      'interactions': {'replyAllowed': false, 'canReplyToNext': true},
+    });
+    expect(page.termsAccepted, true);
+    expect(page.replyAllowed, false);
+    expect(page.canReplyToNext, true);
+
+    final unknown = AnimeRiftCommentPage.fromJson({
+      'items': <Object>[],
+      'termsAndConditionsAccepted': 'secret',
+      'replyAllowed': 1,
+    });
+    expect(unknown.termsAccepted, isNull);
+    expect(unknown.replyAllowed, isNull);
+    expect(unknown.canReplyToNext, isNull);
+  });
+
   test(
     'Rift provider sends anime and episode comment scopes independently',
     () async {
@@ -250,6 +281,8 @@ void main() {
         'parentId': 'comment1',
       });
       expect(client.postedText, 'reply');
+      await provider.reactToComment(episodeTarget, 'comment1');
+      expect(client.reactedCommentId, 'comment1');
     },
   );
 

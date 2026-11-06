@@ -31,6 +31,20 @@ class _MemoryStorage extends StorageService {
   }
 }
 
+class _GatedStorage extends _MemoryStorage {
+  final started = Completer<void>();
+  final release = Completer<void>();
+
+  @override
+  Future<void> setString(String key, String? value) async {
+    if (!started.isCompleted) {
+      started.complete();
+      await release.future;
+    }
+    await super.setString(key, value);
+  }
+}
+
 class _CloudReader implements AnimeRiftCloudAccountReader {
   bool includeHistory = false;
 
@@ -188,6 +202,77 @@ class _FavoriteClient extends AnimeRiftApiClient {
 
 void main() {
   tearDown(AnimeRiftLocalAccountScope.reset);
+
+  test(
+    'favorite readback uses anime identity instead of membership record ID',
+    () async {
+      AnimeRiftLocalAccountScope.activate('alice');
+      final account = AnimeRiftLocalAccountScope.accountHash!;
+      for (final identity in [
+        {'anime': 'safe1'},
+        {
+          '_anime': {'_id': 'safe1'},
+        },
+      ]) {
+        final writer = AnimeRiftCloudWriter(
+          _FavoriteClient().setFavoriteAnime,
+          readFavorites: () async => {
+            'items': [
+              {'_id': 'membership1', ...identity},
+            ],
+          },
+        );
+        for (final favorite in [true, false]) {
+          expect(
+            await writer.write(
+              account,
+              AnimeRiftCloudPendingChange(
+                kind: 'favorite',
+                url: _title,
+                value: {'favorite': favorite},
+                revision: 1,
+              ),
+            ),
+            favorite,
+            reason: 'Readback must identify the anime for both add and removal',
+          );
+        }
+      }
+    },
+  );
+
+  test(
+    'playback completion cannot mark an episode in a switched account',
+    () async {
+      final storage = _GatedStorage();
+      final provider = _FakeRift('alice');
+      await provider.restoreAccountSession();
+      final alice = AnimeRiftLocalAccountScope.accountHash!;
+      final sync = AnimeRiftAutoSyncCoordinator(
+        storage: storage,
+        activeRift: () => provider,
+      );
+      addTearDown(sync.dispose);
+      final playback = sync.queuePlayback(
+        _title,
+        position: 95,
+        duration: 100,
+        episode: 3,
+      );
+      final rejected = expectLater(
+        playback,
+        throwsA(isA<AnimeRiftAuthenticationRequired>()),
+      );
+      await storage.started.future;
+      AnimeRiftLocalAccountScope.activate('bob');
+      storage.release.complete();
+      await rejected;
+      final journal = AnimeRiftCloudPendingJournal(storage);
+      expect(journal.pending(AnimeRiftLocalAccountScope.accountHash!), isEmpty);
+      AnimeRiftLocalAccountScope.activate('alice');
+      expect(journal.pending(alice).single.kind, 'playback');
+    },
+  );
 
   test(
     'Rift visible shelf flushes only library edits and history only on demand',

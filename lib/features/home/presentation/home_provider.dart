@@ -215,12 +215,11 @@ class HomeData extends _$HomeData {
     // A failed side request keeps what the page already shows.
     unawaited(
       news.then((page) {
-        final current = state;
-        if (page == null ||
-            generation != _fetchGeneration ||
-            current is! HomeSuccess) {
+        if (!ref.mounted || generation != _fetchGeneration || page == null) {
           return;
         }
+        final current = state;
+        if (current is! HomeSuccess) return;
         state = HomeSuccess(
           current.data,
           news: page.items,

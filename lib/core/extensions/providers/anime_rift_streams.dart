@@ -23,7 +23,10 @@ class AnimeRiftStreams {
   final Future<int> Function(String animeId, String episodeId) episodeNumber;
   final Dio _external;
   final _sources =
-      <String, ({DateTime expires, Future<Map<String, dynamic>> value})>{};
+      <
+        (String?, String),
+        ({DateTime expires, Future<Map<String, dynamic>> value})
+      >{};
 
   static bool isSourceSelection(String url) =>
       _SourceIdentity.parse(url)?.host != null;
@@ -44,30 +47,49 @@ class AnimeRiftStreams {
     );
   }
 
-  Future<Map<String, dynamic>> _raw(_SourceIdentity ref) async {
-    final cached = _sources[ref.episodeUrl];
-    if (cached != null && cached.expires.isAfter(DateTime.now()))
-      return cached.value;
-    final value = api.request(
-      'library/episode/sources',
-      'ANIME.LIBRARY.EPISODES.SOURCES.ALL',
-      method: 'POST',
-      body: {
-        'animeId': ref.anime,
-        'episodeId': ref.episode,
-        'episode_number': ref.number,
-      },
-    );
-    _sources[ref.episodeUrl] = (
-      expires: DateTime.now().add(const Duration(minutes: 1)),
-      value: value,
-    );
+  Future<Map<String, dynamic>> _raw(
+    _SourceIdentity ref, {
+    bool allowRestoredSession = true,
+  }) async {
+    // Offline eligibility and server metadata belong to the requesting account.
+    // Download discovery can restore a session without the provider's wrapper.
+    final key = (api.accountIdentity?.id, ref.episodeUrl);
+    final cached = _sources[key];
+    final value = cached != null && cached.expires.isAfter(DateTime.now())
+        ? cached.value
+        : api.request(
+            'library/episode/sources',
+            'ANIME.LIBRARY.EPISODES.SOURCES.ALL',
+            method: 'POST',
+            body: {
+              'animeId': ref.anime,
+              'episodeId': ref.episode,
+              'episode_number': ref.number,
+            },
+          );
+    if (!identical(cached?.value, value)) {
+      _sources[key] = (
+        expires: DateTime.now().add(const Duration(minutes: 1)),
+        value: value,
+      );
+    }
     if (_sources.length > 32) _sources.remove(_sources.keys.first);
     try {
-      return await value;
+      final data = await value;
+      if (key.$1 != api.accountIdentity?.id) {
+        if (identical(_sources[key]?.value, value)) _sources.remove(key);
+        // Initialization may restore a saved account. Re-read once under that
+        // account, but reject linked-account switches and never retry errors.
+        if (key.$1 == null &&
+            api.accountIdentity != null &&
+            allowRestoredSession) {
+          return await _raw(ref, allowRestoredSession: false);
+        }
+        throw const AnimeRiftAuthenticationRequired();
+      }
+      return data;
     } catch (_) {
-      if (identical(_sources[ref.episodeUrl]?.value, value))
-        _sources.remove(ref.episodeUrl);
+      if (identical(_sources[key]?.value, value)) _sources.remove(key);
       rethrow;
     }
   }

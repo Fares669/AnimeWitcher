@@ -142,11 +142,19 @@ class AnimeRiftCloudWriter implements AnimeRiftVerifiedCloudWriter {
     final ids = <String>{};
     for (final row in items) {
       if (row is! Map) return null;
-      final embedded = row['anime'];
-      final anime = embedded is Map ? embedded : row;
-      final rawId = embedded is Map
+      final embedded = row['anime'] is Map
+          ? row['anime'] as Map
+          : row['_anime'] is Map
+          ? row['_anime'] as Map
+          : null;
+      final anime = embedded ?? row;
+      final rawId = embedded != null
           ? anime['_id'] ?? anime['anime_id'] ?? anime['animeId']
-          : row['anime_id'] ?? row['animeId'] ?? row['_anime'] ?? row['_id'];
+          : row['anime_id'] ??
+                row['animeId'] ??
+                row['_anime'] ??
+                row['anime'] ??
+                row['_id'];
       if (rawId is! String || !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(rawId)) {
         return null;
       }

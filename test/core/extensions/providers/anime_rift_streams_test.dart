@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart';
 import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
 import 'package:animewitcher/core/services/download_v2/anime_rift_download_metadata_v2.dart';
@@ -20,6 +22,11 @@ class StreamFixture extends AnimeRiftApiClient {
   bool requireDownloadAuth = false;
   bool requireRestoredDownloadSession = false;
   bool sessionRestored = false;
+  AnimeRiftAccountIdentity? identity;
+  AnimeRiftAccountIdentity? identityOnSourceRequest;
+  Completer<void>? sourcesStarted;
+  Future<void>? sourcesGate;
+  bool restoreDownloadAccount = false;
   String? authRequiredHost;
   bool denyPlayback = false;
   bool? offlineModeEnabled = true;
@@ -30,8 +37,15 @@ class StreamFixture extends AnimeRiftApiClient {
   String? unavailableHost;
 
   @override
+  AnimeRiftAccountIdentity? get accountIdentity => identity;
+
+  @override
   Future<bool> restoreAccountSession() async {
     sessionRestored = true;
+    if (restoreDownloadAccount) {
+      identity = const AnimeRiftAccountIdentity(id: 'linked-account');
+      offlineModeEnabled = true;
+    }
     return true;
   }
 
@@ -51,8 +65,9 @@ class StreamFixture extends AnimeRiftApiClient {
           {'_id': 'ep7', 'episode_number': 7},
         ],
       };
-    if (path == 'library/episode/sources')
-      return {
+    if (path == 'library/episode/sources') {
+      if (identityOnSourceRequest != null) identity = identityOnSourceRequest;
+      final result = <String, dynamic>{
         'items': [
           {
             '_id': 'host1',
@@ -99,6 +114,10 @@ class StreamFixture extends AnimeRiftApiClient {
           {'server_key': 'idrivee2', 'is_premium': true},
         ],
       };
+      if (sourcesStarted?.isCompleted == false) sourcesStarted!.complete();
+      await sourcesGate;
+      return result;
+    }
     if (path.endsWith('/can_play')) {
       if (body?['is_download'] == true &&
           requireRestoredDownloadSession &&
@@ -139,6 +158,112 @@ class StreamFixture extends AnimeRiftApiClient {
 }
 
 void main() {
+  test(
+    'in-flight source catalog rejects a switch between linked accounts',
+    () async {
+      final gate = Completer<void>();
+      final started = Completer<void>();
+      final api = StreamFixture()
+        ..identity = const AnimeRiftAccountIdentity(id: 'alice')
+        ..sourcesStarted = started
+        ..sourcesGate = gate.future;
+      final provider = AnimeRiftProvider(client: api);
+      final pending = provider.loadDownloadStreamSources(episodeUrl);
+      final rejected = expectLater(
+        pending,
+        throwsA(isA<AnimeRiftAuthenticationRequired>()),
+      );
+      await started.future;
+      api.identity = const AnimeRiftAccountIdentity(id: 'bob');
+      gate.complete();
+      await rejected;
+      expect(
+        api.calls.where((call) => call.path == 'library/episode/sources'),
+        hasLength(1),
+      );
+    },
+  );
+
+  test(
+    'download discovery cannot reuse guest catalog after restoring account',
+    () async {
+      final api = StreamFixture()
+        ..offlineModeEnabled = false
+        ..restoreDownloadAccount = true;
+      final provider = AnimeRiftProvider(client: api);
+      expect(await provider.loadStreamSources(episodeUrl), isNotEmpty);
+      expect(api.accountIdentity, isNull);
+
+      final downloads = await provider.loadDownloadStreamSources(episodeUrl);
+      expect(downloads, isNotEmpty);
+      expect(
+        api.calls.where((call) => call.path == 'library/episode/sources'),
+        hasLength(2),
+      );
+      await provider.loadDownloadStreamSources(episodeUrl);
+      expect(
+        api.calls.where((call) => call.path == 'library/episode/sources'),
+        hasLength(2),
+        reason: 'The restored account still reuses its own catalog',
+      );
+    },
+  );
+
+  test('download catalog cache separates linked accounts and guest', () async {
+    final api = StreamFixture()
+      ..identity = const AnimeRiftAccountIdentity(id: 'alice');
+    final provider = AnimeRiftProvider(client: api);
+    expect(await provider.loadDownloadStreamSources(episodeUrl), isNotEmpty);
+
+    api
+      ..identity = const AnimeRiftAccountIdentity(id: 'bob')
+      ..offlineModeEnabled = false;
+    expect(await provider.loadDownloadStreamSources(episodeUrl), isEmpty);
+    api.identity = null;
+    expect(await provider.loadDownloadStreamSources(episodeUrl), isEmpty);
+    expect(
+      api.calls.where((call) => call.path == 'library/episode/sources'),
+      hasLength(3),
+    );
+    api.identity = const AnimeRiftAccountIdentity(id: 'alice');
+    expect(await provider.loadDownloadStreamSources(episodeUrl), isNotEmpty);
+    expect(
+      api.calls.where((call) => call.path == 'library/episode/sources'),
+      hasLength(3),
+    );
+    expect(
+      api.calls.where((call) => call.path.endsWith('/direct_link')),
+      isEmpty,
+    );
+  });
+
+  test(
+    'account restored inside first source request cannot populate guest cache',
+    () async {
+      final api = StreamFixture()
+        ..identityOnSourceRequest = const AnimeRiftAccountIdentity(id: 'alice');
+      final provider = AnimeRiftProvider(client: api);
+      expect(await provider.loadStreamSources(episodeUrl), isNotEmpty);
+      expect(api.accountIdentity?.id, 'alice');
+      expect(
+        api.calls.where((call) => call.path == 'library/episode/sources'),
+        hasLength(2),
+        reason:
+            'Restore is followed by one read under the authenticated account',
+      );
+
+      api
+        ..identityOnSourceRequest = null
+        ..identity = null
+        ..offlineModeEnabled = false;
+      expect(await provider.loadDownloadStreamSources(episodeUrl), isEmpty);
+      expect(
+        api.calls.where((call) => call.path == 'library/episode/sources'),
+        hasLength(3),
+      );
+    },
+  );
+
   test(
     'direct link uses distinct native player and offline-download flags',
     () async {

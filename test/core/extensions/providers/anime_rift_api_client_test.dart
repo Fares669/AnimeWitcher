@@ -204,11 +204,10 @@ void main() {
       expect(writes, hasLength(1));
       expect(writes.single.uri.path, '/api/v4/comment/create');
       expect(writes.single.method, 'POST');
-      expect(writes.single.data, {
+      expect(writes.single.data, {'text': 'hello', '_parent': 'parent1'});
+      expect(writes.single.queryParameters, {
         'animeId': 'anime42',
         'episodeId': 'episode7',
-        '_parent': 'parent1',
-        'comment': 'hello',
       });
       expect(
         writes.single.headers['authorization'],
@@ -216,13 +215,80 @@ void main() {
       );
       await client.createComment(animeId: 'anime42', text: 'top-level');
       expect(writes, hasLength(2));
-      expect(writes.last.data, {
-        'animeId': 'anime42',
-        '_parent': null,
-        'comment': 'top-level',
-      });
+      expect(writes.last.data, {'text': 'top-level', '_parent': null});
+      expect(writes.last.queryParameters, {'animeId': 'anime42'});
     },
   );
+
+  test('reaction uses the original Rift route and linked identity', () async {
+    final writes = <RequestOptions>[];
+    var reactionStatus = 200;
+    final client = AnimeRiftApiClient(
+      config: fixtureConfig,
+      dio: fixtureDio((options) {
+        if (options.uri.host.endsWith('googleapis.com')) {
+          return reply(options, <String, dynamic>{}, 400);
+        }
+        if (options.uri.path.endsWith('/auth/register/device')) {
+          return reply(options, {'sessionKey': 'fixture'}, 201);
+        }
+        if (options.uri.path.endsWith('/auth/sign-in/with-code')) {
+          return reply(options, {
+            'items': {
+              'profile': {'_id': 'rift-comment-user'},
+              'token': 'rift-comment-token',
+            },
+          });
+        }
+        writes.add(options);
+        return reply(options, {
+          'success': reactionStatus == 200,
+        }, reactionStatus);
+      }),
+    );
+    await client.signInWithCode('test-only-code');
+    await client.reactToComment(
+      'comment-1',
+      animeId: 'anime42',
+      episodeId: 'episode7',
+    );
+    expect(writes, hasLength(1));
+    expect(writes.single.uri.path, '/api/v4/comment/react/comment-1');
+    expect(writes.single.method, 'PUT');
+    expect(writes.single.data, {
+      'reaction_type': 'thumbsUp',
+      'animeId': 'anime42',
+      'episodeId': 'episode7',
+    });
+    expect(writes.single.queryParameters, isEmpty);
+    expect(writes.single.headers['authorization'], 'Bearer rift-comment-token');
+    expect(() => client.reactToComment('../escape'), throwsArgumentError);
+    reactionStatus = 406;
+    await expectLater(
+      client.reactToComment('comment-1', animeId: 'anime42'),
+      throwsA(
+        isA<AnimeRiftAccessUnavailable>().having(
+          (error) => error.statusCode,
+          'statusCode',
+          406,
+        ),
+      ),
+    );
+    // A refusal must not cause a replay or discard the linked identity.
+    expect(writes, hasLength(2));
+    expect(client.isAccountLinked, isTrue);
+  });
+
+  test('HTTP 406 is a server refusal, not proof of a banned IP', () {
+    final refused = const AnimeRiftAccessUnavailable(statusCode: 406);
+    expect(refused.toString(), contains('رفض خادم Anime Rift'));
+    expect(refused.toString(), contains('HTTP 406'));
+    expect(refused.toString(), contains('لا يعني هذا بالضرورة'));
+    expect(refused.toString(), isNot(contains('تحقق من إعدادات المزوّد')));
+
+    final redirected = const AnimeRiftAccessUnavailable(statusCode: 302);
+    expect(redirected.toString(), contains('توجيهًا غير متوقع'));
+  });
 
   test(
     'linked Rift comment reads use the user token, not guest headers',
@@ -1141,6 +1207,38 @@ void main() {
     },
   );
 
+  test('another installation cannot erase a saved account while restoring as guest', () async {
+    const identityKey = 'animerift.api.installation.v1';
+    const sessionKey = 'animerift.user.session.v1';
+    final first = AnimeRiftApiClient(config: fixtureConfig);
+    expect(await first.restoreAccountSession(), isFalse);
+    final prefs = await SharedPreferences.getInstance();
+    final firstIdentity = prefs.getString(identityKey)!;
+    final device = jsonDecode(firstIdentity) as Map;
+    final saved = jsonEncode({
+      'version': 1,
+      'deviceId': device['deviceId'],
+      'token': 'fixture-preserved-token',
+      'accountId': 'fixture-preserved-account',
+    });
+    secureValues[sessionKey] = saved;
+
+    // Linux's keyring is shared while XDG profiles have separate preferences.
+    await prefs.remove(identityKey);
+    secureCalls.clear();
+    final other = AnimeRiftApiClient(config: fixtureConfig);
+    expect(await other.restoreAccountSession(), isFalse);
+    expect(other.isAccountLinked, isFalse);
+    expect(AnimeRiftLocalAccountScope.accountHash, isNull);
+    expect(secureValues[sessionKey], saved);
+    expect(secureCalls.map((call) => call.method), ['read']);
+
+    await prefs.setString(identityKey, firstIdentity);
+    final restarted = AnimeRiftApiClient(config: fixtureConfig);
+    expect(await restarted.restoreAccountSession(), isTrue);
+    expect(restarted.accountIdentity?.id, 'fixture-preserved-account');
+  });
+
   test('legacy credential remains linked in its own token-derived partition', () async {
     final client = AnimeRiftApiClient(config: fixtureConfig);
     expect(await client.restoreAccountSession(), isFalse);
@@ -1468,6 +1566,7 @@ void main() {
           statusCode: 403,
           headers: Headers.fromMap({
             'server': ['cloudflare'],
+            'cf-mitigated': ['challenge'],
           }),
           data: {
             'error': {'error_code': 'DEVICE_SUSPENDED'},

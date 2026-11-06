@@ -224,6 +224,15 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
         if (result.serverUserIdPresent case final account?)
           'parentActive': account,
       });
+      if (result.termsAccepted != null ||
+          result.replyAllowed != null ||
+          result.canReplyToNext != null) {
+        appDiagnostics.record('rift.comments.permissions', {
+          'termsAccepted': result.termsAccepted,
+          'replyAllowed': result.replyAllowed,
+          'canReplyNext': result.canReplyToNext,
+        });
+      }
       return result;
     } catch (error) {
       appDiagnostics.record('rift.comments.failure', {
@@ -244,6 +253,19 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
       episodeId: target.episodeId,
       parentId: target.parentId,
       text: text,
+    );
+  }
+
+  Future<void> reactToComment(
+    AnimeRiftCommentTarget target,
+    String commentId,
+  ) async {
+    // Native Rift includes its current anime/episode target in the reaction
+    // body. A bare comment ID is insufficient to reproduce its write request.
+    await _api.reactToComment(
+      commentId,
+      animeId: target.animeId,
+      episodeId: target.episodeId,
     );
   }
 

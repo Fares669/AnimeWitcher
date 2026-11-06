@@ -116,6 +116,9 @@ class AnimeRiftCommentPage {
     required this.items,
     required this.hasMore,
     this.serverUserIdPresent,
+    this.termsAccepted,
+    this.replyAllowed,
+    this.canReplyToNext,
   });
   final List<AnimeRiftComment> items;
   final bool hasMore;
@@ -124,8 +127,24 @@ class AnimeRiftCommentPage {
   /// whether the server supplied an identity, never the user identifier.
   final bool? serverUserIdPresent;
 
+  /// Only explicit boolean permissions are interpreted; missing data remains
+  /// unknown instead of incorrectly blocking every comment action.
+  final bool? termsAccepted;
+  final bool? replyAllowed;
+  final bool? canReplyToNext;
+
   factory AnimeRiftCommentPage.fromJson(Map<String, dynamic> data) {
     final envelope = data['items'];
+    final interactions = data['interactions'];
+    bool? flag(String name) {
+      for (final object in [data, interactions, envelope]) {
+        if (object is Map && object[name] is bool) {
+          return object[name] as bool;
+        }
+      }
+      return null;
+    }
+
     final raw = envelope is List
         ? envelope
         : envelope is Map
@@ -145,6 +164,9 @@ class AnimeRiftCommentPage {
     }
     return AnimeRiftCommentPage(
       items: comments,
+      termsAccepted: flag('termsAndConditionsAccepted'),
+      replyAllowed: flag('replyAllowed'),
+      canReplyToNext: flag('canReplyToNext'),
       serverUserIdPresent: data.containsKey('userId')
           ? data['userId'] != null && data['userId'] != ''
           : null,

@@ -107,8 +107,19 @@ class AnimeRiftAccessUnavailable implements Exception {
   }
 
   @override
-  String toString() =>
-      'تعذر الاتصال بخدمة Anime Rift$_safeDiagnostic. تحقق من إعدادات المزوّد ثم أعد المحاولة.';
+  String toString() {
+    if (statusCode == 406) {
+      return 'رفض خادم Anime Rift هذا الطلب (HTTP 406). '
+          'لا يعني هذا بالضرورة انتهاء الجلسة أو حظر عنوان IP. '
+          'لم يُعد التطبيق إرسال الطلب تلقائيًا.';
+    }
+    if (statusCode != null && statusCode! >= 300 && statusCode! < 400) {
+      return 'أعاد خادم Anime Rift توجيهًا غير متوقع '
+          '(HTTP $statusCode). لم يتبع التطبيق وجهة غير موثقة.';
+    }
+    return 'تعذر الاتصال بخدمة Anime Rift$_safeDiagnostic. '
+        'تحقق من إعدادات المزوّد ثم أعد المحاولة.';
+  }
 }
 
 enum AnimeRiftRequestStage {
@@ -507,6 +518,11 @@ class AnimeRiftApiClient {
     final stopwatch = Stopwatch()..start();
     int? completedStatus;
     String? failedKind;
+    int? retryAfterSeconds;
+    AnimeRiftServerReason? serverReason;
+    String? responseKind;
+    String? redirectKind;
+    var edgeRejected = false;
     try {
       final response = await _dio.request<dynamic>(
         url,
@@ -524,13 +540,20 @@ class AnimeRiftApiClient {
       );
       final status = response.statusCode ?? 0;
       completedStatus = status;
+      responseKind = _responseKind(response.data).name;
+      if (status >= 300 && status < 400) {
+        redirectKind = _safeRedirectKind(response.headers, url);
+      }
+      retryAfterSeconds = _retryAfterSeconds(response.headers);
+      edgeRejected = status >= 400 && _isEdgeRejected(response.headers);
       if (status < 200 ||
           status >= 300 ||
           (expectedStatus != null && status != expectedStatus)) {
+        serverReason = _recognizedServerReason(response.data);
         throw AnimeRiftAccessUnavailable(
           statusCode: status,
           stage: stage,
-          knownReason: _recognizedServerReason(response.data),
+          knownReason: serverReason,
           serverCode: _serverErrorCode(response.data),
           responseKind: _responseKind(response.data),
           edgeRejected: _isEdgeRejected(response.headers),
@@ -554,13 +577,26 @@ class AnimeRiftApiClient {
       }
       return Map<String, dynamic>.from(value);
     } on DioException catch (e) {
+      completedStatus = e.response?.statusCode;
       failedKind = e.type.name;
+      serverReason = _recognizedServerReason(e.response?.data);
+      if (e.response != null) {
+        responseKind = _responseKind(e.response?.data).name;
+        redirectKind = _safeRedirectKind(e.response!.headers, url);
+      }
+      retryAfterSeconds = e.response == null
+          ? null
+          : _retryAfterSeconds(e.response!.headers);
+      edgeRejected =
+          e.response != null &&
+          (e.response!.statusCode ?? 0) >= 400 &&
+          _isEdgeRejected(e.response!.headers);
       if (CancelToken.isCancel(e)) rethrow;
       throw AnimeRiftAccessUnavailable(
         statusCode: e.response?.statusCode,
         stage: stage,
         failure: e.response == null ? AnimeRiftFailureKind.transport : null,
-        knownReason: _recognizedServerReason(e.response?.data),
+        knownReason: serverReason,
         serverCode: _serverErrorCode(e.response?.data),
         responseKind: e.response == null
             ? null
@@ -584,17 +620,19 @@ class AnimeRiftApiClient {
       );
     } finally {
       final elapsed = stopwatch.elapsedMilliseconds;
-      // Most successful network calls need no disk write. Slow calls and all
-      // failures are actionable, and include only numeric/safe route labels.
-      if (elapsed >= 900 || failedKind != null) {
-        appDiagnostics.record('rift.api.complete', {
-          'status': AppDiagnostics.safeRiftOperation(url),
-          'action': method,
-          'durationMs': elapsed,
-          if (completedStatus != null) 'httpStatus': completedStatus,
-          if (failedKind != null) 'errorType': failedKind,
-        });
-      }
+      _appDiagnostics.recordRiftRequest(
+        url: url,
+        method: method,
+        durationMs: elapsed,
+        httpStatus: completedStatus,
+        failureKind: failedKind,
+        serverReason: serverReason?.name,
+        responseKind: responseKind,
+        redirectKind: redirectKind,
+        retryAfterSeconds: retryAfterSeconds,
+        edgeRejected: edgeRejected,
+        accountLinked: isAccountLinked,
+      );
     }
   }
 
@@ -667,8 +705,27 @@ class AnimeRiftApiClient {
     return AnimeRiftResponseKind.other;
   }
 
+  /// Only a redirect class is reported. A Location may embed identifiers or
+  /// session data, so neither the destination nor its domain is persisted.
+  static String? _safeRedirectKind(Headers headers, String requestedUrl) {
+    final location = headers.value('location');
+    if (location == null || location.isEmpty) return null;
+    final destination = Uri.tryParse(location);
+    final origin = Uri.tryParse(requestedUrl);
+    if (destination == null || origin == null) return null;
+    if (!destination.hasScheme && destination.host.isEmpty) return 'relative';
+    return destination.scheme == origin.scheme &&
+            destination.host == origin.host &&
+            destination.port == origin.port
+        ? 'sameOrigin'
+        : 'external';
+  }
+
+  /// A Cloudflare `server` header alone only identifies an intermediary;
+  /// origin's own HTTP 406 can pass through it unchanged. Do not imply an
+  /// edge-level challenge without an explicit challenge marker.
   static bool _isEdgeRejected(Headers headers) =>
-      (headers.value('server') ?? '').toLowerCase() == 'cloudflare';
+      (headers.value('cf-mitigated') ?? '').toLowerCase() == 'challenge';
 
   int? _retryAfterSeconds(Headers headers) {
     final value = headers.value('retry-after')?.trim();
@@ -1088,7 +1145,6 @@ class AnimeRiftApiClient {
           decoded?['accountId'],
         );
         if (decoded?['version'] != 1 ||
-            decoded?['deviceId'] != _identity!['deviceId'] ||
             decoded?['token'] is! String ||
             !_validAccessToken(decoded!['token'] as String)) {
           await _secureStorage.delete(key: _sessionKey);
@@ -1097,6 +1153,14 @@ class AnimeRiftApiClient {
             AnimeRiftLocalAccountScope.reset();
           }
           return isAccountLinked;
+        }
+        if (decoded!['deviceId'] != _identity!['deviceId']) {
+          // Linux keyrings are shared across XDG profiles, unlike installation
+          // preferences. A valid credential for another installation must not
+          // be used here or deleted while merely restoring this guest profile.
+          _sessionRestoreAttempted = true;
+          AnimeRiftLocalAccountScope.reset();
+          return false;
         }
         final token = decoded['token'] as String;
         // Preserve pre-partition Rift sessions: they have a real token but no
@@ -1521,9 +1585,9 @@ class AnimeRiftApiClient {
     );
   }
 
-  /// The original APK's /comment/create builds a body with optional animeId,
-  /// episodeId, characterId, eventId and comment. An anime/episode comment
-  /// uses its own IDs; eventId is reserved for an actual event target.
+  /// Native ARM64 0xab6128–0xab62e0 sends `text` and nullable `_parent` in
+  /// the POST body; animeId/episodeId are in its separate query map. The
+  /// wrapper 0xa8a278 passes that map as Dio's query parameters (`BUb`).
   /// Comment creation is always authenticated; the catalog account is never
   /// substituted for the separate AnimeRift identity.
   Future<Map<String, dynamic>> createComment({
@@ -1532,15 +1596,12 @@ class AnimeRiftApiClient {
     String? parentId,
     required String text,
   }) {
-    final body = commentTargetFields(
+    final query = commentTargetFields(
       animeId: animeId,
       episodeId: episodeId,
       parentId: parentId,
     );
-    // Native /comment/create serializes reply ancestry as `_parent`, while
-    // /comment/all uses `parentId` as a query filter.
-    body.remove('parentId');
-    body['_parent'] = parentId;
+    query.remove('parentId');
     final content = text.trim();
     if (content.isEmpty || content.length > 5000) {
       throw ArgumentError('Invalid Anime Rift comment');
@@ -1549,7 +1610,35 @@ class AnimeRiftApiClient {
       'comment/create',
       'COMMENTS.CREATE',
       method: 'POST',
-      body: {...body, 'comment': content},
+      query: query,
+      body: {'text': content, '_parent': parentId},
+    );
+  }
+
+  /// Native APK ARM64: reaction handler at 0xab889c invokes the PUT wrapper
+  /// 0xaae770 -> 0x5c6d90, unlike comment/create's POST wrapper 0xa8a278.
+  /// Its payload at 0xab8780–0xab8878 includes the available target IDs.
+  /// Keep the linked user session for mutations and never retry on 403.
+  Future<Map<String, dynamic>> reactToComment(
+    String commentId, {
+    String? animeId,
+    String? episodeId,
+  }) {
+    if (!RegExp(r'^[A-Za-z0-9._~-]+$').hasMatch(commentId)) {
+      throw ArgumentError('Invalid Anime Rift comment ID');
+    }
+    if (animeId == null && episodeId != null) {
+      throw ArgumentError('Missing Anime Rift anime ID');
+    }
+    return _readAccountData(
+      'comment/react/$commentId',
+      'COMMENTS.LIKE',
+      method: 'PUT',
+      body: {
+        'reaction_type': 'thumbsUp',
+        if (animeId != null)
+          ...commentTargetFields(animeId: animeId, episodeId: episodeId),
+      },
     );
   }
 

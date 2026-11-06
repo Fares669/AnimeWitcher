@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'dart:io';
 import 'dart:ui' show FrameTiming;
 
@@ -31,6 +32,7 @@ class AppDiagnostics {
   final DownloadDiagnosticsV2 _sink;
   final int Function() _clockMillis;
   int? _lastJankAt;
+  final Queue<int> _recentRiftRequests = Queue<int>();
 
   /// Classify by fixed API route components only: IDs and query strings never
   /// leave this function. Unknown routes are a single safe 'other' category.
@@ -52,7 +54,7 @@ class AppDiagnostics {
         'episode',
         'upcoming',
       },
-      'comment': {'all', 'create'},
+      'comment': {'all', 'create', 'react', 'reactions', 'edit', 'delete'},
       'my_list': {'all', 'rate', 'bookmark', 'overview'},
       'watch_history': {'latest', 'watch', 'mark', 'un_mark', 'clear'},
       'favorite': {'anime'},
@@ -90,6 +92,83 @@ class AppDiagnostics {
 
   void record(String event, [Map<String, Object?> fields = const {}]) {
     _sink.recordTransport(event, fields);
+  }
+
+  /// Safe local request-rate evidence for diagnosing rate limits / access
+  /// failures. No URL, account identity, header or response body is persisted.
+  /// Counts are rolling, in-process observations, not a server quota estimate.
+  void recordRiftRequest({
+    required String url,
+    required String method,
+    required int durationMs,
+    int? httpStatus,
+    String? failureKind,
+    String? serverReason,
+    String? responseKind,
+    String? redirectKind,
+    int? retryAfterSeconds,
+    bool edgeRejected = false,
+    bool accountLinked = false,
+  }) {
+    final now = _clockMillis();
+    if (_recentRiftRequests.isNotEmpty && now < _recentRiftRequests.first) {
+      _recentRiftRequests.clear();
+    }
+    while (_recentRiftRequests.isNotEmpty &&
+        now - _recentRiftRequests.first >= 60000) {
+      _recentRiftRequests.removeFirst();
+    }
+    _recentRiftRequests.addLast(now);
+    final route = safeRiftOperation(url);
+    final normalizedMethod =
+        const {'GET', 'POST', 'PUT', 'PATCH', 'DELETE'}.contains(method)
+        ? method
+        : 'OTHER';
+    if (durationMs < 900 &&
+        failureKind == null &&
+        (httpStatus == null || httpStatus < 400) &&
+        !(route.startsWith('comment.') && normalizedMethod != 'GET')) {
+      return;
+    }
+    const knownFailures = {
+      'access',
+      'invalidResponse',
+      'connectionTimeout',
+      'sendTimeout',
+      'receiveTimeout',
+      'badResponse',
+      'cancel',
+      'connectionError',
+      'unknown',
+      'badCertificate',
+    };
+    const knownServerReasons = {
+      'installSourceNotSupported',
+      'unsupportedPlatform',
+      'deviceSuspended',
+      'integrityVerificationFailed',
+      'accessDenied',
+      'deviceSessionExpired',
+      'invalidCode',
+    };
+    record('rift.api.complete', {
+      'status': route,
+      'action': normalizedMethod,
+      'durationMs': durationMs,
+      'count': _recentRiftRequests.length,
+      if (httpStatus != null && httpStatus >= 100 && httpStatus <= 599)
+        'httpStatus': httpStatus,
+      if (knownFailures.contains(failureKind)) 'errorType': failureKind,
+      if (knownServerReasons.contains(serverReason)) 'reason': serverReason,
+      if (const {'json', 'html', 'text', 'other'}.contains(responseKind))
+        'responseKind': responseKind,
+      if (const {'relative', 'sameOrigin', 'external'}.contains(redirectKind))
+        'redirectKind': redirectKind,
+      if (retryAfterSeconds != null)
+        'delayMs': retryAfterSeconds.clamp(0, 86400) * 1000,
+      'result': edgeRejected,
+      'active': accountLinked,
+    });
   }
 
   /// Flush diagnostics before the user exports the common log folder.

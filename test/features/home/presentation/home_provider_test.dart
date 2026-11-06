@@ -83,6 +83,17 @@ class _DeferredHomeSource extends _FakeHomeSource {
   Future<Map<String, List<MultimediaItem>>> getHome() => home.future;
 }
 
+class _DeferredNewsSource extends _FakeHomeSource {
+  final news = Completer<ProviderNewsPage>();
+
+  @override
+  String get packageName => 'fake.deferred.news';
+
+  @override
+  Future<ProviderNewsPage> getHomeNewsPage({int offset = 0, int limit = 10}) =>
+      news.future;
+}
+
 class _SwitchableActiveProvider extends ActiveProvider {
   _SwitchableActiveProvider(this.initial);
   final AnimeWitcherProvider initial;
@@ -100,6 +111,67 @@ Future<void> _flush() async {
 }
 
 void main() {
+  test('a news response after home disposal is ignored', () async {
+    final source = _DeferredNewsSource();
+    final container = ProviderContainer(
+      overrides: [
+        activeProviderProvider.overrideWithValue(source),
+        extensionManagerProvider.overrideWith(_EmptyManager.new),
+      ],
+    );
+    container.listen<HomeState>(homeDataProvider, (_, _) {});
+    await _flush();
+    expect(container.read(homeDataProvider), isA<HomeSuccess>());
+    container.dispose();
+
+    source.news.complete(
+      const ProviderNewsPage(items: [], nextOffset: 0, hasMore: false),
+    );
+    await _flush();
+  });
+
+  for (final unavailable in [false, true]) {
+    test(
+      'old provider news cannot replace the current home (unavailable=$unavailable)',
+      () async {
+        final source = _DeferredNewsSource();
+        final container = ProviderContainer(
+          overrides: [
+            activeProviderProvider.overrideWith(
+              () => _SwitchableActiveProvider(source),
+            ),
+            extensionManagerProvider.overrideWith(_EmptyManager.new),
+          ],
+        );
+        addTearDown(container.dispose);
+        container.listen<HomeState>(homeDataProvider, (_, _) {});
+        await _flush();
+        expect(container.read(homeDataProvider), isA<HomeSuccess>());
+
+        await container
+            .read(activeProviderProvider.notifier)
+            .set(unavailable ? AnimeRiftProvider() : _FakeHomeSource());
+        await _flush();
+        final current = container.read(homeDataProvider);
+        expect(
+          current,
+          unavailable ? isA<HomeProviderUnavailable>() : isA<HomeSuccess>(),
+        );
+        source.news.complete(
+          const ProviderNewsPage(
+            items: [
+              NewsItem(id: 'old', title: 'Old provider news', imageUrl: ''),
+            ],
+            nextOffset: 1,
+            hasMore: false,
+          ),
+        );
+        await _flush();
+        expect(container.read(homeDataProvider), same(current));
+      },
+    );
+  }
+
   for (final failure in [false, true]) {
     test(
       'home response after disposal is ignored (failure=$failure)',

@@ -29,6 +29,7 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
   final TextEditingController _composer = TextEditingController();
   final ScrollController _scroll = ScrollController();
   final Set<String> _revealedSpoilers = <String>{};
+  final Set<String> _reactingIds = <String>{};
   List<AnimeRiftComment> _comments = const [];
   bool _initialLoading = true;
   bool _moreLoading = false;
@@ -36,8 +37,16 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
   bool _posting = false;
   bool _linked = false;
   bool? _serverUserIdPresent;
+  bool? _termsAccepted;
+  bool? _replyAllowed;
   int _nextPage = 0;
+  int _requestGeneration = 0;
   Object? _error;
+
+  bool get _canPublish =>
+      _linked &&
+      _termsAccepted != false &&
+      (widget.target.parentId == null || _replyAllowed != false);
 
   @override
   void initState() {
@@ -67,9 +76,12 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
 
   Future<void> _reload() async {
     if (!mounted) return;
+    final generation = ++_requestGeneration;
     setState(() {
       _initialLoading = true;
+      _moreLoading = false;
       _error = null;
+      _hasMore = false;
     });
     try {
       final linked = await widget.provider.restoreAccountSession();
@@ -84,17 +96,19 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
           page: nextPage++,
         );
       }
-      if (!mounted) return;
+      if (!mounted || generation != _requestGeneration) return;
       setState(() {
         _linked = linked;
         _serverUserIdPresent = page.serverUserIdPresent;
+        _termsAccepted = page.termsAccepted;
+        _replyAllowed = page.replyAllowed;
         _comments = page.items;
         _hasMore = page.hasMore;
         _nextPage = nextPage;
         _initialLoading = false;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _requestGeneration) return;
       setState(() {
         _error = error;
         _initialLoading = false;
@@ -103,14 +117,15 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
   }
 
   Future<void> _loadMore() async {
-    if (_moreLoading || !_hasMore) return;
+    if (_moreLoading || !_hasMore || _initialLoading) return;
+    final generation = _requestGeneration;
     setState(() => _moreLoading = true);
     try {
       final page = await widget.provider.loadComments(
         widget.target,
         page: _nextPage,
       );
-      if (!mounted) return;
+      if (!mounted || generation != _requestGeneration) return;
       setState(() {
         final known = _comments.map((comment) => comment.id).toSet();
         _comments = [
@@ -121,9 +136,11 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
         _nextPage++;
       });
     } catch (error) {
-      if (mounted) _message(error);
+      if (mounted && generation == _requestGeneration) _message(error);
     } finally {
-      if (mounted) setState(() => _moreLoading = false);
+      if (mounted && generation == _requestGeneration) {
+        setState(() => _moreLoading = false);
+      }
     }
   }
 
@@ -132,14 +149,14 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
         ? 'تعذر قراءة بيانات تعليقات AnimeRift.'
         : error is AnimeRiftAccessUnavailable
         ? error.toString()
-        : 'تعذر تحميل التعليقات أو نشرها. حاول مرة أخرى.';
+        : 'تعذر إكمال العملية في AnimeRift. حاول مرة أخرى.';
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _publish() async {
     final text = _composer.text.trim();
-    if (!_linked || _posting || text.isEmpty) return;
+    if (!_canPublish || _posting || text.isEmpty) return;
     setState(() => _posting = true);
     try {
       await widget.provider.publishComment(widget.target, text);
@@ -156,8 +173,22 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
     }
   }
 
-  void _openReplies(AnimeRiftComment comment) {
-    Navigator.of(context).push(
+  Future<void> _react(AnimeRiftComment comment) async {
+    if (!_linked || !_reactingIds.add(comment.id)) return;
+    setState(() {});
+    try {
+      await widget.provider.reactToComment(widget.target, comment.id);
+      if (mounted) await _reload();
+    } catch (error) {
+      if (mounted) _message(error);
+    } finally {
+      _reactingIds.remove(comment.id);
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _openReplies(AnimeRiftComment comment) async {
+    await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => AnimeRiftCommentsScreen(
           provider: widget.provider,
@@ -165,6 +196,7 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
         ),
       ),
     );
+    if (mounted) await _reload();
   }
 
   @override
@@ -364,6 +396,9 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
                     icon: Icons.favorite_border_rounded,
                     count: comment.likes,
                     tooltip: 'الإعجابات',
+                    onTap: _linked && !_reactingIds.contains(comment.id)
+                        ? () => _react(comment)
+                        : null,
                   ),
                   const SizedBox(width: 14),
                   _RiftReaction(
@@ -393,7 +428,7 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
           ),
         ),
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-        child: _linked
+        child: _canPublish
             ? Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
@@ -455,7 +490,11 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
                     const SizedBox(width: 8),
                     Flexible(
                       child: Text(
-                        'اربط حساب AnimeRift من الإعدادات لإضافة تعليق.',
+                        !_linked
+                            ? 'اربط حساب AnimeRift من الإعدادات لإضافة تعليق.'
+                            : _termsAccepted == false
+                            ? 'يجب قبول إرشادات المجتمع في AnimeRift قبل التعليق.'
+                            : 'الخادم لا يسمح بالرد على هذا التعليق.',
                         textAlign: TextAlign.center,
                         style: Theme.of(context).textTheme.bodyMedium
                             ?.copyWith(color: colors.onSurfaceVariant),
