@@ -270,9 +270,12 @@ class EpisodeCard extends HookConsumerWidget {
     final downloadProgress =
         downloadProgressData?.progress ?? activeDownload?.progress ?? 0.0;
 
+    final fileKey = downloadedFileKey(parentItem, episode: episode);
+    // Each visible row resolves its file asynchronously. Watching the whole
+    // map rebuilds every row for every result as the user scrolls.
     final downloadedFile = ref.watch(
-      downloadedFilesProvider,
-    )[downloadedFileKey(parentItem, episode: episode)];
+      downloadedFilesProvider.select((files) => files[fileKey]),
+    );
 
     // Check for downloaded file on load
     useEffect(() {

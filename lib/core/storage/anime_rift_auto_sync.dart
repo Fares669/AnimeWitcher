@@ -452,16 +452,14 @@ class AnimeRiftAutoSyncCoordinator {
   /// background sync and pending mutations are uploaded before each pull.
   Future<void> refreshCategory(LibraryCategory category) {
     if (_disposed) return Future<void>.value();
-    _debounceTimer?.cancel();
-    _debounceTimer = null;
+    // This pass excludes watched/playback/rating edits. Keep their scheduled
+    // flush alive so opening a shelf cannot strand them in the journal.
     _requestedCategories.add(category);
     return _beginRefresh();
   }
 
   Future<void> refreshHistory() {
     if (_disposed) return Future<void>.value();
-    _debounceTimer?.cancel();
-    _debounceTimer = null;
     _requestedHistory = true;
     return _beginRefresh();
   }
@@ -483,8 +481,6 @@ class AnimeRiftAutoSyncCoordinator {
     if (account == null || !_canRecordLocalChange) {
       throw const AnimeRiftAuthenticationRequired();
     }
-    _debounceTimer?.cancel();
-    _debounceTimer = null;
     _ratingFlushRequested = true;
     _ratingFlushUrls.add(AnimeRiftCloudPendingJournal.catalogUrl(url));
     await _beginRefresh();
@@ -803,14 +799,19 @@ class AnimeRiftAutoSyncCoordinator {
         continue;
       }
       bool acknowledged;
+      final started = _diagnosticClock();
+      var outcome = 'error';
+      int? httpStatus;
       try {
         acknowledged = await _measure(
           'write',
           () => writer.write(account, change),
         );
+        outcome = acknowledged ? 'acknowledged' : 'unconfirmed';
       } on AnimeRiftAccessUnavailable catch (error) {
         AnimeRiftCloudPendingJournal.requireAccount(account);
         final status = error.statusCode;
+        httpStatus = status;
         // A non-auth 4xx rejection belongs to this one queued edit. Preserve
         // it for inspection/retry, but don't starve unrelated library edits.
         // Offline, rate-limit and server outages still stop the batch.
@@ -822,6 +823,7 @@ class AnimeRiftAutoSyncCoordinator {
             status == 429) {
           rethrow;
         }
+        outcome = 'rejected';
         _record('rift.sync.writeRejected', {
           'status':
               const {
@@ -839,6 +841,26 @@ class AnimeRiftAutoSyncCoordinator {
           'httpStatus': status,
         });
         continue;
+      } finally {
+        // One outcome per attempted mutation; fixed kind/outcome labels only.
+        // Never include its URL, episode number, payload or exception text.
+        _record('rift.sync.writeOutcome', {
+          'status':
+              const {
+                'favorite',
+                'category',
+                'watched',
+                'rating',
+                'history',
+                'history-clear',
+                'playback',
+              }.contains(change.kind)
+              ? change.kind
+              : 'other',
+          'action': outcome,
+          'durationMs': _elapsed(started),
+          'httpStatus': ?httpStatus,
+        });
       }
       if (!acknowledged) {
         _skip('unconfirmed');

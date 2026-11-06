@@ -1068,8 +1068,19 @@ void main() {
       expect(secondScope, isNot(firstScope));
 
       AnimeRiftLocalAccountScope.reset();
-      final restarted = AnimeRiftApiClient(config: fixtureConfig, dio: dio);
+      final restoreSink = InMemoryDownloadDiagnosticsV2();
+      final restarted = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: dio,
+        diagnostics: AppDiagnostics(sink: restoreSink),
+      );
       expect(await restarted.restoreAccountSession(), isTrue);
+      expect(
+        restoreSink.transportEvents
+            .where((event) => event['event'] == 'rift.auth.sessionRestore')
+            .single['status'],
+        'restored',
+      );
       expect(restarted.accountIdentity?.id, 'user-two');
       expect(AnimeRiftLocalAccountScope.accountHash, secondScope);
 
@@ -1125,7 +1136,11 @@ void main() {
   );
 
   test('overlapping restore calls share the secure read', () async {
-    final client = AnimeRiftApiClient(config: fixtureConfig);
+    final sink = InMemoryDownloadDiagnosticsV2();
+    final client = AnimeRiftApiClient(
+      config: fixtureConfig,
+      diagnostics: AppDiagnostics(sink: sink),
+    );
     final results = await Future.wait([
       client.restoreAccountSession(),
       client.restoreAccountSession(),
@@ -1133,6 +1148,13 @@ void main() {
     ]);
     expect(results, [false, false, false]);
     expect(secureCalls.where((call) => call.method == 'read'), hasLength(1));
+    final sessionRows = sink.transportEvents.where(
+      (event) => event['event'] == 'rift.auth.sessionRestore',
+    );
+    expect(sessionRows, hasLength(1));
+    expect(sessionRows.single['status'], 'missing');
+    expect(sessionRows.single['active'], false);
+    expect(sessionRows.toString(), isNot(contains('deviceId')));
   });
 
   test(
@@ -1235,8 +1257,22 @@ void main() {
     // Linux's keyring is shared while XDG profiles have separate preferences.
     await prefs.remove(identityKey);
     secureCalls.clear();
-    final other = AnimeRiftApiClient(config: fixtureConfig);
+    final restoreSink = InMemoryDownloadDiagnosticsV2();
+    final other = AnimeRiftApiClient(
+      config: fixtureConfig,
+      diagnostics: AppDiagnostics(sink: restoreSink),
+    );
     expect(await other.restoreAccountSession(), isFalse);
+    expect(
+      restoreSink.transportEvents
+          .where((event) => event['event'] == 'rift.auth.sessionRestore')
+          .single['status'],
+      'installationMismatch',
+    );
+    expect(
+      restoreSink.transportEvents.toString(),
+      isNot(contains('fixture-preserved-token')),
+    );
     expect(other.isAccountLinked, isFalse);
     expect(AnimeRiftLocalAccountScope.accountHash, isNull);
     expect(secureValues[sessionKey], saved);

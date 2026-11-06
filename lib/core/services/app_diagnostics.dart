@@ -135,9 +135,23 @@ class AppDiagnostics {
         const {'GET', 'POST', 'PUT', 'PATCH', 'DELETE'}.contains(method)
         ? method
         : 'OTHER';
+    // A successful watched/rating mutation often finishes under 900ms.
+    // Always retain these specific, bounded write endpoints; otherwise a
+    // missing line in app.jsonl looks identical to an unsent cloud edit.
+    const importantWrites = {
+      'watch_history.watch',
+      'watch_history.mark',
+      'watch_history.un_mark',
+      'my_list.rate',
+      'my_list.bookmark',
+      'favorite.anime',
+    };
+    final recordMutation =
+        normalizedMethod != 'GET' && importantWrites.contains(route);
     if (durationMs < 900 &&
         failureKind == null &&
         (httpStatus == null || httpStatus < 400) &&
+        !recordMutation &&
         !(route.startsWith('comment.') && normalizedMethod != 'GET')) {
       return;
     }

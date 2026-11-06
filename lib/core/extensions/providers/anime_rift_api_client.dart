@@ -1190,6 +1190,29 @@ class AnimeRiftApiClient {
         _restoringSession = null;
       });
 
+  // A successful device registration does not restore the linked user token.
+  // These are fixed classifications only; never record the secure value,
+  // device ID, account ID or an exception message.
+  void _recordSessionRestore(String reason, {required bool linked}) {
+    if (!const {
+      'missing',
+      'invalid',
+      'installationMismatch',
+      'restored',
+      'storageError',
+    }.contains(reason)) {
+      return;
+    }
+    try {
+      _appDiagnostics.record('rift.auth.sessionRestore', {
+        'status': reason,
+        'active': linked,
+      });
+    } catch (_) {
+      // A failing diagnostic sink must not change authentication behavior.
+    }
+  }
+
   Future<bool> _restoreAccountSession() async {
     await _loadIdentity();
     if (_sessionRestoreAttempted) return isAccountLinked;
@@ -1202,6 +1225,7 @@ class AnimeRiftApiClient {
         if (raw == null || raw.isEmpty) {
           _sessionRestoreAttempted = true;
           AnimeRiftLocalAccountScope.reset();
+          _recordSessionRestore('missing', linked: false);
           return false;
         }
         Map<dynamic, dynamic>? decoded;
@@ -1222,14 +1246,16 @@ class AnimeRiftApiClient {
             _sessionRestoreAttempted = true;
             AnimeRiftLocalAccountScope.reset();
           }
+          _recordSessionRestore('invalid', linked: isAccountLinked);
           return isAccountLinked;
         }
-        if (decoded!['deviceId'] != _identity!['deviceId']) {
+        if (decoded['deviceId'] != _identity!['deviceId']) {
           // Linux keyrings are shared across XDG profiles, unlike installation
           // preferences. A valid credential for another installation must not
           // be used here or deleted while merely restoring this guest profile.
           _sessionRestoreAttempted = true;
           AnimeRiftLocalAccountScope.reset();
+          _recordSessionRestore('installationMismatch', linked: false);
           return false;
         }
         final token = decoded['token'] as String;
@@ -1250,6 +1276,7 @@ class AnimeRiftApiClient {
         );
         AnimeRiftLocalAccountScope.activate(accountId);
         _sessionRestoreAttempted = true;
+        _recordSessionRestore('restored', linked: true);
         return true;
       });
     } catch (_) {
@@ -1259,6 +1286,7 @@ class AnimeRiftApiClient {
         _accountIdentity = null;
         AnimeRiftLocalAccountScope.reset();
       }
+      _recordSessionRestore('storageError', linked: isAccountLinked);
       throw const AnimeRiftSecureStorageUnavailable();
     }
   }

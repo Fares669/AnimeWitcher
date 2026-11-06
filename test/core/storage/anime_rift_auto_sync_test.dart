@@ -208,6 +208,132 @@ class _FavoriteClient extends AnimeRiftApiClient {
 
 void main() {
   test(
+    'outgoing outcomes identify kind without exposing queued identities',
+    () async {
+      final storage = _MemoryStorage();
+      final provider = _FakeRift('alice');
+      await provider.restoreAccountSession();
+      final events = <(String, Map<String, Object?>)>[];
+      var now = 0;
+      final sync = AnimeRiftAutoSyncCoordinator(
+        storage: storage,
+        activeRift: () => provider,
+        debounce: const Duration(days: 1),
+        diagnosticClockMillis: () => now,
+        diagnosticRecord: (event, fields) => events.add((event, fields)),
+        verifiedWriter: AnimeRiftCloudWriter(
+          (id, value, {required accountHash}) async => {},
+          readFavorites: () async => {'items': <Object>[]},
+          setWatched: (id, episode, viewed, {required accountHash}) async {
+            now += 7;
+            if (episode == 2) {
+              throw const AnimeRiftAccessUnavailable(statusCode: 422);
+            }
+            return {};
+          },
+        ),
+      );
+      addTearDown(sync.dispose);
+      await sync.queueFavorite(_title, true);
+      await sync.queueWatched(_title, 2, true);
+      await sync.queueWatched(_title, 3, false);
+      await sync.flushPending();
+      final outcomes = events
+          .where((e) => e.$1 == 'rift.sync.writeOutcome')
+          .map((e) => e.$2)
+          .toList();
+      expect(outcomes, [
+        {'status': 'favorite', 'action': 'unconfirmed', 'durationMs': 0},
+        {
+          'status': 'watched',
+          'action': 'rejected',
+          'durationMs': 7,
+          'httpStatus': 422,
+        },
+        {'status': 'watched', 'action': 'acknowledged', 'durationMs': 7},
+      ]);
+      expect(
+        AnimeRiftCloudPendingJournal(storage)
+            .pending(AnimeRiftLocalAccountScope.accountHash!)
+            .map((c) => c.kind),
+        ['favorite', 'watched'],
+      );
+    },
+  );
+
+  testWidgets('shelf refresh preserves scheduled upload of 20 watched edits', (
+    tester,
+  ) async {
+    final storage = _MemoryStorage();
+    final provider = _FakeRift('alice');
+    await provider.restoreAccountSession();
+    final writer = _FakeVerifiedWriter();
+    final sync = AnimeRiftAutoSyncCoordinator(
+      storage: storage,
+      activeRift: () => provider,
+      verifiedWriter: writer,
+    );
+    addTearDown(sync.dispose);
+    for (var number = 1; number <= 20; number++) {
+      await sync.queueWatched(_title, number, true);
+    }
+    await sync.refreshCategory(LibraryCategory.watching);
+    expect(writer.sent, isEmpty);
+    await tester.pump(const Duration(seconds: 3));
+    expect(writer.sent, hasLength(20));
+    expect(writer.sent.map((c) => c.value['episode_number']).toSet(), {
+      for (var number = 1; number <= 20; number++) number,
+    });
+    expect(
+      AnimeRiftCloudPendingJournal(storage)
+          .pending(AnimeRiftLocalAccountScope.accountHash!),
+      isEmpty,
+    );
+    expect(provider.pullCalls, 0);
+    expect(provider.selectedPulls, [LibraryCategory.watching]);
+  });
+
+  testWidgets('immediate rating push preserves scheduled watched upload', (
+    tester,
+  ) async {
+    final provider = _FakeRift('alice');
+    await provider.restoreAccountSession();
+    final writer = _FakeVerifiedWriter();
+    final sync = AnimeRiftAutoSyncCoordinator(
+      storage: _MemoryStorage(),
+      activeRift: () => provider,
+      verifiedWriter: writer,
+    );
+    addTearDown(sync.dispose);
+    await sync.queueWatched(_title, 1, true);
+    await sync.queueClearRating(_title);
+    expect(await sync.pushRatingNow(_title), isTrue);
+    expect(writer.sent.map((c) => c.kind), ['rating']);
+    await tester.pump(const Duration(seconds: 3));
+    expect(writer.sent.map((c) => c.kind), ['rating', 'watched']);
+  });
+
+  testWidgets('history refresh preserves scheduled library upload', (
+    tester,
+  ) async {
+    final provider = _FakeRift('alice');
+    await provider.restoreAccountSession();
+    final writer = _FakeVerifiedWriter();
+    final sync = AnimeRiftAutoSyncCoordinator(
+      storage: _MemoryStorage(),
+      activeRift: () => provider,
+      verifiedWriter: writer,
+    );
+    addTearDown(sync.dispose);
+    await sync.queueFavorite(_title, true);
+    await sync.refreshHistory();
+    expect(writer.sent, isEmpty);
+    await tester.pump(const Duration(seconds: 3));
+    expect(writer.sent.single.kind, 'favorite');
+    expect(provider.historyPulls, 1);
+  });
+
+  test(
     'noisy skips are bounded for 30 seconds and reset on clock reversal',
     () async {
       for (final writerAvailable in [false, true]) {

@@ -115,6 +115,41 @@ void main() {
     expect(sink.transportEvents.toString(), isNot(contains('secret')));
   });
 
+  test(
+    'fast watched and rating writes remain visible but searches are sampled',
+    () {
+      final sink = InMemoryDownloadDiagnosticsV2();
+      final diagnostics = AppDiagnostics(sink: sink);
+      diagnostics.recordRiftRequest(
+        url: 'https://example.org/api/v4/watch_history/watch?user=private',
+        method: 'PUT',
+        durationMs: 80,
+        httpStatus: 202,
+        accountLinked: true,
+      );
+      diagnostics.recordRiftRequest(
+        url: 'https://example.org/api/v4/my_list/rate?token=hidden',
+        method: 'PUT',
+        durationMs: 70,
+        httpStatus: 200,
+        accountLinked: true,
+      );
+      diagnostics.recordRiftRequest(
+        url: 'https://example.org/api/v4/library/search?query=private',
+        method: 'POST',
+        durationMs: 75,
+        httpStatus: 200,
+      );
+      expect(sink.transportEvents, hasLength(2));
+      expect(sink.transportEvents.map((event) => event['status']), [
+        'watch_history.watch',
+        'my_list.rate',
+      ]);
+      expect(sink.transportEvents.toString(), isNot(contains('private')));
+      expect(sink.transportEvents.toString(), isNot(contains('hidden')));
+    },
+  );
+
   test('safe Rift rejection facts are written to local app.jsonl', () async {
     final directory = await Directory.systemTemp.createTemp('rift-safe-log-');
     addTearDown(() => directory.delete(recursive: true));

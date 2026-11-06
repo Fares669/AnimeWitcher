@@ -400,6 +400,14 @@ class SliverDetailsDesktopEpisodeGrid extends ConsumerWidget {
                   endIndex,
                 );
 
+                if (crossAxisCount == 1) {
+                  return EpisodeCard(
+                    key: ValueKey(rowEpisodes.single.url),
+                    episode: rowEpisodes.single,
+                    parentItem: parentItem,
+                  );
+                }
+
                 return IntrinsicHeight(
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -457,6 +465,9 @@ class SliverEpisodeCardGrid extends StatelessWidget {
       separatorBuilder: (_, _) => SizedBox(height: mainAxisSpacing),
       itemBuilder: (context, rowIndex) {
         final startIndex = rowIndex * crossAxisCount;
+        // A single card already determines its row height. IntrinsicHeight
+        // adds a speculative layout pass to every newly visible episode.
+        if (crossAxisCount == 1) return children[startIndex];
         return IntrinsicHeight(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -925,6 +936,16 @@ class DetailsDesktopEpisodeColumn extends ConsumerWidget {
     final startIndex = rowIndex * crossAxisCount;
     final endIndex = (startIndex + crossAxisCount).clamp(0, episodes.length);
     final rowEpisodes = episodes.sublist(startIndex, endIndex);
+
+    if (crossAxisCount == 1) {
+      return EpisodeCard(
+        key: ValueKey(rowEpisodes.single.url),
+        episode: rowEpisodes.single,
+        parentItem: parentItem,
+        plain: plain,
+        vertical: vertical,
+      );
+    }
 
     return IntrinsicHeight(
       child: Row(
