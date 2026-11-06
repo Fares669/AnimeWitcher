@@ -33,6 +33,7 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
   final Set<String> _reactingIds = <String>{};
   // Keep local results over later list responses, which may predate a reaction.
   final Map<String, ({bool liked, int count})> _reactions = {};
+  String? _reactionAccountHash;
   List<AnimeRiftComment> _comments = const [];
   bool _initialLoading = true;
   bool _moreLoading = false;
@@ -100,6 +101,7 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
         );
       }
       if (!mounted || generation != _requestGeneration) return;
+      _acceptServerReactions(page.items);
       setState(() {
         _linked = linked;
         _serverUserIdPresent = page.serverUserIdPresent;
@@ -129,6 +131,7 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
         page: _nextPage,
       );
       if (!mounted || generation != _requestGeneration) return;
+      _acceptServerReactions(page.items);
       setState(() {
         final known = _comments.map((comment) => comment.id).toSet();
         _comments = [
@@ -157,6 +160,36 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
         .showSnackBar(SnackBar(content: Text(message)));
   }
 
+  void _acceptServerReactions(List<AnimeRiftComment> items) {
+    final account = AnimeRiftLocalAccountScope.accountHash;
+    if (_reactionAccountHash != account) {
+      _reactions.clear();
+      _reactionAccountHash = account;
+    }
+    for (final comment in items) {
+      final liked = comment.likedByMe;
+      if (liked == null || _reactingIds.contains(comment.id)) continue;
+      // Unlike a cached local guess, the original app obtains this flag from
+      // `interactions` returned by /comment/all on every load.
+      _reactions.remove(comment.id);
+      widget.provider.rememberCommentReaction(
+        widget.target,
+        comment.id,
+        liked: liked,
+        count: comment.likes,
+      );
+    }
+  }
+
+  ({bool liked, int count})? _reactionFor(AnimeRiftComment comment) {
+    final pending = _reactions[comment.id];
+    if (pending != null) return pending;
+    if (comment.likedByMe case final liked?) {
+      return (liked: liked, count: comment.likes);
+    }
+    return widget.provider.knownCommentReaction(widget.target, comment.id);
+  }
+
   Future<void> _publish() async {
     final text = _composer.text.trim();
     if (!_canPublish || _posting || text.isEmpty) return;
@@ -178,9 +211,7 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
 
   Future<void> _react(AnimeRiftComment comment) async {
     if (!_linked || !_reactingIds.add(comment.id)) return;
-    final previous =
-        _reactions[comment.id] ??
-        widget.provider.knownCommentReaction(widget.target, comment.id);
+    final previous = _reactionFor(comment);
     final accountAtStart = AnimeRiftLocalAccountScope.accountHash;
     final liked = previous?.liked ?? false;
     final count = previous?.count ?? comment.likes;
@@ -347,9 +378,7 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final photo = comment.photoUrl ?? '';
-    final reaction =
-        _reactions[comment.id] ??
-        widget.provider.knownCommentReaction(widget.target, comment.id);
+    final reaction = _reactionFor(comment);
     final reveal = !comment.spoiler || _revealedSpoilers.contains(comment.id);
     return Material(
       key: ValueKey('rift-comment-${comment.id}'),

@@ -58,6 +58,7 @@ class AnimeRiftComment {
     required this.likes,
     required this.replies,
     required this.spoiler,
+    this.likedByMe,
     this.createdAt,
     this.photoUrl,
   });
@@ -68,10 +69,15 @@ class AnimeRiftComment {
   final int likes;
   final int replies;
   final bool spoiler;
+
+  /// Native `/comment/all` returns the current viewer's action in its
+  /// `interactions` list. Null means the server did not supply that list;
+  /// false means it did but there was no thumbsUp for this comment.
+  final bool? likedByMe;
   final DateTime? createdAt;
   final String? photoUrl;
 
-  static AnimeRiftComment? fromJson(Object? value) {
+  static AnimeRiftComment? fromJson(Object? value, {bool? likedByMe}) {
     if (value is! Map) return null;
     final id = value['_id'] ?? value['id'];
     final content = value['comment'] ?? value['text'];
@@ -100,6 +106,7 @@ class AnimeRiftComment {
       likes: count(thumbCount ?? value['likes_count']),
       replies: count(value['replies_count'] ?? value['replies']),
       spoiler: value['spoiler'] == true,
+      likedByMe: likedByMe,
       createdAt: rawDate is String ? DateTime.tryParse(rawDate) : null,
       photoUrl: switch (user['avatar'] ??
           user['profile_picture'] ??
@@ -136,6 +143,27 @@ class AnimeRiftCommentPage {
   factory AnimeRiftCommentPage.fromJson(Map<String, dynamic> data) {
     final envelope = data['items'];
     final interactions = data['interactions'];
+    // Original APK ARM64 `0xab77f8..0xab8450`: interaction_keys may remap
+    // the server action name `like`; default is literally `like`. Each entry
+    // in the viewer-scoped interactions list has `_comment`, `action`, and
+    // the unmodified reaction enum name in `reaction_type`.
+    final rawKeys = data['interaction_keys'];
+    final rawLike = rawKeys is Map ? rawKeys['like'] : null;
+    final likeAction = rawLike is String && rawLike.isNotEmpty
+        ? rawLike
+        : 'like';
+    final viewerLikedIds = <String>{};
+    if (interactions is List) {
+      for (final entry in interactions) {
+        if (entry is! Map ||
+            entry['action'] != likeAction ||
+            entry['reaction_type'] != 'thumbsUp') {
+          continue;
+        }
+        final id = entry['_comment'];
+        if (id is String) viewerLikedIds.add(id);
+      }
+    }
     bool? flag(String name) {
       for (final object in [data, interactions, envelope]) {
         if (object is Map && object[name] is bool) {
@@ -155,7 +183,14 @@ class AnimeRiftCommentPage {
     }
     final comments = <AnimeRiftComment>[
       for (final entry in raw)
-        if (AnimeRiftComment.fromJson(entry) case final comment?) comment,
+        if (AnimeRiftComment.fromJson(
+              entry,
+              likedByMe: interactions is List && entry is Map
+                  ? viewerLikedIds.contains(entry['_id'] ?? entry['id'])
+                  : null,
+            )
+            case final comment?)
+          comment,
     ];
     // A nonempty server page must not turn into a false 'no comments' state
     // just because the server model changed and our parser rejected every row.

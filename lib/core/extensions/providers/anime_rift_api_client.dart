@@ -427,6 +427,14 @@ class AnimeRiftApiClient {
   static const _maxRegistrationCooldownMs = _registrationCooldownSeconds * 1000;
   // Serializes registrations from separate client instances in the same app.
   static Future<void> _registrationGate = Future<void>.value();
+  // Native registration session keys live in memory, never in preferences.
+  static ({
+    (String, String, String) identity,
+    int succeededAt,
+    String sessionKey,
+    bool androidFallback,
+  })?
+  _runtimeRegistration;
   static const _sessionKey = 'animerift.user.session.v1';
   static const _defaultBase = 'https://gateway.embrassme.top/api/v4';
   static const _defaultSecureStorage = FlutterSecureStorage(
@@ -449,6 +457,7 @@ class AnimeRiftApiClient {
   String _base = _defaultBase;
   Map<String, String>? _identity;
   String? _accessToken;
+  String? _deviceSessionKey;
   AnimeRiftAccountIdentity? _accountIdentity;
   Future<void>? _identityLoading;
   Future<bool>? _restoringSession;
@@ -461,6 +470,9 @@ class AnimeRiftApiClient {
   bool get isConfigured => config.isConfigured;
   bool get isAccountLinked => _accessToken != null;
   AnimeRiftAccountIdentity? get accountIdentity => _accountIdentity;
+
+  (String, String, String) get _registrationCacheIdentity =>
+      (_base, _identity!['deviceId']!, config.signingKey);
 
   static String _randomText(int length) {
     const alphabet =
@@ -622,6 +634,11 @@ class AnimeRiftApiClient {
     } finally {
       if (completedStatus == 403 &&
           serverReason == AnimeRiftServerReason.deviceSuspended) {
+        _registered = false;
+        _deviceSessionKey = null;
+        if (_runtimeRegistration?.identity == _registrationCacheIdentity) {
+          _runtimeRegistration = null;
+        }
         // A local success timestamp is no longer evidence that the gateway
         // accepts this installation. Do not replay this request or change its
         // identity. A later normal initialization observes the existing delay
@@ -851,16 +868,29 @@ class AnimeRiftApiClient {
 
   Map<String, String> _headers(String scope, {bool includeUserToken = true}) {
     final device = _deviceDescriptor!;
+    final runtime = _runtimeRegistration;
+    if (runtime != null && runtime.identity == _registrationCacheIdentity) {
+      _deviceSessionKey = runtime.sessionKey;
+    }
+    final signingKey = scope == 'USER.AUTH.DEVICE.REGISTER'
+        ? config.signingKey
+        : _deviceSessionKey;
+    if (signingKey == null) {
+      throw const AnimeRiftAccessUnavailable(
+        stage: AnimeRiftRequestStage.deviceRegistration,
+        failure: AnimeRiftFailureKind.invalidResponse,
+      );
+    }
     String encode(Object value) =>
         base64Url.encode(utf8.encode(jsonEncode(value))).replaceAll('=', '');
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final unsigned =
-        '${encode({'alg': 'HS256', 'typ': 'JWT'})}.${encode({'scope': scope, 'exp': now + 60, 'iat': now})}';
+        '${encode({'alg': 'HS256', 'typ': 'JWT'})}.${encode({'scope': scope, 'exp': now + 10, 'iat': now})}';
     final signature = base64Url
         .encode(
           Hmac(
             sha256,
-            utf8.encode(config.signingKey),
+            utf8.encode(signingKey),
           ).convert(utf8.encode(unsigned)).bytes,
         )
         .replaceAll('=', '');
@@ -939,9 +969,10 @@ class AnimeRiftApiClient {
           retryAfterSeconds: seconds,
         );
       }
-      // Reuse a recent *successful* registration; refreshing the UI or
-      // reopening the app must not flood the gateway with identical requests.
+      // Recreated providers can share a recent runtime registration. A cold
+      // restart has no session key, so a saved timestamp alone cannot qualify.
       final succeededAt = prefs.getInt(_registrationSuccessKey);
+      final runtime = _runtimeRegistration;
       if (_forceRegistration) {
         final forcedAt = prefs.getInt(_registrationForcedAtKey);
         if (forcedAt != null &&
@@ -965,9 +996,13 @@ class AnimeRiftApiClient {
       }
       if (!_forceRegistration &&
           succeededAt != null &&
+          runtime != null &&
+          runtime.identity == _registrationCacheIdentity &&
+          runtime.succeededAt == succeededAt &&
           nowMs >= succeededAt &&
           nowMs - succeededAt < _registrationReuseMs) {
-        final reusedFallback = prefs.getBool(_registrationAndroidKey) == true;
+        _deviceSessionKey = runtime.sessionKey;
+        final reusedFallback = runtime.androidFallback;
         if (reusedFallback) {
           _deviceDescriptor = AnimeRiftDeviceDescriptor.emulatedAndroid(
             _identity!['buildId']!,
@@ -1057,9 +1092,13 @@ class AnimeRiftApiClient {
         );
         rethrow;
       }
-      await prefs.setInt(
-        _registrationSuccessKey,
-        _clock().toUtc().millisecondsSinceEpoch,
+      final completedAt = _clock().toUtc().millisecondsSinceEpoch;
+      await prefs.setInt(_registrationSuccessKey, completedAt);
+      _runtimeRegistration = (
+        identity: _registrationCacheIdentity,
+        succeededAt: completedAt,
+        sessionKey: _deviceSessionKey!,
+        androidFallback: mode == AnimeRiftRegistrationMode.androidFallback,
       );
       await prefs.setBool(
         _registrationAndroidKey,
@@ -1085,10 +1124,12 @@ class AnimeRiftApiClient {
   }
 
   Future<void> _registerDevice(AnimeRiftDeviceDescriptor device) async {
-    await _send(
+    _deviceSessionKey = null;
+    final response = await _send(
       '$_base/auth/register/device',
       headers: _headers('USER.AUTH.DEVICE.REGISTER'),
       method: 'POST',
+      expectedStatus: 201,
       body: {
         'deviceId': _identity!['deviceId'],
         'current_app_version': '3.13.5',
@@ -1102,6 +1143,14 @@ class AnimeRiftApiClient {
         'install_mode': 2,
       },
     );
+    final sessionKey = response['sessionKey'];
+    if (sessionKey is! String || !_validAccessToken(sessionKey)) {
+      throw const AnimeRiftAccessUnavailable(
+        stage: AnimeRiftRequestStage.deviceRegistration,
+        failure: AnimeRiftFailureKind.invalidResponse,
+      );
+    }
+    _deviceSessionKey = sessionKey;
   }
 
   Future<void> _ensureReady() async {

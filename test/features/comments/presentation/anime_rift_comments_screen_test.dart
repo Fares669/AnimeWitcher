@@ -110,7 +110,72 @@ class UnrecognizedRiftSessionProvider extends FakeRiftCommentsProvider {
   );
 }
 
+/// Real APK comment listing includes viewer-scoped interactions. A new
+/// provider instance has no in-memory likes, just like a cold app restart.
+class NativeViewerReactionProvider extends FakeRiftCommentsProvider {
+  @override
+  Future<AnimeRiftCommentPage> loadComments(
+    AnimeRiftCommentTarget target, {
+    int page = 0,
+  }) async {
+    loadCount++;
+    return AnimeRiftCommentPage.fromJson({
+      'items': [
+        {
+          '_id': 'comment1',
+          'text': 'تعليق من ريفت',
+          '_user': {'name': 'المستخدم'},
+          'reactions_counts': {'thumbsUp': 3},
+          'replies_count': 1,
+        },
+      ],
+      'interaction_keys': {'like': 'LIKE_ACTION'},
+      'interactions': [
+        {
+          '_comment': 'comment1',
+          'action': 'LIKE_ACTION',
+          'reaction_type': 'thumbsUp',
+        },
+      ],
+    });
+  }
+}
+
 void main() {
+  testWidgets('server-origin like is shown after a fresh screen and provider', (
+    tester,
+  ) async {
+    const target = AnimeRiftCommentTarget(animeId: 'anime42', title: 'أنمي');
+    final firstProvider = NativeViewerReactionProvider();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AnimeRiftCommentsScreen(provider: firstProvider, target: target),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.favorite_rounded), findsOneWidget);
+    expect(find.text('3'), findsOneWidget);
+
+    final newProvider = NativeViewerReactionProvider();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AnimeRiftCommentsScreen(provider: newProvider, target: target),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(newProvider.loadCount, 1);
+    expect(find.byIcon(Icons.favorite_rounded), findsOneWidget);
+    expect(find.text('3'), findsOneWidget);
+
+    // Native PUT toggles an existing reaction off; do not add a second like.
+    await tester.tap(find.byTooltip('الإعجابات'));
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.favorite_border_rounded), findsOneWidget);
+    expect(find.text('2'), findsOneWidget);
+    expect(newProvider.reactionCount, 1);
+    expect(newProvider.loadCount, 1);
+  });
   testWidgets(
     'linked account is not reported as zero published comments when server omits user ID',
     (tester) async {

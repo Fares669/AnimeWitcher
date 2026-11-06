@@ -208,6 +208,52 @@ void main() {
     expect(page.items.single.replies, 0);
   });
 
+  test('native comment interactions identify the current viewer likes', () {
+    final page = AnimeRiftCommentPage.fromJson({
+      'items': [
+        for (final id in ['liked', 'other', 'different-reaction'])
+          {
+            '_id': id,
+            'text': 'fixture',
+            'reactions_counts': {'thumbsUp': 2},
+          },
+      ],
+      'interaction_keys': {'like': 'LIKED_ACTION'},
+      'interactions': [
+        {
+          '_comment': 'liked',
+          'action': 'LIKED_ACTION',
+          'reaction_type': 'thumbsUp',
+        },
+        {
+          '_comment': 'different-reaction',
+          'action': 'LIKED_ACTION',
+          'reaction_type': 'heartFace',
+        },
+      ],
+    });
+    expect(page.items.map((e) => e.likedByMe).toList(), [true, false, false]);
+    expect(page.items.map((e) => e.likes).toList(), [2, 2, 2]);
+    final withoutInteractionMetadata = AnimeRiftCommentPage.fromJson({
+      'items': [
+        {'_id': 'unknown', 'text': 'fixture'},
+      ],
+    });
+    expect(withoutInteractionMetadata.items.single.likedByMe, isNull);
+  });
+
+  test('native default like action works without interaction_keys', () {
+    final page = AnimeRiftCommentPage.fromJson({
+      'items': [
+        {'_id': 'liked', 'text': 'fixture'},
+      ],
+      'interactions': [
+        {'_comment': 'liked', 'action': 'like', 'reaction_type': 'thumbsUp'},
+      ],
+    });
+    expect(page.items.single.likedByMe, true);
+  });
+
   test('Rift comments expose only the server account presence, never ID', () {
     final guest = AnimeRiftCommentPage.fromJson({
       'items': <Object>[],

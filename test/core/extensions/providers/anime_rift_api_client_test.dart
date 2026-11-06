@@ -1300,12 +1300,16 @@ void main() {
               .encode(
                 Hmac(
                   sha256,
-                  utf8.encode(fixtureConfig.signingKey),
+                  utf8.encode(
+                    o.uri.path.endsWith('/auth/register/device')
+                        ? fixtureConfig.signingKey
+                        : 'fixture-session',
+                  ),
                 ).convert(utf8.encode('${jwt[0]}.${jwt[1]}')).bytes,
               )
               .replaceAll('=', '');
           expect(jwt[2], expected);
-          expect((payload['exp'] as int) - (payload['iat'] as int), 60);
+          expect((payload['exp'] as int) - (payload['iat'] as int), 10);
           expect(o.headers.containsKey('x-goog-api-key'), isFalse);
           expect(o.followRedirects, isFalse);
           if (o.uri.path.endsWith('/auth/register/device')) {
@@ -1327,6 +1331,171 @@ void main() {
         ),
       );
       expect(registrations, 1);
+    },
+  );
+
+  test(
+    'cold restart cannot reuse a timestamp without a runtime session key',
+    () async {
+      final now = DateTime.utc(2026, 11, 6, 12);
+      SharedPreferences.setMockInitialValues({
+        'animerift.api.installation.v1': jsonEncode({
+          'fid': 'cold-fixture-fid',
+          'deviceId': 'cold-fixture-device',
+          'buildId': 'cold-fixture-build',
+        }),
+        'animerift.api.registration.successAt.v1': now.millisecondsSinceEpoch,
+      });
+      secureValues['animerift.user.session.v1'] = jsonEncode({
+        'version': 1,
+        'token': 'cold-fixture-user-token',
+        'deviceId': 'cold-fixture-device',
+        'accountId': 'cold-fixture-user',
+      });
+      var registrations = 0;
+      final catalogRequests = <RequestOptions>[];
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        clock: () => now,
+        dio: fixtureDio((request) {
+          if (request.uri.host.endsWith('googleapis.com')) {
+            return reply(request, <String, dynamic>{}, 400);
+          }
+          if (request.uri.path.endsWith('/auth/register/device')) {
+            registrations++;
+            return reply(request, {'sessionKey': 'cold-fixture-key'}, 201);
+          }
+          catalogRequests.add(request);
+          return reply(request, {'items': <Object>[]});
+        }),
+      );
+      await client.request(
+        'library/home_content',
+        'ANIME.LIBRARY.HOME_CONTENT',
+      );
+      await client.request(
+        'library/home_content',
+        'ANIME.LIBRARY.HOME_CONTENT',
+      );
+      expect(registrations, 1);
+      expect(client.isAccountLinked, isTrue);
+      expect(client.accountIdentity?.id, 'cold-fixture-user');
+      final prefs = await SharedPreferences.getInstance();
+      expect(
+        prefs.getKeys().map((key) => prefs.get(key).toString()).join(),
+        isNot(contains('cold-fixture-key')),
+      );
+      expect(secureValues.values.join(), isNot(contains('cold-fixture-key')));
+      for (final request in catalogRequests) {
+        expect(
+          request.headers['authorization'],
+          'Bearer cold-fixture-user-token',
+        );
+        final jwt = (request.headers['integrity'] as String)
+            .substring(7)
+            .split('.');
+        final signature = base64Url
+            .encode(
+              Hmac(
+                sha256,
+                utf8.encode('cold-fixture-key'),
+              ).convert(utf8.encode('${jwt[0]}.${jwt[1]}')).bytes,
+            )
+            .replaceAll('=', '');
+        expect(jwt[2], signature);
+      }
+    },
+  );
+
+  test('existing clients use the renewed runtime registration key', () async {
+    var now = DateTime.utc(2026, 11, 6, 12);
+    var registrations = 0;
+    final catalogRequests = <RequestOptions>[];
+    final dio = fixtureDio((request) {
+      if (request.uri.host.endsWith('googleapis.com')) {
+        return reply(request, <String, dynamic>{}, 400);
+      }
+      if (request.uri.path.endsWith('/auth/register/device')) {
+        registrations++;
+        return reply(request, {
+          'sessionKey': 'renewed-key-$registrations',
+        }, 201);
+      }
+      catalogRequests.add(request);
+      return reply(request, <String, dynamic>{});
+    });
+    AnimeRiftApiClient client() =>
+        AnimeRiftApiClient(config: fixtureConfig, dio: dio, clock: () => now);
+    final first = client();
+    await first.request('library/home_content', 'ANIME.LIBRARY.HOME_CONTENT');
+    now = now.add(const Duration(minutes: 6));
+    await client().request(
+      'library/home_content',
+      'ANIME.LIBRARY.HOME_CONTENT',
+    );
+    await first.request('library/home_content', 'ANIME.LIBRARY.HOME_CONTENT');
+    expect(registrations, 2);
+    for (final request in catalogRequests.skip(1)) {
+      final jwt = (request.headers['integrity'] as String)
+          .substring(7)
+          .split('.');
+      final signature = base64Url
+          .encode(
+            Hmac(
+              sha256,
+              utf8.encode('renewed-key-2'),
+            ).convert(utf8.encode('${jwt[0]}.${jwt[1]}')).bytes,
+          )
+          .replaceAll('=', '');
+      expect(jwt[2], signature);
+    }
+  });
+
+  test(
+    'registration without a valid session key fails closed and cools down',
+    () async {
+      for (final key in [null, '', 'bad key', 42]) {
+        SharedPreferences.setMockInitialValues({});
+        var registrations = 0;
+        var catalogCalls = 0;
+        final dio = fixtureDio((request) {
+          if (request.uri.host.endsWith('googleapis.com')) {
+            return reply(request, <String, dynamic>{}, 400);
+          }
+          if (request.uri.path.endsWith('/auth/register/device')) {
+            registrations++;
+            return reply(request, {'sessionKey': key}, 201);
+          }
+          catalogCalls++;
+          return reply(request, <String, dynamic>{});
+        });
+        final client = AnimeRiftApiClient(config: fixtureConfig, dio: dio);
+        await expectLater(
+          client.request('library/home_content', 'ANIME.LIBRARY.HOME_CONTENT'),
+          throwsA(
+            isA<AnimeRiftAccessUnavailable>().having(
+              (error) => error.failure,
+              'failure',
+              AnimeRiftFailureKind.invalidResponse,
+            ),
+          ),
+        );
+        await expectLater(
+          AnimeRiftApiClient(
+            config: fixtureConfig,
+            dio: dio,
+          ).request('library/home_content', 'ANIME.LIBRARY.HOME_CONTENT'),
+          throwsA(
+            isA<AnimeRiftAccessUnavailable>().having(
+              (error) => error.failure,
+              'failure',
+              AnimeRiftFailureKind.registrationCooldown,
+            ),
+          ),
+        );
+        expect(registrations, 1);
+        expect(catalogCalls, 0);
+      }
     },
   );
 
@@ -1543,7 +1712,7 @@ void main() {
         if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
         if (o.uri.path.endsWith('/auth/register/device')) {
           registers.add(o);
-          return reply(o, {}, 201);
+          return reply(o, {'sessionKey': 'fixture'}, 201);
         }
         return reply(o, {'items': []});
       }),
@@ -1691,7 +1860,7 @@ void main() {
           }
           if (options.uri.path.endsWith('/auth/register/device')) {
             attempts++;
-            return reply(options, {'ok': true}, 201);
+            return reply(options, {'sessionKey': 'fixture'}, 201);
           }
           return reply(options, {'items': <Object>[]});
         }),
@@ -1868,7 +2037,7 @@ void main() {
           if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
           if (o.uri.path.endsWith('/auth/register/device')) {
             registrations++;
-            return reply(o, {}, 201);
+            return reply(o, {'sessionKey': 'fixture'}, 201);
           }
           if (o.uri.path.endsWith('/auth/sign-in/with-code')) {
             signInCalls++;
@@ -2389,7 +2558,7 @@ void main() {
         dio: fixtureDio((o) {
           if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
           if (o.uri.path.endsWith('/auth/register/device')) {
-            return reply(o, {}, 201);
+            return reply(o, {'sessionKey': 'fixture'}, 201);
           }
           return reply(o, {
             'items': {'profile': <String, dynamic>{}},
@@ -2416,7 +2585,7 @@ void main() {
         dio: fixtureDio((o) {
           if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
           if (o.uri.path.endsWith('/auth/register/device')) {
-            return reply(o, {}, 201);
+            return reply(o, {'sessionKey': 'fixture'}, 201);
           }
           return reply(o, {
             'items': {
@@ -2447,7 +2616,7 @@ void main() {
       dio: fixtureDio((o) {
         if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
         if (o.uri.path.endsWith('/auth/register/device')) {
-          return reply(o, {}, 201);
+          return reply(o, {'sessionKey': 'fixture'}, 201);
         }
         return reply(o, {
           'items': {
@@ -2475,7 +2644,7 @@ void main() {
     final dio = fixtureDio((o) {
       if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
       if (o.uri.path.endsWith('/auth/register/device')) {
-        return reply(o, {}, 201);
+        return reply(o, {'sessionKey': 'fixture'}, 201);
       }
       return reply(o, {
         'items': {
@@ -2506,7 +2675,7 @@ void main() {
     final dio = fixtureDio((o) {
       if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
       if (o.uri.path.endsWith('/auth/register/device')) {
-        return reply(o, {}, 201);
+        return reply(o, {'sessionKey': 'fixture'}, 201);
       }
       return reply(o, {
         'items': {
@@ -2539,7 +2708,7 @@ void main() {
       final dio = fixtureDio((o) {
         if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
         if (o.uri.path.endsWith('/auth/register/device')) {
-          return reply(o, {}, 201);
+          return reply(o, {'sessionKey': 'fixture'}, 201);
         }
         return reply(o, {
           'items': {
@@ -2574,7 +2743,7 @@ void main() {
       final dio = fixtureDio((o) {
         if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
         if (o.uri.path.endsWith('/auth/register/device')) {
-          return reply(o, {}, 201);
+          return reply(o, {'sessionKey': 'fixture'}, 201);
         }
         return reply(o, {
           'items': {
