@@ -345,12 +345,69 @@ class AnimeRiftAutoSyncCoordinator {
     AnimeRiftVerifiedCloudWriter? verifiedWriter,
     void Function()? onImported,
     Duration debounce = const Duration(seconds: 3),
-  }) : _storage = storage,
+    int Function()? diagnosticClockMillis,
+    void Function(String, Map<String, Object?>)? diagnosticRecord,
+  }) : _diagnosticClock = diagnosticClockMillis ?? _monotonicClock(),
+       _record = diagnosticRecord ?? appDiagnostics.record,
+       _storage = storage,
        _activeRift = activeRift,
        _writer = verifiedWriter,
        _onImported = onImported,
        _debounce = debounce,
        _journal = AnimeRiftCloudPendingJournal(storage);
+
+  static int Function() _monotonicClock() {
+    final watch = Stopwatch()..start();
+    return () => watch.elapsedMilliseconds;
+  }
+
+  final int Function() _diagnosticClock;
+  final void Function(String, Map<String, Object?>) _record;
+  // Keys are only the fixed skip reasons and coalescedWait phase below.
+  final Map<String, int> _noisyDiagnosticAt = {};
+  int? _lastNoisyDiagnosticClock;
+
+  bool _allowNoisyDiagnostic(String phase) {
+    final now = _diagnosticClock();
+    final previousClock = _lastNoisyDiagnosticClock;
+    if (previousClock != null && now < previousClock) {
+      _noisyDiagnosticAt.clear();
+    }
+    _lastNoisyDiagnosticClock = now;
+    final previous = _noisyDiagnosticAt[phase];
+    if (previous != null && now - previous < 30000) return false;
+    _noisyDiagnosticAt[phase] = now;
+    return true;
+  }
+
+  int _elapsed(int start) => (_diagnosticClock() - start).clamp(0, 2147483647);
+
+  // Counts coordinator operations, not HTTP requests. Imports include local
+  // persistence; verified writes may include several remote readback requests.
+  Future<T> _measure<T>(String phase, Future<T> Function() operation) async {
+    final start = _diagnosticClock();
+    var succeeded = false;
+    try {
+      final result = await operation();
+      succeeded = true;
+      return result;
+    } finally {
+      if (phase != 'coalescedWait' || _allowNoisyDiagnostic(phase)) {
+        _record('rift.sync.await', {
+          'action': phase,
+          'count': 1,
+          'durationMs': _elapsed(start),
+          'status': succeeded ? 'complete' : 'error',
+        });
+      }
+    }
+  }
+
+  void _skip(String reason) {
+    if (_allowNoisyDiagnostic(reason)) {
+      _record('rift.sync.skip', {'reason': reason});
+    }
+  }
 
   final StorageService _storage;
   final AnimeRiftProvider? Function() _activeRift;
@@ -441,7 +498,9 @@ class AnimeRiftAutoSyncCoordinator {
 
   Future<void> _beginRefresh() {
     final running = _inFlight;
-    if (running != null) return running;
+    if (running != null) {
+      return _measure('coalescedWait', () => running);
+    }
     final operation = _drain();
     _inFlight = operation;
     return operation.whenComplete(() {
@@ -572,11 +631,23 @@ class AnimeRiftAutoSyncCoordinator {
     // Inbound reads happen on startup, resume and account/provider changes.
     // Without a verified cloud writer, fetching the same remote lists for
     // every local progress tick achieves nothing and can saturate the gateway.
-    if (_disposed || _writer == null) return;
+    if (_disposed || _writer == null) {
+      _skip(_disposed ? 'disposed' : 'writerUnavailable');
+      return;
+    }
     // A frequently updating player must not postpone syncing forever.
-    if (_debounceTimer?.isActive == true) return;
+    if (_debounceTimer?.isActive == true) {
+      _skip('debounceActive');
+      return;
+    }
+    final scheduled = _diagnosticClock();
     _debounceTimer = Timer(_debounce, () {
       _debounceTimer = null;
+      _record('rift.sync.await', {
+        'action': 'debounce',
+        'durationMs': _elapsed(scheduled),
+        'status': 'complete',
+      });
       unawaited(
         flushPending().catchError((Object error, StackTrace _) {
           _lastError = error;
@@ -588,7 +659,7 @@ class AnimeRiftAutoSyncCoordinator {
   }
 
   Future<void> _drain() async {
-    final elapsed = Stopwatch()..start();
+    final started = _diagnosticClock();
     var passes = 0;
     try {
       do {
@@ -606,13 +677,21 @@ class AnimeRiftAutoSyncCoordinator {
         _requestedCategories.clear();
         _requestedHistory = false;
         final provider = _activeRift();
-        if (provider == null || !await provider.restoreAccountSession()) {
+        if (provider == null) {
+          _skip('providerInactive');
+          continue;
+        }
+        if (!await _measure('restore', provider.restoreAccountSession)) {
+          _skip('sessionUnavailable');
           continue;
         }
         final account = AnimeRiftLocalAccountScope.accountHash;
-        if (account == null) continue;
+        if (account == null) {
+          _skip('accountUnavailable');
+          continue;
+        }
 
-        appDiagnostics.record('rift.sync.phase', {
+        _record('rift.sync.phase', {
           'status': all
               ? 'full'
               : categories.isNotEmpty
@@ -647,23 +726,31 @@ class AnimeRiftAutoSyncCoordinator {
                     if (ratings) 'rating',
                   },
           );
+        } else {
+          _skip('writerUnavailable');
         }
         AnimeRiftCloudPendingJournal.requireAccount(account);
         if (all) {
-          final result = await provider.importCloudLibrary(_storage);
+          final result = await _measure(
+            'importFull',
+            () => provider.importCloudLibrary(_storage),
+          );
           AnimeRiftCloudPendingJournal.requireAccount(account);
           if (!_disposed && result.changed > 0) _onImported?.call();
         } else {
           for (final category in categories) {
-            final result = await provider.importCloudLibraryCategory(
-              _storage,
-              category,
+            final result = await _measure(
+              'importShelf',
+              () => provider.importCloudLibraryCategory(_storage, category),
             );
             AnimeRiftCloudPendingJournal.requireAccount(account);
             if (!_disposed && result.changed > 0) _onImported?.call();
           }
           if (history) {
-            final result = await provider.importCloudHistory(_storage);
+            final result = await _measure(
+              'importHistory',
+              () => provider.importCloudHistory(_storage),
+            );
             AnimeRiftCloudPendingJournal.requireAccount(account);
             if (!_disposed && result.changed > 0) _onImported?.call();
           }
@@ -675,16 +762,16 @@ class AnimeRiftAutoSyncCoordinator {
               _requestedCategories.isNotEmpty ||
               _requestedHistory) &&
           !_disposed);
-      appDiagnostics.record('rift.sync.complete', {
-        'durationMs': elapsed.elapsedMilliseconds,
+      _record('rift.sync.complete', {
+        'durationMs': _elapsed(started),
         'count': passes,
       });
     } catch (error) {
       _lastError = error;
-      appDiagnostics.record('rift.sync.error', {
-        'durationMs': elapsed.elapsedMilliseconds,
+      _record('rift.sync.error', {
+        'durationMs': _elapsed(started),
         'count': passes,
-        'errorType': error.runtimeType.toString(),
+        'reason': 'syncFailed',
       });
       rethrow;
     }
@@ -698,18 +785,29 @@ class AnimeRiftAutoSyncCoordinator {
     final writer = _writer;
     if (writer == null) return;
     final changes = _journal.pending(account);
+    _record('rift.sync.pending', {'count': changes.length});
     for (final change in changes) {
       AnimeRiftCloudPendingJournal.requireAccount(account);
-      if (change.kind == 'rescan') continue;
-      if (kinds != null && !kinds.contains(change.kind)) continue;
+      if (change.kind == 'rescan') {
+        _skip('localOnly');
+        continue;
+      }
+      if (kinds != null && !kinds.contains(change.kind)) {
+        _skip('kindFiltered');
+        continue;
+      }
       if (ratingUrls != null &&
           change.kind == 'rating' &&
           !ratingUrls.contains(change.url)) {
+        _skip('ratingFiltered');
         continue;
       }
       bool acknowledged;
       try {
-        acknowledged = await writer.write(account, change);
+        acknowledged = await _measure(
+          'write',
+          () => writer.write(account, change),
+        );
       } on AnimeRiftAccessUnavailable catch (error) {
         AnimeRiftCloudPendingJournal.requireAccount(account);
         final status = error.statusCode;
@@ -724,15 +822,33 @@ class AnimeRiftAutoSyncCoordinator {
             status == 429) {
           rethrow;
         }
-        appDiagnostics.record('rift.sync.writeRejected', {
-          'status': change.kind,
+        _record('rift.sync.writeRejected', {
+          'status':
+              const {
+                'favorite',
+                'category',
+                'watched',
+                'rating',
+                'history',
+                'history-clear',
+                'playback',
+                'rescan',
+              }.contains(change.kind)
+              ? change.kind
+              : 'other',
           'httpStatus': status,
         });
         continue;
       }
-      if (!acknowledged) continue;
+      if (!acknowledged) {
+        _skip('unconfirmed');
+        continue;
+      }
       AnimeRiftCloudPendingJournal.requireAccount(account);
-      await _journal.acknowledge(account, change);
+      await _measure(
+        'acknowledge',
+        () => _journal.acknowledge(account, change),
+      );
     }
   }
 

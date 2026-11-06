@@ -35,6 +35,14 @@ class AppDiagnostics {
   final DownloadDiagnosticsV2 _sink;
   final int Function() _clockMillis;
   int? _lastJankAt;
+  String _frameScreen = 'other';
+  int _suppressedJankCount = 0;
+  int _worstSuppressedFrameMs = 0;
+  int _worstSuppressedBuildMs = 0;
+  int _worstSuppressedRasterMs = 0;
+  int _worstSuppressedVsyncMs = 0;
+  String _worstSuppressedCause = 'other';
+  String _suppressedScreen = 'other';
   final Queue<int> _recentRiftRequests = Queue<int>();
 
   /// Classify by fixed API route components only: IDs and query strings never
@@ -175,10 +183,13 @@ class AppDiagnostics {
   }
 
   /// Flush diagnostics before the user exports the common log folder.
-  Future<void> flush() => switch (_sink) {
-    FileDownloadDiagnosticsV2 file => file.flush(),
-    _ => Future<void>.value(),
-  };
+  Future<void> flush() {
+    _flushSuppressedJank();
+    return switch (_sink) {
+      FileDownloadDiagnosticsV2 file => file.flush(),
+      _ => Future<void>.value(),
+    };
+  }
 
   /// Error text/stack may contain credentials, URLs and personal content.
   /// Record only the exception type and a small allowlist of account error
@@ -205,21 +216,89 @@ class AppDiagnostics {
     });
   }
 
-  void recordFrameDuration(Duration duration) {
+  /// Record only a known screen category, never route arguments or IDs.
+  void setCurrentScreen(String route) {
+    _frameScreen = safeScreen(route);
+  }
+
+  static String _frameCause(int buildMs, int rasterMs) {
+    if (buildMs >= 24 && rasterMs >= 24) return 'mixed';
+    if (buildMs >= 24) return 'build';
+    if (rasterMs >= 24) return 'raster';
+    return 'other';
+  }
+
+  void _flushSuppressedJank() {
+    if (_suppressedJankCount == 0) return;
+    record('app.frame.jankSummary', {
+      'status': _worstSuppressedCause,
+      'action': _suppressedScreen,
+      'count': _suppressedJankCount,
+      'durationMs': _worstSuppressedFrameMs,
+      'buildMs': _worstSuppressedBuildMs,
+      'rasterMs': _worstSuppressedRasterMs,
+      'vsyncMs': _worstSuppressedVsyncMs,
+      'memoryBytes': ProcessInfo.currentRss,
+    });
+    _suppressedJankCount = 0;
+    _worstSuppressedFrameMs = 0;
+    _worstSuppressedBuildMs = 0;
+    _worstSuppressedRasterMs = 0;
+    _worstSuppressedVsyncMs = 0;
+    _worstSuppressedCause = 'other';
+  }
+
+  /// Frames over ~3x a 60Hz budget are noteworthy. Build/raster breakdown
+  /// identifies whether Dart/UI or GPU/compositor is the bottleneck; periodic
+  /// summaries preserve stutters inside the 10s sampling window.
+  void recordFrameDuration(
+    Duration duration, {
+    Duration? buildDuration,
+    Duration? rasterDuration,
+    Duration? vsyncOverhead,
+  }) {
     final millis = duration.inMilliseconds;
-    if (millis < 120) return;
+    if (millis < 50) return;
     final now = _clockMillis();
-    if (_lastJankAt != null && now - _lastJankAt! < 10000) return;
+    final buildMs = buildDuration?.inMilliseconds ?? 0;
+    final rasterMs = rasterDuration?.inMilliseconds ?? 0;
+    final vsyncMs = vsyncOverhead?.inMilliseconds ?? 0;
+    final cause = _frameCause(buildMs, rasterMs);
+    if (_lastJankAt != null &&
+        now >= _lastJankAt! &&
+        now - _lastJankAt! < 10000) {
+      _suppressedJankCount++;
+      if (millis > _worstSuppressedFrameMs) {
+        _worstSuppressedFrameMs = millis;
+        _worstSuppressedBuildMs = buildMs;
+        _worstSuppressedRasterMs = rasterMs;
+        _worstSuppressedVsyncMs = vsyncMs;
+        _worstSuppressedCause = cause;
+        _suppressedScreen = _frameScreen;
+      }
+      return;
+    }
+    _flushSuppressedJank();
     _lastJankAt = now;
     record('app.frame.jank', {
+      'status': cause,
+      'action': _frameScreen,
       'durationMs': millis,
+      'buildMs': buildMs,
+      'rasterMs': rasterMs,
+      'vsyncMs': vsyncMs,
       'memoryBytes': ProcessInfo.currentRss,
     });
   }
 
   void recordFrameTimings(List<FrameTiming> timings) {
     for (final frame in timings) {
-      recordFrameDuration(frame.totalSpan);
+      recordFrameDuration(
+        frame.totalSpan,
+        buildDuration: frame.buildDuration,
+        rasterDuration: frame.rasterDuration,
+        vsyncOverhead: frame.vsyncOverhead,
+      );
     }
   }
 }
@@ -230,6 +309,7 @@ final appDiagnostics = AppDiagnostics();
 class AppNavigationDiagnosticsObserver extends NavigatorObserver {
   @override
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    appDiagnostics.setCurrentScreen(route.settings.name ?? '');
     appDiagnostics.record('app.navigation.push', {
       'status': AppDiagnostics.safeScreen(route.settings.name ?? ''),
     });
@@ -237,8 +317,14 @@ class AppNavigationDiagnosticsObserver extends NavigatorObserver {
 
   @override
   void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    appDiagnostics.setCurrentScreen(previousRoute?.settings.name ?? '');
     appDiagnostics.record('app.navigation.pop', {
       'status': AppDiagnostics.safeScreen(route.settings.name ?? ''),
     });
+  }
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
+    appDiagnostics.setCurrentScreen(newRoute?.settings.name ?? '');
   }
 }

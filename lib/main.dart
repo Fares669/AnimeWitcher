@@ -44,6 +44,31 @@ import 'core/account/account_providers.dart';
 import 'core/storage/anime_rift_auto_sync.dart';
 import 'core/services/app_diagnostics.dart';
 
+/// Observes the existing foreground sync without adding requests or retries.
+@visibleForTesting
+Future<void> runNativeForegroundSync(
+  Future<void> Function() sync, {
+  AppDiagnostics? diagnostics,
+}) async {
+  final log = diagnostics ?? appDiagnostics;
+  final elapsed = Stopwatch()..start();
+  var succeeded = false;
+  log.record('native.sync.start', {'status': 'foreground'});
+  try {
+    await sync();
+    succeeded = true;
+  } catch (error) {
+    log.recordException('nativeSync', error);
+    rethrow;
+  } finally {
+    log.record('native.sync.complete', {
+      'status': 'foreground',
+      'durationMs': elapsed.elapsedMilliseconds,
+      'result': succeeded,
+    });
+  }
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // No exception strings, stacks or user identifiers are written to disk.
@@ -392,27 +417,28 @@ class _MyAppState extends ConsumerState<MyApp>
         .read(animeWitcherAccountControllerProvider)
         .asData
         ?.value;
-    if (account?.isSignedIn != true) return;
+    if (account?.isSignedIn != true) {
+      appDiagnostics.record('native.sync.skipped', {'reason': 'signedOut'});
+      return;
+    }
 
     final now = DateTime.now();
     final previous = _lastForegroundAccountSyncAt;
     if (previous != null &&
         now.difference(previous) < const Duration(minutes: 1)) {
+      appDiagnostics.record('native.sync.skipped', {'reason': 'throttled'});
       return;
     }
     _lastForegroundAccountSyncAt = now;
     unawaited(
-      ref
-          .read(animeWitcherAccountControllerProvider.notifier)
-          .syncNow()
-          .catchError((Object error) {
-            appDiagnostics.recordException('nativeSync', error);
-            if (kDebugMode) {
-              debugPrint(
-                '[AnimeWitcherAccount] Foreground sync deferred: $error',
-              );
-            }
-          }),
+      runNativeForegroundSync(
+        () =>
+            ref.read(animeWitcherAccountControllerProvider.notifier).syncNow(),
+      ).catchError((Object error) {
+        if (kDebugMode) {
+          debugPrint('[AnimeWitcherAccount] Foreground sync deferred');
+        }
+      }),
     );
   }
 

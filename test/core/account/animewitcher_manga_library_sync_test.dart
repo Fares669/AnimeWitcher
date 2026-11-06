@@ -4,6 +4,8 @@ import 'package:animewitcher/core/account/animewitcher_account_models.dart';
 import 'package:animewitcher/core/account/animewitcher_account_service.dart';
 import 'package:animewitcher/core/account/firestore_rest_client.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
+import 'package:animewitcher/core/services/app_diagnostics.dart';
+import 'package:animewitcher/core/services/download_v2/download_v2_diagnostics.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
 import 'package:animewitcher/core/storage/provider_local_library.dart';
 import 'package:animewitcher/core/storage/secure_token_storage.dart';
@@ -150,6 +152,8 @@ final class _Firestore extends FirestoreRestClient {
   final List<_Write> writes = <_Write>[];
   final List<String> queries = <String>[];
   bool offline = false;
+  String? failedCollection;
+  final stageError = StateError('private token https://private.example/uid-1');
   final List<_ArrayTransform> arrayTransforms = <_ArrayTransform>[];
   bool failArrayTransforms = false;
   final List<String> deletes = <String>[];
@@ -223,9 +227,12 @@ final class _Firestore extends FirestoreRestClient {
     String collectionPath,
     String idToken, {
     int pageSize = 100,
-  }) async => List<FirestoreDocument>.from(
-    collections[collectionPath] ?? const <FirestoreDocument>[],
-  );
+  }) async {
+    if (collectionPath == failedCollection) throw stageError;
+    return List<FirestoreDocument>.from(
+      collections[collectionPath] ?? const <FirestoreDocument>[],
+    );
+  }
 
   @override
   Future<FirestoreDocument?> getDocument(String path, String idToken) async =>
@@ -235,6 +242,7 @@ final class _Firestore extends FirestoreRestClient {
 Future<AnimeWitcherAccountService> _signedInService(
   _Firestore firestore, {
   _Storage? storage,
+  AppDiagnostics? diagnostics,
 }) async {
   final backing = storage ?? _Storage();
   final secure = _SecureStorage(backing);
@@ -264,6 +272,7 @@ Future<AnimeWitcherAccountService> _signedInService(
     storage: backing,
     secureStorage: secure,
     firestore: firestore,
+    diagnostics: diagnostics,
   );
   await service.restoreCachedSession();
   expect(service.isSignedIn, isTrue);
@@ -285,6 +294,69 @@ FirestoreDocument _remote({
 }) => FirestoreDocument(id: path.split('/').last, path: path, fields: fields);
 
 void main() {
+  test(
+    'syncAll records five successful stages with only safe fields',
+    () async {
+      final sink = InMemoryDownloadDiagnosticsV2();
+      final service = await _signedInService(
+        _Firestore(),
+        diagnostics: AppDiagnostics(sink: sink),
+      );
+
+      await service.syncAll();
+
+      expect(sink.transportEvents, hasLength(5));
+      expect(
+        sink.transportEvents.map((event) => event['status']),
+        unorderedEquals([
+          'animeLibrary',
+          'mangaLibrary',
+          'watchedEpisodes',
+          'watchedManga',
+          'continueWatching',
+        ]),
+      );
+      for (final event in sink.transportEvents) {
+        expect(event, {
+          'event': 'native.sync.stage',
+          'status': isA<String>(),
+          'durationMs': isNonNegative,
+          'result': true,
+        });
+      }
+    },
+  );
+
+  test('syncAll identifies failed stage and preserves its error', () async {
+    final sink = InMemoryDownloadDiagnosticsV2();
+    final firestore = _Firestore()
+      ..failedCollection = 'users/profile-1/chapters_watched';
+    final service = await _signedInService(
+      firestore,
+      diagnostics: AppDiagnostics(sink: sink),
+    );
+
+    await expectLater(service.syncAll(), throwsA(same(firestore.stageError)));
+
+    expect(sink.transportEvents, hasLength(5));
+    final failed = sink.transportEvents.where(
+      (event) => event['result'] == false,
+    );
+    expect(failed.single, {
+      'event': 'native.sync.stage',
+      'status': 'watchedManga',
+      'durationMs': isNonNegative,
+      'result': false,
+    });
+    expect(
+      sink.transportEvents.where((event) => event['result'] == true),
+      hasLength(4),
+    );
+    expect(sink.transportEvents.toString(), isNot(contains('private')));
+    expect(sink.transportEvents.toString(), isNot(contains('uid-1')));
+    expect(service.snapshot.lastSyncAt, isNull);
+  });
+
   test(
     'opening Witcher anime library requests only native anime shelves',
     () async {

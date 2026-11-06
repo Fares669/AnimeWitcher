@@ -111,9 +111,12 @@ class _FakeRift extends AnimeRiftProvider {
   int changed = 0;
   final selectedPulls = <LibraryCategory>[];
   int historyPulls = 0;
+  void Function()? onRestore;
+  void Function()? onPull;
 
   @override
   Future<bool> restoreAccountSession() async {
+    onRestore?.call();
     if (linked) AnimeRiftLocalAccountScope.activate(accountId);
     return linked;
   }
@@ -123,6 +126,7 @@ class _FakeRift extends AnimeRiftProvider {
     StorageService storage,
   ) async {
     pullCalls++;
+    onPull?.call();
     activePulls++;
     if (activePulls > maxActivePulls) maxActivePulls = activePulls;
     try {
@@ -171,6 +175,7 @@ class _FakeRift extends AnimeRiftProvider {
 
 class _FakeVerifiedWriter implements AnimeRiftVerifiedCloudWriter {
   final sent = <AnimeRiftCloudPendingChange>[];
+  void Function()? onWrite;
   Completer<void>? gate;
 
   @override
@@ -180,6 +185,7 @@ class _FakeVerifiedWriter implements AnimeRiftVerifiedCloudWriter {
   ) async {
     AnimeRiftCloudPendingJournal.requireAccount(accountHash);
     sent.add(change);
+    onWrite?.call();
     await gate?.future;
     return true;
   }
@@ -201,6 +207,184 @@ class _FavoriteClient extends AnimeRiftApiClient {
 }
 
 void main() {
+  test(
+    'noisy skips are bounded for 30 seconds and reset on clock reversal',
+    () async {
+      for (final writerAvailable in [false, true]) {
+        var now = 1000;
+        final events = <(String, Map<String, Object?>)>[];
+        final provider = _FakeRift('alice');
+        await provider.restoreAccountSession();
+        final sync = AnimeRiftAutoSyncCoordinator(
+          storage: _MemoryStorage(),
+          activeRift: () => provider,
+          verifiedWriter: writerAvailable ? _FakeVerifiedWriter() : null,
+          debounce: const Duration(days: 1),
+          diagnosticClockMillis: () => now,
+          diagnosticRecord: (event, fields) => events.add((event, fields)),
+        );
+        addTearDown(sync.dispose);
+        final reason = writerAvailable ? 'debounceActive' : 'writerUnavailable';
+        int count() => events
+            .where((e) => e.$1 == 'rift.sync.skip' && e.$2['reason'] == reason)
+            .length;
+        for (var i = 0; i < 100; i++) {
+          await sync.queueFavorite(_title, true);
+        }
+        expect(count(), 1);
+        now = 30999;
+        await sync.queueFavorite(_title, true);
+        expect(count(), 1);
+        now = 31000;
+        await sync.queueFavorite(_title, true);
+        expect(count(), 2);
+        now = 0;
+        await sync.queueFavorite(_title, true);
+        expect(count(), 3);
+        expect(provider.pullCalls, 0);
+      }
+    },
+  );
+
+  test(
+    'coalesced wait diagnostics are bounded without dropping refreshes',
+    () async {
+      var now = 1000;
+      final events = <(String, Map<String, Object?>)>[];
+      final provider = _FakeRift('alice');
+      final sync = AnimeRiftAutoSyncCoordinator(
+        storage: _MemoryStorage(),
+        activeRift: () => provider,
+        diagnosticClockMillis: () => now,
+        diagnosticRecord: (event, fields) => events.add((event, fields)),
+      );
+      addTearDown(sync.dispose);
+      Future<void> batch() async {
+        provider.pullGate = Completer<void>();
+        final first = sync.refresh();
+        await Future<void>.delayed(Duration.zero);
+        final waiters = List.generate(20, (_) => sync.refresh());
+        provider.pullGate!.complete();
+        await Future.wait([first, ...waiters]);
+      }
+
+      int count() => events
+          .where(
+            (e) =>
+                e.$1 == 'rift.sync.await' && e.$2['action'] == 'coalescedWait',
+          )
+          .length;
+      await batch();
+      expect(count(), 1);
+      now = 30999;
+      await batch();
+      expect(count(), 1);
+      now = 31000;
+      await batch();
+      expect(count(), 2);
+      now = 0;
+      await batch();
+      expect(count(), 3);
+      expect(provider.pullCalls, 8);
+      expect(provider.maxActivePulls, 1);
+    },
+  );
+
+  test(
+    'pending diagnostics separate writer await from local acknowledgement',
+    () async {
+      var now = 0;
+      final events = <(String, Map<String, Object?>)>[];
+      final provider = _FakeRift('alice');
+      await provider.restoreAccountSession();
+      final writer = _FakeVerifiedWriter()..onWrite = (() => now += 19000);
+      final sync = AnimeRiftAutoSyncCoordinator(
+        storage: _MemoryStorage(),
+        activeRift: () => provider,
+        verifiedWriter: writer,
+        debounce: const Duration(days: 1),
+        diagnosticClockMillis: () => now,
+        diagnosticRecord: (event, fields) => events.add((event, fields)),
+      );
+      addTearDown(sync.dispose);
+      await sync.queueFavorite(_title, true);
+      await sync.flushPending();
+      expect(
+        events.singleWhere((e) => e.$1 == 'rift.sync.pending').$2['count'],
+        1,
+      );
+      final phases = events.where((e) => e.$1 == 'rift.sync.await').toList();
+      expect(phases.map((e) => e.$2['action']), [
+        'restore',
+        'write',
+        'acknowledge',
+      ]);
+      expect(phases.map((e) => e.$2['durationMs']), [0, 19000, 0]);
+      expect(writer.sent, hasLength(1));
+      expect(provider.pullCalls, 0);
+    },
+  );
+
+  test(
+    'failed phase reports safe labels and preserves the original failure',
+    () async {
+      final events = <(String, Map<String, Object?>)>[];
+      final failure = StateError('private-token-and-url');
+      final provider = _FakeRift('alice')..onPull = (() => throw failure);
+      final sync = AnimeRiftAutoSyncCoordinator(
+        storage: _MemoryStorage(),
+        activeRift: () => provider,
+        diagnosticClockMillis: () => 0,
+        diagnosticRecord: (event, fields) => events.add((event, fields)),
+      );
+      addTearDown(sync.dispose);
+      await expectLater(sync.refresh(), throwsA(same(failure)));
+      expect(sync.lastError, same(failure));
+      expect(
+        events.where((e) => e.$1 == 'rift.sync.await').last.$2['status'],
+        'error',
+      );
+      expect(events.last.$1, 'rift.sync.error');
+      expect(events.toString(), isNot(contains('private-token-and-url')));
+    },
+  );
+
+  test('sync diagnostics split restore and import with a fake clock', () async {
+    var now = 0;
+    final events = <(String, Map<String, Object?>)>[];
+    final provider = _FakeRift('private-account')
+      ..onRestore = (() => now += 12)
+      ..onPull = (() => now += 16000);
+    final sync = AnimeRiftAutoSyncCoordinator(
+      storage: _MemoryStorage(),
+      activeRift: () => provider,
+      diagnosticClockMillis: () => now,
+      diagnosticRecord: (event, fields) => events.add((event, fields)),
+    );
+    addTearDown(sync.dispose);
+    await sync.refresh();
+    final phases = events.where((e) => e.$1 == 'rift.sync.await').toList();
+    expect(phases.map((e) => e.$2['action']), ['restore', 'importFull']);
+    expect(phases.map((e) => e.$2['durationMs']), [12, 16000]);
+    expect(events.last.$2['durationMs'], 16012);
+    expect(provider.pullCalls, 1);
+    expect(events.toString(), isNot(contains('private-account')));
+    expect(events.any((e) => e.$2['reason'] == 'writerUnavailable'), isTrue);
+  });
+
+  test('inactive provider diagnostics explain a skipped pass', () async {
+    final events = <Map<String, Object?>>[];
+    final sync = AnimeRiftAutoSyncCoordinator(
+      storage: _MemoryStorage(),
+      activeRift: () => null,
+      diagnosticRecord: (_, fields) => events.add(fields),
+      diagnosticClockMillis: () => 10,
+    );
+    addTearDown(sync.dispose);
+    await sync.refresh();
+    expect(events.any((e) => e['reason'] == 'providerInactive'), isTrue);
+  });
+
   tearDown(AnimeRiftLocalAccountScope.reset);
 
   test(

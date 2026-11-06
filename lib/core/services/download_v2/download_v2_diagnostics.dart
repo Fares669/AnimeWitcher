@@ -99,10 +99,8 @@ final class NoopDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
 
 /// Deterministic sink used by V2 regression tests and debug projections.
 final class InMemoryDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
-  final List<DownloadDiagnosticEventV2> _events =
-      <DownloadDiagnosticEventV2>[];
-  final List<Map<String, Object?>> _transportEvents =
-      <Map<String, Object?>>[];
+  final List<DownloadDiagnosticEventV2> _events = <DownloadDiagnosticEventV2>[];
+  final List<Map<String, Object?>> _transportEvents = <Map<String, Object?>>[];
 
   List<DownloadDiagnosticEventV2> get events =>
       List<DownloadDiagnosticEventV2>.unmodifiable(_events);
@@ -246,9 +244,9 @@ final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
     var version = 'unknown';
     var buildNumber = 'unknown';
     try {
-      final identity = await _buildIdentityProvider
-          ?.call()
-          .timeout(const Duration(seconds: 1));
+      final identity = await _buildIdentityProvider?.call().timeout(
+        const Duration(seconds: 1),
+      );
       if (identity != null) {
         version = _safeBuildComponent(identity.version);
         buildNumber = _safeBuildComponent(identity.buildNumber);
@@ -294,15 +292,12 @@ final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
     final rotatedName = dot > 0
         ? '${fileName.substring(0, dot)}.$index${fileName.substring(dot)}'
         : '$fileName.$index';
-    return File(
-      '${directory.path}${Platform.pathSeparator}$rotatedName',
-    );
+    return File('${directory.path}${Platform.pathSeparator}$rotatedName');
   }
 
   /// Testing/support hook for callers that need the append queue settled.
   Future<void> flush() => _tail;
 }
-
 
 bool _shouldFlushDiagnosticRecord(Map<String, Object?> body) {
   if (body['recordType'] != 'snapshot') return false;
@@ -315,6 +310,9 @@ const Set<String> _transportFieldAllowlist = <String>{
   'logicalId',
   'action',
   'durationMs',
+  'buildMs',
+  'rasterMs',
+  'vsyncMs',
   'taskId',
   'parentTaskId',
   'childTaskId',
@@ -389,8 +387,18 @@ Map<String, Object?> _sanitizeTransportFields(Map<String, Object?> fields) {
     if (entry.key == 'memoryBytes' && (value is! int || value < 0)) {
       continue;
     }
-    if (const {'retryAttempt', 'delayMs', 'callbackAttempt', 'currentAttempt', 'draining', 'verifiedBytes'}
-        .contains(entry.key) && (value is! int || value < 0)) {
+    if (const {
+          'retryAttempt',
+          'delayMs',
+          'callbackAttempt',
+          'currentAttempt',
+          'draining',
+          'verifiedBytes',
+          'buildMs',
+          'rasterMs',
+          'vsyncMs',
+        }.contains(entry.key) &&
+        (value is! int || value < 0)) {
       continue;
     }
     if (value is num) {

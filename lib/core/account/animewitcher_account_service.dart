@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import '../domain/entity/multimedia_item.dart';
 import '../extensions/providers/animewitcher_manga_mapping.dart';
+import '../services/app_diagnostics.dart';
 import '../storage/library_category.dart';
 import '../storage/provider_local_library.dart';
 import '../storage/secure_token_storage.dart';
@@ -30,12 +31,14 @@ class AnimeWitcherAccountService {
     FirestoreRestClient? firestore,
     FirebaseStorageRestClient? cloudStorage,
     FirebaseFunctionsRestClient? functions,
+    AppDiagnostics? diagnostics,
   }) : _storage = storage,
        _secureStorage = secureStorage,
        _auth = auth ?? FirebaseAuthRestClient(),
        _firestore = firestore ?? FirestoreRestClient(),
        _cloudStorage = cloudStorage ?? FirebaseStorageRestClient(),
-       _functions = functions ?? FirebaseFunctionsRestClient();
+       _functions = functions ?? FirebaseFunctionsRestClient(),
+       _diagnostics = diagnostics ?? appDiagnostics;
 
   static const String _sessionKey = 'animewitcher_account_session_v1';
   static const String _profileKey = 'animewitcher_account_profile_v1';
@@ -60,6 +63,7 @@ class AnimeWitcherAccountService {
   final FirestoreRestClient _firestore;
   final FirebaseStorageRestClient _cloudStorage;
   final FirebaseFunctionsRestClient _functions;
+  final AppDiagnostics _diagnostics;
   AnimeWitcherSession? _session;
   AnimeWitcherProfile? _profile;
   DateTime? _lastSyncAt;
@@ -1894,6 +1898,24 @@ class AnimeWitcherAccountService {
     }
   }
 
+  Future<void> _observeSyncStage(
+    String stage,
+    Future<void> Function() operation,
+  ) async {
+    final elapsed = Stopwatch()..start();
+    var succeeded = false;
+    try {
+      await operation();
+      succeeded = true;
+    } finally {
+      _diagnostics.record('native.sync.stage', {
+        'status': stage,
+        'durationMs': elapsed.elapsedMilliseconds,
+        'result': succeeded,
+      });
+    }
+  }
+
   Future<void> syncAll() {
     if (!isSignedIn) return Future<void>.value();
     final active = _syncInFlight;
@@ -1902,11 +1924,11 @@ class AnimeWitcherAccountService {
 
     final operation = () async {
       await Future.wait<void>(<Future<void>>[
-        _syncLibrary(),
-        _syncMangaLibrary(),
-        _syncWatchedEpisodes(),
-        _syncWatchedMangaChapters(),
-        _syncContinueWatching(),
+        _observeSyncStage('animeLibrary', _syncLibrary),
+        _observeSyncStage('mangaLibrary', _syncMangaLibrary),
+        _observeSyncStage('watchedEpisodes', _syncWatchedEpisodes),
+        _observeSyncStage('watchedManga', _syncWatchedMangaChapters),
+        _observeSyncStage('continueWatching', _syncContinueWatching),
       ]);
       if (!_isCurrentProfile(profile)) return;
       _lastSyncAt = DateTime.now();
