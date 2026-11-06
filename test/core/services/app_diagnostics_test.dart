@@ -2,10 +2,39 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:animewitcher/core/services/app_diagnostics.dart';
+import 'package:animewitcher/core/account/animewitcher_account_models.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_diagnostics.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'nativeSync logs allowlisted error code but never server error text',
+    () {
+      final sink = InMemoryDownloadDiagnosticsV2();
+      final diagnostics = AppDiagnostics(sink: sink);
+      diagnostics.recordException(
+        'nativeSync',
+        const AnimeWitcherAccountException(
+          'invalid-session',
+          'token secret private-server-response',
+        ),
+      );
+      expect(sink.transportEvents.last['status'], 'invalid-session');
+      expect(sink.transportEvents.toString(), isNot(contains('secret')));
+      diagnostics.recordException(
+        'nativeSync',
+        const AnimeWitcherAccountException(
+          'private-account-id',
+          'personal private information',
+        ),
+      );
+      expect(sink.transportEvents.last['status'], 'other');
+      expect(
+        sink.transportEvents.toString(),
+        isNot(contains('private-account-id')),
+      );
+    },
+  );
   test('API log scopes never contain catalogue or user identifiers', () {
     expect(
       AppDiagnostics.safeRiftOperation(

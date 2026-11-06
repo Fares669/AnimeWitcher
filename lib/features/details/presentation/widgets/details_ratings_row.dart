@@ -191,6 +191,7 @@ class _DetailsRatingsRowState extends ConsumerState<DetailsRatingsRow> {
   bool _loadingRating = false;
   bool _loadedRating = false;
   String? _loadedAnimeId;
+  int _ratingLoadRevision = 0;
 
   AnimeDetailsRatings get _ratings => AnimeDetailsRatings.fromItem(widget.item);
 
@@ -213,6 +214,7 @@ class _DetailsRatingsRowState extends ConsumerState<DetailsRatingsRow> {
   Future<void> _loadUserRating() async {
     if (widget.item.provider == animeRiftProviderId) {
       final url = widget.item.url;
+      final loadRevision = ++_ratingLoadRevision;
       if (mounted) setState(() => _loadingRating = true);
       int? rating;
       try {
@@ -221,7 +223,10 @@ class _DetailsRatingsRowState extends ConsumerState<DetailsRatingsRow> {
         // Show the local editing surface even if the cloud is temporarily
         // unavailable. Never attempt the unrelated Witcher account API.
       }
-      if (!mounted || widget.item.url != url) return;
+      if (!mounted ||
+          widget.item.url != url ||
+          loadRevision != _ratingLoadRevision)
+        return;
       setState(() {
         _userRating = rating;
         _loadingRating = false;
@@ -275,7 +280,22 @@ class _DetailsRatingsRowState extends ConsumerState<DetailsRatingsRow> {
 
   Future<void> _onRatePressed() async {
     if (widget.item.provider == animeRiftProviderId) {
-      final result = await openRiftRatingDialog(context, ref, widget.item);
+      final url = widget.item.url;
+      final result = await openRiftRatingDialog(
+        context,
+        ref,
+        widget.item,
+        onOptimisticRating: (rating) {
+          if (!mounted || widget.item.url != url) return;
+          ++_ratingLoadRevision;
+          setState(() {
+            _userRating = rating;
+            _loadedRating = true;
+            _loadedAnimeId = url;
+            _loadingRating = false;
+          });
+        },
+      );
       if (mounted && result.changed) {
         setState(() => _userRating = result.rating);
       }

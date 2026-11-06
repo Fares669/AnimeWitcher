@@ -27,6 +27,40 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
   final AnimeRiftApiClient _api;
   final Dio? _externalDio;
   final _episodeNumbers = <String, int>{};
+  // The comments GET contract has no verified per-viewer liked flag. Remember
+  // only locally acknowledged reactions, scoped to the linked account, so
+  // reopening the page in this app session does not disguise one's own like.
+  final _knownCommentReactions = <String, ({bool liked, int count})>{};
+
+  String? _commentReactionKey(AnimeRiftCommentTarget target, String commentId) {
+    final account = AnimeRiftLocalAccountScope.accountHash;
+    if (account == null) return null;
+    return '$account:${target.animeId}:${target.episodeId ?? ''}:$commentId';
+  }
+
+  ({bool liked, int count})? knownCommentReaction(
+    AnimeRiftCommentTarget target,
+    String commentId,
+  ) {
+    final key = _commentReactionKey(target, commentId);
+    return key == null ? null : _knownCommentReactions[key];
+  }
+
+  void rememberCommentReaction(
+    AnimeRiftCommentTarget target,
+    String commentId, {
+    required bool liked,
+    required int count,
+  }) {
+    final key = _commentReactionKey(target, commentId);
+    if (key == null) return;
+    if (_knownCommentReactions.length >= 500 &&
+        !_knownCommentReactions.containsKey(key)) {
+      _knownCommentReactions.remove(_knownCommentReactions.keys.first);
+    }
+    _knownCommentReactions[key] = (liked: liked, count: count);
+  }
+
   late final _streams = AnimeRiftStreams(
     _api,
     _episodeNumber,

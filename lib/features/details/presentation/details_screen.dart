@@ -190,6 +190,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   final GlobalKey _extraTabsKey = GlobalKey();
   int? _userRating;
   bool _loadingUserRating = false;
+  int _riftRatingLoadRevision = 0;
   bool _loadedUserRatingSignedIn = false;
   String? _loadedUserRatingAnimeId;
 
@@ -694,6 +695,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     if (item.provider == animeRiftProviderId) {
       final id = item.url;
       if (_loadingUserRating) return;
+      final loadRevision = ++_riftRatingLoadRevision;
       setState(() => _loadingUserRating = true);
       int? rating;
       var linked = false;
@@ -707,7 +709,10 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       } catch (_) {
         // Never query the Witcher session for a Rift item.
       }
-      if (!mounted) return;
+      if (!mounted ||
+          item.url != widget.item.url ||
+          loadRevision != _riftRatingLoadRevision)
+        return;
       setState(() {
         _userRating = rating;
         _loadedUserRatingAnimeId = id;
@@ -794,6 +799,18 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       ratings: AnimeDetailsRatings.fromItem(item),
       initialRating: _userRating ?? 0,
       item: item,
+      onOptimisticRating: isRift
+          ? (rating) {
+              if (!mounted || item.url != widget.item.url) return;
+              ++_riftRatingLoadRevision;
+              setState(() {
+                _userRating = rating;
+                _loadingUserRating = false;
+                _loadedUserRatingAnimeId = animeId;
+                _loadedUserRatingSignedIn = true;
+              });
+            }
+          : null,
     );
     if (!mounted || !outcome.changed) return;
     setState(() {

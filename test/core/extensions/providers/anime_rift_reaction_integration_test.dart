@@ -1,6 +1,7 @@
 import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart';
 import 'package:animewitcher/core/extensions/providers/anime_rift_comments.dart';
 import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
+import 'package:animewitcher/core/storage/anime_rift_account_scope.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _ReactionClient extends AnimeRiftApiClient {
@@ -27,6 +28,24 @@ class _ReactionClient extends AnimeRiftApiClient {
 }
 
 void main() {
+  tearDown(AnimeRiftLocalAccountScope.reset);
+
+  test('locally confirmed likes remain isolated across account switches', () {
+    final provider = AnimeRiftProvider(client: _ReactionClient());
+    const target = AnimeRiftCommentTarget(animeId: 'anime42', title: 'test');
+    AnimeRiftLocalAccountScope.activate('account-A');
+    expect(provider.knownCommentReaction(target, 'comment1'), isNull);
+    provider.rememberCommentReaction(target, 'comment1', liked: true, count: 1);
+    expect(provider.knownCommentReaction(target, 'comment1')?.liked, true);
+    expect(provider.knownCommentReaction(target, 'comment1')?.count, 1);
+
+    AnimeRiftLocalAccountScope.activate('account-B');
+    expect(provider.knownCommentReaction(target, 'comment1'), isNull);
+    AnimeRiftLocalAccountScope.reset();
+    expect(provider.knownCommentReaction(target, 'comment1'), isNull);
+    AnimeRiftLocalAccountScope.activate('account-A');
+    expect(provider.knownCommentReaction(target, 'comment1')?.liked, true);
+  });
   test(
     'AnimeRift reaction forwards native anime and episode context',
     () async {

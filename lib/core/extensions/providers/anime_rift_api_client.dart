@@ -84,7 +84,8 @@ class AnimeRiftAccessUnavailable implements Exception {
             'مصدر التثبيت غير مدعوم',
           AnimeRiftServerReason.invalidCode => 'رمز الدخول غير صالح',
           AnimeRiftServerReason.unsupportedPlatform => 'المنصة غير مدعومة',
-          AnimeRiftServerReason.deviceSuspended => 'الجهاز موقوف',
+          AnimeRiftServerReason.deviceSuspended =>
+            'الخادم رفض جلسة الجهاز المستخدمة حاليًا',
           AnimeRiftServerReason.integrityVerificationFailed =>
             'فشل التحقق من سلامة التطبيق',
           AnimeRiftServerReason.accessDenied => 'الوصول مرفوض',
@@ -619,6 +620,26 @@ class AnimeRiftApiClient {
         failure: AnimeRiftFailureKind.invalidResponse,
       );
     } finally {
+      if (completedStatus == 403 &&
+          serverReason == AnimeRiftServerReason.deviceSuspended) {
+        // A local success timestamp is no longer evidence that the gateway
+        // accepts this installation. Do not replay this request or change its
+        // identity. A later normal initialization observes the existing delay
+        // before it can register the same installation again.
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          final deadline =
+              _clock().toUtc().millisecondsSinceEpoch +
+              _registrationCooldownSeconds * 1000;
+          final blockedUntil = prefs.getInt(_registrationBlockedKey) ?? 0;
+          if (blockedUntil < deadline) {
+            await prefs.setInt(_registrationBlockedKey, deadline);
+          }
+          await prefs.remove(_registrationSuccessKey);
+        } catch (_) {
+          // Preserve the server's original access failure if local storage fails.
+        }
+      }
       final elapsed = stopwatch.elapsedMilliseconds;
       _appDiagnostics.recordRiftRequest(
         url: url,

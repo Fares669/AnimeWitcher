@@ -1,5 +1,8 @@
 import 'dart:collection';
 import 'dart:io';
+
+import '../account/animewitcher_account_models.dart';
+
 import 'dart:ui' show FrameTiming;
 
 import 'package:flutter/widgets.dart';
@@ -177,12 +180,28 @@ class AppDiagnostics {
     _ => Future<void>.value(),
   };
 
-  /// Only the exception's class name is stored. Error text/stack may contain
-  /// credentials, URLs and personal content, so they are never serialized.
+  /// Error text/stack may contain credentials, URLs and personal content.
+  /// Record only the exception type and a small allowlist of account error
+  /// codes so a deferred nativeSync can be diagnosed without those secrets.
   void recordException(String source, Object error) {
+    const safeAccountCodes = {
+      'invalid-session',
+      'account-not-found',
+      'profile-not-found',
+      'account-banned',
+      'not-signed-in',
+      'permission-denied',
+      'network-error',
+      'requires-recent-login',
+      'unauthenticated',
+      'invalid-credentials',
+      'server-error',
+    };
     record('app.exception', {
       'reason': source,
       'errorType': error.runtimeType.toString(),
+      if (error is AnimeWitcherAccountException)
+        'status': safeAccountCodes.contains(error.code) ? error.code : 'other',
     });
   }
 

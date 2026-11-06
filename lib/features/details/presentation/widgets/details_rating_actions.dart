@@ -7,6 +7,7 @@
 /// the kind of thing that drifts apart, so both call these.
 library;
 
+import 'dart:async' show unawaited;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
@@ -57,9 +58,15 @@ Future<AnimeRatingOutcome> openAnimeRatingDialog(
   required AnimeDetailsRatings ratings,
   int initialRating = 0,
   MultimediaItem? item,
+  ValueChanged<int?>? onOptimisticRating,
 }) async {
   if (item?.provider == animeRiftProviderId) {
-    return openRiftRatingDialog(context, ref, item!);
+    return openRiftRatingDialog(
+      context,
+      ref,
+      item!,
+      onOptimisticRating: onOptimisticRating,
+    );
   }
   if (!ratings.canRate) return _unchanged;
   final service = ref.read(animeWitcherAccountServiceProvider);
@@ -116,8 +123,9 @@ Future<AnimeRiftRating?> loadRiftRating(
 Future<AnimeRatingOutcome> openRiftRatingDialog(
   BuildContext context,
   WidgetRef ref,
-  MultimediaItem item,
-) async {
+  MultimediaItem item, {
+  ValueChanged<int?>? onOptimisticRating,
+}) async {
   final provider = ref.read(activeProviderProvider);
   if (provider is! AnimeRiftProvider ||
       !await provider.restoreAccountSession()) {
@@ -135,6 +143,8 @@ Future<AnimeRatingOutcome> openRiftRatingDialog(
   if (!context.mounted) return _unchanged;
   final selected = await showRiftRatingEditor(context, initial: current);
   if (selected == null || !context.mounted) return _unchanged;
+  final optimisticScore = selected.rating?.general.round();
+  onOptimisticRating?.call(optimisticScore);
   final sync = ref.read(riftAutoSyncProvider);
   try {
     if (selected.clear) {
@@ -143,24 +153,27 @@ Future<AnimeRatingOutcome> openRiftRatingDialog(
       await sync.queueRating(item.url, selected.rating!);
     }
   } catch (_) {
+    onOptimisticRating?.call(current?.general.round());
     _toast(ref, 'تعذر حفظ تقييم Anime Rift', info: false);
     return _unchanged;
   }
-  // Attempt the cloud write now, not only when the next background sync runs.
-  // If it fails, the desired state stays durably queued for a later retry.
-  try {
-    final confirmed = await sync.pushRatingNow(item.url);
-    if (!confirmed) {
-      _toast(ref, 'التقييم محفوظ محليًا وينتظر تأكيد السيرفر', info: false);
+  // The journal is durable. Return immediately to update both rating buttons
+  // instead of waiting for network latency or a rejected server request.
+  // Failed cloud writes remain queued and are not retried in a tight loop.
+  final notifications = ref.read(notificationServiceProvider);
+  unawaited(() async {
+    try {
+      final confirmed = await sync.pushRatingNow(item.url);
+      if (!confirmed) {
+        notifications.showError('التقييم محفوظ محليًا وينتظر تأكيد السيرفر');
+      }
+    } catch (_) {
+      notifications.showError(
+        'تعذر تأكيد السيرفر؛ سيُعاد إرسال التقييم تلقائيًا',
+      );
     }
-  } catch (_) {
-    _toast(
-      ref,
-      'تعذر تأكيد السيرفر؛ سيُعاد إرسال التقييم تلقائيًا',
-      info: false,
-    );
-  }
-  return (changed: true, rating: selected.rating?.general.round());
+  }());
+  return (changed: true, rating: optimisticScore);
 }
 
 Future<({bool clear, AnimeRiftRating? rating})?> showRiftRatingEditor(

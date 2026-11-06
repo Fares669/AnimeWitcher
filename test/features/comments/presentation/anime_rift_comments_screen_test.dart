@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:animewitcher/core/extensions/providers/anime_rift_comments.dart';
 import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
 import 'package:animewitcher/features/comments/presentation/anime_rift_comments_screen.dart';
@@ -8,6 +10,8 @@ class FakeRiftCommentsProvider extends AnimeRiftProvider {
   bool linked = true;
   bool failPublish = false;
   bool failReaction = false;
+  Completer<void>? reactionCompletion;
+  int reactionCount = 0;
   bool? termsAccepted;
   bool? replyAllowed;
   String? reactedId;
@@ -58,8 +62,10 @@ class FakeRiftCommentsProvider extends AnimeRiftProvider {
     AnimeRiftCommentTarget target,
     String commentId,
   ) async {
+    reactionCount++;
     reactedTarget = target;
     reactedId = commentId;
+    if (reactionCompletion != null) await reactionCompletion!.future;
     if (failReaction) throw StateError('Reaction failed');
   }
 }
@@ -235,10 +241,11 @@ void main() {
     expect(find.text(draft), findsNothing);
   });
 
-  testWidgets('like uses current comment identity and refreshes results', (
+  testWidgets('like immediately toggles heart and count without reloading', (
     tester,
   ) async {
-    final provider = FakeRiftCommentsProvider();
+    final provider = FakeRiftCommentsProvider()
+      ..reactionCompletion = Completer<void>();
     await tester.pumpWidget(
       MaterialApp(
         home: AnimeRiftCommentsScreen(
@@ -259,13 +266,46 @@ void main() {
     expect(provider.reactedTarget?.animeId, 'anime42');
     expect(provider.reactedTarget?.episodeId, 'episode17');
     expect(provider.reactedTarget?.parentId, 'parent9');
+    expect(find.byIcon(Icons.favorite_rounded), findsOneWidget);
+    expect(find.text('3'), findsOneWidget);
+    expect(find.text('تعليق من ريفت'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    await tester.tap(find.byTooltip('الإعجابات'));
+    await tester.pump();
+    expect(provider.reactionCount, 1);
+    await tester
+        .widget<RefreshIndicator>(find.byType(RefreshIndicator))
+        .onRefresh();
+    await tester.pump();
+    expect(provider.loadCount, 1);
+    expect(find.byIcon(Icons.favorite_rounded), findsOneWidget);
+    provider.reactionCompletion!.complete();
+    await tester.pumpAndSettle();
+    expect(provider.loadCount, 1);
+    provider.reactionCompletion = null;
+    await tester.enterText(
+      find.byKey(const ValueKey('rift-comment-input')),
+      'تعليق لتحديث القائمة',
+    );
+    await tester.tap(find.byTooltip('نشر التعليق'));
+    await tester.pumpAndSettle();
+    expect(provider.loadCount, 2);
+    expect(find.byIcon(Icons.favorite_rounded), findsOneWidget);
+    expect(find.text('3'), findsOneWidget);
+    await tester.tap(find.byTooltip('الإعجابات'));
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.favorite_border_rounded), findsOneWidget);
+    expect(find.text('2'), findsOneWidget);
+    expect(provider.reactionCount, 2);
     expect(provider.loadCount, 2);
   });
 
   testWidgets('reaction failure shows feedback without reloading', (
     tester,
   ) async {
-    final provider = FakeRiftCommentsProvider()..failReaction = true;
+    final provider = FakeRiftCommentsProvider()
+      ..failReaction = true
+      ..reactionCompletion = Completer<void>();
     await tester.pumpWidget(
       MaterialApp(
         home: AnimeRiftCommentsScreen(
@@ -279,8 +319,14 @@ void main() {
     );
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('الإعجابات'));
+    await tester.pump();
+    expect(find.byIcon(Icons.favorite_rounded), findsOneWidget);
+    expect(find.text('3'), findsOneWidget);
+    provider.reactionCompletion!.complete();
     await tester.pumpAndSettle();
     expect(provider.loadCount, 1);
+    expect(find.byIcon(Icons.favorite_border_rounded), findsOneWidget);
+    expect(find.text('2'), findsOneWidget);
     expect(find.textContaining('تعذر إكمال العملية'), findsOneWidget);
   });
 

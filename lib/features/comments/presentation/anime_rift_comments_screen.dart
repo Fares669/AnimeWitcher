@@ -8,6 +8,7 @@ import '../../../core/utils/avatar_image.dart';
 
 import '../../../core/extensions/providers/anime_rift_comments.dart';
 import '../../../core/extensions/providers/anime_rift_provider.dart';
+import '../../../core/storage/anime_rift_account_scope.dart';
 
 /// Uses Rift's own gateway/account. Never reads or writes Witcher's Firestore.
 class AnimeRiftCommentsScreen extends StatefulWidget {
@@ -30,6 +31,8 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
   final ScrollController _scroll = ScrollController();
   final Set<String> _revealedSpoilers = <String>{};
   final Set<String> _reactingIds = <String>{};
+  // Keep local results over later list responses, which may predate a reaction.
+  final Map<String, ({bool liked, int count})> _reactions = {};
   List<AnimeRiftComment> _comments = const [];
   bool _initialLoading = true;
   bool _moreLoading = false;
@@ -75,7 +78,7 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
   }
 
   Future<void> _reload() async {
-    if (!mounted) return;
+    if (!mounted || _reactingIds.isNotEmpty) return;
     final generation = ++_requestGeneration;
     setState(() {
       _initialLoading = true;
@@ -175,12 +178,42 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
 
   Future<void> _react(AnimeRiftComment comment) async {
     if (!_linked || !_reactingIds.add(comment.id)) return;
-    setState(() {});
+    final previous =
+        _reactions[comment.id] ??
+        widget.provider.knownCommentReaction(widget.target, comment.id);
+    final accountAtStart = AnimeRiftLocalAccountScope.accountHash;
+    final liked = previous?.liked ?? false;
+    final count = previous?.count ?? comment.likes;
+    setState(() {
+      _reactions[comment.id] = (
+        liked: !liked,
+        count: liked ? (count > 0 ? count - 1 : 0) : count + 1,
+      );
+    });
     try {
       await widget.provider.reactToComment(widget.target, comment.id);
-      if (mounted) await _reload();
+      if (accountAtStart == AnimeRiftLocalAccountScope.accountHash) {
+        final confirmed = _reactions[comment.id];
+        if (confirmed != null) {
+          widget.provider.rememberCommentReaction(
+            widget.target,
+            comment.id,
+            liked: confirmed.liked,
+            count: confirmed.count,
+          );
+        }
+      }
     } catch (error) {
-      if (mounted) _message(error);
+      if (mounted) {
+        setState(() {
+          if (previous == null) {
+            _reactions.remove(comment.id);
+          } else {
+            _reactions[comment.id] = previous;
+          }
+        });
+        _message(error);
+      }
     } finally {
       _reactingIds.remove(comment.id);
       if (mounted) setState(() {});
@@ -314,6 +347,9 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final photo = comment.photoUrl ?? '';
+    final reaction =
+        _reactions[comment.id] ??
+        widget.provider.knownCommentReaction(widget.target, comment.id);
     final reveal = !comment.spoiler || _revealedSpoilers.contains(comment.id);
     return Material(
       key: ValueKey('rift-comment-${comment.id}'),
@@ -393,9 +429,12 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   _RiftReaction(
-                    icon: Icons.favorite_border_rounded,
-                    count: comment.likes,
+                    icon: reaction?.liked == true
+                        ? Icons.favorite_rounded
+                        : Icons.favorite_border_rounded,
+                    count: reaction?.count ?? comment.likes,
                     tooltip: 'الإعجابات',
+                    active: reaction?.liked == true,
                     onTap: _linked && !_reactingIds.contains(comment.id)
                         ? () => _react(comment)
                         : null,
@@ -513,17 +552,21 @@ class _RiftReaction extends StatelessWidget {
     required this.icon,
     required this.count,
     required this.tooltip,
+    this.active = false,
     this.onTap,
   });
 
   final IconData icon;
   final int count;
   final String tooltip;
+  final bool active;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    final color = Theme.of(context).colorScheme.onSurfaceVariant;
+    final color = active
+        ? Colors.redAccent
+        : Theme.of(context).colorScheme.onSurfaceVariant;
     return Tooltip(
       message: tooltip,
       child: InkWell(

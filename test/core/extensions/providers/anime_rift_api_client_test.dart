@@ -290,6 +290,15 @@ void main() {
     expect(redirected.toString(), contains('توجيهًا غير متوقع'));
   });
 
+  test('device suspended server code never claims the phone is blocked', () {
+    final error = const AnimeRiftAccessUnavailable(
+      statusCode: 403,
+      knownReason: AnimeRiftServerReason.deviceSuspended,
+    );
+    expect(error.toString(), contains('رفض جلسة الجهاز'));
+    expect(error.toString(), isNot(contains('الجهاز موقوف')));
+  });
+
   test(
     'linked Rift comment reads use the user token, not guest headers',
     () async {
@@ -2201,6 +2210,65 @@ void main() {
       expect(pages, 2);
     },
   );
+
+  test('suspended registration cache is invalidated without replay or identity rotation', () async {
+    var now = DateTime.utc(2026, 11, 6, 12);
+    var registrations = 0;
+    var catalogCalls = 0;
+    final deviceIds = <Object?>[];
+    final dio = fixtureDio((request) {
+      if (request.uri.host.endsWith('googleapis.com')) {
+        return reply(request, {}, 400);
+      }
+      deviceIds.add(request.headers['x-device-id']);
+      if (request.uri.path.endsWith('/auth/register/device')) {
+        registrations++;
+        return reply(request, {'sessionKey': 'fixture'}, 201);
+      }
+      catalogCalls++;
+      return catalogCalls == 1
+          ? reply(request, {'errorCode': 'DEVICE_SUSPENDED'}, 403)
+          : reply(request, {'items': []});
+    });
+    AnimeRiftApiClient client() =>
+        AnimeRiftApiClient(config: fixtureConfig, dio: dio, clock: () => now);
+    await expectLater(
+      client().request('library/home_content', 'ANIME.LIBRARY.HOME_CONTENT'),
+      throwsA(
+        isA<AnimeRiftAccessUnavailable>().having(
+          (error) => error.knownReason,
+          'reason',
+          AnimeRiftServerReason.deviceSuspended,
+        ),
+      ),
+    );
+    expect(registrations, 1);
+    expect(catalogCalls, 1);
+    final prefs = await SharedPreferences.getInstance();
+    expect(
+      prefs.containsKey('animerift.api.registration.successAt.v1'),
+      isFalse,
+    );
+    await expectLater(
+      client().request('library/home_content', 'ANIME.LIBRARY.HOME_CONTENT'),
+      throwsA(
+        isA<AnimeRiftAccessUnavailable>().having(
+          (error) => error.failure,
+          'cooldown',
+          AnimeRiftFailureKind.registrationCooldown,
+        ),
+      ),
+    );
+    expect(registrations, 1);
+    now = now.add(const Duration(seconds: 61));
+    await client().request(
+      'library/home_content',
+      'ANIME.LIBRARY.HOME_CONTENT',
+    );
+    expect(registrations, 2);
+    expect(catalogCalls, 2);
+    expect(deviceIds.toSet(), hasLength(1));
+  });
 
   test(
     'source entitlement denial does not re-register or replay a POST',
