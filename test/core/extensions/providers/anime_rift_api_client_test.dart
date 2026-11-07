@@ -2984,4 +2984,76 @@ void main() {
       );
     },
   );
+
+  test(
+    'Rift profile and my comments use APK GET paths and integrity scopes',
+    () async {
+      final fetched = <RequestOptions>[];
+      final client = AnimeRiftApiClient(
+        config: fixtureConfig,
+        dio: fixtureDio((options) {
+          if (options.uri.host.endsWith('googleapis.com')) {
+            return reply(options, {}, 400);
+          }
+          if (options.uri.path.endsWith('/auth/register/device')) {
+            return reply(options, {'sessionKey': 'fixture'}, 201);
+          }
+          if (options.uri.path.endsWith('/auth/sign-in/with-code')) {
+            return reply(options, {
+              'items': {
+                'profile': {'_id': 'rift-user'},
+                'token': 'rift-user-token',
+              },
+            });
+          }
+          fetched.add(options);
+          return reply(options, {'items': []});
+        }),
+      );
+      await expectLater(
+        client.fetchOwnProfile(),
+        throwsA(isA<AnimeRiftAuthenticationRequired>()),
+      );
+      await expectLater(
+        client.fetchMyCommentHistory(),
+        throwsA(isA<AnimeRiftAuthenticationRequired>()),
+      );
+      expect(fetched, isEmpty);
+      await client.signInWithCode('owner-issued-code');
+      await client.fetchOwnProfile();
+      await client.fetchMyCommentHistory();
+      await client.fetchMyCommentHistory(page: 1);
+      expect(fetched.map((request) => request.uri.path), [
+        '/api/v4/setting/profile',
+        '/api/v4/comment/history',
+        '/api/v4/comment/history',
+      ]);
+      expect(fetched[0].uri.queryParameters, isEmpty);
+      expect(fetched[1].uri.queryParameters, isEmpty);
+      expect(fetched[2].uri.queryParameters, {'page': '1'});
+      for (var i = 0; i < fetched.length; i++) {
+        final request = fetched[i];
+        expect(request.method, 'GET');
+        expect(request.data, isNull);
+        expect(request.headers['authorization'], 'Bearer rift-user-token');
+        final jwt = (request.headers['integrity'] as String)
+            .substring(7)
+            .split('.');
+        final payload = jsonDecode(
+          utf8.decode(base64Url.decode(base64Url.normalize(jwt[1]))),
+        ) as Map;
+        expect(
+          payload['scope'],
+          i == 0 ? 'SETTINGS.PROFILE.VIEW' : 'COMMENTS.HISTORY',
+        );
+      }
+      expect(() => client.fetchMyCommentHistory(page: -1), throwsArgumentError);
+      await client.signOut();
+      await expectLater(
+        client.fetchOwnProfile(),
+        throwsA(isA<AnimeRiftAuthenticationRequired>()),
+      );
+      expect(fetched, hasLength(3));
+    },
+  );
 }

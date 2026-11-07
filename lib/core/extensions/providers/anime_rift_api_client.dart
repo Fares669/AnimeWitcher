@@ -1494,6 +1494,28 @@ class AnimeRiftApiClient {
   /// These intentionally return the server's opaque response map: item and
   /// pagination schemas are not yet verified with an authenticated account.
   /// They never accept a caller-supplied path, method, scope or request body.
+  /// APK Blutter pool 0x41bb0/0x41bc0: self profile (not /user/view/{id}).
+  Future<Map<String, dynamic>> fetchOwnProfile({CancelToken? cancelToken}) =>
+      _readAccountData(
+        'setting/profile',
+        'SETTINGS.PROFILE.VIEW',
+        cancelToken: cancelToken,
+      );
+
+  /// APK Blutter pool 0x3ed40/0x3ed48: own comment/review history.
+  Future<Map<String, dynamic>> fetchMyCommentHistory({
+    int page = 0,
+    CancelToken? cancelToken,
+  }) {
+    if (page < 0 || page > 256) throw ArgumentError.value(page, 'page');
+    return _readAccountData(
+      'comment/history',
+      'COMMENTS.HISTORY',
+      query: page == 0 ? null : {'page': page},
+      cancelToken: cancelToken,
+    );
+  }
+
   Future<Map<String, dynamic>> fetchFavoriteAnime({CancelToken? cancelToken}) =>
       _readAccountData(
         'favorite/anime/all',

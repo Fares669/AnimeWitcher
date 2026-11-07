@@ -11,6 +11,7 @@ import '../../services/app_diagnostics.dart';
 import '../base_provider.dart';
 import '../../utils/anime_rift_identity.dart';
 import 'anime_rift_api_client.dart';
+import 'anime_rift_account_content.dart';
 import 'anime_rift_comments.dart';
 import 'anime_rift_streams.dart';
 export 'anime_rift_streams.dart'
@@ -99,6 +100,14 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
 
   bool get isAccountLinked => _api.isAccountLinked;
   AnimeRiftAccountIdentity? get accountIdentity => _api.accountIdentity;
+
+  Future<AnimeRiftAccountProfile> loadAccountProfile() async =>
+      AnimeRiftAccountProfile.fromJson(await _api.fetchOwnProfile());
+
+  Future<AnimeRiftMyCommentPage> loadMyComments({int page = 0}) async =>
+      AnimeRiftMyCommentPage.fromJson(
+        await _api.fetchMyCommentHistory(page: page),
+      );
 
   Future<Map<String, dynamic>> setCloudFavorite(
     String id,

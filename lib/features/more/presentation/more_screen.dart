@@ -7,6 +7,7 @@ import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import '../../../core/account/account_providers.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/providers/anime_rift_provider.dart';
+import '../../../core/storage/anime_rift_account_scope.dart';
 import '../../../core/navigation/app_layout_style.dart';
 import '../../../core/theme/theme_provider.dart';
 import '../../../shared/widgets/live_previews.dart';
@@ -14,6 +15,7 @@ import '../../details/presentation/widgets/details_seasons_bar.dart';
 import '../../manga/reader/manga_reader_settings_screen.dart';
 import '../../../core/account/animewitcher_account_models.dart';
 import '../../settings/presentation/account_screen.dart';
+import '../../settings/presentation/rift_account_profile_provider.dart';
 import '../../../shared/widgets/account_avatar_button.dart';
 import '../../settings/presentation/settings_screen.dart';
 import '../../settings/presentation/widgets/settings_widgets.dart';
@@ -72,9 +74,16 @@ class MoreScreen extends ConsumerWidget {
         ? ref.watch(animeWitcherAccountControllerProvider)
         : null;
     final accountProfile = accountState?.asData?.value.profile;
-    final accountPhotoUrl = accountProfile?.photoUrl?.trim() ?? '';
+    final accountHash = AnimeRiftLocalAccountScope.accountHash;
+    final riftProfile = rift?.isAccountLinked != true || accountHash == null
+        ? null
+        : ref.watch(riftAccountProfileProvider(accountHash)).asData?.value;
+    final accountPhotoUrl = rift == null
+        ? accountProfile?.photoUrl?.trim() ?? ''
+        : riftProfile?.avatarUrl ?? '';
     final riftLinked = rift?.isAccountLinked == true;
-    final riftName = rift?.accountIdentity?.displayName?.trim() ?? '';
+    final riftName =
+        riftProfile?.name ?? rift?.accountIdentity?.displayName?.trim() ?? '';
     final accountTitle = rift == null
         ? (accountProfile == null
               ? appText(context, english: 'Sign in', arabic: 'تسجيل الدخول')

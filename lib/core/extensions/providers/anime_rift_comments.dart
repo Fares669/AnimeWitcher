@@ -92,7 +92,11 @@ class AnimeRiftComment {
         : value['user'] is Map
         ? value['user'] as Map
         : const <String, dynamic>{};
-    final display = user['name'] ?? user['user_name'] ?? user['username'];
+    final display =
+        user['name'] ??
+        user['userName'] ??
+        user['user_name'] ??
+        user['username'];
     final reactions = value['reactions_counts'];
     final thumbCount = reactions is Map ? reactions['thumbsUp'] : null;
     int count(Object? n) => n is int && n >= 0 ? n : 0;
@@ -105,7 +109,7 @@ class AnimeRiftComment {
           : 'مستخدم AnimeRift',
       likes: count(thumbCount ?? value['likes_count']),
       replies: count(value['replies_count'] ?? value['replies']),
-      spoiler: value['spoiler'] == true,
+      spoiler: value['spoiler'] == true || value['has_spoiler'] == true,
       likedByMe: likedByMe,
       createdAt: rawDate is String ? DateTime.tryParse(rawDate) : null,
       photoUrl: switch (user['avatar'] ??

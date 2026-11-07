@@ -7,6 +7,8 @@ import '../../../core/account/animewitcher_account_config.dart';
 import '../../../core/account/animewitcher_account_models.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/providers/anime_rift_provider.dart';
+import '../../../core/extensions/providers/anime_rift_account_content.dart';
+import '../../../core/storage/anime_rift_account_scope.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/utils/localized_text.dart';
 import '../../../core/utils/artwork_quality.dart';
@@ -15,11 +17,13 @@ import '../../../shared/widgets/custom_widgets.dart';
 import '../../../shared/widgets/account_notifications_button.dart';
 import '../../../shared/widgets/glass_dialog.dart';
 import '../../comments/presentation/animewitcher_my_comments_screen.dart';
+import '../../comments/presentation/anime_rift_my_comments_screen.dart';
 import 'account_management_screens.dart';
 import 'account_privacy_settings_screen.dart';
 import 'account_ui_helpers.dart';
 import 'widgets/settings_widgets.dart';
 import 'widgets/anime_provider_picker.dart';
+import 'rift_account_profile_provider.dart';
 
 enum _AccountFormMode { signIn, createAccount }
 
@@ -34,7 +38,13 @@ class AnimeRiftAccountScreen extends ConsumerWidget {
     ref.watch(accountDataRevisionProvider);
     final rift = provider is AnimeRiftProvider ? provider : null;
     final linked = rift?.isAccountLinked == true;
-    final name = linked ? rift?.accountIdentity?.displayName?.trim() : null;
+    final account = AnimeRiftLocalAccountScope.accountHash;
+    final profile = linked && account != null
+        ? ref.watch(riftAccountProfileProvider(account))
+        : null;
+    final name =
+        profile?.asData?.value?.name ??
+        (linked ? rift?.accountIdentity?.displayName?.trim() : null);
 
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -57,18 +67,146 @@ class AnimeRiftAccountScreen extends ConsumerWidget {
               bottom: 100,
             ),
             children: [
-              ListTile(
-                leading: const Icon(Icons.account_circle_outlined),
-                title: Text(name?.isNotEmpty == true ? name! : 'Anime Rift'),
-                subtitle: Text(
-                  linked
-                      ? 'حساب Anime Rift مرتبط بهذا الجهاز'
-                      : 'اربط حساب Anime Rift للوصول إلى المحتوى المحمي',
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: _RiftAccountBanner(
+                  name: name?.isNotEmpty == true ? name! : 'Anime Rift',
+                  linked: linked,
+                  profile: profile?.asData?.value,
                 ),
               ),
+              if (linked && profile?.hasError == true)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: TextButton.icon(
+                    onPressed: () =>
+                        ref.invalidate(riftAccountProfileProvider(account!)),
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text(
+                      'تعذر جلب صورة الحساب والغلاف — إعادة المحاولة',
+                    ),
+                  ),
+                ),
+              if (linked && rift != null)
+                SettingsGroup(
+                  title: 'إدارة الحساب',
+                  children: [
+                    SettingsTile(
+                      key: const ValueKey('rift-my-comments'),
+                      icon: Icons.chat_bubble_outline_rounded,
+                      title: 'تعليقاتي',
+                      subtitle: 'تعليقاتك ومراجعاتك على Anime Rift',
+                      onTap: () => Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) =>
+                              AnimeRiftMyCommentsScreen(provider: rift),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               if (rift != null) const AnimeRiftAccountSettingsTile(),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Matches AnimeWitcher's account banner layout without mixing accounts.
+class _RiftAccountBanner extends StatelessWidget {
+  const _RiftAccountBanner({
+    required this.name,
+    required this.linked,
+    this.profile,
+  });
+
+  final String name;
+  final bool linked;
+  final AnimeRiftAccountProfile? profile;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final cover = profile?.coverUrl;
+    final photo = profile?.avatarUrl;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: SizedBox(
+        height: 168,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [colors.primaryContainer, colors.secondaryContainer],
+                ),
+              ),
+            ),
+            if (cover != null)
+              KeyedSubtree(
+                key: const ValueKey('rift-profile-banner'),
+                child: ArtworkDecode(
+                  paintedWidth: MediaQuery.sizeOf(context).width,
+                  builder: (context, width) => Image.network(
+                    cover,
+                    fit: BoxFit.cover,
+                    cacheWidth: width,
+                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                  ),
+                ),
+              ),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    Colors.black.withValues(alpha: 0.78),
+                    Colors.black.withValues(alpha: 0.35),
+                  ],
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    key: const ValueKey('rift-profile-avatar'),
+                    radius: 46,
+                    backgroundColor: colors.primaryContainer,
+                    foregroundImage: photo == null ? null : NetworkImage(photo),
+                    onForegroundImageError: photo == null ? null : (_, _) {},
+                    child: const Icon(Icons.person_rounded, size: 44),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.headlineSmall
+                              ?.copyWith(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                        ),
+                        Text(
+                          linked ? 'حساب Anime Rift مرتبط بهذا الجهاز' : 'اربط حساب Anime Rift للوصول إلى المحتوى المحمي',
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );

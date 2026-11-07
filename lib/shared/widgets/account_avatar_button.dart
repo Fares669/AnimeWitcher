@@ -4,7 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/account/account_providers.dart';
 import '../../core/extensions/extension_manager.dart';
 import '../../core/extensions/providers/anime_rift_provider.dart';
+import '../../core/storage/anime_rift_account_scope.dart';
 import '../../features/settings/presentation/account_screen.dart';
+import '../../features/settings/presentation/rift_account_profile_provider.dart';
 
 /// Opens the selected anime provider's account page.
 void openAccountScreen(BuildContext context) {
@@ -36,16 +38,24 @@ class AccountAvatarButton extends ConsumerWidget {
     final activeProvider = ref.watch(activeProviderProvider);
     final rift = activeProvider is AnimeRiftProvider ? activeProvider : null;
     if (rift != null) ref.watch(accountDataRevisionProvider);
+    final accountHash = AnimeRiftLocalAccountScope.accountHash;
+    final riftProfile = rift?.isAccountLinked != true || accountHash == null
+        ? null
+        : ref.watch(riftAccountProfileProvider(accountHash)).asData?.value;
     final profile = rift == null
         ? ref.watch(animeWitcherAccountControllerProvider).asData?.value.profile
         : null;
-    final photo = profile?.photoUrl?.trim() ?? '';
+    final photo = rift == null
+        ? profile?.photoUrl?.trim() ?? ''
+        : riftProfile?.avatarUrl ?? '';
     final userName = profile?.userName?.trim() ?? '';
-    final name = rift == null
-        ? (userName.isNotEmpty ? userName : profile?.email?.trim() ?? '')
-        : (rift.accountIdentity?.displayName?.trim().isNotEmpty == true
-              ? rift.accountIdentity!.displayName!.trim()
-              : 'Anime Rift');
+    final name =
+        riftProfile?.name ??
+        (rift == null
+            ? (userName.isNotEmpty ? userName : profile?.email?.trim() ?? '')
+            : (rift.accountIdentity?.displayName?.trim().isNotEmpty == true
+                  ? rift.accountIdentity!.displayName!.trim()
+                  : 'Anime Rift'));
     final signedIn = rift?.isAccountLinked ?? (profile != null);
     final initial = name.isEmpty ? '' : name.characters.first.toUpperCase();
 
