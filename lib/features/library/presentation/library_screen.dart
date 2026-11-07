@@ -105,9 +105,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     final history = ref.watch(watchHistoryProvider);
     final kind = libraryState.mediaKind;
     final category = libraryState.category;
-    final counts = <LibraryMediaKind, Map<LibraryCategory, int>>{
+    final counts = <LibraryMediaKind, Map<LibraryCategory, int?>>{
       for (final listKind in LibraryMediaKind.values)
-        listKind: <LibraryCategory, int>{
+        listKind: <LibraryCategory, int?>{
           for (final listCategory in LibraryCategory.values)
             listCategory: ref
                 .read(libraryProvider.notifier)

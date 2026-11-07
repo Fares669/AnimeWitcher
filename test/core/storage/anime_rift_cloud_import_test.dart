@@ -29,6 +29,16 @@ class _MemoryStorage extends StorageService {
   }
 }
 
+class _CountingStorage extends _MemoryStorage {
+  int providerLibraryWrites = 0;
+
+  @override
+  Future<void> setString(String key, String? value) async {
+    if (key.startsWith('provider_library_v1_')) providerLibraryWrites++;
+    return super.setString(key, value);
+  }
+}
+
 class _CloudReader
     implements AnimeRiftCloudAccountReader, AnimeRiftCloudPagedReader {
   bool linked = true;
@@ -39,6 +49,7 @@ class _CloudReader
   Completer<Map<String, dynamic>>? favoritesGate;
   bool completeOverview = true;
   final requests = <String>[];
+  int overviewCalls = 0;
   int? pageSize;
   int pageBase = 1;
   int? failOnPage;
@@ -64,18 +75,21 @@ class _CloudReader
   }
 
   @override
-  Future<Map<String, dynamic>> fetchMyListOverview() async => {
-    'items': {
-      'my_list_favorites': favorites.length,
-      if (completeOverview) ...{
-        'my_list_currently_watching': lists['currently']?.length ?? 0,
-        'my_list_plan_to_watch': lists['want_to']?.length ?? 0,
-        'my_list_finished_watching': lists['finished']?.length ?? 0,
-        'my_list_on_hold': lists['later']?.length ?? 0,
-        'my_list_dropped': lists['dropped']?.length ?? 0,
+  Future<Map<String, dynamic>> fetchMyListOverview() async {
+    overviewCalls++;
+    return {
+      'items': {
+        'my_list_favorites': favorites.length,
+        if (completeOverview) ...{
+          'my_list_currently_watching': lists['currently']?.length ?? 0,
+          'my_list_plan_to_watch': lists['want_to']?.length ?? 0,
+          'my_list_finished_watching': lists['finished']?.length ?? 0,
+          'my_list_on_hold': lists['later']?.length ?? 0,
+          'my_list_dropped': lists['dropped']?.length ?? 0,
+        },
       },
-    },
-  };
+    };
+  }
 
   @override
   Future<Map<String, dynamic>> fetchFavoriteAnime() => (() {
@@ -127,6 +141,27 @@ class _CloudReader
 void main() {
   tearDown(AnimeRiftLocalAccountScope.reset);
 
+  test('30 Rift records persist as one local library write', () async {
+    AnimeRiftLocalAccountScope.activate('bulk-library');
+    final storage = _CountingStorage();
+    final reader = _CloudReader()
+      ..pageSize = 30
+      ..lists['currently'] = [
+        for (var i = 0; i < 30; i++)
+          {
+            'anime': {'_id': 'bulk$i', 'title': 'Bulk $i'},
+          },
+      ];
+    await AnimeRiftCloudSync(
+      reader,
+    ).importSelectedList(storage: storage, category: LibraryCategory.watching);
+    expect(storage.providerLibraryWrites, 1);
+    expect(
+      ProviderLocalLibrary(storage, _rift).items(LibraryCategory.watching),
+      hasLength(30),
+    );
+  });
+
   test(
     'visible shelf imports 30 then explicitly advances with server total',
     () async {
@@ -160,6 +195,7 @@ void main() {
         category: LibraryCategory.completed,
         loadNextPage: true,
       );
+      expect(reader.overviewCalls, 1);
       expect(
         cloud.selectedListPage(LibraryCategory.completed)?.loadedCount,
         60,
@@ -192,6 +228,32 @@ void main() {
       isEmpty,
     );
     expect(cloud.selectedListPage(LibraryCategory.completed)?.totalCount, 290);
+  });
+
+  test('a full Rift list response feeds additional 30-card pages without duplicate GETs', () async {
+    AnimeRiftLocalAccountScope.activate('single-response');
+    final storage = _MemoryStorage();
+    final reader = _CloudReader()
+      ..lists['finished'] = [
+        for (var i = 0; i < 74; i++)
+          {
+            'anime': {'_id': 'full$i', 'title': 'Full $i'},
+          },
+      ];
+    final cloud = AnimeRiftCloudSync(reader);
+    for (final expected in [30, 60, 74]) {
+      await cloud.importSelectedList(
+        storage: storage,
+        category: LibraryCategory.completed,
+        loadNextPage: expected != 30,
+      );
+      expect(
+        cloud.selectedListPage(LibraryCategory.completed)?.loadedCount,
+        expected,
+      );
+    }
+    expect(cloud.selectedListPage(LibraryCategory.completed)?.hasMore, false);
+    expect(reader.requests, ['finished']);
   });
 
   test(
@@ -950,8 +1012,6 @@ void main() {
     'guests and unrecognized cloud rows cannot claim a successful import',
     () async {
       final storage = _MemoryStorage();
-      final library = ProviderLocalLibrary(storage, _rift);
-      final history = ProviderLocalHistory(storage, _rift);
       await expectLater(
         AnimeRiftCloudSync(_CloudReader()).importToLocal(storage: storage),
         throwsA(isA<AnimeRiftAuthenticationRequired>()),

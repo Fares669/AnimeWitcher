@@ -1,5 +1,6 @@
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/storage/provider_local_library.dart';
+import 'package:animewitcher/core/storage/anime_rift_account_scope.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
 import 'package:dio/dio.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
@@ -13,6 +14,8 @@ import 'package:animewitcher/features/library/presentation/library_screen.dart';
 import 'package:animewitcher/features/library/presentation/library_media_kind.dart';
 import 'package:animewitcher/features/library/presentation/library_provider.dart';
 import 'package:animewitcher/features/library/presentation/widgets/library_phone_shelves.dart';
+import 'package:animewitcher/features/library/presentation/widgets/bookmarks_tab.dart';
+import 'package:animewitcher/shared/widgets/anime_catalog_shimmer.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/shared/widgets/app_side_menu.dart';
 import 'package:flutter/material.dart';
@@ -186,6 +189,74 @@ Future<_LibraryStorage> _pump(
 }
 
 void main() {
+  testWidgets(
+    'underfilled library requests next page without scroll and only once',
+    (tester) async {
+      var requests = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: LibraryItemsGrid(
+              items: const [],
+              hasMore: true,
+              onLoadMore: () async {
+                requests++;
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(requests, 1);
+    },
+  );
+  testWidgets('library paging displays poster skeletons instead of a spinner', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: LibraryItemsGrid(items: [], hasMore: true, loadingMore: true),
+        ),
+      ),
+    );
+    expect(find.byType(AnimePosterShimmer), findsWidgets);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+  });
+
+  testWidgets('failed library page exposes manual retry instead of a spinner', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: LibraryItemsGrid(items: [], hasMore: true, loadFailed: true),
+        ),
+      ),
+    );
+    expect(find.text('إعادة المحاولة'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+  });
+  testWidgets('unknown Rift counts do not hide linked shelves', (tester) async {
+    AnimeRiftLocalAccountScope.activate('shelves-fixture');
+    addTearDown(AnimeRiftLocalAccountScope.reset);
+    await _pump(
+      tester,
+      size: const Size(400, 860),
+      kind: 'anime',
+      rift: true,
+      strings: const {'library_shelves_hide_empty': 'true'},
+    );
+    expect(
+      find.byKey(const ValueKey('library-list-tab-completed')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('library-list-tab-pinned')),
+      findsOneWidget,
+    );
+  });
   testWidgets('phone guest library loads 30 cards then next batch on scroll', (
     tester,
   ) async {

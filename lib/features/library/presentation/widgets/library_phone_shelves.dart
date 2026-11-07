@@ -71,7 +71,7 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
 
   final Map<(LibraryMediaKind, LibraryCategory), List<MultimediaItem>> _lists =
       <(LibraryMediaKind, LibraryCategory), List<MultimediaItem>>{};
-  final Map<(LibraryMediaKind, LibraryCategory), int> _tabCounts = {};
+  final Map<(LibraryMediaKind, LibraryCategory), int?> _tabCounts = {};
   Object? _listsFor;
 
   @override
@@ -235,6 +235,7 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
             totalCount: page.total,
             hasMore: page.hasMore,
             loadingMore: page.loading,
+            loadFailed: page.loadFailed,
             onLoadMore: () => ref
                 .read(libraryProvider.notifier)
                 .loadNextPage(mediaKind: kind, category: category),
@@ -264,9 +265,7 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
     final provider = ref.watch(activeProviderProvider);
     final providerId = provider?.packageName;
     final remoteTotals = provider is AnimeRiftProvider
-        ? Object.hashAll(
-            LibraryCategory.values.map(provider.cloudLibraryTotal),
-          )
+        ? Object.hashAll(LibraryCategory.values.map(provider.cloudLibraryTotal))
         : 0;
     ref.listen(activeProviderProvider, (previous, next) {
       if (previous?.packageName == next?.packageName) return;
@@ -298,6 +297,7 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
           library.mediaKind,
           _prefs.sort,
           dataRevision,
+          ref.read(libraryProvider.notifier).countRevision,
           providerId,
           AnimeRiftLocalAccountScope.accountHash,
           remoteTotals,
@@ -380,8 +380,13 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
                   child: TabBarView(
                     key: const ValueKey<String>('library-list-pager'),
                     controller: controller,
+                    // TabBarView builds adjacent pages lazily. Do not decode
+                    // and sort every stored shelf on each swipe/scroll frame.
                     children: [
-                      for (final tab in tabs) _listBody(repository, kind!, tab),
+                      for (final tab in tabs)
+                        Builder(
+                          builder: (_) => _listBody(repository, kind!, tab),
+                        ),
                     ],
                   ),
                 );

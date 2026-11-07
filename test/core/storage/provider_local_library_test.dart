@@ -23,6 +23,25 @@ class _Memory extends StorageService {
 
 void main() {
   test(
+    'cached shelf refreshes when another library instance edits storage',
+    () async {
+      final storage = _Memory();
+      final first = ProviderLocalLibrary(storage, 'cache-provider');
+      final second = ProviderLocalLibrary(storage, 'cache-provider');
+      final item = MultimediaItem(
+        title: 'Cached',
+        url: 'cache-id',
+        posterUrl: '',
+      );
+      expect(first.items(LibraryCategory.completed), isEmpty);
+      await second.setCategory(item, LibraryCategory.completed);
+      expect(first.items(LibraryCategory.completed), hasLength(1));
+      await second.clearCategory(item.url);
+      expect(first.items(LibraryCategory.completed), isEmpty);
+      expect(first.isFavorite(item.url), false);
+    },
+  );
+  test(
     'favorites and categories persist independently for the same id',
     () async {
       final storage = _Memory();

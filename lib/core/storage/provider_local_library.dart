@@ -25,13 +25,22 @@ class ProviderLocalLibrary {
   final String providerId;
   final String _namespace;
   static final _queues = Expando<Map<String, Future<void>>>();
+  String? _cachedRaw;
+  Map<String, dynamic>? _cachedEntries;
+  final _cachedCategoryItems = <LibraryCategory, List<MultimediaItem>>{};
 
   String get storageKey =>
       'provider_library_v1_${sha256.convert(utf8.encode(_namespace))}';
 
   Map<String, dynamic> _read() {
     final raw = _storage.getString(storageKey);
-    if (raw == null) return <String, dynamic>{};
+    if (_cachedEntries != null && raw == _cachedRaw) return _cachedEntries!;
+    if (raw == null) {
+      _cachedRaw = null;
+      _cachedEntries = <String, dynamic>{};
+      _cachedCategoryItems.clear();
+      return _cachedEntries!;
+    }
     final value = jsonDecode(raw);
     if (value is! Map<String, dynamic>) {
       throw const FormatException('Invalid local provider library');
@@ -61,8 +70,14 @@ class ProviderLocalLibrary {
         }
         normalized[id] = row;
       }
+      _cachedRaw = raw;
+      _cachedEntries = normalized;
+      _cachedCategoryItems.clear();
       return normalized;
     }
+    _cachedRaw = raw;
+    _cachedEntries = value;
+    _cachedCategoryItems.clear();
     return value;
   }
 
@@ -93,20 +108,26 @@ class ProviderLocalLibrary {
   }
 
   List<MultimediaItem> items(LibraryCategory category) {
-    return _read().values
-        .where((entry) {
-          final row = entry as Map;
-          return category == LibraryCategory.favorite
-              ? row['favorite'] == true
-              : row['category'] == category.storageKey;
-        })
-        .map((entry) {
-          final row = entry as Map;
-          return MultimediaItem.fromJson(
-            Map<String, dynamic>.from(row['item'] as Map),
-          );
-        })
-        .toList(growable: false);
+    final entries = _read();
+    return _cachedCategoryItems.putIfAbsent(
+      category,
+      () => List.unmodifiable(
+        entries.values
+            .where((entry) {
+              final row = entry as Map;
+              return category == LibraryCategory.favorite
+                  ? row['favorite'] == true
+                  : row['category'] == category.storageKey;
+            })
+            .map((entry) {
+              final row = entry as Map;
+              return MultimediaItem.fromJson(
+                Map<String, dynamic>.from(row['item'] as Map),
+              );
+            })
+            .toList(growable: false),
+      ),
+    );
   }
 
   List<MultimediaItem> allItems() => _read().values
@@ -119,7 +140,7 @@ class ProviderLocalLibrary {
       .toList(growable: false);
 
   Future<void> remove(String id) => _enqueue(() {
-    final entries = _read();
+    final entries = Map<String, dynamic>.from(_read());
     entries.remove(_id(id));
     return entries;
   });
@@ -134,6 +155,69 @@ class ProviderLocalLibrary {
     return _write(item, category: category, changeCategory: true);
   }
 
+  /// Reconcile one verified cloud shelf in a single serialized storage write.
+  /// Rewriting the entire JSON map for every poster was quadratic on large
+  /// accounts and blocked frames when the user scrolled the library.
+  Future<int> applyCloudItems({
+    required LibraryCategory category,
+    required Iterable<MultimediaItem> received,
+    Set<String> protectedUrls = const {},
+    Set<String> absentUrls = const {},
+  }) async {
+    var changed = 0;
+    await _enqueue(() {
+      final entries = Map<String, dynamic>.from(_read());
+      final favoriteShelf = category == LibraryCategory.favorite;
+      for (final item in received) {
+        final id = _id(item.url);
+        if (protectedUrls.contains(id)) continue;
+        final existing = entries[id] as Map?;
+        final favorite = existing?['favorite'] == true;
+        final previousCategory = existing?['category'];
+        if (favoriteShelf
+            ? favorite
+            : previousCategory == category.storageKey) {
+          continue;
+        }
+        entries[id] = <String, dynamic>{
+          'item': providerId == animeRiftProviderId
+              ? _riftCatalogSnapshot(item, id)
+              : item.copyWith(provider: providerId).toJson(),
+          'favorite': favoriteShelf || favorite,
+          'category': favoriteShelf ? previousCategory : category.storageKey,
+        };
+        changed++;
+      }
+      for (final url in absentUrls) {
+        final id = _id(url);
+        if (protectedUrls.contains(id)) continue;
+        final previous = entries[id];
+        if (previous is! Map) continue;
+        final favorite = previous['favorite'] == true;
+        final previousCategory = previous['category'];
+        if (favoriteShelf
+            ? !favorite
+            : previousCategory != category.storageKey) {
+          continue;
+        }
+        final keepFavorite = !favoriteShelf && favorite;
+        final keepCategory = favoriteShelf ? previousCategory : null;
+        if (!keepFavorite && keepCategory == null) {
+          entries.remove(id);
+        } else {
+          entries[id] = <String, dynamic>{
+            ...Map<String, dynamic>.from(previous),
+            'favorite': keepFavorite,
+            'category': keepCategory,
+          };
+        }
+        changed++;
+      }
+      return entries;
+    });
+    return changed;
+  }
+
   Future<void> _write(
     MultimediaItem item, {
     bool? favorite,
@@ -143,7 +227,7 @@ class ProviderLocalLibrary {
     final id = _id(item.url);
     if (id.isEmpty) throw ArgumentError.value(item.url, 'item.url');
     return _enqueue(() {
-      final entries = _read();
+      final entries = Map<String, dynamic>.from(_read());
       final existing = entries[id] as Map?;
       final savedFavorite = favorite ?? (existing?['favorite'] == true);
       final savedCategory = changeCategory

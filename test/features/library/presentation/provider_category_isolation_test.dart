@@ -6,6 +6,7 @@ import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
+import 'package:animewitcher/core/storage/anime_rift_account_scope.dart';
 import 'package:animewitcher/core/storage/provider_local_library.dart';
 import 'package:animewitcher/core/storage/secure_token_storage.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
@@ -95,6 +96,31 @@ class _Active extends ActiveProvider {
 }
 
 void main() {
+  test('linked Rift counts are unknown until server overview is fetched', () {
+    AnimeRiftLocalAccountScope.activate('count-fixture');
+    addTearDown(AnimeRiftLocalAccountScope.reset);
+    final storage = _Storage();
+    final account = AnimeWitcherAccountService(
+      storage: storage,
+      secureStorage: SecureTokenStorage(storage),
+    );
+    final container = ProviderContainer(
+      overrides: [
+        storageServiceProvider.overrideWithValue(storage),
+        animeWitcherAccountServiceProvider.overrideWithValue(account),
+        activeProviderProvider.overrideWith(
+          () => _Active(_Source(animeRiftProviderId)),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+    expect(
+      container
+          .read(libraryProvider.notifier)
+          .categoryCount(LibraryMediaKind.anime, LibraryCategory.completed),
+      isNull,
+    );
+  });
   test(
     'delayed selection stays on its original provider after switching',
     () async {

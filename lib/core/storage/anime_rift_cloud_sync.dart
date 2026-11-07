@@ -166,10 +166,18 @@ class AnimeRiftCloudListPage {
 }
 
 class _CloudListCursor {
-  _CloudListCursor(this.rows, this.total, this.hasMore);
+  _CloudListCursor(
+    this.rows,
+    this.total,
+    this.hasMore, {
+    List<Object?> bufferedRows = const [],
+    this.serverHasMore = false,
+  }) : buffered = List<Object?>.from(bufferedRows);
   final List<Object?> rows;
+  final List<Object?> buffered;
   final int? total;
   bool hasMore;
+  bool serverHasMore;
   int nextPage = 1;
   bool loading = false;
 }
@@ -263,14 +271,29 @@ class AnimeRiftCloudSync {
     }
     var cursor = _cursors[list];
     if (!loadNextPage || cursor == null) {
-      final rows = _cloudRows(first).take(30).toList();
+      final allRows = _cloudRows(first);
+      final rows = allRows.take(30).toList();
       cursor = _CloudListCursor(
         rows,
         expectedCount,
         _hasMore(first) ||
+            allRows.length > rows.length ||
             (expectedCount != null && rows.length < expectedCount),
+        bufferedRows: allRows.skip(30).toList(),
+        serverHasMore: _hasMore(first),
       );
       _cursors[list] = cursor;
+    } else if (cursor.hasMore && cursor.buffered.isNotEmpty) {
+      // The server can send its entire library in one response, ignoring the
+      // requested page. Never discard rows 31+ or repeatedly GET page one.
+      final take = cursor.buffered.take(30).toList();
+      cursor.rows.addAll(take);
+      cursor.buffered.removeRange(0, take.length);
+      cursor.hasMore =
+          cursor.buffered.isNotEmpty ||
+          (cursor.total != null
+              ? cursor.rows.length < cursor.total!
+              : cursor.serverHasMore);
     } else if (cursor.hasMore && !cursor.loading && loadPage != null) {
       cursor.loading = true;
       try {
@@ -286,17 +309,21 @@ class AnimeRiftCloudSync {
           if (!identical(_cursors[list], cursor)) {
             throw const AnimeRiftAccessUnavailable();
           }
-          final incoming = _cloudRows(response).take(30).toList();
+          final incoming = _cloudRows(response);
           final keys = cursor.rows.map(_rowIdentity).toSet();
           final added = incoming
               .where((row) => keys.add(_rowIdentity(row)))
               .toList();
           cursor.nextPage++;
-          cursor.rows.addAll(added);
+          cursor.rows.addAll(added.take(30));
+          cursor.buffered.addAll(added.skip(30));
+          cursor.serverHasMore = _hasMore(response);
           cursor.hasMore =
               incoming.isNotEmpty &&
-              (_hasMore(response) ||
-                  (cursor.total != null && cursor.rows.length < cursor.total!));
+              (cursor.buffered.isNotEmpty ||
+                  (cursor.total != null
+                      ? cursor.rows.length < cursor.total!
+                      : cursor.serverHasMore));
           if (added.isNotEmpty || !cursor.hasMore) break;
           if (attempt == 1) cursor.hasMore = false;
         }
@@ -385,12 +412,19 @@ class AnimeRiftCloudSync {
         ? await _reader.fetchFavoriteAnime()
         : await _reader.fetchMyList(list);
     _requireAccount(account);
-    Map<String, int> counts = const {};
-    try {
-      counts = parseMyListOverviewCounts(await _reader.fetchMyListOverview());
-      _requireAccount(account);
-    } on AnimeRiftAccessUnavailable {
-      _requireAccount(account);
+    // Scrolling another 30 posters must not refetch the same overview and
+    // hold the grid behind an unrelated account summary request.
+    Map<String, int> counts =
+        loadNextPage && hasCursor && _overviewTotals.isNotEmpty
+        ? _overviewTotals
+        : const {};
+    if (counts.isEmpty) {
+      try {
+        counts = parseMyListOverviewCounts(await _reader.fetchMyListOverview());
+        _requireAccount(account);
+      } on AnimeRiftAccessUnavailable {
+        _requireAccount(account);
+      }
     }
     final countKey = category == LibraryCategory.favorite
         ? 'my_list_favorites'
@@ -414,6 +448,7 @@ class AnimeRiftCloudSync {
     if (counts.isNotEmpty) _overviewTotals = Map.unmodifiable(counts);
     final rows = _cloudRows(response);
     final library = ProviderLocalLibrary(storage, animeRiftProviderId);
+    final localItems = {for (final item in library.allItems()) item.url: item};
     final hydrated = <String, MultimediaItem?>{};
     final received = <String, MultimediaItem>{};
     var skipped = 0;
@@ -426,7 +461,7 @@ class AnimeRiftCloudSync {
             ? hydrate
             : null,
         hydrated,
-        cached: library.item,
+        cached: (url) => localItems[url],
       );
       _requireAccount(account);
       if (item == null) {
@@ -436,34 +471,23 @@ class AnimeRiftCloudSync {
       }
     }
     final journal = AnimeRiftCloudPendingJournal(storage);
-    var changed = 0;
-    for (final item in received.values) {
-      _requireAccount(account);
-      final kind = category == LibraryCategory.favorite
-          ? 'favorite'
-          : 'category';
-      if (journal.hasPending(account, item.url, kind)) continue;
-      if (category == LibraryCategory.favorite) {
-        if (!library.isFavorite(item.url)) {
-          await library.setFavorite(item, true);
-          changed++;
-        }
-      } else if (library.category(item.url) != category) {
-        await library.setCategory(item, category);
-        changed++;
-      }
-    }
+    final kind = category == LibraryCategory.favorite ? 'favorite' : 'category';
+    final protectedUrls = {
+      for (final mutation in journal.pending(account))
+        if (mutation.kind == kind) mutation.url,
+    };
     final complete =
         counts[countKey] == rows.length &&
         received.length == rows.length &&
         !_hasMore(response);
+    final isFavorite = category == LibraryCategory.favorite;
+    final key = isFavorite
+        ? 'animerift_cloud_favorites_v1:$account'
+        : 'animerift_cloud_categories_v1:$account';
+    Set<String> previousFavorites = {};
+    Map<String, String> previousCategories = {};
+    Set<String> absentUrls = {};
     if (complete) {
-      final isFavorite = category == LibraryCategory.favorite;
-      final key = isFavorite
-          ? 'animerift_cloud_favorites_v1:$account'
-          : 'animerift_cloud_categories_v1:$account';
-      Set<String> previousFavorites = {};
-      Map<String, String> previousCategories = {};
       try {
         if (isFavorite) {
           previousFavorites = _favoriteSnapshot(storage.getString(key)) ?? {};
@@ -479,27 +503,17 @@ class AnimeRiftCloudSync {
               for (final entry in previousCategories.entries)
                 if (entry.value == category.storageKey) entry.key,
             };
-      for (final url in prior.difference(received.keys.toSet())) {
-        _requireAccount(account);
-        if (journal.hasPending(
-          account,
-          url,
-          isFavorite ? 'favorite' : 'category',
-        )) {
-          continue;
-        }
-        if (isFavorite) {
-          final item = library.item(url);
-          if (item != null && library.isFavorite(url)) {
-            await library.setFavorite(item, false);
-            changed++;
-          }
-        } else if (library.category(url) == category) {
-          await library.clearCategory(url);
-          changed++;
-        }
-      }
-      _requireAccount(account);
+      absentUrls = prior.difference(received.keys.toSet());
+    }
+    _requireAccount(account);
+    final changed = await library.applyCloudItems(
+      category: category,
+      received: received.values,
+      protectedUrls: protectedUrls,
+      absentUrls: absentUrls,
+    );
+    _requireAccount(account);
+    if (complete) {
       if (isFavorite) {
         await storage.setString(
           key,

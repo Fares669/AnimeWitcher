@@ -13,6 +13,7 @@ import '../../../../core/storage/anime_rift_auto_sync.dart';
 import '../../../../core/storage/anime_rift_account_scope.dart';
 import '../../../../core/extensions/extension_manager.dart';
 import '../../../../core/extensions/providers/anime_rift_provider.dart';
+import '../../../../core/services/app_diagnostics.dart';
 
 import './library_auth.dart';
 import './library_state.dart';
@@ -27,12 +28,14 @@ class LibraryShelfPageInfo {
     required this.loaded,
     required this.hasMore,
     required this.loading,
+    this.loadFailed = false,
     this.total,
   });
   final int loaded;
   final int? total;
   final bool hasMore;
   final bool loading;
+  final bool loadFailed;
 }
 
 class _LibraryShelfCursorState {
@@ -40,6 +43,7 @@ class _LibraryShelfCursorState {
   int cachedLocalCount = 0;
   int? total;
   bool loading = false;
+  bool loadFailed = false;
   bool hasMore = false;
   bool receivedRemotePage = false;
   AnimeWitcherLibraryCursor? nativeCursor;
@@ -51,7 +55,68 @@ class Library extends _$Library {
   static const _riftAnimeCategoryKey = 'animerift_library_anime_category';
   static const pageSize = 30;
   final _pages = <String, _LibraryShelfCursorState>{};
+  final _confirmedCounts = <String, Map<LibraryCategory, int>>{};
+  final _countRequests = <String, Future<void>>{};
+  ProviderLocalLibrary? _riftLocalLibrary;
+  String? _riftLocalOwner;
+  int _countRevision = 0;
+  int get countRevision => _countRevision;
   int _selectionGeneration = 0;
+
+  String _countsKey(LibraryMediaKind kind) =>
+      '${_pageKey(kind, LibraryCategory.watching)}:counts';
+
+  /// Fetch totals without fetching poster rows. An unknown total is not zero.
+  Future<void> refreshServerCounts(LibraryMediaKind kind) {
+    final key = _countsKey(kind);
+    if (_confirmedCounts.containsKey(key)) return Future<void>.value();
+    final active = _countRequests[key];
+    if (active != null) return active;
+    final provider = ref.read(activeProviderProvider);
+    final isRift =
+        kind == LibraryMediaKind.anime && provider is AnimeRiftProvider;
+    final service = ref.read(animeWitcherAccountServiceProvider);
+    if (isRift
+        ? AnimeRiftLocalAccountScope.accountHash == null
+        : !service.isSignedIn) {
+      return Future<void>.value();
+    }
+    final request = () async {
+      try {
+        final Map<LibraryCategory, int> counts;
+        if (isRift) {
+          final overview = await provider.fetchCloudLibraryCounts();
+          const keys = <LibraryCategory, String>{
+            LibraryCategory.favorite: 'my_list_favorites',
+            LibraryCategory.watching: 'my_list_currently_watching',
+            LibraryCategory.planToWatch: 'my_list_plan_to_watch',
+            LibraryCategory.completed: 'my_list_finished_watching',
+            LibraryCategory.continueLater: 'my_list_on_hold',
+            LibraryCategory.notInterested: 'my_list_dropped',
+          };
+          counts = {
+            for (final entry in keys.entries)
+              if (overview[entry.value] case final int total) entry.key: total,
+          };
+        } else {
+          counts = await service.fetchLibraryCounts(
+            manga: kind == LibraryMediaKind.manga,
+          );
+        }
+        if (ref.mounted && _countsKey(kind) == key) {
+          _confirmedCounts[key] = counts;
+          _countRevision++;
+          refresh();
+        }
+      } catch (_) {
+        // Retry on the next library visit or account restoration.
+      }
+    }();
+    _countRequests[key] = request;
+    return request.whenComplete(() {
+      _countRequests.remove(key);
+    });
+  }
 
   String _pageKey(LibraryMediaKind kind, LibraryCategory category) {
     final isRift =
@@ -141,21 +206,33 @@ class Library extends _$Library {
       total: page.total,
       hasMore:
           page.hasMore ||
+          page.loading ||
+          page.loadFailed ||
           (!page.receivedRemotePage &&
               page.cachedLocalCount > page.visibleLimit),
       loading: page.loading,
+      loadFailed: page.loadFailed,
     );
   }
 
-  int categoryCount(LibraryMediaKind kind, LibraryCategory category) {
+  int? categoryCount(LibraryMediaKind kind, LibraryCategory category) {
     final provider = ref.read(activeProviderProvider);
-    final riftTotal =
-        kind == LibraryMediaKind.anime && provider is AnimeRiftProvider
-        ? provider.cloudLibraryTotal(category)
-        : null;
-    return pageInfo(kind, category).total ??
-        riftTotal ??
-        _localItems(kind, category).length;
+    final rift =
+        kind == LibraryMediaKind.anime &&
+        provider?.packageName == animeRiftProviderId;
+    final confirmed =
+        pageInfo(kind, category).total ??
+        _confirmedCounts[_countsKey(kind)]?[category] ??
+        (rift && provider is AnimeRiftProvider
+            ? provider.cloudLibraryTotal(category)
+            : null);
+    if (confirmed != null) return confirmed;
+    final linked = rift
+        ? AnimeRiftLocalAccountScope.accountHash != null
+        : ref.read(animeWitcherAccountServiceProvider).isSignedIn;
+    // While fetching overview/Firestore counts, don't turn unknown into zero.
+    if (linked) return null;
+    return _localItems(kind, category).length;
   }
 
   @override
@@ -168,6 +245,12 @@ class Library extends _$Library {
     );
     final category = _categoryFor(mediaKind);
     final items = _visibleItems(mediaKind, category);
+    Future<void>.microtask(() {
+      if (!ref.mounted) return;
+      for (final kind in LibraryMediaKind.values) {
+        unawaited(refreshServerCounts(kind));
+      }
+    });
     return items.isEmpty
         ? LibraryEmpty(category, mediaKind)
         : LibrarySuccess(items, category, mediaKind);
@@ -216,11 +299,16 @@ class Library extends _$Library {
         : service.accountUid;
     if (account == null) return;
     page.loading = true;
+    page.loadFailed = false;
     refresh();
+    final elapsed = Stopwatch()..start();
     final pageKey = _pageKey(kind, shelf);
     try {
       if (isRift) {
-        await ref.read(riftAutoSyncProvider).refreshCategory(shelf);
+        await ref
+            .read(riftAutoSyncProvider)
+            .refreshCategory(shelf)
+            .timeout(const Duration(seconds: 25));
         final provider = ref.read(activeProviderProvider);
         final remote = provider is AnimeRiftProvider
             ? provider.cloudLibraryPage(shelf)
@@ -232,10 +320,12 @@ class Library extends _$Library {
           page.receivedRemotePage = true;
         }
       } else {
-        final result = await service.fetchLibraryPage(
-          category: shelf,
-          manga: kind == LibraryMediaKind.manga,
-        );
+        final result = await service
+            .fetchLibraryPage(
+              category: shelf,
+              manga: kind == LibraryMediaKind.manga,
+            )
+            .timeout(const Duration(seconds: 25));
         if (_pageKey(kind, shelf) == pageKey) {
           page.nativeItems
             ..clear()
@@ -258,11 +348,27 @@ class Library extends _$Library {
       // The import has already persisted the new cache. Notify all shelf
       // views, including counts and the phone's sorted in-memory list cache.
       refresh();
-    } catch (_) {
-      // Keep cached library items visible while offline or after a transient
-      // authentication/transport error; the next opening retries the GET.
+    } catch (error) {
+      page.loadFailed = true;
+      appDiagnostics.record('library.page', {
+        'action': 'first',
+        'status': error is TimeoutException ? 'timeout' : 'failed',
+        'reason': isRift ? 'rift' : 'native',
+        'durationMs': elapsed.elapsedMilliseconds,
+        'retryable': true,
+      });
+      // Keep cached items visible; show a retry instead of an endless spinner.
     } finally {
       page.loading = false;
+      if (!page.loadFailed) {
+        appDiagnostics.record('library.page', {
+          'action': 'first',
+          'status': 'ok',
+          'reason': isRift ? 'rift' : 'native',
+          'durationMs': elapsed.elapsedMilliseconds,
+          'count': page.visibleLimit,
+        });
+      }
       if (ref.mounted) refresh();
     }
   }
@@ -294,16 +400,20 @@ class Library extends _$Library {
     }
     if (!page.hasMore) return;
     page.loading = true;
+    page.loadFailed = false;
     refresh();
+    final elapsed = Stopwatch()..start();
     try {
       if (isRift) {
         final provider = ref.read(activeProviderProvider);
         if (provider is! AnimeRiftProvider) return;
-        await provider.importCloudLibraryCategory(
-          ref.read(storageServiceProvider),
-          category,
-          loadNextPage: true,
-        );
+        await provider
+            .importCloudLibraryCategory(
+              ref.read(storageServiceProvider),
+              category,
+              loadNextPage: true,
+            )
+            .timeout(const Duration(seconds: 25));
         if (ref.mounted && _pageKey(mediaKind, category) == key) {
           final remote = provider.cloudLibraryPage(category);
           if (remote != null) {
@@ -314,12 +424,17 @@ class Library extends _$Library {
         }
       } else {
         final cursor = page.nativeCursor;
-        if (cursor == null) return;
-        final result = await service.fetchLibraryPage(
-          category: category,
-          manga: mediaKind == LibraryMediaKind.manga,
-          cursor: cursor,
-        );
+        if (cursor == null) {
+          page.loadFailed = true;
+          return;
+        }
+        final result = await service
+            .fetchLibraryPage(
+              category: category,
+              manga: mediaKind == LibraryMediaKind.manga,
+              cursor: cursor,
+            )
+            .timeout(const Duration(seconds: 25));
         if (ref.mounted && _pageKey(mediaKind, category) == key) {
           final seen = page.nativeItems.map((item) => item.url).toSet();
           for (final item in result.items) {
@@ -331,10 +446,27 @@ class Library extends _$Library {
           page.visibleLimit = page.nativeItems.length;
         }
       }
-    } catch (_) {
-      // A failed next page preserves the already loaded items and cursor.
+    } catch (error) {
+      page.loadFailed = true;
+      appDiagnostics.record('library.page', {
+        'action': 'next',
+        'status': error is TimeoutException ? 'timeout' : 'failed',
+        'reason': isRift ? 'rift' : 'native',
+        'durationMs': elapsed.elapsedMilliseconds,
+        'retryable': true,
+      });
+      // A failed next page preserves the cursor for the retry control.
     } finally {
       page.loading = false;
+      if (!page.loadFailed) {
+        appDiagnostics.record('library.page', {
+          'action': 'next',
+          'status': 'ok',
+          'reason': isRift ? 'rift' : 'native',
+          'durationMs': elapsed.elapsedMilliseconds,
+          'count': page.visibleLimit,
+        });
+      }
       if (ref.mounted) refresh();
     }
   }
@@ -487,10 +619,17 @@ class Library extends _$Library {
     );
   }
 
-  ProviderLocalLibrary _local() => ProviderLocalLibrary(
-    ref.read(storageServiceProvider),
-    animeRiftProviderId,
-  );
+  ProviderLocalLibrary _local() {
+    final owner = AnimeRiftLocalAccountScope.accountHash;
+    if (_riftLocalLibrary == null || _riftLocalOwner != owner) {
+      _riftLocalOwner = owner;
+      _riftLocalLibrary = ProviderLocalLibrary(
+        ref.read(storageServiceProvider),
+        animeRiftProviderId,
+      );
+    }
+    return _riftLocalLibrary!;
+  }
 
   bool isFavorite(String url, {String? providerId}) {
     if (providerId == animeRiftProviderId) return _local().isFavorite(url);

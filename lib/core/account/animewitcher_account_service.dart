@@ -1987,6 +1987,45 @@ class AnimeWitcherAccountService {
     });
   }
 
+  /// Read counts independently of library posters. Hide-empty filters need
+  /// confirmed server totals even for shelves the user has never opened.
+  Future<Map<LibraryCategory, int>> fetchLibraryCounts({
+    bool manga = false,
+  }) async {
+    final profile = _profile;
+    if (!isSignedIn || profile == null) {
+      throw const AnimeWitcherAccountException(
+        'not-signed-in',
+        'Sign in to load the library.',
+      );
+    }
+    final generation = _sessionGeneration;
+    final values = await _authenticated<List<int>>((token) async {
+      return Future.wait([
+        for (final category in LibraryCategory.values)
+          _firestore.countLibraryDocuments(
+            'users/${profile.documentId}/'
+            '${category == LibraryCategory.favorite ? 'fav' : 'user'}_'
+            '${manga ? 'manga' : 'anime'}',
+            token,
+            type: category == LibraryCategory.favorite
+                ? null
+                : _cloudType(category),
+          ),
+      ]);
+    });
+    if (!_isCurrentProfile(profile) || generation != _sessionGeneration) {
+      throw const AnimeWitcherAccountException(
+        'session-changed',
+        'The active account changed.',
+      );
+    }
+    return {
+      for (var index = 0; index < LibraryCategory.values.length; index++)
+        LibraryCategory.values[index]: values[index],
+    };
+  }
+
   /// Reads one shelf without interpreting absent documents as deletions or
   /// changing local category/favorite state. Full reconciliation stays explicit.
   Future<AnimeWitcherLibraryPage> fetchLibraryPage({
