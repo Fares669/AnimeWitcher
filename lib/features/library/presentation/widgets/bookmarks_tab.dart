@@ -39,14 +39,41 @@ class _BookmarksTabState extends ConsumerState<BookmarksTab>
   Widget build(BuildContext context) {
     super.build(context);
     final libraryState = ref.watch(libraryProvider);
+    final page = ref
+        .read(libraryProvider.notifier)
+        .pageInfo(libraryState.mediaKind, libraryState.category);
     final content = switch (libraryState) {
       LibraryLoading() => const Center(child: AppLoadingIndicator()),
       LibraryError(message: final msg) => Center(child: Text(msg)),
-      LibraryEmpty() => LibraryEmptyState(mediaKind: libraryState.mediaKind),
+      LibraryEmpty() =>
+        page.loading
+            ? const Center(child: AppLoadingIndicator())
+            : page.hasMore
+            ? LibraryItemsGrid(
+                items: const [],
+                totalCount: page.total,
+                hasMore: true,
+                onLoadMore: () => ref
+                    .read(libraryProvider.notifier)
+                    .loadNextPage(
+                      mediaKind: libraryState.mediaKind,
+                      category: libraryState.category,
+                    ),
+              )
+            : LibraryEmptyState(mediaKind: libraryState.mediaKind),
       LibrarySuccess(items: final items) => LibraryItemsGrid(
         items: widget.sort == null
             ? items
             : sortLibraryItems(items, widget.sort!),
+        totalCount: page.total,
+        hasMore: page.hasMore,
+        loadingMore: page.loading,
+        onLoadMore: () => ref
+            .read(libraryProvider.notifier)
+            .loadNextPage(
+              mediaKind: libraryState.mediaKind,
+              category: libraryState.category,
+            ),
       ),
     };
     return content;
@@ -72,12 +99,20 @@ class LibraryItemsGrid extends StatelessWidget {
     this.labels,
     this.heroPrefix = 'lib_bookmark',
     this.onLongPress,
+    this.totalCount,
+    this.hasMore = false,
+    this.loadingMore = false,
+    this.onLoadMore,
   });
 
   final List<MultimediaItem> items;
   final List<String>? labels;
   final String heroPrefix;
   final void Function(MultimediaItem item)? onLongPress;
+  final int? totalCount;
+  final bool hasMore;
+  final bool loadingMore;
+  final Future<void> Function()? onLoadMore;
 
   @override
   Widget build(BuildContext context) {
@@ -89,70 +124,104 @@ class LibraryItemsGrid extends StatelessWidget {
     final colors = Theme.of(context).colorScheme;
 
     return CatalogDirection(
-      child: GridView.builder(
-        padding: EdgeInsets.fromLTRB(
-          gridHorizontalPadding,
-          LayoutConstants.spacingMd,
-          gridHorizontalPadding,
-          100,
-        ),
-        gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
-          context,
-          maxCrossAxisExtent: maxCardWidth,
-          childAspectRatio: MultimediaCardLayout.gridAspectRatio(
-            isPortrait: true,
-            isDesktop: isDesktop,
+      child: NotificationListener<ScrollNotification>(
+        onNotification: (notification) {
+          if (notification is ScrollUpdateNotification &&
+              notification.metrics.axis == Axis.vertical &&
+              hasMore &&
+              !loadingMore &&
+              onLoadMore != null &&
+              notification.metrics.extentAfter < 500) {
+            onLoadMore!();
+          }
+          return false;
+        },
+        child: GridView.builder(
+          padding: EdgeInsets.fromLTRB(
+            gridHorizontalPadding,
+            LayoutConstants.spacingMd,
+            gridHorizontalPadding,
+            100,
           ),
-          crossAxisSpacing: MultimediaCardLayout.catalogGridCrossAxisSpacing(
+          gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
             context,
+            maxCrossAxisExtent: maxCardWidth,
+            childAspectRatio: MultimediaCardLayout.gridAspectRatio(
+              isPortrait: true,
+              isDesktop: isDesktop,
+            ),
+            crossAxisSpacing: MultimediaCardLayout.catalogGridCrossAxisSpacing(
+              context,
+            ),
+            mainAxisSpacing: MultimediaCardLayout.catalogGridMainAxisSpacing(
+              context,
+            ),
+            handsetPortraitCrossAxisCount:
+                MultimediaCardLayout.handsetPortraitGridColumns,
+            horizontalPadding: gridHorizontalPadding,
           ),
-          mainAxisSpacing: MultimediaCardLayout.catalogGridMainAxisSpacing(
-            context,
-          ),
-          handsetPortraitCrossAxisCount:
-              MultimediaCardLayout.handsetPortraitGridColumns,
-          horizontalPadding: gridHorizontalPadding,
-        ),
-        itemCount: items.length,
-        itemBuilder: (context, index) {
-          final item = items[index];
-          final card = MultimediaCard.fromItem(
-            key: ValueKey(item.url),
-            item: item,
-            heroTag: heroTagWithUrl(heroPrefix, item, index),
-            onTap: () => openLibraryItem(context, item),
-            onLongPress: onLongPress == null ? null : () => onLongPress!(item),
-          );
-          final label = labels?[index];
-          if (label == null) return card;
-          return Stack(
-            children: [
-              Positioned.fill(child: card),
-              PositionedDirectional(
-                top: 6,
-                start: 6,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 7,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: colors.surface.withValues(alpha: 0.86),
-                    borderRadius: BorderRadius.circular(99),
-                  ),
-                  child: Text(
-                    label,
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      color: colors.primary,
+          itemCount: items.length + (hasMore ? 1 : 0),
+          itemBuilder: (context, index) {
+            if (index == items.length) {
+              return Center(
+                key: const ValueKey<String>('library-lazy-loading'),
+                child: loadingMore
+                    ? const CircularProgressIndicator(strokeWidth: 2)
+                    : TextButton(
+                        onPressed: () {
+                          onLoadMore?.call();
+                        },
+                        child: Text(
+                          totalCount == null
+                              ? 'تحميل المزيد'
+                              : '${items.length} / $totalCount',
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+              );
+            }
+            final item = items[index];
+            final card = MultimediaCard.fromItem(
+              key: ValueKey(item.url),
+              item: item,
+              heroTag: heroTagWithUrl(heroPrefix, item, index),
+              onTap: () => openLibraryItem(context, item),
+              onLongPress: onLongPress == null
+                  ? null
+                  : () => onLongPress!(item),
+            );
+            final label = labels?[index];
+            if (label == null) return card;
+            return Stack(
+              children: [
+                Positioned.fill(child: card),
+                PositionedDirectional(
+                  top: 6,
+                  start: 6,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: colors.surface.withValues(alpha: 0.86),
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                    child: Text(
+                      label,
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: colors.primary,
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ],
-          );
-        },
+              ],
+            );
+          },
+        ),
       ),
     );
   }

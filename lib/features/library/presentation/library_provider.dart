@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:animewitcher/core/account/account_providers.dart';
+import 'package:animewitcher/core/account/animewitcher_account_service.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/storage/library_category.dart';
@@ -11,6 +12,7 @@ import '../../../../core/storage/provider_local_library.dart';
 import '../../../../core/storage/anime_rift_auto_sync.dart';
 import '../../../../core/storage/anime_rift_account_scope.dart';
 import '../../../../core/extensions/extension_manager.dart';
+import '../../../../core/extensions/providers/anime_rift_provider.dart';
 
 import './library_auth.dart';
 import './library_state.dart';
@@ -18,28 +20,154 @@ import './library_media_kind.dart';
 
 part 'library_provider.g.dart';
 
+/// Server-reported library count is separate from the number loaded so far.
+/// An unknown server total must never be advertised as a confirmed zero.
+class LibraryShelfPageInfo {
+  const LibraryShelfPageInfo({
+    required this.loaded,
+    required this.hasMore,
+    required this.loading,
+    this.total,
+  });
+  final int loaded;
+  final int? total;
+  final bool hasMore;
+  final bool loading;
+}
+
+class _LibraryShelfCursorState {
+  int visibleLimit = 30;
+  int cachedLocalCount = 0;
+  int? total;
+  bool loading = false;
+  bool hasMore = false;
+  bool receivedRemotePage = false;
+  AnimeWitcherLibraryCursor? nativeCursor;
+  final List<MultimediaItem> nativeItems = [];
+}
+
 @Riverpod(keepAlive: true)
 class Library extends _$Library {
   static const _riftAnimeCategoryKey = 'animerift_library_anime_category';
+  static const pageSize = 30;
+  final _pages = <String, _LibraryShelfCursorState>{};
   int _selectionGeneration = 0;
+
+  String _pageKey(LibraryMediaKind kind, LibraryCategory category) {
+    final isRift =
+        ref.read(activeProviderProvider)?.packageName == animeRiftProviderId &&
+        kind == LibraryMediaKind.anime;
+    final owner = isRift
+        ? AnimeRiftLocalAccountScope.accountHash
+        : ref.read(animeWitcherAccountServiceProvider).accountUid;
+    return '${isRift ? animeRiftProviderId : 'native'}:${owner ?? 'guest'}:'
+        '${kind.storageKey}:${category.storageKey}';
+  }
+
+  _LibraryShelfCursorState _page(
+    LibraryMediaKind kind,
+    LibraryCategory category,
+  ) => _pages.putIfAbsent(
+    _pageKey(kind, category),
+    _LibraryShelfCursorState.new,
+  );
+
+  List<MultimediaItem> _localItems(
+    LibraryMediaKind kind,
+    LibraryCategory category,
+  ) {
+    final isRift =
+        ref.read(activeProviderProvider)?.packageName == animeRiftProviderId &&
+        kind == LibraryMediaKind.anime;
+    return filterLibraryItemsByKind(
+      isRift
+          ? _local().items(category)
+          : ref
+                .read(libraryRepositoryProvider)
+                .getLibraryItems(category: category),
+      kind,
+    );
+  }
+
+  List<MultimediaItem> _visibleItems(
+    LibraryMediaKind kind,
+    LibraryCategory category,
+  ) {
+    final page = _page(kind, category);
+    final local = _localItems(kind, category);
+    page.cachedLocalCount = local.length;
+    final provider = ref.read(activeProviderProvider);
+    if (kind == LibraryMediaKind.anime &&
+        provider is AnimeRiftProvider &&
+        page.receivedRemotePage) {
+      final urls = provider.cloudLibraryItemUrls(category);
+      if (urls != null) {
+        final localByUrl = {for (final item in local) item.url: item};
+        return [
+          for (final url in urls.take(page.visibleLimit))
+            if (localByUrl[url] case final item?) item,
+        ];
+      }
+    }
+    final isNativeRemote =
+        page.receivedRemotePage &&
+        !(kind == LibraryMediaKind.anime &&
+            ref.read(activeProviderProvider)?.packageName ==
+                animeRiftProviderId);
+    // A native page is ordered by Firestore; an old local cache may contain
+    // hundreds of rows and must not silently reveal the whole server shelf.
+    final rows = isNativeRemote && page.nativeItems.isNotEmpty
+        ? page.nativeItems
+        : local;
+    return rows.take(page.visibleLimit).toList(growable: false);
+  }
+
+  LibraryShelfPageInfo pageInfo(
+    LibraryMediaKind kind,
+    LibraryCategory category, {
+    int? loadedLocalCount,
+  }) {
+    final page = _page(kind, category);
+    final localCount = loadedLocalCount ?? page.cachedLocalCount;
+    final count =
+        page.receivedRemotePage &&
+            !(kind == LibraryMediaKind.anime &&
+                ref.read(activeProviderProvider)?.packageName ==
+                    animeRiftProviderId)
+        ? page.nativeItems.length
+        : localCount;
+    return LibraryShelfPageInfo(
+      loaded: count.clamp(0, page.visibleLimit),
+      total: page.total,
+      hasMore:
+          page.hasMore ||
+          (!page.receivedRemotePage &&
+              page.cachedLocalCount > page.visibleLimit),
+      loading: page.loading,
+    );
+  }
+
+  int categoryCount(LibraryMediaKind kind, LibraryCategory category) {
+    final provider = ref.read(activeProviderProvider);
+    final riftTotal =
+        kind == LibraryMediaKind.anime && provider is AnimeRiftProvider
+        ? provider.cloudLibraryTotal(category)
+        : null;
+    return pageInfo(kind, category).total ??
+        riftTotal ??
+        _localItems(kind, category).length;
+  }
 
   @override
   LibraryState build() {
     ++_selectionGeneration;
     ref.watch(accountDataRevisionProvider);
-    final activeProvider = ref.watch(activeProviderProvider);
-    final repository = ref.read(libraryRepositoryProvider);
+    ref.watch(activeProviderProvider);
     final mediaKind = LibraryMediaKind.fromStorageKey(
       ref.read(storageServiceProvider).getString('library_media_kind'),
     );
     final category = _categoryFor(mediaKind);
-    final items = filterLibraryItemsByKind(
-      activeProvider?.packageName == animeRiftProviderId &&
-              mediaKind == LibraryMediaKind.anime
-          ? _local().items(category)
-          : repository.getLibraryItems(category: category),
-      mediaKind,
-    );
+    final items = _visibleItems(mediaKind, category);
     return items.isEmpty
         ? LibraryEmpty(category, mediaKind)
         : LibrarySuccess(items, category, mediaKind);
@@ -49,15 +177,7 @@ class Library extends _$Library {
     LibraryMediaKind kind,
     LibraryCategory category,
   ) {
-    final local =
-        ref.read(activeProviderProvider)?.packageName == animeRiftProviderId &&
-        kind == LibraryMediaKind.anime;
-    final items = local
-        ? _local().items(category)
-        : ref
-              .read(libraryRepositoryProvider)
-              .getLibraryItems(category: category);
-    return filterLibraryItemsByKind(items, kind);
+    return _visibleItems(kind, category);
   }
 
   LibraryCategory get selectedCategory => state.category;
@@ -67,32 +187,26 @@ class Library extends _$Library {
     LibraryCategory? category,
     LibraryMediaKind? mediaKind,
   }) {
-    final repository = ref.read(libraryRepositoryProvider);
     final selected = category ?? state.category;
     final selectedKind = mediaKind ?? state.mediaKind;
-    final items = filterLibraryItemsByKind(
-      ref.read(activeProviderProvider)?.packageName == animeRiftProviderId &&
-              selectedKind == LibraryMediaKind.anime
-          ? _local().items(selected)
-          : repository.getLibraryItems(category: selected),
-      selectedKind,
-    );
+    final items = _visibleItems(selectedKind, selected);
     state = items.isEmpty
         ? LibraryEmpty(selected, selectedKind)
         : LibrarySuccess(items, selected, selectedKind);
     return state;
   }
 
-  /// Stale-while-revalidate: cached rows render synchronously through build()
-  /// and refresh(); a background GET fetches only the visible cloud shelf.
-  /// Offline errors never clear cached rows. Changes are applied only to the
-  /// account/provider that initiated the read.
+  /// Display fetches exactly one 30-row server page, never the whole library.
+  /// Cached rows remain visible offline; a partial response never deletes any
+  /// cached item nor resolves missing remote rows as server-side deletions.
   Future<void> refreshVisibleFromServer({
     LibraryCategory? category,
     LibraryMediaKind? mediaKind,
   }) async {
     final kind = mediaKind ?? state.mediaKind;
     final shelf = category ?? state.category;
+    final page = _page(kind, shelf);
+    if (page.loading) return;
     final providerId = ref.read(activeProviderProvider)?.packageName;
     final isRift =
         providerId == animeRiftProviderId && kind == LibraryMediaKind.anime;
@@ -101,13 +215,37 @@ class Library extends _$Library {
         ? AnimeRiftLocalAccountScope.accountHash
         : service.accountUid;
     if (account == null) return;
+    page.loading = true;
+    refresh();
+    final pageKey = _pageKey(kind, shelf);
     try {
       if (isRift) {
         await ref.read(riftAutoSyncProvider).refreshCategory(shelf);
+        final provider = ref.read(activeProviderProvider);
+        final remote = provider is AnimeRiftProvider
+            ? provider.cloudLibraryPage(shelf)
+            : null;
+        if (remote != null && _pageKey(kind, shelf) == pageKey) {
+          page.total = remote.totalCount;
+          page.visibleLimit = remote.loadedCount.clamp(pageSize, 20000);
+          page.hasMore = remote.hasMore;
+          page.receivedRemotePage = true;
+        }
       } else {
-        await service.refreshLibraryForDisplay(
+        final result = await service.fetchLibraryPage(
+          category: shelf,
           manga: kind == LibraryMediaKind.manga,
         );
+        if (_pageKey(kind, shelf) == pageKey) {
+          page.nativeItems
+            ..clear()
+            ..addAll(result.items);
+          page.nativeCursor = result.nextCursor;
+          page.total = result.total;
+          page.hasMore = result.hasMore;
+          page.visibleLimit = pageSize;
+          page.receivedRemotePage = true;
+        }
       }
       if (!ref.mounted ||
           providerId != ref.read(activeProviderProvider)?.packageName ||
@@ -119,10 +257,85 @@ class Library extends _$Library {
       }
       // The import has already persisted the new cache. Notify all shelf
       // views, including counts and the phone's sorted in-memory list cache.
-      ref.read(accountDataRevisionProvider.notifier).bump();
+      refresh();
     } catch (_) {
       // Keep cached library items visible while offline or after a transient
       // authentication/transport error; the next opening retries the GET.
+    } finally {
+      page.loading = false;
+      if (ref.mounted) refresh();
+    }
+  }
+
+  /// Invoked from the bottom of a library grid. Concurrent scroll triggers
+  /// coalesce and the cursor is tied to provider, account and category.
+  Future<void> loadNextPage({
+    required LibraryMediaKind mediaKind,
+    required LibraryCategory category,
+  }) async {
+    final page = _page(mediaKind, category);
+    if (page.loading) return;
+    final key = _pageKey(mediaKind, category);
+    final isRift =
+        ref.read(activeProviderProvider)?.packageName == animeRiftProviderId &&
+        mediaKind == LibraryMediaKind.anime;
+    final service = ref.read(animeWitcherAccountServiceProvider);
+    final account = isRift
+        ? AnimeRiftLocalAccountScope.accountHash
+        : service.accountUid;
+    if (account == null) {
+      page.visibleLimit += pageSize;
+      refresh();
+      return;
+    }
+    if (!page.receivedRemotePage) {
+      await refreshVisibleFromServer(category: category, mediaKind: mediaKind);
+      return;
+    }
+    if (!page.hasMore) return;
+    page.loading = true;
+    refresh();
+    try {
+      if (isRift) {
+        final provider = ref.read(activeProviderProvider);
+        if (provider is! AnimeRiftProvider) return;
+        await provider.importCloudLibraryCategory(
+          ref.read(storageServiceProvider),
+          category,
+          loadNextPage: true,
+        );
+        if (ref.mounted && _pageKey(mediaKind, category) == key) {
+          final remote = provider.cloudLibraryPage(category);
+          if (remote != null) {
+            page.visibleLimit = remote.loadedCount.clamp(pageSize, 20000);
+            page.total = remote.totalCount;
+            page.hasMore = remote.hasMore;
+          }
+        }
+      } else {
+        final cursor = page.nativeCursor;
+        if (cursor == null) return;
+        final result = await service.fetchLibraryPage(
+          category: category,
+          manga: mediaKind == LibraryMediaKind.manga,
+          cursor: cursor,
+        );
+        if (ref.mounted && _pageKey(mediaKind, category) == key) {
+          final seen = page.nativeItems.map((item) => item.url).toSet();
+          for (final item in result.items) {
+            if (seen.add(item.url)) page.nativeItems.add(item);
+          }
+          page.nativeCursor = result.nextCursor;
+          page.total = result.total;
+          page.hasMore = result.hasMore;
+          page.visibleLimit = page.nativeItems.length;
+        }
+      }
+    } catch (_) {
+      // A failed next page preserves the already loaded items and cursor.
+    } finally {
+      page.loading = false;
+      if (ref.mounted) refresh();
     }
   }
 

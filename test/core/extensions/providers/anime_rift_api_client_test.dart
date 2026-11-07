@@ -80,11 +80,16 @@ void main() {
           }
           return secureValues[key];
         case 'write':
-          if (secureWriteStarted != null && !secureWriteStarted!.isCompleted) {
-            secureWriteStarted!.complete();
+          // Race fixtures intentionally hold only the linked *user* token,
+          // never the independent short-lived device registration cache.
+          if (key == 'animerift.user.session.v1') {
+            if (secureWriteStarted != null &&
+                !secureWriteStarted!.isCompleted) {
+              secureWriteStarted!.complete();
+            }
+            final writeGate = delayedSecureWrite;
+            if (writeGate != null) await writeGate.future;
           }
-          final writeGate = delayedSecureWrite;
-          if (writeGate != null) await writeGate.future;
           if (rejectSecureWrites) {
             throw PlatformException(code: 'SECURE_WRITE_FAILED');
           }
@@ -1188,7 +1193,7 @@ void main() {
       await expectLater(signingIn, throwsA(isA<AnimeRiftAccessUnavailable>()));
       expect(client.isAccountLinked, isFalse);
       expect(AnimeRiftLocalAccountScope.accountHash, isNull);
-      expect(secureValues, isEmpty);
+      expect(secureValues.containsKey('animerift.user.session.v1'), isFalse);
     },
   );
 
@@ -1310,7 +1315,7 @@ void main() {
     expect(await anotherRestart.restoreAccountSession(), isTrue);
     expect(AnimeRiftLocalAccountScope.accountHash, scope);
     await anotherRestart.signOut();
-    expect(secureValues, isEmpty);
+    expect(secureValues.containsKey('animerift.user.session.v1'), isFalse);
     expect(AnimeRiftLocalAccountScope.accountHash, isNull);
   });
 
@@ -1421,7 +1426,16 @@ void main() {
         prefs.getKeys().map((key) => prefs.get(key).toString()).join(),
         isNot(contains('cold-fixture-key')),
       );
-      expect(secureValues.values.join(), isNot(contains('cold-fixture-key')));
+      expect(
+        secureValues['animerift.user.session.v1'],
+        isNot(contains('cold-fixture-key')),
+        reason: 'Device and user session credentials must stay separate',
+      );
+      expect(
+        secureValues['animerift.device.registration.v1'],
+        contains('cold-fixture-key'),
+        reason: 'Device key survives restarts only in encrypted storage',
+      );
       for (final request in catalogRequests) {
         expect(
           request.headers['authorization'],
@@ -1440,6 +1454,63 @@ void main() {
             .replaceAll('=', '');
         expect(jwt[2], signature);
       }
+    },
+  );
+
+  test(
+    'encrypted device registration key survives a cold app restart',
+    () async {
+      var now = DateTime.utc(2026, 11, 6, 12);
+      SharedPreferences.setMockInitialValues({
+        'animerift.api.installation.v1': jsonEncode({
+          'fid': 'secure-cache-fid',
+          'deviceId': 'secure-cache-device',
+          'buildId': 'secure-cache-build',
+        }),
+      });
+      var registrations = 0;
+      final dio = fixtureDio((o) {
+        if (o.uri.host.endsWith('googleapis.com')) return reply(o, {}, 400);
+        if (o.uri.path.endsWith('/auth/register/device')) {
+          registrations++;
+          return reply(o, {'sessionKey': 'secure-only-test-key'}, 201);
+        }
+        return reply(o, {'items': <Object>[]});
+      });
+      AnimeRiftApiClient makeClient() =>
+          AnimeRiftApiClient(config: fixtureConfig, dio: dio, clock: () => now);
+      await makeClient().request(
+        'library/home_content',
+        'ANIME.LIBRARY.HOME_CONTENT',
+      );
+      expect(registrations, 1);
+      expect(
+        secureValues['animerift.device.registration.v1'],
+        contains('secure-only-test-key'),
+      );
+      final prefs = await SharedPreferences.getInstance();
+      expect(
+        prefs.getKeys().map((key) => prefs.get(key)).join(),
+        isNot(contains('secure-only-test-key')),
+      );
+
+      // Emulate the runtime static cache disappearing on a cold relaunch.
+      AnimeRiftApiClient.resetDeviceRegistrationMemoryForTesting();
+      now = now.add(const Duration(seconds: 20));
+      await makeClient().request(
+        'library/home_content',
+        'ANIME.LIBRARY.HOME_CONTENT',
+      );
+      expect(registrations, 1, reason: 'Keychain-backed registration reused');
+
+      // The short-lived cache is not a permanent authorization grant.
+      AnimeRiftApiClient.resetDeviceRegistrationMemoryForTesting();
+      now = now.add(const Duration(minutes: 6));
+      await makeClient().request(
+        'library/home_content',
+        'ANIME.LIBRARY.HOME_CONTENT',
+      );
+      expect(registrations, 2);
     },
   );
 
@@ -2356,7 +2427,10 @@ void main() {
       method: 'POST',
       body: {'is_download': true},
     );
-    expect(secureValues.values.single, contains('fixture-user-token'));
+    expect(
+      secureValues['animerift.user.session.v1'],
+      contains('fixture-user-token'),
+    );
 
     await restarted.signOut();
     await restarted.request(
@@ -2369,7 +2443,7 @@ void main() {
     expect(signIns, 1);
     expect(authenticatedDownloads, 2);
     expect(guestDownloads, 1);
-    expect(secureValues, isEmpty);
+    expect(secureValues.containsKey('animerift.user.session.v1'), isFalse);
     final prefs = await SharedPreferences.getInstance();
     final plainValues = prefs
         .getKeys()
@@ -2607,8 +2681,15 @@ void main() {
         throwsA(isA<AnimeRiftAccessUnavailable>()),
       );
       expect(client.isAccountLinked, isFalse);
-      expect(secureValues, isEmpty);
-      expect(secureCalls.where((call) => call.method == 'write'), isEmpty);
+      expect(secureValues.containsKey('animerift.user.session.v1'), isFalse);
+      expect(
+        secureCalls.where(
+          (call) =>
+              call.method == 'write' &&
+              (call.arguments as Map)['key'] == 'animerift.user.session.v1',
+        ),
+        isEmpty,
+      );
     },
   );
 
@@ -2668,7 +2749,7 @@ void main() {
     await client.signOut();
 
     expect(client.isAccountLinked, isFalse);
-    expect(secureValues, isEmpty);
+    expect(secureValues.containsKey('animerift.user.session.v1'), isFalse);
     expect(secureCalls.map((call) => call.method), ['delete']);
     final arguments = Map<Object?, Object?>.from(
       secureCalls.single.arguments as Map,
@@ -2765,8 +2846,12 @@ void main() {
       await unlinking;
 
       expect(client.isAccountLinked, isFalse);
-      expect(secureValues, isEmpty);
-      final writes = secureCalls.where((call) => call.method == 'write');
+      expect(secureValues.containsKey('animerift.user.session.v1'), isFalse);
+      final writes = secureCalls.where(
+        (call) =>
+            call.method == 'write' &&
+            (call.arguments as Map)['key'] == 'animerift.user.session.v1',
+      );
       final deletes = secureCalls.where((call) => call.method == 'delete');
       expect(writes, hasLength(1));
       expect(deletes, hasLength(1));
@@ -2800,7 +2885,10 @@ void main() {
       await Future.wait([unlinking, linking]);
 
       expect(client.isAccountLinked, isTrue);
-      expect(secureValues.values.single, contains('fixture-user-token'));
+      expect(
+        secureValues['animerift.user.session.v1'],
+        contains('fixture-user-token'),
+      );
     },
   );
 }

@@ -10,6 +10,9 @@ import 'package:animewitcher/core/storage/secure_token_storage.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/library/presentation/history_provider.dart';
 import 'package:animewitcher/features/library/presentation/library_screen.dart';
+import 'package:animewitcher/features/library/presentation/library_media_kind.dart';
+import 'package:animewitcher/features/library/presentation/library_provider.dart';
+import 'package:animewitcher/features/library/presentation/widgets/library_phone_shelves.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/shared/widgets/app_side_menu.dart';
 import 'package:flutter/material.dart';
@@ -82,16 +85,29 @@ final class _LibraryStorage extends MemoryStorageService {
 }
 
 class _RiftProvider extends AnimeWitcherProvider {
-  @override String get packageName => animeRiftProviderId;
-  @override String get name => 'Anime Rift';
-  @override String get mainUrl => 'https://example.test';
-  @override String get version => '1';
-  @override List<String> get languages => ['ar'];
-  @override Set<ProviderType> get supportedTypes => {ProviderType.anime};
-  @override Future<List<MultimediaItem>> search(String query, {CancelToken? cancelToken}) async => [];
-  @override Future<Map<String, List<MultimediaItem>>> getHome() async => {};
-  @override Future<MultimediaItem> getDetails(String url) => throw UnimplementedError();
-  @override Future<List<StreamResult>> loadStreams(String url) async => [];
+  @override
+  String get packageName => animeRiftProviderId;
+  @override
+  String get name => 'Anime Rift';
+  @override
+  String get mainUrl => 'https://example.test';
+  @override
+  String get version => '1';
+  @override
+  List<String> get languages => ['ar'];
+  @override
+  Set<ProviderType> get supportedTypes => {ProviderType.anime};
+  @override
+  Future<List<MultimediaItem>> search(
+    String query, {
+    CancelToken? cancelToken,
+  }) async => [];
+  @override
+  Future<Map<String, List<MultimediaItem>>> getHome() async => {};
+  @override
+  Future<MultimediaItem> getDetails(String url) => throw UnimplementedError();
+  @override
+  Future<List<StreamResult>> loadStreams(String url) async => [];
 }
 
 final class _History extends WatchHistory {
@@ -114,6 +130,7 @@ Future<_LibraryStorage> _pump(
   Map<String, String> strings = const <String, String>{},
   bool? showPageMenuButtons,
   bool rift = false,
+  int extraAnime = 0,
 }) async {
   final storage =
       _LibraryStorage({
@@ -121,14 +138,17 @@ Future<_LibraryStorage> _pump(
             _item('Frieren'),
             _item('Berserk', type: MultimediaContentType.manga, year: 1989),
             _item('Vagabond', type: MultimediaContentType.manga, year: 1998),
+            for (var i = 0; i < extraAnime; i++) _item('Extra anime $i'),
           ],
           'pinned': [_item('Dandadan', type: MultimediaContentType.manga)],
         })
         ..strings['library_media_kind'] = kind
         ..strings.addAll(strings);
   if (rift) {
-    await ProviderLocalLibrary(storage, animeRiftProviderId)
-        .setCategory(_item('RiftOnly'), LibraryCategory.watching);
+    await ProviderLocalLibrary(
+      storage,
+      animeRiftProviderId,
+    ).setCategory(_item('RiftOnly'), LibraryCategory.watching);
   }
   final account = AnimeWitcherAccountService(
     storage: storage,
@@ -166,7 +186,42 @@ Future<_LibraryStorage> _pump(
 }
 
 void main() {
-  testWidgets('phone library shows Rift entries instead of native entries', (tester) async {
+  testWidgets('phone guest library loads 30 cards then next batch on scroll', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      size: const Size(400, 860),
+      kind: 'anime',
+      extraAnime: 45,
+    );
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(LibraryPhoneShelves)),
+    );
+    final provider = container.read(libraryProvider.notifier);
+    expect(
+      provider.itemsForCategory(
+        LibraryMediaKind.anime,
+        LibraryCategory.watching,
+      ),
+      hasLength(30),
+    );
+    await tester.drag(
+      find.byKey(const ValueKey('library-grid-anime-watching')),
+      const Offset(0, -4000),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(
+      provider.itemsForCategory(
+        LibraryMediaKind.anime,
+        LibraryCategory.watching,
+      ),
+      hasLength(46),
+    );
+  });
+  testWidgets('phone library shows Rift entries instead of native entries', (
+    tester,
+  ) async {
     await _pump(tester, size: const Size(400, 860), kind: 'anime', rift: true);
     await tester.pump();
     expect(find.text('RiftOnly'), findsWidgets);
@@ -184,11 +239,7 @@ void main() {
   testWidgets('PC: menu appears top left and hides with the top bar', (
     tester,
   ) async {
-    await _pump(
-      tester,
-      size: const Size(1400, 900),
-      showPageMenuButtons: true,
-    );
+    await _pump(tester, size: const Size(1400, 900), showPageMenuButtons: true);
     final button = find.byKey(const ValueKey('app-side-menu-button'));
     expect(button, findsOneWidget);
     final rect = tester.getRect(button);
@@ -217,49 +268,52 @@ void main() {
     expect(find.text('Berserk'), findsWidgets);
     expect(find.text('Vagabond'), findsWidgets);
     expect(find.text('Dandadan'), findsNothing);
-    expect(find.byKey(const ValueKey('library-shelf-manga-watching')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('library-shelf-manga-watching')),
+      findsNothing,
+    );
     expect(tester.takeException(), isNull);
     await tester.pump(const Duration(milliseconds: 100));
   });
 
-  testWidgets('phone: anime category bar shows recent plus six lists with counts', (
-    tester,
-  ) async {
-    await _pump(
-      tester,
-      size: const Size(400, 860),
-      kind: 'anime',
-      history: [
-        HistoryItem(
-          item: _item('One Piece'),
-          position: 10,
-          duration: 20,
-          timestamp: 1,
-        ),
-      ],
-    );
+  testWidgets(
+    'phone: anime category bar shows recent plus six lists with counts',
+    (tester) async {
+      await _pump(
+        tester,
+        size: const Size(400, 860),
+        kind: 'anime',
+        history: [
+          HistoryItem(
+            item: _item('One Piece'),
+            position: 10,
+            duration: 20,
+            timestamp: 1,
+          ),
+        ],
+      );
 
-    expect(find.byKey(const ValueKey('library-list-tab-recent')), findsOneWidget);
-    expect(find.text('آخر المشاهدات 1'), findsOneWidget);
-    expect(find.text('المفضلة 0'), findsOneWidget);
-    expect(find.text('أشاهده حاليًا 1'), findsOneWidget);
-    expect(find.text('أكملها لاحقًا 0'), findsOneWidget);
-    expect(find.text('أرغب بمشاهدته 0'), findsOneWidget);
-    expect(find.text('تمت مشاهدته 0'), findsOneWidget);
-    expect(find.text('لا أرغب بمشاهدته 0'), findsOneWidget);
-  });
+      expect(
+        find.byKey(const ValueKey('library-list-tab-recent')),
+        findsOneWidget,
+      );
+      expect(find.text('آخر المشاهدات 1'), findsOneWidget);
+      expect(find.text('المفضلة 0'), findsOneWidget);
+      expect(find.text('أشاهده حاليًا 1'), findsOneWidget);
+      expect(find.text('أكملها لاحقًا 0'), findsOneWidget);
+      expect(find.text('أرغب بمشاهدته 0'), findsOneWidget);
+      expect(find.text('تمت مشاهدته 0'), findsOneWidget);
+      expect(find.text('لا أرغب بمشاهدته 0'), findsOneWidget);
+    },
+  );
 
   testWidgets('phone: library filter sits on the physical right of search', (
     tester,
   ) async {
     await _pump(tester, size: const Size(400, 860));
 
-    final search = tester.getRect(
-      find.byKey(const ValueKey('library-search')),
-    );
-    final filter = tester.getRect(
-      find.byKey(const ValueKey('library-filter')),
-    );
+    final search = tester.getRect(find.byKey(const ValueKey('library-search')));
+    final filter = tester.getRect(find.byKey(const ValueKey('library-filter')));
 
     expect(
       filter.center.dx,
@@ -277,7 +331,10 @@ void main() {
     await tester.enterText(find.byKey(const ValueKey('library-search')), 'vag');
     await tester.pump(const Duration(milliseconds: 600));
 
-    expect(find.byKey(const ValueKey('library-grid-manga-search')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('library-grid-manga-search')),
+      findsOneWidget,
+    );
     expect(find.text('Vagabond'), findsWidgets);
     expect(find.text('Berserk'), findsNothing);
     expect(
@@ -290,30 +347,40 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
   });
 
-  testWidgets('phone: filter picks anime manga or characters and hides empty tabs', (
-    tester,
-  ) async {
-    final storage = await _pump(tester, size: const Size(400, 860));
+  testWidgets(
+    'phone: filter picks anime manga or characters and hides empty tabs',
+    (tester) async {
+      final storage = await _pump(tester, size: const Size(400, 860));
 
-    await tester.tap(find.byKey(const ValueKey('library-filter')));
-    await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('library-filter')));
+      await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('library-section-anime')), findsOneWidget);
-    expect(find.byKey(const ValueKey('library-section-manga')), findsOneWidget);
-    expect(find.byKey(const ValueKey('library-section-characters')), findsOneWidget);
-    expect(find.text('العرض'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('library-section-anime')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('library-section-manga')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('library-section-characters')),
+        findsOneWidget,
+      );
+      expect(find.text('العرض'), findsNothing);
 
-    await tester.tap(find.byKey(const ValueKey('library-filter-hide-empty')));
-    await tester.pumpAndSettle();
-    await tester.tapAt(const Offset(200, 40));
-    await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('library-filter-hide-empty')));
+      await tester.pumpAndSettle();
+      await tester.tapAt(const Offset(200, 40));
+      await tester.pumpAndSettle();
 
-    expect(find.text('المفضلة 0'), findsNothing);
-    expect(find.text('أقرأها حاليًا 2'), findsOneWidget);
-    expect(find.text('أرغب بقراءتها 1'), findsOneWidget);
-    expect(storage.strings['library_shelves_hide_empty'], 'true');
-    await tester.pump(const Duration(milliseconds: 100));
-  });
+      expect(find.text('المفضلة 0'), findsNothing);
+      expect(find.text('أقرأها حاليًا 2'), findsOneWidget);
+      expect(find.text('أرغب بقراءتها 1'), findsOneWidget);
+      expect(storage.strings['library_shelves_hide_empty'], 'true');
+      await tester.pump(const Duration(milliseconds: 100));
+    },
+  );
 
   testWidgets('phone: characters section contains only favorite characters', (
     tester,
@@ -332,10 +399,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('الشخصيات المفضلة'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('library-characters')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('library-characters')), findsOneWidget);
     expect(find.textContaining('أشاهده حاليًا'), findsNothing);
     expect(find.textContaining('أقرأها حاليًا'), findsNothing);
   });
@@ -476,7 +540,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-        activeProviderProvider.overrideWithValue(null),
+          activeProviderProvider.overrideWithValue(null),
           storageServiceProvider.overrideWithValue(storage),
           animeWitcherAccountServiceProvider.overrideWithValue(account),
           watchHistoryProvider.overrideWith(() => _History(const [])),
@@ -492,9 +556,7 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    final pinnedTab = find.byKey(
-      const ValueKey('library-list-tab-pinned'),
-    );
+    final pinnedTab = find.byKey(const ValueKey('library-list-tab-pinned'));
     await tester.ensureVisible(pinnedTab);
     await tester.pumpAndSettle();
     await tester.tap(pinnedTab);
@@ -588,7 +650,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
   });
 
-  testWidgets('phone: typing a search does not read the library again', (
+  testWidgets('phone: search reads deferred local shelves only once', (
     tester,
   ) async {
     final storage = await _pump(tester, size: const Size(400, 860));
@@ -597,12 +659,20 @@ void main() {
     await tester.enterText(find.byKey(const ValueKey('library-search')), 'ber');
     await tester.pump(const Duration(milliseconds: 600));
     expect(find.text('Berserk'), findsWidgets);
+    final firstSearchReads = storage.reads;
+    expect(
+      firstSearchReads,
+      lessThanOrEqualTo(before + LibraryCategory.values.length),
+    );
     await tester.enterText(find.byKey(const ValueKey('library-search')), '');
     await tester.pump(const Duration(milliseconds: 600));
 
-    // The lists are kept: searching and clearing read nothing from storage,
-    // and newest-first needs no date looked up per title.
-    expect(storage.reads, before);
+    // Lazy shelf setup may read each local category exactly once the first
+    // time search spans them. Editing or clearing the query does not reload.
+    expect(storage.reads, firstSearchReads);
+    await tester.enterText(find.byKey(const ValueKey('library-search')), 'vag');
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(storage.reads, firstSearchReads);
     expect(storage.dateLookups, 0);
     await tester.pump(const Duration(milliseconds: 100));
   });

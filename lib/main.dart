@@ -336,7 +336,6 @@ class MyApp extends ConsumerStatefulWidget {
 class _MyAppState extends ConsumerState<MyApp>
     with WindowListener, WidgetsBindingObserver {
   DateTime? _lastForegroundAccountSyncAt;
-  DateTime? _lastForegroundRiftSyncAt;
 
   @override
   void initState() {
@@ -348,9 +347,10 @@ class _MyAppState extends ConsumerState<MyApp>
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      _lastForegroundRiftSyncAt = DateTime.now();
       unawaited(
-        ref.read(riftAutoSyncProvider).refresh().catchError((Object error) {
+        ref.read(riftAutoSyncProvider).refreshHistory().catchError((
+          Object error,
+        ) {
           if (kDebugMode) {
             debugPrint(
               '[AnimeRiftSync] Startup deferred (${error.runtimeType})',
@@ -393,25 +393,16 @@ class _MyAppState extends ConsumerState<MyApp>
       'memoryBytes': ProcessInfo.currentRss,
     });
     if (state != AppLifecycleState.resumed) return;
-    final resumedAt = DateTime.now();
-    // A quick task switch must not re-download every cloud shelf. The active
-    // list already refreshes itself on opening, like AnimeWitcher's library.
-    final fullRiftRefresh =
-        _lastForegroundRiftSyncAt == null ||
-        resumedAt.difference(_lastForegroundRiftSyncAt!) >=
-            const Duration(minutes: 5);
-    if (fullRiftRefresh) _lastForegroundRiftSyncAt = resumedAt;
+    // Resume flushes queued edits only. Startup/account linking fetches watch
+    // history separately, without downloading all six library shelves.
     unawaited(
-      (fullRiftRefresh
-              ? ref.read(riftAutoSyncProvider).refresh()
-              : ref.read(riftAutoSyncProvider).flushPending())
-          .catchError((Object error) {
-            if (kDebugMode) {
-              debugPrint(
-                '[AnimeRiftSync] Foreground deferred (${error.runtimeType})',
-              );
-            }
-          }),
+      ref.read(riftAutoSyncProvider).flushPending().catchError((Object error) {
+        if (kDebugMode) {
+          debugPrint(
+            '[AnimeRiftSync] Foreground deferred (${error.runtimeType})',
+          );
+        }
+      }),
     );
     final account = ref
         .read(animeWitcherAccountControllerProvider)

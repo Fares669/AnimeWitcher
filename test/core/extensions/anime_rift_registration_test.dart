@@ -42,6 +42,18 @@ ProviderContainer _container(_TestSettings settings) {
 }
 
 void main() {
+  test(
+    'rebuilding provider registry preserves Rift in-memory session owner',
+    () {
+      final container = _container(_TestSettings(null));
+      addTearDown(container.dispose);
+      final first = container.read(extensionManagerProvider).last;
+      container.invalidate(extensionManagerProvider);
+      final after = container.read(extensionManagerProvider).last;
+      expect(after, same(first));
+    },
+  );
+
   test('registers Anime Rift after the default native anime provider', () {
     final settings = _TestSettings(null);
     final container = _container(settings);

@@ -26,6 +26,11 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
   // Own transport: never forward the AnimeWitcher account's credentials.
   final AnimeRiftApiClient _api;
   final Dio? _externalDio;
+  // A pagination cursor belongs to this provider's linked account. Creating
+  // a new CloudSync for every shelf request would lose the next-page cursor.
+  late final AnimeRiftCloudSync _cloudSync = AnimeRiftCloudSync(
+    AnimeRiftCloudApiReader(_api),
+  );
   final _episodeNumbers = <String, int>{};
   // The comments GET contract has no verified per-viewer liked flag. Remember
   // only locally acknowledged reactions, scoped to the linked account, so
@@ -199,25 +204,32 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
   /// authenticated account's lists. Unknown server rows remain untouched.
   Future<AnimeRiftCloudImportResult> importCloudLibrary(
     StorageService storage,
-  ) =>
-      AnimeRiftCloudSync(AnimeRiftCloudApiReader(_api))
-          .importToLocal(storage: storage, hydrate: getDetails);
+  ) => _cloudSync.importToLocal(storage: storage, hydrate: getDetails);
+
+  AnimeRiftCloudListPage? cloudLibraryPage(LibraryCategory category) =>
+      _cloudSync.selectedListPage(category);
+
+  int? cloudLibraryTotal(LibraryCategory category) =>
+      _cloudSync.serverListTotal(category);
+
+  List<String>? cloudLibraryItemUrls(LibraryCategory category) =>
+      _cloudSync.selectedListUrls(category);
 
   /// Read exactly the chosen Rift shelf, rather than all account lists/history.
   Future<AnimeRiftCloudImportResult> importCloudLibraryCategory(
     StorageService storage,
-    LibraryCategory category,
-  ) => AnimeRiftCloudSync(AnimeRiftCloudApiReader(_api)).importSelectedList(
+    LibraryCategory category, {
+    bool loadNextPage = false,
+  }) => _cloudSync.importSelectedList(
     storage: storage,
     category: category,
+    loadNextPage: loadNextPage,
     hydrate: getDetails,
   );
 
   Future<AnimeRiftCloudImportResult> importCloudHistory(
     StorageService storage,
-  ) =>
-      AnimeRiftCloudSync(AnimeRiftCloudApiReader(_api))
-          .importHistoryToLocal(storage: storage, hydrate: getDetails);
+  ) => _cloudSync.importHistoryToLocal(storage: storage, hydrate: getDetails);
 
   final _homeSectionRows = <String, Map<dynamic, dynamic>>{};
   Future<Map<String, List<MultimediaItem>>>? _homeRequest;

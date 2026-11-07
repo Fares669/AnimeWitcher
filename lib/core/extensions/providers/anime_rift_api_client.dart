@@ -5,6 +5,7 @@ import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -427,7 +428,9 @@ class AnimeRiftApiClient {
   static const _maxRegistrationCooldownMs = _registrationCooldownSeconds * 1000;
   // Serializes registrations from separate client instances in the same app.
   static Future<void> _registrationGate = Future<void>.value();
-  // Native registration session keys live in memory, never in preferences.
+  // Device registration keys never belong in preferences. A short-lived
+  // encrypted secure-storage copy survives app restarts without sending a
+  // fresh registration request every time. This is NOT the user login token.
   static ({
     (String, String, String) identity,
     int succeededAt,
@@ -436,6 +439,7 @@ class AnimeRiftApiClient {
   })?
   _runtimeRegistration;
   static const _sessionKey = 'animerift.user.session.v1';
+  static const _deviceRegistrationKey = 'animerift.device.registration.v1';
   static const _defaultBase = 'https://gateway.embrassme.top/api/v4';
   static const _defaultSecureStorage = FlutterSecureStorage(
     aOptions: AndroidOptions(
@@ -473,6 +477,66 @@ class AnimeRiftApiClient {
 
   (String, String, String) get _registrationCacheIdentity =>
       (_base, _identity!['deviceId']!, config.signingKey);
+
+  String get _deviceRegistrationFingerprint => sha256
+      .convert(
+        utf8.encode(
+          jsonEncode([_base, _identity!['deviceId'], config.signingKey]),
+        ),
+      )
+      .toString();
+
+  @visibleForTesting
+  static void resetDeviceRegistrationMemoryForTesting() {
+    _runtimeRegistration = null;
+  }
+
+  Future<({String sessionKey, bool androidFallback})?>
+  _readSavedDeviceRegistration(int succeededAt) async {
+    try {
+      final raw = await _secureStorage.read(key: _deviceRegistrationKey);
+      if (raw == null) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map ||
+          decoded['version'] != 1 ||
+          decoded['succeededAt'] != succeededAt ||
+          decoded['fingerprint'] != _deviceRegistrationFingerprint ||
+          decoded['sessionKey'] is! String ||
+          !_validAccessToken(decoded['sessionKey'] as String) ||
+          decoded['androidFallback'] is! bool) {
+        return null;
+      }
+      return (
+        sessionKey: decoded['sessionKey'] as String,
+        androidFallback: decoded['androidFallback'] as bool,
+      );
+    } catch (_) {
+      // A locked/unavailable keychain must not prevent normal registration;
+      // do not discard a linked account token when this optional cache fails.
+      return null;
+    }
+  }
+
+  Future<void> _saveDeviceRegistration(
+    int succeededAt, {
+    required bool androidFallback,
+  }) async {
+    try {
+      await _secureStorage.write(
+        key: _deviceRegistrationKey,
+        value: jsonEncode({
+          'version': 1,
+          'fingerprint': _deviceRegistrationFingerprint,
+          'succeededAt': succeededAt,
+          'sessionKey': _deviceSessionKey,
+          'androidFallback': androidFallback,
+        }),
+      );
+    } catch (_) {
+      // If secure storage is unavailable, retain in-memory reuse only.
+      // Never fall back to unprotected SharedPreferences or a local log.
+    }
+  }
 
   static String _randomText(int length) {
     const alphabet =
@@ -638,6 +702,11 @@ class AnimeRiftApiClient {
         _deviceSessionKey = null;
         if (_runtimeRegistration?.identity == _registrationCacheIdentity) {
           _runtimeRegistration = null;
+        }
+        try {
+          await _secureStorage.delete(key: _deviceRegistrationKey);
+        } catch (_) {
+          // Never persist revoked device registration or interfere with errors.
         }
         // A local success timestamp is no longer evidence that the gateway
         // accepts this installation. Do not replay this request or change its
@@ -969,8 +1038,9 @@ class AnimeRiftApiClient {
           retryAfterSeconds: seconds,
         );
       }
-      // Recreated providers can share a recent runtime registration. A cold
-      // restart has no session key, so a saved timestamp alone cannot qualify.
+      // A stored timestamp alone must never qualify as a device session. A
+      // key must exist in runtime memory or encrypted platform storage and
+      // match this exact installation and server fingerprint.
       final succeededAt = prefs.getInt(_registrationSuccessKey);
       final runtime = _runtimeRegistration;
       if (_forceRegistration) {
@@ -996,25 +1066,38 @@ class AnimeRiftApiClient {
       }
       if (!_forceRegistration &&
           succeededAt != null &&
-          runtime != null &&
-          runtime.identity == _registrationCacheIdentity &&
-          runtime.succeededAt == succeededAt &&
           nowMs >= succeededAt &&
           nowMs - succeededAt < _registrationReuseMs) {
-        _deviceSessionKey = runtime.sessionKey;
-        final reusedFallback = runtime.androidFallback;
-        if (reusedFallback) {
-          _deviceDescriptor = AnimeRiftDeviceDescriptor.emulatedAndroid(
-            _identity!['buildId']!,
+        final saved =
+            runtime != null &&
+                runtime.identity == _registrationCacheIdentity &&
+                runtime.succeededAt == succeededAt
+            ? (
+                sessionKey: runtime.sessionKey,
+                androidFallback: runtime.androidFallback,
+              )
+            : await _readSavedDeviceRegistration(succeededAt);
+        if (saved != null) {
+          _deviceSessionKey = saved.sessionKey;
+          _runtimeRegistration = (
+            identity: _registrationCacheIdentity,
+            succeededAt: succeededAt,
+            sessionKey: saved.sessionKey,
+            androidFallback: saved.androidFallback,
           );
+          if (saved.androidFallback) {
+            _deviceDescriptor = AnimeRiftDeviceDescriptor.emulatedAndroid(
+              _identity!['buildId']!,
+            );
+          }
+          _authLog(
+            AnimeRiftAuthEvent.registrationReused,
+            mode: saved.androidFallback
+                ? AnimeRiftRegistrationMode.androidFallback
+                : _nativeMode(native),
+          );
+          return;
         }
-        _authLog(
-          AnimeRiftAuthEvent.registrationReused,
-          mode: reusedFallback
-              ? AnimeRiftRegistrationMode.androidFallback
-              : _nativeMode(native),
-        );
-        return;
       }
       final nativeMode = _nativeMode(native);
       var mode = nativeMode;
@@ -1106,6 +1189,10 @@ class AnimeRiftApiClient {
       );
       await prefs.remove(_registrationBlockedKey);
       await prefs.setString(_identityKey, jsonEncode(_identity));
+      await _saveDeviceRegistration(
+        completedAt,
+        androidFallback: mode == AnimeRiftRegistrationMode.androidFallback,
+      );
     });
     _registered = true;
   }

@@ -4,6 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
+import '../../../../core/account/account_providers.dart';
+import '../../../../core/extensions/extension_manager.dart';
+import '../../../../core/extensions/providers/anime_rift_provider.dart';
+import '../../../../core/storage/anime_rift_account_scope.dart';
 import '../../../../core/storage/library_category.dart';
 import '../../../../core/storage/library_repository.dart';
 import '../../../../core/storage/storage_service.dart';
@@ -16,6 +20,7 @@ import '../history_provider.dart';
 import '../library_lists.dart';
 import '../library_media_kind.dart';
 import '../library_provider.dart';
+import '../library_state.dart';
 import 'bookmarks_tab.dart';
 
 String _t(BuildContext context, String en, String ar) => ar;
@@ -66,6 +71,7 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
 
   final Map<(LibraryMediaKind, LibraryCategory), List<MultimediaItem>> _lists =
       <(LibraryMediaKind, LibraryCategory), List<MultimediaItem>>{};
+  final Map<(LibraryMediaKind, LibraryCategory), int> _tabCounts = {};
   Object? _listsFor;
 
   @override
@@ -78,6 +84,18 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
         : LibraryPhoneSection.anime;
     _selectedListKey = library.category.storageKey;
     Future<void>.microtask(_syncHistory);
+    Future<void>.microtask(() {
+      if (!mounted) return;
+      final state = ref.read(libraryProvider);
+      unawaited(
+        ref
+            .read(libraryProvider.notifier)
+            .refreshVisibleFromServer(
+              category: state.category,
+              mediaKind: state.mediaKind,
+            ),
+      );
+    });
   }
 
   Future<void> _syncHistory() async {
@@ -156,7 +174,11 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
     }
     for (final category in LibraryCategory.values) {
       if (!_prefs.shows(category)) continue;
-      final count = _list(repository, kind, category).length;
+      // The server total can exceed the number of loaded poster cards.
+      final count = _tabCounts.putIfAbsent(
+        (kind, category),
+        () => ref.read(libraryProvider.notifier).categoryCount(kind, category),
+      );
       if (_prefs.hideEmpty && count == 0) continue;
       tabs.add((
         key: category.storageKey,
@@ -199,7 +221,10 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
     }
     final category = tab.category!;
     final items = _list(repository, kind, category);
-    return items.isEmpty
+    final page = ref
+        .read(libraryProvider.notifier)
+        .pageInfo(kind, category, loadedLocalCount: items.length);
+    return items.isEmpty && !page.hasMore && !page.loading
         ? LibraryEmptyState(mediaKind: kind)
         : LibraryItemsGrid(
             key: ValueKey<String>(
@@ -207,6 +232,12 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
             ),
             items: items,
             heroPrefix: 'lib_${kind.storageKey}_${category.storageKey}',
+            totalCount: page.total,
+            hasMore: page.hasMore,
+            loadingMore: page.loading,
+            onLoadMore: () => ref
+                .read(libraryProvider.notifier)
+                .loadNextPage(mediaKind: kind, category: category),
           );
   }
 
@@ -229,6 +260,29 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
   @override
   Widget build(BuildContext context) {
     final library = ref.watch(libraryProvider);
+    final dataRevision = ref.watch(accountDataRevisionProvider);
+    final provider = ref.watch(activeProviderProvider);
+    final providerId = provider?.packageName;
+    final remoteTotals = provider is AnimeRiftProvider
+        ? Object.hashAll(
+            LibraryCategory.values.map(provider.cloudLibraryTotal),
+          )
+        : 0;
+    ref.listen(activeProviderProvider, (previous, next) {
+      if (previous?.packageName == next?.packageName) return;
+      _lists.clear();
+      _tabCounts.clear();
+      _listsFor = null;
+      final selected = ref.read(libraryProvider);
+      unawaited(
+        ref
+            .read(libraryProvider.notifier)
+            .refreshVisibleFromServer(
+              category: selected.category,
+              mediaKind: selected.mediaKind,
+            ),
+      );
+    });
     final history = ref.watch(watchHistoryProvider);
     final repository = ref.read(libraryRepositoryProvider);
     final colors = Theme.of(context).colorScheme;
@@ -236,9 +290,24 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
     return ListenableBuilder(
       listenable: _prefs,
       builder: (context, _) {
-        final listsFor = (library, _prefs.sort);
+        // A search query changes only the view, not the underlying library.
+        // Invalidate local shelf caches on actual data/account/page changes,
+        // not on harmless loading-state rebuilds.
+        final listsFor = (
+          library.category,
+          library.mediaKind,
+          _prefs.sort,
+          dataRevision,
+          providerId,
+          AnimeRiftLocalAccountScope.accountHash,
+          remoteTotals,
+          library is LibrarySuccess
+              ? Object.hashAll(library.items.map((item) => item.url))
+              : 0,
+        );
         if (listsFor != _listsFor) {
           _lists.clear();
+          _tabCounts.clear();
           _listsFor = listsFor;
         }
 

@@ -146,8 +146,9 @@ class _FakeRift extends AnimeRiftProvider {
   @override
   Future<AnimeRiftCloudImportResult> importCloudLibraryCategory(
     StorageService storage,
-    LibraryCategory category,
-  ) async {
+    LibraryCategory category, {
+    bool loadNextPage = false,
+  }) async {
     selectedPulls.add(category);
     return const AnimeRiftCloudImportResult(
       favorites: 0,

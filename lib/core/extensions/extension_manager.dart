@@ -15,9 +15,14 @@ part 'extension_manager.g.dart';
 /// Built-in provider registry for the standalone AnimeWitcher app.
 @Riverpod(keepAlive: true)
 class ExtensionManager extends _$ExtensionManager {
+  // Keep the same account/session owner across provider registry rebuilds.
+  // Re-creating it on settings/Dio changes temporarily discards the linked
+  // identity while a second secure-storage restore is still pending.
+  final AnimeRiftProvider _rift = AnimeRiftProvider();
+
   @override
   List<AnimeWitcherProvider> build() {
-    final rift = AnimeRiftProvider();
+    final rift = _rift;
     // Restore the independent Rift identity before the user opens settings.
     // Refresh visible local library/history when secure storage selects a
     // different account partition. Failure remains visible in account settings.

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 
 import '../../../core/providers/device_info_provider.dart';
+import '../../../core/extensions/extension_manager.dart';
 import '../../../core/storage/library_category.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../../core/utils/layout_constants.dart';
@@ -45,6 +46,12 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   void initState() {
     super.initState();
     _prefs = LibraryShelfPrefs(ref.read(storageServiceProvider));
+    // Desktop's first opened shelf has the same bounded server query as
+    // phones. Other shelves load only after the user selects them.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(ref.read(libraryProvider.notifier).refreshVisibleFromServer());
+    });
   }
 
   @override
@@ -71,6 +78,13 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(activeProviderProvider, (previous, next) {
+      if (previous?.packageName != next?.packageName) {
+        unawaited(
+          ref.read(libraryProvider.notifier).refreshVisibleFromServer(),
+        );
+      }
+    });
     final profile = ref.watch(deviceProfileProvider).asData?.value;
     final isTv = profile?.isTv == true || context.isTv;
     final isWidescreen = isTv || context.isTabletOrLarger;
@@ -97,8 +111,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
           for (final listCategory in LibraryCategory.values)
             listCategory: ref
                 .read(libraryProvider.notifier)
-                .itemsForCategory(listKind, listCategory)
-                .length,
+                .categoryCount(listKind, listCategory),
         },
     };
     final recentCount = libraryRecentFor(

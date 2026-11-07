@@ -199,6 +199,36 @@ final class _Firestore extends FirestoreRestClient {
     );
   }
 
+  final List<({String path, String? type, FirestoreDocument? cursor})>
+  pageRequests = [];
+
+  @override
+  Future<List<FirestoreDocument>> queryLibraryDocumentsPage(
+    String collectionPath,
+    String idToken, {
+    String? type,
+    FirestoreDocument? startAfter,
+    int limit = 30,
+  }) async {
+    pageRequests.add((path: collectionPath, type: type, cursor: startAfter));
+    final docs = (collections[collectionPath] ?? [])
+        .where((d) => type == null || d.fields['type'] == type)
+        .toList();
+    final start = startAfter == null
+        ? 0
+        : docs.indexWhere((d) => d.path == startAfter.path) + 1;
+    return docs.skip(start).take(limit).toList();
+  }
+
+  @override
+  Future<int> countLibraryDocuments(
+    String collectionPath,
+    String idToken, {
+    String? type,
+  }) async => (collections[collectionPath] ?? [])
+      .where((d) => type == null || d.fields['type'] == type)
+      .length;
+
   @override
   Future<void> transformArrayFieldValues(
     String path, {
@@ -294,6 +324,99 @@ FirestoreDocument _remote({
 }) => FirestoreDocument(id: path.split('/').last, path: path, fields: fields);
 
 void main() {
+  test(
+    'display page returns 30 shelf items and total without reconciliation',
+    () async {
+      final firestore = _Firestore();
+      final storage = _Storage();
+      final local = _manga();
+      await storage.addToLibrary(
+        local,
+        category: 'completed',
+        favorite: true,
+        updatedAt: 10,
+        syncedAccountUid: 'uid-1',
+        syncedAt: 10,
+      );
+      firestore.collections['users/profile-1/user_manga'] = List.generate(
+        65,
+        (i) => _remote(
+          path: 'users/profile-1/user_manga/m$i',
+          fields: {
+            'type': 'watching',
+            'date': DateTime.utc(2026, 1, 1),
+            'animewitcher_item': {
+              'title': 'Manga $i',
+              'url': 'https://animewitcher.com/manga/m$i',
+              'posterUrl': '',
+              'type': 'manga',
+            },
+          },
+        ),
+      );
+      final service = await _signedInService(firestore, storage: storage);
+      final first = await service.fetchLibraryPage(
+        category: LibraryCategory.watching,
+        manga: true,
+      );
+      expect(first.items, hasLength(30));
+      expect(first.total, 65);
+      expect(first.hasMore, isTrue);
+      final second = await service.fetchLibraryPage(
+        category: LibraryCategory.watching,
+        manga: true,
+        cursor: first.nextCursor,
+      );
+      expect(second.items, hasLength(30));
+      expect(second.items.first.title, 'Manga 30');
+      final last = await service.fetchLibraryPage(
+        category: LibraryCategory.watching,
+        manga: true,
+        cursor: second.nextCursor,
+      );
+      expect(last.items, hasLength(5));
+      expect(last.hasMore, isFalse);
+      expect(firestore.pageRequests, hasLength(3));
+      expect(firestore.queries, isEmpty);
+      expect(firestore.writes, isEmpty);
+      expect(firestore.deletes, isEmpty);
+      expect(storage.library.keys, [local.url]);
+      expect(storage.categories[local.url], 'completed');
+      expect(storage.favorites[local.url], isTrue);
+      await expectLater(
+        service.fetchLibraryPage(
+          category: LibraryCategory.completed,
+          manga: true,
+          cursor: first.nextCursor,
+        ),
+        throwsArgumentError,
+      );
+    },
+  );
+
+  test(
+    'automatic sync uploads dirty library entries without snapshot reads',
+    () async {
+      final firestore = _Firestore();
+      final storage = _Storage();
+      await storage.addToLibrary(
+        _manga(),
+        category: 'watching',
+        updatedAt: 20,
+        syncedAccountUid: 'uid-1',
+        syncedAt: 10,
+      );
+      final service = await _signedInService(firestore, storage: storage);
+      await service.syncAll(includeLibrary: false);
+      expect(firestore.queries, isEmpty);
+      expect(
+        firestore.writes.any((w) => w.path == 'users/profile-1/user_manga/m1'),
+        isTrue,
+      );
+      expect(storage.library, hasLength(1));
+    },
+  );
+
   test(
     'syncAll records five successful stages with only safe fields',
     () async {

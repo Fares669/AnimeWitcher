@@ -23,6 +23,40 @@ import 'firebase_functions_rest_client.dart';
 import 'firebase_storage_rest_client.dart';
 import 'firestore_rest_client.dart';
 
+/// Opaque, account- and shelf-bound position in a remote library.
+class AnimeWitcherLibraryCursor {
+  const AnimeWitcherLibraryCursor._(
+    this.document,
+    this.uid,
+    this.profileId,
+    this.generation,
+    this.category,
+    this.manga,
+    this.total,
+    this.loaded,
+  );
+  final FirestoreDocument document;
+  final String uid;
+  final String profileId;
+  final int generation;
+  final LibraryCategory category;
+  final bool manga;
+  final int total;
+  final int loaded;
+}
+
+class AnimeWitcherLibraryPage {
+  const AnimeWitcherLibraryPage({
+    required this.items,
+    required this.total,
+    required this.nextCursor,
+  });
+  final List<MultimediaItem> items;
+  final int total;
+  final AnimeWitcherLibraryCursor? nextCursor;
+  bool get hasMore => nextCursor != null;
+}
+
 class AnimeWitcherAccountService {
   AnimeWitcherAccountService({
     required StorageService storage,
@@ -216,7 +250,7 @@ class AnimeWitcherAccountService {
         return snapshot;
       }
       _syncNewAuthEmailBestEffort(refreshedSession);
-      await syncAll();
+      await syncAll(includeLibrary: false);
     } on AnimeWitcherAccountException catch (error) {
       if (error.code == 'invalid-session' ||
           error.code == 'account-not-found' ||
@@ -713,7 +747,7 @@ class AnimeWitcherAccountService {
       rethrow;
     }
     try {
-      await syncAll();
+      await syncAll(includeLibrary: false);
     } catch (error) {
       // Authentication and profile loading have already succeeded. A
       // temporary sync failure must not log the user out; manual sync retries
@@ -1916,7 +1950,7 @@ class AnimeWitcherAccountService {
     }
   }
 
-  Future<void> syncAll() {
+  Future<void> syncAll({bool includeLibrary = true}) {
     if (!isSignedIn) return Future<void>.value();
     final active = _syncInFlight;
     if (active != null) return active;
@@ -1924,8 +1958,18 @@ class AnimeWitcherAccountService {
 
     final operation = () async {
       await Future.wait<void>(<Future<void>>[
-        _observeSyncStage('animeLibrary', _syncLibrary),
-        _observeSyncStage('mangaLibrary', _syncMangaLibrary),
+        _observeSyncStage(
+          'animeLibrary',
+          includeLibrary
+              ? _syncLibrary
+              : () => _uploadPendingLibraryChanges(manga: false),
+        ),
+        _observeSyncStage(
+          'mangaLibrary',
+          includeLibrary
+              ? _syncMangaLibrary
+              : () => _uploadPendingLibraryChanges(manga: true),
+        ),
         _observeSyncStage('watchedEpisodes', _syncWatchedEpisodes),
         _observeSyncStage('watchedManga', _syncWatchedMangaChapters),
         _observeSyncStage('continueWatching', _syncContinueWatching),
@@ -1941,6 +1985,95 @@ class AnimeWitcherAccountService {
     return operation.whenComplete(() {
       if (identical(_syncInFlight, operation)) _syncInFlight = null;
     });
+  }
+
+  /// Reads one shelf without interpreting absent documents as deletions or
+  /// changing local category/favorite state. Full reconciliation stays explicit.
+  Future<AnimeWitcherLibraryPage> fetchLibraryPage({
+    required LibraryCategory category,
+    bool manga = false,
+    AnimeWitcherLibraryCursor? cursor,
+  }) async {
+    final profile = _profile;
+    if (profile == null || !isSignedIn) {
+      throw const AnimeWitcherAccountException(
+        'not-signed-in',
+        'Sign in to load the library.',
+      );
+    }
+    final generation = _sessionGeneration;
+    if (cursor != null &&
+        (cursor.uid != profile.uid ||
+            cursor.profileId != profile.documentId ||
+            cursor.generation != generation ||
+            cursor.category != category ||
+            cursor.manga != manga)) {
+      throw ArgumentError('Cursor belongs to another account or shelf');
+    }
+    final favorite = category == LibraryCategory.favorite;
+    final collection =
+        '${favorite ? 'fav' : 'user'}_${manga ? 'manga' : 'anime'}';
+    final path = 'users/${profile.documentId}/$collection';
+    final type = favorite ? null : _cloudType(category);
+    final total =
+        cursor?.total ??
+        await _authenticated<int>(
+          (token) => _firestore.countLibraryDocuments(path, token, type: type),
+        );
+    final docs = await _authenticated(
+      (token) => _firestore.queryLibraryDocumentsPage(
+        path,
+        token,
+        type: type,
+        startAfter: cursor?.document,
+        limit: 30,
+      ),
+    );
+    final items = <MultimediaItem>[];
+    for (final doc in docs) {
+      if (!_isCurrentProfile(profile) || generation != _sessionGeneration) {
+        throw const AnimeWitcherAccountException(
+          'session-changed',
+          'The active account changed.',
+        );
+      }
+      final id = manga
+          ? (favorite
+                ? _mangaIdFromFavorite(doc)
+                : _mangaIdFromListDocument(doc))
+          : (favorite
+                ? _animeIdFromFavorite(doc)
+                : _animeIdFromListDocument(doc));
+      if (id == null) continue;
+      final item = manga
+          ? (_mangaItemFromRemoteDocument(doc, id) ?? await _itemForMangaId(id))
+          : (_itemFromCompact(doc.fields['animewitcher_item']) ??
+                await _itemForAnimeId(id));
+      if (item != null) items.add(item);
+    }
+    if (!_isCurrentProfile(profile) || generation != _sessionGeneration) {
+      throw const AnimeWitcherAccountException(
+        'session-changed',
+        'The active account changed.',
+      );
+    }
+    return AnimeWitcherLibraryPage(
+      items: List.unmodifiable(items),
+      total: total,
+      nextCursor:
+          docs.length < 30 || (cursor?.loaded ?? 0) + docs.length >= total
+          ? null
+          : AnimeWitcherLibraryCursor._(
+              docs.last,
+              profile.uid,
+              profile.documentId,
+              generation,
+              category,
+              manga,
+              total,
+              (cursor?.loaded ?? 0) + docs.length,
+            ),
+    );
   }
 
   /// Fetches only the cloud-backed library collection for the visible media
@@ -2345,6 +2478,42 @@ class AnimeWitcherAccountService {
   // -------------------------------------------------------------------------
   // Anime lists
   // -------------------------------------------------------------------------
+
+  /// Startup pushes offline edits, but does not read whole remote shelves.
+  Future<void> _uploadPendingLibraryChanges({required bool manga}) async {
+    final profile = _profile!;
+    await _pendingStorageWrite;
+    if (manga) {
+      await _flushPendingMangaLibraryDeletes(profile);
+    } else {
+      await _flushPendingLibraryDeletes(profile);
+    }
+    for (final item in _storage.getLibraryItems()) {
+      if (!_isCurrentProfile(profile)) return;
+      if (item.provider == animeRiftProviderId ||
+          (item.contentType == MultimediaContentType.manga) != manga)
+        continue;
+      final owner = _storage.getLibraryItemSyncedAccountUid(item.url);
+      if (owner != null && owner != profile.uid) continue;
+      final synced = _storage.getLibraryItemSyncedAt(item.url);
+      if (owner == profile.uid &&
+          _storage.getLibraryItemUpdatedAt(item.url) <= synced)
+        continue;
+      if (manga) {
+        await saveMangaLibraryItem(
+          item,
+          _localLibraryCategory(item.url),
+          favorite: _storage.isLibraryItemFavorite(item.url),
+        );
+      } else {
+        await saveLibraryItem(
+          item,
+          _localLibraryCategory(item.url),
+          favorite: _storage.isLibraryItemFavorite(item.url),
+        );
+      }
+    }
+  }
 
   Future<void> _syncLibrary() async {
     final profile = _profile!;

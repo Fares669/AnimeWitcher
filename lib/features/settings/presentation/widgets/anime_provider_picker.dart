@@ -87,7 +87,7 @@ class AnimeProviderSettingsTile extends ConsumerWidget {
                                     unawaited(
                                       ref
                                           .read(riftAutoSyncProvider)
-                                          .refresh()
+                                          .flushPending()
                                           .catchError((Object _) {
                                             // The local lists remain usable
                                             // while Rift is offline.
@@ -176,7 +176,7 @@ class _AnimeRiftAccountTileState extends ConsumerState<_AnimeRiftAccountTile> {
 
   void _refreshCloudAutomatically() {
     unawaited(
-      ref.read(riftAutoSyncProvider).refresh().catchError((Object _) {
+      ref.read(riftAutoSyncProvider).refreshHistory().catchError((Object _) {
         // Offline accounts keep their local data; the coordinator retries on
         // the next startup, local change, or foreground activation.
       }),
