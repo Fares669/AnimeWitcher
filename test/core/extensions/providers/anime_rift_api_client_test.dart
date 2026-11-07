@@ -1289,6 +1289,99 @@ void main() {
     expect(restarted.accountIdentity?.id, 'fixture-preserved-account');
   });
 
+  test('Firebase installation ID renewal must not log out a linked Rift account on cold restart', () async {
+    final suffix = 'APA91b${List.filled(80, 'a').join()}';
+    SharedPreferences.setMockInitialValues({
+      'animerift.api.installation.v1': jsonEncode({
+        'fid': 'before-firebase-refresh',
+        'deviceId': 'before-firebase-refresh:$suffix',
+        'buildId': 'original-build',
+      }),
+    });
+    var firebaseRenewals = 0;
+    var codeSignIns = 0;
+    final dio = fixtureDio((request) {
+      if (request.uri.host == 'firebaseinstallations.googleapis.com') {
+        firebaseRenewals++;
+        return reply(request, {
+          'fid': 'renewed-fid-$firebaseRenewals',
+          'authToken': {'token': 'fake-firebase-auth'},
+        });
+      }
+      if (request.uri.host == 'firebaseremoteconfig.googleapis.com') {
+        return reply(request, {'entries': <String, String>{}});
+      }
+      if (request.uri.path.endsWith('/auth/register/device')) {
+        return reply(request, {'sessionKey': 'fake-device-registration'}, 201);
+      }
+      if (request.uri.path.endsWith('/auth/sign-in/with-code')) {
+        codeSignIns++;
+        return reply(request, {
+          'items': {
+            'profile': {'_id': 'linked-account'},
+            'token': 'saved-user-credential',
+          },
+        });
+      }
+      if (request.uri.path.endsWith('/favorite/anime/all')) {
+        expect(
+          request.headers['authorization'],
+          'Bearer saved-user-credential',
+          reason: 'The restored credential must still authorize account reads',
+        );
+      }
+      return reply(request, {'items': <Object>[]});
+    });
+
+    final first = AnimeRiftApiClient(config: fixtureConfig, dio: dio);
+    await first.signInWithCode('one-time-code');
+    expect(first.isAccountLinked, true);
+    expect(codeSignIns, 1);
+
+    // A later launch refreshes Firebase and persists another FID, while the
+    // linked user credential is still bound to the previous device ID.
+    final second = AnimeRiftApiClient(config: fixtureConfig, dio: dio);
+    expect(await second.restoreAccountSession(), true);
+    await second.request('library/home_content', 'ANIME.LIBRARY.HOME_CONTENT');
+    expect(firebaseRenewals, 2);
+
+    // This is the exact failure from app(6).jsonl: installationMismatch on
+    // the next cold start, despite no explicit logout or server rejection.
+    final third = AnimeRiftApiClient(config: fixtureConfig, dio: dio);
+    expect(await third.restoreAccountSession(), true);
+    await third.fetchFavoriteAnime();
+    expect(third.accountIdentity?.id, 'linked-account');
+    expect(codeSignIns, 1, reason: 'A new sign-in code must not be necessary');
+    expect(secureValues.containsKey('animerift.user.session.v1'), true);
+  });
+
+  test(
+    'Firebase FID reuse never admits a different installation random suffix',
+    () async {
+      final own = 'APA91b${List.filled(80, 'a').join()}';
+      final foreign = 'APA91b${List.filled(80, 'b').join()}';
+      SharedPreferences.setMockInitialValues({
+        'animerift.api.installation.v1': jsonEncode({
+          'fid': 'shared-fid',
+          'deviceId': 'shared-fid:$own',
+          'buildId': 'test-build',
+        }),
+      });
+      final foreignCredential = jsonEncode({
+        'version': 1,
+        'deviceId': 'shared-fid:$foreign',
+        'token': 'another-installation-user-token',
+        'accountId': 'another-user',
+      });
+      secureValues['animerift.user.session.v1'] = foreignCredential;
+      final client = AnimeRiftApiClient(config: fixtureConfig);
+      expect(await client.restoreAccountSession(), false);
+      expect(client.isAccountLinked, false);
+      expect(AnimeRiftLocalAccountScope.accountHash, isNull);
+      expect(secureValues['animerift.user.session.v1'], foreignCredential);
+    },
+  );
+
   test('legacy credential remains linked in its own token-derived partition', () async {
     final client = AnimeRiftApiClient(config: fixtureConfig);
     expect(await client.restoreAccountSession(), isFalse);
