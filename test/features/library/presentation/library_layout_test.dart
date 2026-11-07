@@ -189,6 +189,53 @@ Future<_LibraryStorage> _pump(
 }
 
 void main() {
+  testWidgets('known three-item shelf never requests a redundant extra page', (
+    tester,
+  ) async {
+    var requests = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: LibraryItemsGrid(
+            items: [_item('one'), _item('two'), _item('three')],
+            totalCount: 3,
+            hasMore: true, // Simulates a stale cursor/placeholder flag.
+            onLoadMore: () async => requests++,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(requests, 0);
+    expect(find.text('3 / 3'), findsNothing);
+    expect(find.byKey(const ValueKey('library-lazy-loading-0')), findsNothing);
+  });
+
+  testWidgets('page of 30 can fetch more when server total is 31', (
+    tester,
+  ) async {
+    var requests = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: LibraryItemsGrid(
+            items: [for (var i = 0; i < 30; i++) _item('Anime $i')],
+            totalCount: 31,
+            hasMore: true,
+            onLoadMore: () async => requests++,
+          ),
+        ),
+      ),
+    );
+    await tester.scrollUntilVisible(
+      find.text('30 / 31'),
+      400,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pump();
+    expect(requests, greaterThan(0));
+  });
+
   testWidgets(
     'underfilled library requests next page without scroll and only once',
     (tester) async {

@@ -194,6 +194,7 @@ class Library extends _$Library {
   }) {
     final page = _page(kind, category);
     final localCount = loadedLocalCount ?? page.cachedLocalCount;
+    final total = _knownTotal(kind, category);
     final count =
         page.receivedRemotePage &&
             !(kind == LibraryMediaKind.anime &&
@@ -201,15 +202,17 @@ class Library extends _$Library {
                     animeRiftProviderId)
         ? page.nativeItems.length
         : localCount;
+    final loaded = count.clamp(0, page.visibleLimit);
     return LibraryShelfPageInfo(
-      loaded: count.clamp(0, page.visibleLimit),
-      total: page.total,
+      loaded: loaded,
+      total: total,
       hasMore:
-          page.hasMore ||
-          page.loading ||
-          page.loadFailed ||
-          (!page.receivedRemotePage &&
-              page.cachedLocalCount > page.visibleLimit),
+          (total == null || loaded < total) &&
+          (page.hasMore ||
+              page.loading ||
+              page.loadFailed ||
+              (!page.receivedRemotePage &&
+                  page.cachedLocalCount > page.visibleLimit)),
       loading: page.loading,
       loadFailed: page.loadFailed,
     );
@@ -220,12 +223,7 @@ class Library extends _$Library {
     final rift =
         kind == LibraryMediaKind.anime &&
         provider?.packageName == animeRiftProviderId;
-    final confirmed =
-        pageInfo(kind, category).total ??
-        _confirmedCounts[_countsKey(kind)]?[category] ??
-        (rift && provider is AnimeRiftProvider
-            ? provider.cloudLibraryTotal(category)
-            : null);
+    final confirmed = _knownTotal(kind, category);
     if (confirmed != null) return confirmed;
     final linked = rift
         ? AnimeRiftLocalAccountScope.accountHash != null
@@ -233,6 +231,15 @@ class Library extends _$Library {
     // While fetching overview/Firestore counts, don't turn unknown into zero.
     if (linked) return null;
     return _localItems(kind, category).length;
+  }
+
+  int? _knownTotal(LibraryMediaKind kind, LibraryCategory category) {
+    final provider = ref.read(activeProviderProvider);
+    return _page(kind, category).total ??
+        _confirmedCounts[_countsKey(kind)]?[category] ??
+        (kind == LibraryMediaKind.anime && provider is AnimeRiftProvider
+            ? provider.cloudLibraryTotal(category)
+            : null);
   }
 
   @override
@@ -396,6 +403,12 @@ class Library extends _$Library {
     }
     if (!page.receivedRemotePage) {
       await refreshVisibleFromServer(category: category, mediaKind: mediaKind);
+      return;
+    }
+    final total = _knownTotal(mediaKind, category);
+    final loaded = isRift ? page.visibleLimit : page.nativeItems.length;
+    if (total != null && loaded >= total) {
+      page.hasMore = false;
       return;
     }
     if (!page.hasMore) return;

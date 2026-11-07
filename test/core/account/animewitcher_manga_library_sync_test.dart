@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:animewitcher/core/account/animewitcher_account_models.dart';
@@ -161,6 +162,8 @@ final class _Firestore extends FirestoreRestClient {
       <String, List<FirestoreDocument>>{};
   final Map<String, FirestoreDocument> documents =
       <String, FirestoreDocument>{};
+  Completer<void>? blockDetails;
+  final List<String> detailRequests = <String>[];
 
   @override
   Future<void> setDocumentWithServerTimestamps(
@@ -265,8 +268,11 @@ final class _Firestore extends FirestoreRestClient {
   }
 
   @override
-  Future<FirestoreDocument?> getDocument(String path, String idToken) async =>
-      documents[path];
+  Future<FirestoreDocument?> getDocument(String path, String idToken) async {
+    detailRequests.add(path);
+    if (blockDetails != null) await blockDetails!.future;
+    return documents[path];
+  }
 }
 
 Future<AnimeWitcherAccountService> _signedInService(
@@ -324,6 +330,49 @@ FirestoreDocument _remote({
 }) => FirestoreDocument(id: path.split('/').last, path: path, fields: fields);
 
 void main() {
+  test(
+    'legacy library details are requested concurrently, not one by one',
+    () async {
+      final firestore = _Firestore()..blockDetails = Completer<void>();
+      firestore.collections['users/profile-1/user_anime'] = [
+        for (var i = 0; i < 3; i++)
+          _remote(
+            path: 'users/profile-1/user_anime/a$i',
+            fields: {'type': 'watching', 'date': DateTime.utc(2026, 1, 1)},
+          ),
+      ];
+      for (var i = 0; i < 3; i++) {
+        firestore.documents['anime_list/a$i'] = _remote(
+          path: 'anime_list/a$i',
+          fields: {'name': 'Anime $i', 'poster_uri': ''},
+        );
+      }
+      final service = await _signedInService(firestore);
+      final loading = service.fetchLibraryPage(
+        category: LibraryCategory.watching,
+      );
+      try {
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        expect(
+          firestore.detailRequests,
+          hasLength(3),
+          reason: 'Old APK starts all missing-detail tasks together',
+        );
+      } finally {
+        firestore.blockDetails!.complete();
+      }
+      final page = await loading;
+      expect(page.items.map((item) => item.title), [
+        'Anime 0',
+        'Anime 1',
+        'Anime 2',
+      ]);
+      expect(page.total, 3);
+      expect(page.hasMore, isFalse);
+      expect(firestore.pageRequests, hasLength(1));
+    },
+  );
+
   test(
     'display page returns 30 shelf items and total without reconciliation',
     () async {

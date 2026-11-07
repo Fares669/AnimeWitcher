@@ -126,9 +126,11 @@ class LibraryItemsGrid extends StatelessWidget {
     final double maxCardWidth = isDesktop ? 240.0 : 150.0;
     final colors = Theme.of(context).colorScheme;
 
+    final canLoadMore =
+        hasMore && (totalCount == null || items.length < totalCount!);
     return _LoadUnderfilledPage(
       loadedCount: items.length,
-      hasMore: hasMore,
+      hasMore: canLoadMore,
       loading: loadingMore,
       failed: loadFailed,
       onLoadMore: onLoadMore,
@@ -137,7 +139,7 @@ class LibraryItemsGrid extends StatelessWidget {
           onNotification: (notification) {
             if (notification is ScrollUpdateNotification &&
                 notification.metrics.axis == Axis.vertical &&
-                hasMore &&
+                canLoadMore &&
                 !loadingMore &&
                 !loadFailed &&
                 onLoadMore != null &&
@@ -171,9 +173,9 @@ class LibraryItemsGrid extends StatelessWidget {
             ),
             itemCount:
                 items.length +
-                (loadingMore
+                (loadingMore && canLoadMore
                     ? 3
-                    : hasMore
+                    : canLoadMore
                     ? 1
                     : 0),
             itemBuilder: (context, index) {

@@ -2068,28 +2068,31 @@ class AnimeWitcherAccountService {
         limit: 30,
       ),
     );
-    final items = <MultimediaItem>[];
-    for (final doc in docs) {
-      if (!_isCurrentProfile(profile) || generation != _sessionGeneration) {
-        throw const AnimeWitcherAccountException(
-          'session-changed',
-          'The active account changed.',
-        );
-      }
-      final id = manga
-          ? (favorite
-                ? _mangaIdFromFavorite(doc)
-                : _mangaIdFromListDocument(doc))
-          : (favorite
-                ? _animeIdFromFavorite(doc)
-                : _animeIdFromListDocument(doc));
-      if (id == null) continue;
-      final item = manga
-          ? (_mangaItemFromRemoteDocument(doc, id) ?? await _itemForMangaId(id))
-          : (_itemFromCompact(doc.fields['animewitcher_item']) ??
-                await _itemForAnimeId(id));
-      if (item != null) items.add(item);
-    }
+    // Like the original APK, resolve legacy entries concurrently. Modern
+    // shelf documents already contain compact artwork and need no extra GET.
+    final resolved = await Future.wait(
+      docs.map((doc) async {
+        if (!_isCurrentProfile(profile) || generation != _sessionGeneration) {
+          throw const AnimeWitcherAccountException(
+            'session-changed',
+            'The active account changed.',
+          );
+        }
+        final id = manga
+            ? (favorite
+                  ? _mangaIdFromFavorite(doc)
+                  : _mangaIdFromListDocument(doc))
+            : (favorite
+                  ? _animeIdFromFavorite(doc)
+                  : _animeIdFromListDocument(doc));
+        if (id == null) return null;
+        return manga
+            ? (_mangaItemFromRemoteDocument(doc, id) ??
+                  await _itemForMangaId(id))
+            : (_itemFromCompact(doc.fields['animewitcher_item']) ??
+                  await _itemForAnimeId(id));
+      }),
+    );
     if (!_isCurrentProfile(profile) || generation != _sessionGeneration) {
       throw const AnimeWitcherAccountException(
         'session-changed',
@@ -2097,7 +2100,7 @@ class AnimeWitcherAccountService {
       );
     }
     return AnimeWitcherLibraryPage(
-      items: List.unmodifiable(items),
+      items: List.unmodifiable(resolved.whereType<MultimediaItem>()),
       total: total,
       nextCursor:
           docs.length < 30 || (cursor?.loaded ?? 0) + docs.length >= total
