@@ -117,12 +117,15 @@ final class _History extends WatchHistory {
   _History(this.items);
 
   final List<HistoryItem> items;
+  int serverRefreshes = 0;
 
   @override
   List<HistoryItem> build() => items;
 
   @override
-  Future<void> refreshFromServer() async {}
+  Future<void> refreshFromServer() async {
+    serverRefreshes++;
+  }
 }
 
 Future<_LibraryStorage> _pump(
@@ -189,6 +192,34 @@ Future<_LibraryStorage> _pump(
 }
 
 void main() {
+  testWidgets('Rift library opens watching shelf without fetching history', (
+    tester,
+  ) async {
+    await _pump(tester, size: const Size(400, 860), kind: 'anime', rift: true);
+    await tester.pump();
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(LibraryPhoneShelves)),
+    );
+    final history = container.read(watchHistoryProvider.notifier) as _History;
+    expect(
+      history.serverRefreshes,
+      0,
+      reason: 'History GET belongs to the Recent tab, not every list open',
+    );
+  });
+
+  testWidgets('native library keeps its existing history refresh', (
+    tester,
+  ) async {
+    await _pump(tester, size: const Size(400, 860), kind: 'anime');
+    await tester.pump();
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(LibraryPhoneShelves)),
+    );
+    final history = container.read(watchHistoryProvider.notifier) as _History;
+    expect(history.serverRefreshes, 1);
+  });
+
   testWidgets('known three-item shelf never requests a redundant extra page', (
     tester,
   ) async {

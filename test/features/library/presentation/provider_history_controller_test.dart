@@ -4,6 +4,10 @@ import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/storage/provider_local_library.dart';
+import 'package:animewitcher/core/storage/anime_rift_account_scope.dart';
+import 'package:animewitcher/core/storage/anime_rift_auto_sync.dart';
+import 'package:animewitcher/core/storage/anime_rift_cloud_sync.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
 import 'package:animewitcher/core/storage/secure_token_storage.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/library/presentation/history_provider.dart';
@@ -83,7 +87,71 @@ class _Active extends ActiveProvider {
   Future<void> set(AnimeWitcherProvider? provider) async => state = provider;
 }
 
+class _CountingRift extends AnimeRiftProvider {
+  int fullImports = 0;
+  int historyImports = 0;
+
+  @override
+  Future<bool> restoreAccountSession() async => true;
+
+  @override
+  Future<AnimeRiftCloudImportResult> importCloudLibrary(
+    StorageService storage,
+  ) async {
+    fullImports++;
+    return const AnimeRiftCloudImportResult(
+      favorites: 0,
+      categories: 0,
+      history: 0,
+      skipped: 0,
+    );
+  }
+
+  @override
+  Future<AnimeRiftCloudImportResult> importCloudHistory(
+    StorageService storage,
+  ) async {
+    historyImports++;
+    return const AnimeRiftCloudImportResult(
+      favorites: 0,
+      categories: 0,
+      history: 0,
+      skipped: 0,
+    );
+  }
+}
+
 void main() {
+  test(
+    'Rift continue-watching refresh fetches history, not six cloud shelves',
+    () async {
+      AnimeRiftLocalAccountScope.activate('history-only');
+      addTearDown(AnimeRiftLocalAccountScope.reset);
+      final storage = _Storage();
+      final rift = _CountingRift();
+      final coordinator = AnimeRiftAutoSyncCoordinator(
+        storage: storage,
+        activeRift: () => rift,
+      );
+      final container = ProviderContainer(
+        overrides: [
+          storageServiceProvider.overrideWithValue(storage),
+          activeProviderProvider.overrideWith(() => _Active(rift)),
+          riftAutoSyncProvider.overrideWithValue(coordinator),
+        ],
+      );
+      addTearDown(() {
+        container.dispose();
+        coordinator.dispose();
+      });
+      await container
+          .read(continueWatchingProvider.notifier)
+          .refreshFromServer();
+      expect(rift.historyImports, 1);
+      expect(rift.fullImports, 0);
+    },
+  );
+
   test(
     'history and continue watching follow source without cross-account sync',
     () async {

@@ -204,9 +204,14 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
   /// Shows verified server-side list totals without changing local library
   /// rows. Importing anime records requires a confirmed account list schema.
   Future<Map<String, int>> fetchCloudLibraryCounts() async {
-    final response = await _api.fetchMyListOverview();
-    if (response['items'] is! Map) throw const AnimeRiftAccessUnavailable();
-    return Map<String, int>.unmodifiable(parseMyListOverviewCounts(response));
+    // A read-only account overview can be requested before the local linked
+    // partition is restored; never cache that response under the guest scope.
+    if (AnimeRiftLocalAccountScope.accountHash == null) {
+      final response = await _api.fetchMyListOverview();
+      if (response['items'] is! Map) throw const AnimeRiftAccessUnavailable();
+      return Map<String, int>.unmodifiable(parseMyListOverviewCounts(response));
+    }
+    return _cloudSync.loadOverviewCounts();
   }
 
   /// Populate this Rift account's local library and watch history from the

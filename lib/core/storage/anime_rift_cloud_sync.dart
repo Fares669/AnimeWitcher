@@ -191,6 +191,9 @@ class AnimeRiftCloudSync {
   final AnimeRiftCloudAccountReader _reader;
   String? _cursorAccount;
   Map<String, int> _overviewTotals = const {};
+  DateTime? _overviewFetchedAt;
+  String? _overviewRequestAccount;
+  Future<Map<String, int>>? _overviewRequest;
   final _cursors = <String, _CloudListCursor>{};
   final _selectedUrls = <String, List<String>>{};
   final _selectedRequests = <String, Future<AnimeRiftCloudImportResult>>{};
@@ -252,6 +255,56 @@ class AnimeRiftCloudSync {
     'dropped': 'my_list_dropped',
   };
 
+  void _bindAccount(String account) {
+    _requireAccount(account);
+    if (_cursorAccount == account) return;
+    _cursors.clear();
+    _selectedUrls.clear();
+    _overviewTotals = const {};
+    _overviewFetchedAt = null;
+    _cursorAccount = account;
+  }
+
+  /// An overview is shared with the library tabs and selected-list import.
+  /// Reuse it briefly while navigating; an explicit shelf refresh fetches a
+  /// fresh overview so changes made in the official app are still visible.
+  Future<Map<String, int>> loadOverviewCounts({bool refresh = false}) async {
+    final account = AnimeRiftLocalAccountScope.accountHash;
+    if (account == null) throw const AnimeRiftAuthenticationRequired();
+    _bindAccount(account);
+    final checkedAt = _overviewFetchedAt;
+    if (!refresh &&
+        checkedAt != null &&
+        DateTime.now().difference(checkedAt) < const Duration(seconds: 30)) {
+      return _overviewTotals;
+    }
+    final running = _overviewRequest;
+    if (running != null && _overviewRequestAccount == account) return running;
+    final operation = () async {
+      final response = await _reader.fetchMyListOverview();
+      _requireAccount(account);
+      if (_cursorAccount != account || response['items'] is! Map) {
+        throw const AnimeRiftAccessUnavailable();
+      }
+      final counts = Map<String, int>.unmodifiable(
+        parseMyListOverviewCounts(response),
+      );
+      _overviewTotals = counts;
+      _overviewFetchedAt = DateTime.now();
+      return counts;
+    }();
+    _overviewRequestAccount = account;
+    _overviewRequest = operation;
+    try {
+      return await operation;
+    } finally {
+      if (identical(_overviewRequest, operation)) {
+        _overviewRequest = null;
+        _overviewRequestAccount = null;
+      }
+    }
+  }
+
   /// A refresh reads only the first server page. Further reads are driven by
   /// scrolling, never by startup/background synchronization.
   Future<Map<String, dynamic>> _expandAccountPages({
@@ -262,13 +315,7 @@ class AnimeRiftCloudSync {
     required String list,
     bool loadNextPage = false,
   }) async {
-    _requireAccount(account);
-    if (_cursorAccount != account) {
-      _cursors.clear();
-      _overviewTotals = const {};
-      _selectedUrls.clear();
-      _cursorAccount = account;
-    }
+    _bindAccount(account);
     var cursor = _cursors[list];
     if (!loadNextPage || cursor == null) {
       final allRows = _cloudRows(first);
@@ -276,9 +323,10 @@ class AnimeRiftCloudSync {
       cursor = _CloudListCursor(
         rows,
         expectedCount,
-        _hasMore(first) ||
-            allRows.length > rows.length ||
-            (expectedCount != null && rows.length < expectedCount),
+        (expectedCount == null || rows.length < expectedCount) &&
+            (_hasMore(first) ||
+                allRows.length > rows.length ||
+                (expectedCount != null && rows.length < expectedCount)),
         bufferedRows: allRows.skip(30).toList(),
         serverHasMore: _hasMore(first),
       );
@@ -290,10 +338,10 @@ class AnimeRiftCloudSync {
       cursor.rows.addAll(take);
       cursor.buffered.removeRange(0, take.length);
       cursor.hasMore =
-          cursor.buffered.isNotEmpty ||
-          (cursor.total != null
-              ? cursor.rows.length < cursor.total!
-              : cursor.serverHasMore);
+          (cursor.total == null || cursor.rows.length < cursor.total!) &&
+          (cursor.buffered.isNotEmpty ||
+              cursor.serverHasMore ||
+              (cursor.total != null && cursor.rows.length < cursor.total!));
     } else if (cursor.hasMore && !cursor.loading && loadPage != null) {
       cursor.loading = true;
       try {
@@ -320,6 +368,7 @@ class AnimeRiftCloudSync {
           cursor.serverHasMore = _hasMore(response);
           cursor.hasMore =
               incoming.isNotEmpty &&
+              (cursor.total == null || cursor.rows.length < cursor.total!) &&
               (cursor.buffered.isNotEmpty ||
                   (cursor.total != null
                       ? cursor.rows.length < cursor.total!
@@ -406,26 +455,27 @@ class AnimeRiftCloudSync {
               .firstWhere((entry) => entry.value == category)
               .key;
     final hasCursor = _cursorAccount == account && _cursors.containsKey(list);
-    final first = loadNextPage && hasCursor
-        ? <String, dynamic>{'items': <Object?>[]}
+    // Start both independent reads immediately: in particular, the overview
+    // must not sit behind a slow list GET (or be repeated for every tab).
+    final firstRequest = loadNextPage && hasCursor
+        ? Future<Map<String, dynamic>>.value({'items': <Object?>[]})
         : list == 'favorite'
-        ? await _reader.fetchFavoriteAnime()
-        : await _reader.fetchMyList(list);
+        ? _reader.fetchFavoriteAnime()
+        : _reader.fetchMyList(list);
+    final overviewRequest =
+        (loadNextPage && hasCursor && _overviewTotals.isNotEmpty
+                ? Future<Map<String, int>>.value(_overviewTotals)
+                : loadOverviewCounts(refresh: !loadNextPage && hasCursor))
+            .onError<AnimeRiftAccessUnavailable>((_, _) {
+              _requireAccount(account);
+              return const <String, int>{};
+            });
+    final first = await firstRequest;
     _requireAccount(account);
     // Scrolling another 30 posters must not refetch the same overview and
     // hold the grid behind an unrelated account summary request.
-    Map<String, int> counts =
-        loadNextPage && hasCursor && _overviewTotals.isNotEmpty
-        ? _overviewTotals
-        : const {};
-    if (counts.isEmpty) {
-      try {
-        counts = parseMyListOverviewCounts(await _reader.fetchMyListOverview());
-        _requireAccount(account);
-      } on AnimeRiftAccessUnavailable {
-        _requireAccount(account);
-      }
-    }
+    final counts = await overviewRequest;
+    _requireAccount(account);
     final countKey = category == LibraryCategory.favorite
         ? 'my_list_favorites'
         : _overviewForList[list]!;
@@ -445,29 +495,33 @@ class AnimeRiftCloudSync {
                 : pagedReader.fetchMyListPage(list, page),
     );
     _requireAccount(account);
-    if (counts.isNotEmpty) _overviewTotals = Map.unmodifiable(counts);
     final rows = _cloudRows(response);
     final library = ProviderLocalLibrary(storage, animeRiftProviderId);
     final localItems = {for (final item in library.allItems()) item.url: item};
     final hydrated = <String, MultimediaItem?>{};
     final received = <String, MultimediaItem>{};
     var skipped = 0;
-    for (final row in rows) {
-      // Listing 290 items must not trigger 290 serial detail requests and
-      // silently drop the remainder if the catalog rate-limits them.
-      final item = await _cloudAnime(
-        row,
-        rows.length <= 30 && (counts[countKey] ?? rows.length) <= 30
-            ? hydrate
-            : null,
-        hydrated,
-        cached: (url) => localItems[url],
-      );
+    // Rift's original list response already carries poster metadata. Only
+    // genuinely incomplete rows need details; cap concurrent fallback GETs.
+    for (var offset = 0; offset < rows.length; offset += 6) {
+      final batch = await Future.wait([
+        for (final row in rows.skip(offset).take(6))
+          _cloudAnime(
+            row,
+            rows.length <= 30 && (counts[countKey] ?? rows.length) <= 30
+                ? hydrate
+                : null,
+            hydrated,
+            cached: (url) => localItems[url],
+          ),
+      ]);
       _requireAccount(account);
-      if (item == null) {
-        skipped++;
-      } else {
-        received[item.url] = item;
+      for (final item in batch) {
+        if (item == null) {
+          skipped++;
+        } else {
+          received[item.url] = item;
+        }
       }
     }
     final journal = AnimeRiftCloudPendingJournal(storage);

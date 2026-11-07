@@ -140,7 +140,7 @@ class ContinueWatchingNotifier extends Notifier<List<HistoryItem>> {
 
   Future<void> refreshFromServer() async {
     if (ref.read(activeProviderProvider)?.packageName == animeRiftProviderId) {
-      await ref.read(riftAutoSyncProvider).refresh();
+      await ref.read(riftAutoSyncProvider).refreshHistory();
     } else {
       await ref.read(historyRepositoryProvider).syncContinueWatching();
     }

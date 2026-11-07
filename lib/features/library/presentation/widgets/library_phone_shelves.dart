@@ -10,6 +10,7 @@ import '../../../../core/extensions/providers/anime_rift_provider.dart';
 import '../../../../core/storage/anime_rift_account_scope.dart';
 import '../../../../core/storage/library_category.dart';
 import '../../../../core/storage/library_repository.dart';
+import '../../../../core/storage/provider_local_library.dart';
 import '../../../../core/storage/storage_service.dart';
 import '../../../../shared/widgets/app_search_field.dart';
 import '../../../../shared/widgets/app_side_menu.dart';
@@ -83,7 +84,9 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
         ? LibraryPhoneSection.manga
         : LibraryPhoneSection.anime;
     _selectedListKey = library.category.storageKey;
-    Future<void>.microtask(_syncHistory);
+    if (ref.read(activeProviderProvider)?.packageName != animeRiftProviderId) {
+      Future<void>.microtask(_syncHistory);
+    }
     Future<void>.microtask(() {
       if (!mounted) return;
       final state = ref.read(libraryProvider);

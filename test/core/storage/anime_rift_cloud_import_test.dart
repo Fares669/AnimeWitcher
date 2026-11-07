@@ -47,7 +47,10 @@ class _CloudReader
   final lists = <String, List<Object>>{};
   final history = <Object>[];
   Completer<Map<String, dynamic>>? favoritesGate;
+  Completer<Map<String, dynamic>>? listGate;
+  Completer<Map<String, dynamic>>? overviewGate;
   bool completeOverview = true;
+  bool staleHasNext = false;
   final requests = <String>[];
   int overviewCalls = 0;
   int? pageSize;
@@ -63,7 +66,10 @@ class _CloudReader
     final first = page == null || ignorePage;
     final start = first ? 0 : ((page - pageBase) * limit).clamp(0, all.length);
     final end = (start + limit).clamp(0, all.length);
-    return {'items': all.sublist(start, end), 'hasNext': end < all.length};
+    return {
+      'items': all.sublist(start, end),
+      'hasNext': staleHasNext || end < all.length,
+    };
   }
 
   @override
@@ -77,6 +83,7 @@ class _CloudReader
   @override
   Future<Map<String, dynamic>> fetchMyListOverview() async {
     overviewCalls++;
+    if (overviewGate != null) return overviewGate!.future;
     return {
       'items': {
         'my_list_favorites': favorites.length,
@@ -100,6 +107,7 @@ class _CloudReader
   @override
   Future<Map<String, dynamic>> fetchMyList(String category) async {
     requests.add(category);
+    if (listGate != null) return listGate!.future;
     return _paged(lists[category] ?? <Object>[]);
   }
 
@@ -140,6 +148,137 @@ class _CloudReader
 
 void main() {
   tearDown(AnimeRiftLocalAccountScope.reset);
+
+  test(
+    'three confirmed Rift items ignore stale hasNext without page requests',
+    () async {
+      AnimeRiftLocalAccountScope.activate('three-items');
+      final reader = _CloudReader()
+        ..pageSize = 30
+        ..staleHasNext = true
+        ..lists['currently'] = [
+          for (var i = 0; i < 3; i++)
+            {
+              'anime': {'_id': 'three$i', 'title': 'Title $i'},
+            },
+        ];
+      final cloud = AnimeRiftCloudSync(reader);
+      final storage = _MemoryStorage();
+      await cloud.importSelectedList(
+        storage: storage,
+        category: LibraryCategory.watching,
+      );
+      expect(cloud.selectedListPage(LibraryCategory.watching)?.loadedCount, 3);
+      expect(cloud.selectedListPage(LibraryCategory.watching)?.totalCount, 3);
+      expect(
+        cloud.selectedListPage(LibraryCategory.watching)?.hasMore,
+        isFalse,
+      );
+      await cloud.importSelectedList(
+        storage: storage,
+        category: LibraryCategory.watching,
+        loadNextPage: true,
+      );
+      expect(reader.requests, ['currently']);
+    },
+  );
+
+  test(
+    'opening multiple Rift shelves reuses one authenticated overview',
+    () async {
+      AnimeRiftLocalAccountScope.activate('overview-shared');
+      final reader = _CloudReader()
+        ..lists['currently'] = [
+          {
+            'anime': {'_id': 'watch1', 'title': 'Watching'},
+          },
+        ]
+        ..lists['finished'] = [
+          {
+            'anime': {'_id': 'finish1', 'title': 'Finished'},
+          },
+        ];
+      final cloud = AnimeRiftCloudSync(reader);
+      final storage = _MemoryStorage();
+      await cloud.importSelectedList(
+        storage: storage,
+        category: LibraryCategory.watching,
+      );
+      await cloud.importSelectedList(
+        storage: storage,
+        category: LibraryCategory.completed,
+      );
+      expect(reader.requests, ['currently', 'finished']);
+      expect(reader.overviewCalls, 1);
+    },
+  );
+
+  test(
+    'Rift list and overview begin together instead of serial GETs',
+    () async {
+      AnimeRiftLocalAccountScope.activate('parallel-overview');
+      final reader = _CloudReader()
+        ..pageSize = 30
+        ..listGate = Completer<Map<String, dynamic>>()
+        ..overviewGate = Completer<Map<String, dynamic>>();
+      final cloud = AnimeRiftCloudSync(reader);
+      final pending = cloud.importSelectedList(
+        storage: _MemoryStorage(),
+        category: LibraryCategory.watching,
+      );
+      try {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(reader.requests, ['currently']);
+        expect(
+          reader.overviewCalls,
+          1,
+          reason: 'Overview must not wait for the slow list request',
+        );
+      } finally {
+        reader.listGate!.complete({'items': <Object>[]});
+        reader.overviewGate!.complete({
+          'items': {'my_list_currently_watching': 0},
+        });
+      }
+      await pending;
+    },
+  );
+
+  test('three legacy Rift cards fetch missing details concurrently', () async {
+    AnimeRiftLocalAccountScope.activate('legacy-three');
+    final reader = _CloudReader()
+      ..lists['currently'] = [
+        for (var i = 0; i < 3; i++)
+          {
+            'anime': {'_id': 'legacy$i'},
+          },
+      ];
+    final cloud = AnimeRiftCloudSync(reader);
+    final blocked = Completer<void>();
+    var calls = 0;
+    final future = cloud.importSelectedList(
+      storage: _MemoryStorage(),
+      category: LibraryCategory.watching,
+      hydrate: (url) async {
+        calls++;
+        await blocked.future;
+        return MultimediaItem(
+          url: url,
+          title: 'Full ${url.split('/').last}',
+          posterUrl: '',
+          provider: _rift,
+          contentType: MultimediaContentType.anime,
+        );
+      },
+    );
+    try {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(calls, 3);
+    } finally {
+      blocked.complete();
+    }
+    await future;
+  });
 
   test('30 Rift records persist as one local library write', () async {
     AnimeRiftLocalAccountScope.activate('bulk-library');
