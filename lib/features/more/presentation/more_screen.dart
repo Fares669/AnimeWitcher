@@ -5,6 +5,9 @@ import 'package:animewitcher/shared/widgets/app_side_menu.dart';
 import 'package:animewitcher/shared/widgets/app_page_header.dart';
 
 import '../../../core/account/account_providers.dart';
+import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/providers/anime_rift_provider.dart';
+import '../../../core/storage/anime_rift_account_scope.dart';
 import '../../../core/navigation/app_layout_style.dart';
 import '../../../core/theme/theme_provider.dart';
 import '../../../shared/widgets/live_previews.dart';
@@ -12,6 +15,8 @@ import '../../details/presentation/widgets/details_seasons_bar.dart';
 import '../../manga/reader/manga_reader_settings_screen.dart';
 import '../../../core/account/animewitcher_account_models.dart';
 import '../../settings/presentation/account_screen.dart';
+import '../../settings/presentation/rift_account_profile_provider.dart';
+import '../../../shared/widgets/account_avatar_button.dart';
 import '../../settings/presentation/settings_screen.dart';
 import '../../settings/presentation/widgets/settings_widgets.dart';
 import 'broadcast_schedule_screen.dart';
@@ -62,9 +67,49 @@ class MoreScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final bottomPadding = MediaQuery.viewPaddingOf(context).bottom + 88;
-    final accountState = ref.watch(animeWitcherAccountControllerProvider);
-    final accountProfile = accountState.asData?.value.profile;
-    final accountPhotoUrl = accountProfile?.photoUrl?.trim() ?? '';
+    final provider = ref.watch(activeProviderProvider);
+    final rift = provider is AnimeRiftProvider ? provider : null;
+    if (rift != null) ref.watch(accountDataRevisionProvider);
+    final accountState = rift == null
+        ? ref.watch(animeWitcherAccountControllerProvider)
+        : null;
+    final accountProfile = accountState?.asData?.value.profile;
+    final accountHash = AnimeRiftLocalAccountScope.accountHash;
+    final riftProfile = rift?.isAccountLinked != true || accountHash == null
+        ? null
+        : ref.watch(riftAccountProfileProvider(accountHash)).asData?.value;
+    final accountPhotoUrl = rift == null
+        ? accountProfile?.photoUrl?.trim() ?? ''
+        : riftProfile?.avatarUrl ?? '';
+    final riftLinked = rift?.isAccountLinked == true;
+    final riftName =
+        riftProfile?.name ?? rift?.accountIdentity?.displayName?.trim() ?? '';
+    final accountTitle = rift == null
+        ? (accountProfile == null
+              ? appText(context, english: 'Sign in', arabic: 'تسجيل الدخول')
+              : _accountDisplayName(accountProfile))
+        : (riftLinked
+              ? (riftName.isNotEmpty ? riftName : 'Anime Rift')
+              : 'تسجيل الدخول إلى Anime Rift');
+    final accountSubtitle = rift == null
+        ? (accountProfile == null
+              ? appText(
+                  context,
+                  english: 'Sync your lists and progress',
+                  arabic: 'مزامنة القوائم والتقدم',
+                )
+              : appText(context, english: 'Signed in', arabic: 'مسجّل الدخول'))
+        : riftLinked
+        ? appText(
+            context,
+            english: 'Connected to Anime Rift',
+            arabic: 'متصل بحساب Anime Rift',
+          )
+        : appText(
+            context,
+            english: 'Link your Anime Rift account',
+            arabic: 'ربط حساب Anime Rift',
+          );
 
     // A window with room for two columns keeps the list of destinations on
     // screen beside the one being read, and opens on the account rather than
@@ -95,23 +140,11 @@ class MoreScreen extends ConsumerWidget {
           padding: EdgeInsets.only(top: headerTop),
           child: MoreSidebarShell(
             header: MoreSidebarHeader(
-              name: accountProfile == null
-                  ? appText(context, english: 'Sign in', arabic: 'تسجيل الدخول')
-                  : _accountDisplayName(accountProfile),
+              name: accountTitle,
               // No address here. This card sits on screen the whole time the
               // More section is open, and the account page is where an address
               // belongs — behind an eye, at that.
-              subtitle: accountProfile == null
-                  ? appText(
-                      context,
-                      english: 'Sync your lists and progress',
-                      arabic: 'مزامنة القوائم والتقدم',
-                    )
-                  : appText(
-                      context,
-                      english: 'Signed in',
-                      arabic: 'مسجّل الدخول',
-                    ),
+              subtitle: accountSubtitle,
               photoUrl: accountPhotoUrl,
             ),
             groups: <MoreDestinationGroup>[
@@ -121,7 +154,9 @@ class MoreScreen extends ConsumerWidget {
                   MoreDestination(
                     icon: Icons.person_rounded,
                     label: 'الحساب',
-                    builder: (_) => const AnimeWitcherAccountScreen(),
+                    builder: (_) => rift == null
+                        ? const AnimeWitcherAccountScreen()
+                        : const AnimeRiftAccountScreen(),
                   ),
                 ],
               ),
@@ -179,7 +214,7 @@ class MoreScreen extends ConsumerWidget {
           _MorePanel(
             children: [
               _MoreTile(
-                icon: accountProfile == null
+                icon: (rift != null ? !riftLinked : accountProfile == null)
                     ? Icons.account_circle_rounded
                     : Icons.cloud_done_rounded,
                 leading: accountPhotoUrl.isEmpty
@@ -194,26 +229,23 @@ class MoreScreen extends ConsumerWidget {
                           color: theme.colorScheme.onPrimaryContainer,
                         ),
                       ),
-                title: accountProfile == null
+                title: rift == null && accountProfile == null
                     ? 'تسجيل الدخول أو إنشاء حساب'
-                    : _accountDisplayName(accountProfile),
-                subtitle: accountState.isLoading
+                    : accountTitle,
+                subtitle: rift != null
+                    ? accountSubtitle
+                    : accountState?.isLoading == true
                     ? 'جارٍ التحقق من الحساب...'
                     : accountProfile == null
-                    ? 'مزامنة القوائم والحلقات المشاهدة '
-                          'وتقدم التشغيل'
+                    ? 'مزامنة القوائم والحلقات المشاهدة وتقدم التشغيل'
                     : accountProfile.email ?? 'المزامنة مفعلة',
-                trailing: accountState.isLoading
+                trailing: accountState?.isLoading == true
                     ? const SizedBox.square(
                         dimension: 20,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : null,
-                onTap: () => Navigator.of(context, rootNavigator: true).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const AnimeWitcherAccountScreen(),
-                  ),
-                ),
+                onTap: () => openAccountScreen(context),
               ),
               _MoreTile(
                 icon: Icons.upcoming_rounded,

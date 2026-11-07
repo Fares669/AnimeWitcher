@@ -2,12 +2,24 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/account/account_providers.dart';
+import '../../core/extensions/extension_manager.dart';
+import '../../core/extensions/providers/anime_rift_provider.dart';
+import '../../core/storage/anime_rift_account_scope.dart';
 import '../../features/settings/presentation/account_screen.dart';
+import '../../features/settings/presentation/rift_account_profile_provider.dart';
 
-/// Opens the AnimeWitcher account page over whatever is showing.
+/// Opens the selected anime provider's account page.
 void openAccountScreen(BuildContext context) {
+  final provider = ProviderScope.containerOf(
+    context,
+    listen: false,
+  ).read(activeProviderProvider);
   Navigator.of(context, rootNavigator: true).push<void>(
-    MaterialPageRoute<void>(builder: (_) => const AnimeWitcherAccountScreen()),
+    MaterialPageRoute<void>(
+      builder: (_) => provider is AnimeRiftProvider
+          ? const AnimeRiftAccountScreen()
+          : const AnimeWitcherAccountScreen(),
+    ),
   );
 }
 
@@ -23,19 +35,28 @@ class AccountAvatarButton extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = Theme.of(context).colorScheme;
-
-    final profile = ref
-        .watch(animeWitcherAccountControllerProvider)
-        .asData
-        ?.value
-        .profile;
-    final photo = profile?.photoUrl?.trim() ?? '';
-    final name = () {
-      final userName = profile?.userName?.trim() ?? '';
-      if (userName.isNotEmpty) return userName;
-      return profile?.email?.trim() ?? '';
-    }();
-    final signedIn = profile != null;
+    final activeProvider = ref.watch(activeProviderProvider);
+    final rift = activeProvider is AnimeRiftProvider ? activeProvider : null;
+    if (rift != null) ref.watch(accountDataRevisionProvider);
+    final accountHash = AnimeRiftLocalAccountScope.accountHash;
+    final riftProfile = rift?.isAccountLinked != true || accountHash == null
+        ? null
+        : ref.watch(riftAccountProfileProvider(accountHash)).asData?.value;
+    final profile = rift == null
+        ? ref.watch(animeWitcherAccountControllerProvider).asData?.value.profile
+        : null;
+    final photo = rift == null
+        ? profile?.photoUrl?.trim() ?? ''
+        : riftProfile?.avatarUrl ?? '';
+    final userName = profile?.userName?.trim() ?? '';
+    final name =
+        riftProfile?.name ??
+        (rift == null
+            ? (userName.isNotEmpty ? userName : profile?.email?.trim() ?? '')
+            : (rift.accountIdentity?.displayName?.trim().isNotEmpty == true
+                  ? rift.accountIdentity!.displayName!.trim()
+                  : 'Anime Rift'));
+    final signedIn = rift?.isAccountLinked ?? (profile != null);
     final initial = name.isEmpty ? '' : name.characters.first.toUpperCase();
 
     Widget fallback() => signedIn && initial.isNotEmpty

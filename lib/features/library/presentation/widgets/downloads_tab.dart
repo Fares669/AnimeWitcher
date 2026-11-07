@@ -30,6 +30,7 @@ import '../../../details/presentation/playback_launcher.dart';
 import '../download_progress_v2_provider.dart';
 import '../download_delete_confirmation.dart';
 import '../downloads_provider.dart';
+import '../../../../core/services/download_v2/download_v2_identity.dart';
 import '../download_episode_artwork.dart';
 import '../download_unit_count_label.dart';
 import 'completed_download_chapter_card.dart';
@@ -59,6 +60,7 @@ MultimediaItem _savedPlaybackItem(
     if (download.status == TaskStatus.complete &&
         media.isNotEmpty &&
         mediaIdentity(download.item) == media &&
+        sameDownloadProvider(download.item, selected.item) &&
         episode != null &&
         episode.url.trim().isNotEmpty) {
       episodes[episode.url.trim()] = episode;
@@ -763,7 +765,10 @@ class _CompletedDownloadsList extends StatelessWidget {
           (item.item.url.trim().isNotEmpty
               ? item.item.url.trim()
               : item.item.title);
-      final key = '${item.mediaKind.name}:$mediaIdentity';
+      final source = item.mediaKind == DownloadMediaKind.videoEpisode
+          ? downloadProviderScopeV2(item.item.provider) ?? ''
+          : '';
+      final key = '${item.mediaKind.name}:$source:$mediaIdentity';
       if (!grouped.containsKey(key)) {
         keys.add(key);
         grouped[key] = [];

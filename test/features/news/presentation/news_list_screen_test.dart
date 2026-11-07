@@ -3,14 +3,20 @@ import 'dart:ui' as ui;
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
+import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
+import 'package:animewitcher/core/storage/settings_repository.dart';
+import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/home/presentation/widgets/news_card.dart';
 import 'package:animewitcher/features/news/presentation/news_list_screen.dart';
 import 'package:animewitcher/features/news/presentation/news_utils.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/shared/widgets/app_page_header.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../support/test_fonts.dart';
 import '../../../support/debug_shots.dart';
@@ -20,30 +26,37 @@ NewsItem _item(String id, {String? title}) {
 }
 
 Widget _app(Size size, List<NewsItem> items) {
-  return MediaQuery(
-    data: MediaQueryData(size: size),
-    child: MaterialApp(
-      locale: const Locale('ar'),
-      localizationsDelegates: AppLocalizations.localizationsDelegates,
-      supportedLocales: AppLocalizations.supportedLocales,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        fontFamily: 'NotoSansArabic',
-        scaffoldBackgroundColor: Colors.black,
-      ),
-      home: RepaintBoundary(
-        key: const ValueKey('news-landscape-shot'),
-        child: NewsListScreen(
-          initialItems: items,
-          loadPage: (offset, limit) async => const ProviderNewsPage(
-            items: <NewsItem>[],
-            nextOffset: 0,
-            hasMore: false,
+  return ProviderScope(
+    overrides: [activeProviderProvider.overrideWithValue(_NativeSelection())],
+    child: MediaQuery(
+      data: MediaQueryData(size: size),
+      child: MaterialApp(
+        locale: const Locale('ar'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        theme: ThemeData(
+          brightness: Brightness.dark,
+          fontFamily: 'NotoSansArabic',
+          scaffoldBackgroundColor: Colors.black,
+        ),
+        home: RepaintBoundary(
+          key: const ValueKey('news-landscape-shot'),
+          child: NewsListScreen(
+            initialItems: items,
+            loadPage: (offset, limit) async => const ProviderNewsPage(
+              items: <NewsItem>[],
+              nextOffset: 0,
+              hasMore: false,
+            ),
           ),
         ),
       ),
     ),
   );
+}
+
+class _NativeSelection extends AnimeWitcherNativeProvider {
+  _NativeSelection() : super(Dio(), SettingsRepository(StorageService()));
 }
 
 void main() {
@@ -119,9 +132,8 @@ void main() {
       );
       final image = await boundary.toImage(pixelRatio: 2);
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-      File(
-        '${artifacts.path}/news_list_landscape_two_per_row.png',
-      ).writeAsBytesSync(bytes!.buffer.asUint8List());
+      File('${artifacts.path}/news_list_landscape_two_per_row.png')
+          .writeAsBytesSync(bytes!.buffer.asUint8List());
     });
   });
 

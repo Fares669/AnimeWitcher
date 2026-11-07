@@ -1,4 +1,12 @@
+import 'package:animewitcher/core/extensions/base_provider.dart';
+import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
+import 'package:animewitcher/core/storage/settings_repository.dart';
+import 'package:animewitcher/core/storage/storage_service.dart';
+import 'package:animewitcher/shared/widgets/account_notifications_button.dart';
+import 'package:dio/dio.dart';
 import 'package:animewitcher/core/account/account_providers.dart';
+import 'package:animewitcher/core/account/animewitcher_account_config.dart';
 import 'package:animewitcher/core/account/animewitcher_account_models.dart';
 import 'package:animewitcher/features/settings/presentation/account_screen.dart';
 import 'package:animewitcher/features/settings/presentation/widgets/settings_widgets.dart';
@@ -9,6 +17,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/test_fonts.dart';
+
+class _NativeSelection extends ActiveProvider {
+  @override
+  AnimeWitcherProvider? build() =>
+      AnimeWitcherNativeProvider(Dio(), SettingsRepository(StorageService()));
+}
 
 class _SignedInAccount extends AnimeWitcherAccountController {
   @override
@@ -55,6 +69,8 @@ void main() {
         await tester.pumpWidget(
           ProviderScope(
             overrides: [
+              activeProviderProvider.overrideWith(_NativeSelection.new),
+              accountNotificationCountProvider.overrideWith((ref) async => 0),
               animeWitcherAccountControllerProvider.overrideWith(
                 _SignedInAccount.new,
               ),
@@ -123,6 +139,9 @@ void main() {
           lessThan(tester.getRect(title).left),
         );
         expect(tester.takeException(), isNull);
+
+        // Account actions are disabled when Firebase is not configured.
+        if (!AnimeWitcherAccountConfig.firebaseConfigured) return;
 
         final comments = find.widgetWithText(SettingsTile, 'تعليقاتي');
         await tester.ensureVisible(comments);

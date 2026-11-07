@@ -8,6 +8,11 @@ import 'package:hive_flutter/hive_flutter.dart';
 import '../domain/entity/multimedia_item.dart';
 import '../extensions/base_provider.dart';
 import '../extensions/extension_manager.dart';
+import '../extensions/providers/anime_rift_api_client.dart';
+import '../extensions/providers/anime_rift_provider.dart';
+import '../utils/anime_rift_identity.dart';
+import '../utils/anime_rift_stream_identity.dart';
+import 'download_v2/anime_rift_download_metadata_v2.dart';
 
 const String kDownloadUrlRefreshBox = 'download_url_refresh_v1';
 const Duration kDownloadUrlRefreshDescriptorTtl = Duration(days: 30);
@@ -23,6 +28,7 @@ class DownloadUrlRefreshDescriptor {
     this.logicalId,
     this.quality,
     this.refreshUrl,
+    this.accountHash,
   });
 
   final String trackingUrl;
@@ -30,26 +36,29 @@ class DownloadUrlRefreshDescriptor {
   final String source;
   final String? quality;
   final String? refreshUrl;
+  final String? accountHash;
   final int updatedAtMillis;
   final int generation;
   final String? ownerTaskId;
   final String? logicalId;
 
-  Map<String, Object?> toJson() => <String, Object?>{
-    'trackingUrl': trackingUrl,
-    'providerId': providerId,
-    'source': source,
-    if (quality?.trim().isNotEmpty ?? false) 'quality': quality,
-    if (refreshUrl?.trim().isNotEmpty ?? false) 'refreshUrl': refreshUrl,
-    'updatedAtMillis': updatedAtMillis,
-    'generation': generation,
-    if (ownerTaskId?.trim().isNotEmpty ?? false) 'ownerTaskId': ownerTaskId,
-    if (logicalId?.trim().isNotEmpty ?? false) 'logicalId': logicalId,
-  };
+  Map<String, Object?> toJson() =>
+      safeDownloadSourceDescriptorV2(<String, Object?>{
+        'trackingUrl': trackingUrl,
+        'providerId': providerId,
+        'source': source,
+        if (quality?.trim().isNotEmpty ?? false) 'quality': quality,
+        if (refreshUrl?.trim().isNotEmpty ?? false) 'refreshUrl': refreshUrl,
+        if (accountHash != null) 'accountHash': accountHash,
+        'updatedAtMillis': updatedAtMillis,
+        'generation': generation,
+        if (ownerTaskId?.trim().isNotEmpty ?? false) 'ownerTaskId': ownerTaskId,
+        if (logicalId?.trim().isNotEmpty ?? false) 'logicalId': logicalId,
+      });
 
   static DownloadUrlRefreshDescriptor? fromJson(Object? raw) {
     if (raw is! Map) return null;
-    final map = Map<String, dynamic>.from(raw);
+    final map = safeDownloadSourceDescriptorV2(Map<String, Object?>.from(raw));
     final trackingUrl = _string(map['trackingUrl']);
     final providerId = _string(map['providerId']);
     final source = _string(map['source']);
@@ -61,6 +70,7 @@ class DownloadUrlRefreshDescriptor {
       source: source,
       quality: _string(map['quality']),
       refreshUrl: _string(map['refreshUrl']),
+      accountHash: _string(map['accountHash']),
       updatedAtMillis: _int(map['updatedAtMillis']),
       // Older descriptors predate generation fencing. Generation zero keeps
       // them readable until the owning V2 record rewrites the descriptor.
@@ -111,6 +121,45 @@ class DownloadUrlRefreshStore {
   String keyFor(String trackingUrl) =>
       md5.convert(utf8.encode(trackingUrl.trim())).toString();
 
+  List<String> _keysForRead(String trackingUrl) {
+    final raw = trackingUrl.trim();
+    final uri = Uri.tryParse(raw);
+    if (uri == null ||
+        (uri.host != animeRiftCatalogHost &&
+            uri.host != 'www.$animeRiftCatalogHost')) {
+      return <String>[keyFor(raw)];
+    }
+    final canonical = animeRiftDownloadTrackingIdentityV2(raw);
+    if (canonical == null) return <String>[keyFor(raw)];
+    final canonicalUri = Uri.parse(canonical);
+    final wwwAlias = canonicalUri
+        .replace(host: 'www.$animeRiftCatalogHost')
+        .toString();
+    return <String>{
+      keyFor(canonical),
+      keyFor(raw),
+      keyFor(wwwAlias),
+    }.toList(growable: false);
+  }
+
+  Future<({String key, DownloadUrlRefreshDescriptor descriptor})?>
+  _readDescriptor(String trackingUrl) async {
+    final entries = await _readDescriptors(trackingUrl);
+    return entries.isEmpty ? null : entries.first;
+  }
+
+  Future<List<({String key, DownloadUrlRefreshDescriptor descriptor})>>
+  _readDescriptors(String trackingUrl) async {
+    final entries = <({String key, DownloadUrlRefreshDescriptor descriptor})>[];
+    for (final key in _keysForRead(trackingUrl)) {
+      final descriptor = DownloadUrlRefreshDescriptor.fromJson(
+        await backend.read(key),
+      );
+      if (descriptor != null) entries.add((key: key, descriptor: descriptor));
+    }
+    return entries;
+  }
+
   Future<void> _tail = Future<void>.value();
 
   Future<T> _serialize<T>(Future<T> Function() action) {
@@ -127,6 +176,9 @@ class DownloadUrlRefreshStore {
 
   Future<bool> claimOwnership(DownloadUrlRefreshDescriptor descriptor) =>
       _serialize(() async {
+        final safe = DownloadUrlRefreshDescriptor.fromJson(descriptor.toJson());
+        if (safe == null) return false;
+        descriptor = safe;
         final ownerTaskId = descriptor.ownerTaskId?.trim();
         final logicalId = descriptor.logicalId?.trim();
         if (descriptor.trackingUrl.trim().isEmpty ||
@@ -138,116 +190,127 @@ class DownloadUrlRefreshStore {
             logicalId.isEmpty) {
           return false;
         }
+        final entries = await _readDescriptors(descriptor.trackingUrl);
+        for (final entry in entries) {
+          final existing = entry.descriptor;
+          final existingLogicalId = existing.logicalId?.trim();
+          if (existingLogicalId != null &&
+              existingLogicalId.isNotEmpty &&
+              existingLogicalId != logicalId) {
+            return false;
+          }
+          if (existing.ownerTaskId == ownerTaskId &&
+              existing.generation > descriptor.generation) {
+            return false;
+          }
+        }
         final key = keyFor(descriptor.trackingUrl);
-        final existing = DownloadUrlRefreshDescriptor.fromJson(
-          await backend.read(key),
-        );
-        final existingLogicalId = existing?.logicalId?.trim();
-        if (existingLogicalId != null &&
-            existingLogicalId.isNotEmpty &&
-            existingLogicalId != logicalId) {
-          return false;
-        }
-        if (existing?.ownerTaskId == ownerTaskId &&
-            existing!.generation > descriptor.generation) {
-          return false;
-        }
         await backend.write(key, descriptor.toJson());
+        await Future.wait(
+          entries
+              .where((entry) => entry.key != key)
+              .map((entry) => backend.delete(entry.key)),
+        );
         return true;
       });
 
   Future<bool> save(DownloadUrlRefreshDescriptor descriptor) =>
       _serialize(() async {
+        final safe = DownloadUrlRefreshDescriptor.fromJson(descriptor.toJson());
+        if (safe == null) return false;
+        descriptor = safe;
         if (descriptor.trackingUrl.trim().isEmpty ||
             descriptor.providerId.trim().isEmpty ||
             descriptor.source.trim().isEmpty) {
           return false;
         }
-        final key = keyFor(descriptor.trackingUrl);
-        final existing = DownloadUrlRefreshDescriptor.fromJson(
-          await backend.read(key),
-        );
         final incomingOwner = descriptor.ownerTaskId?.trim();
-        final existingOwner = existing?.ownerTaskId?.trim();
+        final entries = await _readDescriptors(descriptor.trackingUrl);
 
         // Owned descriptors can only be created/replaced through the explicit
         // claim path. This prevents a delayed old task from resurrecting its
         // descriptor after the current owner has deleted it.
-        if (existing == null) {
+        if (entries.isEmpty) {
           if (incomingOwner != null && incomingOwner.isNotEmpty) return false;
-        } else if (existingOwner != null && existingOwner.isNotEmpty) {
-          if (incomingOwner != existingOwner) return false;
-          final existingLogicalId = existing.logicalId?.trim();
-          final incomingLogicalId = descriptor.logicalId?.trim();
-          if (existingLogicalId != null &&
-              existingLogicalId.isNotEmpty &&
-              incomingLogicalId != existingLogicalId) {
-            return false;
+        } else {
+          for (final entry in entries) {
+            final existing = entry.descriptor;
+            final existingOwner = existing.ownerTaskId?.trim();
+            if (existingOwner != null && existingOwner.isNotEmpty) {
+              if (incomingOwner != existingOwner) return false;
+              final existingLogicalId = existing.logicalId?.trim();
+              final incomingLogicalId = descriptor.logicalId?.trim();
+              if (existingLogicalId != null &&
+                  existingLogicalId.isNotEmpty &&
+                  incomingLogicalId != existingLogicalId) {
+                return false;
+              }
+            } else if (incomingOwner != null && incomingOwner.isNotEmpty) {
+              // Adopting an older unowned descriptor into owned state is also a
+              // claim operation, never a plain save.
+              return false;
+            }
+            if (existing.generation > descriptor.generation) return false;
           }
-        } else if (incomingOwner != null && incomingOwner.isNotEmpty) {
-          // Adopting an older unowned descriptor into owned state is also a
-          // claim operation, never a plain save.
-          return false;
         }
 
-        if (existing != null && existing.generation > descriptor.generation) {
-          return false;
-        }
+        final key = keyFor(descriptor.trackingUrl);
         await backend.write(key, descriptor.toJson());
+        await Future.wait(
+          entries
+              .where((entry) => entry.key != key)
+              .map((entry) => backend.delete(entry.key)),
+        );
         return true;
       });
 
   Future<DownloadUrlRefreshDescriptor?> get(String trackingUrl) async {
-    final key = keyFor(trackingUrl);
-    final descriptor = DownloadUrlRefreshDescriptor.fromJson(
-      await backend.read(key),
-    );
-    if (descriptor == null) return null;
+    final entry = await _readDescriptor(trackingUrl);
+    if (entry == null) return null;
+    final descriptor = entry.descriptor;
     if (_now().millisecondsSinceEpoch - descriptor.updatedAtMillis >
         kDownloadUrlRefreshDescriptorTtl.inMilliseconds) {
-      await backend.delete(key);
+      await backend.delete(entry.key);
       return null;
     }
     return descriptor;
   }
 
-  Future<bool> removeForGeneration(
-    String trackingUrl,
-    int generation,
-  ) => _serialize(() async {
-    final key = keyFor(trackingUrl);
-    final descriptor = DownloadUrlRefreshDescriptor.fromJson(
-      await backend.read(key),
-    );
-    if (descriptor == null) return true;
-    // Generation-only cleanup is retained for older unowned rows only. Once
-    // an owner exists, callers must prove the task identity as well.
-    if (descriptor.ownerTaskId != null) return false;
-    if (descriptor.generation != generation) return false;
-    await backend.delete(key);
-    return true;
-  });
+  Future<bool> removeForGeneration(String trackingUrl, int generation) =>
+      _serialize(() async {
+        final entries = await _readDescriptors(trackingUrl);
+        if (entries.isEmpty) return true;
+        for (final entry in entries) {
+          final descriptor = entry.descriptor;
+          // Generation-only cleanup is retained for older unowned rows only.
+          // Once an owner exists, callers must prove the task identity as well.
+          if (descriptor.ownerTaskId != null) return false;
+          if (descriptor.generation != generation) return false;
+        }
+        await Future.wait(entries.map((entry) => backend.delete(entry.key)));
+        return true;
+      });
 
   Future<bool> removeForOwnerGeneration(
     String trackingUrl,
     String ownerTaskId,
     int generation,
   ) => _serialize(() async {
-    final key = keyFor(trackingUrl);
-    final descriptor = DownloadUrlRefreshDescriptor.fromJson(
-      await backend.read(key),
-    );
-    if (descriptor == null) return true;
-    if (descriptor.ownerTaskId?.trim() != ownerTaskId.trim()) return false;
-    // A newer same-owner operation may clean an older descriptor after a
-    // crash, but a stale operation can never delete a newer generation.
-    if (descriptor.generation > generation) return false;
-    await backend.delete(key);
+    final entries = await _readDescriptors(trackingUrl);
+    if (entries.isEmpty) return true;
+    for (final entry in entries) {
+      final descriptor = entry.descriptor;
+      if (descriptor.ownerTaskId?.trim() != ownerTaskId.trim()) return false;
+      // A newer same-owner operation may clean an older descriptor after a
+      // crash, but a stale operation can never delete a newer generation.
+      if (descriptor.generation > generation) return false;
+    }
+    await Future.wait(entries.map((entry) => backend.delete(entry.key)));
     return true;
   });
 
   Future<void> remove(String trackingUrl) =>
-      backend.delete(keyFor(trackingUrl));
+      Future.wait(_keysForRead(trackingUrl).map(backend.delete));
 }
 
 class RefreshedDownloadUrl {
@@ -273,43 +336,72 @@ class DownloadUrlRefresher {
     DownloadUrlRefreshDescriptor descriptor, {
     required String currentUrl,
   }) async {
+    final safe = DownloadUrlRefreshDescriptor.fromJson(descriptor.toJson());
+    if (safe == null) return null;
+    descriptor = safe;
     final provider = providerForId(descriptor.providerId);
     if (provider == null) return null;
+    if (provider is AnimeRiftProvider) {
+      await provider.restoreAccountSession();
+    }
+    if (!downloadBelongsToCurrentRiftAccountV2(descriptor.toJson())) {
+      return null;
+    }
     provider.prepareForNetworkRetry();
 
-    List<StreamResult> candidates = const <StreamResult>[];
+    List<StreamResult> latest = const <StreamResult>[];
+    AnimeRiftAuthenticationRequired? signInRequired;
+    try {
+      final sources = await provider.loadDownloadStreamSources(
+        descriptor.trackingUrl,
+      );
+      final selected = _bestStreamMatch(sources, descriptor);
+      if (selected != null) {
+        latest = selected.requiresResolution
+            ? await provider.loadDownloadStreams(selected.url)
+            : <StreamResult>[selected];
+      }
+    } on AnimeRiftAuthenticationRequired catch (error) {
+      signInRequired = error;
+    } catch (_) {}
+
+    var refreshed = _bestStreamMatch(latest, descriptor);
+    if (_usableRefreshedStream(refreshed, currentUrl)) {
+      return _refreshedDownloadUrl(refreshed!);
+    }
+
     final refreshUrl = descriptor.refreshUrl?.trim();
     if (refreshUrl != null && refreshUrl.isNotEmpty) {
       try {
-        candidates = await provider.loadStreams(refreshUrl);
+        final tokenCandidates = await provider.loadDownloadStreams(refreshUrl);
+        final tokenResult = _bestStreamMatch(tokenCandidates, descriptor);
+        if (_usableRefreshedStream(tokenResult, currentUrl)) {
+          return _refreshedDownloadUrl(tokenResult!);
+        }
+        refreshed ??= tokenResult;
+      } on AnimeRiftAuthenticationRequired catch (error) {
+        signInRequired = error;
       } catch (_) {}
     }
 
-    if (_bestStreamMatch(candidates, descriptor) == null) {
-      List<StreamResult> sources;
-      try {
-        sources = await provider.loadStreamSources(descriptor.trackingUrl);
-      } catch (_) {
-        return null;
-      }
-      final selected = _bestStreamMatch(sources, descriptor);
-      if (selected == null) return null;
-      if (selected.requiresResolution) {
-        try {
-          candidates = await provider.loadStreams(selected.url);
-        } catch (_) {
-          return null;
-        }
-      } else {
-        candidates = <StreamResult>[selected];
-      }
-    }
-
-    final refreshed = _bestStreamMatch(candidates, descriptor);
     if (refreshed == null ||
         refreshed.requiresResolution ||
-        refreshed.url.trim().isEmpty)
+        refreshed.url.trim().isEmpty ||
+        refreshed.url.trim() == currentUrl.trim()) {
+      // Keep the sign-in requirement visible to V2 after a denied renewal.
+      if (signInRequired != null) throw signInRequired;
       return null;
+    }
+    return _refreshedDownloadUrl(refreshed);
+  }
+
+  bool _usableRefreshedStream(StreamResult? stream, String currentUrl) =>
+      stream != null &&
+      !stream.requiresResolution &&
+      stream.url.trim().isNotEmpty &&
+      stream.url.trim() != currentUrl.trim();
+
+  RefreshedDownloadUrl _refreshedDownloadUrl(StreamResult refreshed) {
     return RefreshedDownloadUrl(
       url: refreshed.url.trim(),
       headers: Map<String, String>.from(refreshed.headers ?? const {}),
@@ -324,6 +416,31 @@ StreamResult? _bestStreamMatch(
   DownloadUrlRefreshDescriptor descriptor,
 ) {
   if (streams.isEmpty) return null;
+  if (isAnimeRiftDownloadProviderV2(descriptor.providerId)) {
+    final original = AnimeRiftSourceIdentity.parse(descriptor.refreshUrl ?? '');
+    // Older records without a stable download selector retain their files,
+    // but their display names cannot safely identify a replacement host.
+    if (original == null || original.host == null || !original.download) {
+      return null;
+    }
+    // The displayed source name can change, and different hosts may share
+    // the same label and quality. Only the persisted provider-owned selector
+    // identifies the original host for a renewed download.
+    for (final stream in streams) {
+      final candidate = AnimeRiftSourceIdentity.parse(
+        stream.refreshUrl ?? stream.url,
+      );
+      if (candidate != null &&
+          candidate.download &&
+          candidate.anime == original.anime &&
+          candidate.episode == original.episode &&
+          candidate.host == original.host &&
+          candidate.quality == original.quality) {
+        return stream;
+      }
+    }
+    return null;
+  }
   final wantedSource = descriptor.source.trim().toLowerCase();
   final wantedQuality = descriptor.quality?.trim().toLowerCase();
 

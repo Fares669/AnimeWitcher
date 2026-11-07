@@ -21,15 +21,11 @@ import 'animewitcher_manga_mapping.dart';
 import 'mediafire_utils.dart';
 import 'server_extraction_utils.dart';
 
-class AnimeWitcherSeasonConfig {
-  final String past;
-  final String current;
-  final String next;
-
+class AnimeWitcherSeasonConfig extends ProviderSeasonConfig {
   const AnimeWitcherSeasonConfig({
-    required this.past,
-    required this.current,
-    required this.next,
+    required super.past,
+    required super.current,
+    required super.next,
   });
 }
 
@@ -236,6 +232,9 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
 
   @override
   String get packageName => 'com.fares669.animewitcher.native';
+
+  @override
+  bool get supportsCharacters => true;
 
   @override
   String get name => 'AnimeWitcher';
@@ -940,6 +939,46 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       throwOnFailure: true,
     );
     return _characterPageFromAlgolia(payload, requestedPage: 0, isSearch: true);
+  }
+
+  @override
+  Future<ProviderCharacterPage> getCharacterPage({int page = 0}) async {
+    final legacy = await getCharactersPage(page: page);
+    return _providerCharacterPage(legacy);
+  }
+
+  @override
+  Future<ProviderCharacterPage> searchCharacterPage(
+    String query, {
+    int page = 0,
+  }) async {
+    if (page > 0 && query.trim().isNotEmpty) {
+      return ProviderCharacterPage(
+        items: const <Actor>[],
+        page: page,
+        hasMore: false,
+      );
+    }
+    final legacy = query.trim().isEmpty
+        ? await getCharactersPage(page: page)
+        : await searchCharacters(query);
+    return _providerCharacterPage(legacy);
+  }
+
+  ProviderCharacterPage _providerCharacterPage(AnimeWitcherCharacterPage page) {
+    return ProviderCharacterPage(
+      items: <Actor>[
+        for (final character in page.items)
+          Actor(
+            id: character.id,
+            name: character.name,
+            image: character.imageUrl,
+            likes: character.likes,
+          ),
+      ],
+      page: page.page,
+      hasMore: page.hasMore,
+    );
   }
 
   AnimeWitcherCharacterPage _characterPageFromAlgolia(
@@ -2039,6 +2078,11 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       ],
     );
   }
+
+  @override
+  bool get supportsSeasons => true;
+  @override
+  bool get supportsBroadcastSchedule => true;
 
   AnimeWitcherSeasonConfig _fallbackSeasonConfig() {
     const names = <String>['شتاء', 'ربيع', 'صيف', 'خريف'];
@@ -4008,19 +4052,11 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     int offset = 0,
     int limit = 30,
   }) {
-    if (offset > 0) {
-      return Future<ProviderMediaPage>.value(
-        ProviderMediaPage(
-          items: const <MultimediaItem>[],
-          nextOffset: offset,
-          hasMore: false,
-        ),
-      );
-    }
     return _loadHomePage(
       sectionName,
-      offset: 0,
+      offset: offset,
       limit: _homeViewMoreHitsPerPage,
+      throwOnFailure: true,
     );
   }
 
@@ -4673,11 +4709,9 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   ) async {
     final hits = await _resolveMalIds(rawIds);
     return <int, MultimediaItem>{
-      for (final entry in hits.entries)
-        entry.key: _relatedItem(entry.value),
+      for (final entry in hits.entries) entry.key: _relatedItem(entry.value),
     };
   }
-
 
   String _relationType(dynamic raw) {
     final value = _text(raw).replaceAll(RegExp(r'[\s-]+'), '_').toUpperCase();

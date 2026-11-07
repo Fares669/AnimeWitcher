@@ -58,6 +58,46 @@ enum SearchSortOption {
   }
 }
 
+/// The six sort fields found in AnimeRift's APK and original sort sheet.
+/// Direction is kept in the provider sort string (`field_asc`/`field_desc`).
+enum RiftSearchSortField {
+  name('title', 'الاسم', 'Name'),
+  rating('rating', 'التقييم', 'Rating'),
+  popularity('popularity', 'الشعبية', 'Popularity'),
+  likes('likes', 'إعجابات', 'Likes'),
+  releaseYear('release_year', 'تاريخ الإصدار', 'Release year'),
+  recentlyUpdated('recently_updated', 'تم التحديث مؤخرًا', 'Recently updated');
+
+  const RiftSearchSortField(this.value, this.arabic, this.english);
+  final String value;
+  final String arabic;
+  final String english;
+
+  IconData get icon => switch (this) {
+    RiftSearchSortField.name => Icons.sort_by_alpha_rounded,
+    RiftSearchSortField.rating => Icons.star_rounded,
+    RiftSearchSortField.popularity => Icons.trending_up_rounded,
+    RiftSearchSortField.likes => Icons.favorite_rounded,
+    RiftSearchSortField.releaseYear => Icons.calendar_month_rounded,
+    RiftSearchSortField.recentlyUpdated => Icons.update_rounded,
+  };
+
+  String label(BuildContext context) =>
+      appText(context, english: english, arabic: arabic);
+
+  static String selected(String sort) {
+    if (sort == 'year_asc' || sort == 'year_desc' || sort.isEmpty) {
+      return 'release_year';
+    }
+    for (final field in values) {
+      if (sort == '${field.value}_asc' || sort == '${field.value}_desc') {
+        return field.value;
+      }
+    }
+    return 'release_year';
+  }
+}
+
 class SearchSortDialog extends StatefulWidget {
   const SearchSortDialog({super.key, required this.initialValue});
 

@@ -11,6 +11,51 @@ import '../domain/entity/multimedia_item.dart';
 import '../utils/safe_uri.dart';
 import 'history_repository.dart';
 import 'storage_service.dart';
+import 'provider_local_history.dart';
+import 'provider_local_library.dart';
+import 'anime_rift_auto_sync.dart';
+
+bool? episodeExplicitStateFor(
+  EpisodeWatchRepository repository,
+  MultimediaItem item,
+  Episode episode,
+) => item.provider == animeRiftProviderId
+    ? repository.getExplicitStateFor(item, episode)
+    : repository.getExplicitState(item.url, episode);
+
+bool episodeIsWatchedFor(
+  EpisodeWatchRepository repository,
+  MultimediaItem item,
+  Episode episode,
+) => item.provider == animeRiftProviderId
+    ? repository.isWatchedFor(item, episode)
+    : repository.isWatched(item.url, episode);
+
+Future<void> setEpisodeWatchedFor(
+  EpisodeWatchRepository repository,
+  MultimediaItem item,
+  Episode episode,
+  bool watched,
+) => item.provider == animeRiftProviderId
+    ? repository.setWatchedFor(item, episode, watched)
+    : repository.setWatched(item.url, episode, watched);
+
+Future<void> setEpisodesWatchedFor(
+  EpisodeWatchRepository repository,
+  MultimediaItem item,
+  Iterable<Episode> episodes,
+  bool watched,
+) => item.provider == animeRiftProviderId
+    ? repository.setManyWatchedFor(item, episodes, watched)
+    : repository.setManyWatched(item.url, episodes, watched);
+
+Future<void> reconcileEpisodeWatchFor(
+  EpisodeWatchRepository repository,
+  MultimediaItem item,
+  Iterable<Episode> episodes,
+) => item.provider == animeRiftProviderId
+    ? Future<void>.value()
+    : repository.reconcileWithCloud(item.url, episodes);
 
 final episodeWatchRevisionProvider =
     NotifierProvider<EpisodeWatchRevision, int>(EpisodeWatchRevision.new);
@@ -30,6 +75,9 @@ final episodeWatchRepositoryProvider = Provider<EpisodeWatchRepository>((ref) {
     ref.watch(historyRepositoryProvider),
     ref.watch(animeWitcherAccountServiceProvider),
     () => ref.read(episodeWatchRevisionProvider.notifier).bump(),
+    () => ref.read(riftAutoSyncProvider).scheduleLocalChange(),
+    (url, number, watched) =>
+        ref.read(riftAutoSyncProvider).queueWatched(url, number, watched),
   );
 });
 
@@ -38,18 +86,22 @@ class EpisodeWatchRepository {
     this._storageService,
     this._historyRepository,
     this._accountService,
-    this._notifyChanged,
-  );
+    this._notifyChanged, [
+    this._onRiftLocalChange,
+    this._onRiftWatchedChange,
+  ]);
 
   final StorageService _storageService;
   final HistoryRepository _historyRepository;
   final AnimeWitcherAccountService _accountService;
   final void Function() _notifyChanged;
+  final Future<void> Function()? _onRiftLocalChange;
+  final Future<void> Function(String url, int episodeNumber, bool watched)?
+  _onRiftWatchedChange;
 
   static const String _legacyStorageKey = 'episode_watch_overrides_v1';
   static const String _storageKey = 'episode_watch_states_v2';
-  static const String _cloudMigrationPrefix =
-      'episode_watch_cloud_migrated_v1';
+  static const String _cloudMigrationPrefix = 'episode_watch_cloud_migrated_v1';
 
   Map<String, _EpisodeWatchState>? _cachedStates;
 
@@ -102,9 +154,7 @@ class EpisodeWatchRepository {
         : [episode.url, episode.name, episode.dubStatus.name].join(':');
 
     return sha256
-        .convert(
-          utf8.encode('${_canonicalMainUrl(mainUrl)}|$stableEpisodeId'),
-        )
+        .convert(utf8.encode('${_canonicalMainUrl(mainUrl)}|$stableEpisodeId'))
         .toString();
   }
 
@@ -168,6 +218,65 @@ class EpisodeWatchRepository {
     _notifyChanged();
   }
 
+  ProviderLocalHistory _local() =>
+      ProviderLocalHistory(_storageService, animeRiftProviderId);
+
+  bool? getExplicitStateFor(MultimediaItem item, Episode episode) =>
+      item.provider == animeRiftProviderId
+      ? _local().isWatched(item.url, episode)
+      : getExplicitState(item.url, episode);
+
+  bool isWatchedFor(MultimediaItem item, Episode episode) {
+    if (item.provider != animeRiftProviderId) {
+      return isWatched(item.url, episode);
+    }
+    final explicit = _local().isWatched(item.url, episode);
+    if (explicit != null) return explicit;
+    final position = _local().position(item.url, episode.url);
+    final duration = _local().duration(item.url, episode.url);
+    return duration > 0 && position / duration >= 0.90;
+  }
+
+  Future<void> setWatchedFor(
+    MultimediaItem item,
+    Episode episode,
+    bool watched,
+  ) async {
+    if (item.provider != animeRiftProviderId) {
+      return setWatched(item.url, episode, watched);
+    }
+    await _local().setWatched(item.url, episode, watched);
+    _notifyChanged();
+    if (episode.episode > 0 && _onRiftWatchedChange != null) {
+      await _onRiftWatchedChange(item.url, episode.episode, watched);
+    } else {
+      await _onRiftLocalChange?.call();
+    }
+  }
+
+  Future<void> setManyWatchedFor(
+    MultimediaItem item,
+    Iterable<Episode> episodes,
+    bool watched,
+  ) async {
+    if (item.provider != animeRiftProviderId) {
+      return setManyWatched(item.url, episodes, watched);
+    }
+    final selectedEpisodes = episodes.toList(growable: false);
+    await _local().setManyWatched(item.url, selectedEpisodes, watched);
+    _notifyChanged();
+    if (_onRiftWatchedChange == null) {
+      await _onRiftLocalChange?.call();
+      return;
+    }
+    for (final number
+        in selectedEpisodes.map((episode) => episode.episode).toSet()) {
+      if (number > 0) {
+        await _onRiftWatchedChange(item.url, number, watched);
+      }
+    }
+  }
+
   bool? getExplicitState(String mainUrl, Episode episode) {
     final states = _readStates();
     final current = _visibleState(states[_episodeKey(episode)]);
@@ -175,9 +284,7 @@ class EpisodeWatchRepository {
 
     // Read states written by v1 so existing users do not lose their watched
     // marks after upgrading. New writes use the URL-based v2 identity above.
-    return _visibleState(
-      states[_legacyEpisodeKey(mainUrl, episode)],
-    )?.watched;
+    return _visibleState(states[_legacyEpisodeKey(mainUrl, episode)])?.watched;
   }
 
   _EpisodeWatchState? _visibleState(_EpisodeWatchState? state) {
@@ -393,10 +500,7 @@ class EpisodeWatchRepository {
 }
 
 class _EpisodeWatchState {
-  const _EpisodeWatchState({
-    required this.watched,
-    this.ownerUid,
-  });
+  const _EpisodeWatchState({required this.watched, this.ownerUid});
 
   final bool watched;
   final String? ownerUid;

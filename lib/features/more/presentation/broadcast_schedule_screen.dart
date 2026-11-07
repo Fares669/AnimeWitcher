@@ -1,6 +1,8 @@
 /// V1.4.8 schedule integration: each broadcast day loads independently with
 /// bounded pages, pull-to-refresh, request cancellation, and safe tab cleanup.
 import 'more_sidebar_shell.dart';
+import 'provider_unsupported_page.dart';
+import '../../../core/extensions/extension_manager.dart';
 
 import 'dart:async';
 
@@ -13,7 +15,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
-import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
@@ -70,7 +71,11 @@ class _BroadcastScheduleScreenState
       vsync: this,
       initialIndex: _selectedDay,
     )..addListener(_handleTabTick);
-    unawaited(_loadDay(animeWitcherBroadcastDays[_selectedDay], refresh: true));
+    if (ref.read(activeProviderProvider)?.supportsBroadcastSchedule == true) {
+      unawaited(
+        _loadDay(animeWitcherBroadcastDays[_selectedDay], refresh: true),
+      );
+    }
   }
 
   @override
@@ -90,6 +95,9 @@ class _BroadcastScheduleScreenState
     final value = _tabController.index;
     if (value == _selectedDay) return;
     setState(() => _selectedDay = value);
+    if (ref.read(activeProviderProvider)?.supportsBroadcastSchedule != true) {
+      return;
+    }
     final day = animeWitcherBroadcastDays[value];
     final state = _dayStates[day] ?? const _BroadcastScheduleDayState();
     if (state.items.isEmpty && !state.loading && state.error == null) {
@@ -113,19 +121,8 @@ class _BroadcastScheduleScreenState
   Future<void> _loadDay(String day, {required bool refresh}) async {
     final previous = _dayStates[day] ?? const _BroadcastScheduleDayState();
     if (!refresh && (previous.loading || !previous.hasMore)) return;
-    final provider = ref.nativeProvider;
-    if (provider == null) {
-      if (!mounted) return;
-      setState(() {
-        _dayStates[day] = _BroadcastScheduleDayState(
-          items: previous.items,
-          nextOffset: previous.nextOffset,
-          hasMore: previous.hasMore,
-          error: StateError('AnimeWitcher Native provider is unavailable'),
-        );
-      });
-      return;
-    }
+    final provider = ref.read(activeProviderProvider);
+    if (provider == null || !provider.supportsBroadcastSchedule) return;
 
     _requestTokens.remove(day)?.cancel('Superseded schedule request');
     final token = CancelToken();
@@ -167,7 +164,11 @@ class _BroadcastScheduleScreenState
         );
       });
     } on DioException catch (error) {
-      if (CancelToken.isCancel(error) || !mounted) return;
+      if (CancelToken.isCancel(error) ||
+          !mounted ||
+          !identical(_requestTokens[day], token)) {
+        return;
+      }
       setState(() {
         _dayStates[day] = _BroadcastScheduleDayState(
           items: previous.items,
@@ -178,7 +179,7 @@ class _BroadcastScheduleScreenState
         );
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || !identical(_requestTokens[day], token)) return;
       setState(() {
         _dayStates[day] = _BroadcastScheduleDayState(
           items: previous.items,
@@ -197,6 +198,25 @@ class _BroadcastScheduleScreenState
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(activeProviderProvider, (previous, next) {
+      if (previous?.packageName == next?.packageName) return;
+      for (final token in _requestTokens.values) {
+        token.cancel('Anime provider changed');
+      }
+      _requestTokens.clear();
+      for (final day in animeWitcherBroadcastDays) {
+        _dayStates[day] = const _BroadcastScheduleDayState();
+      }
+      if (next?.supportsBroadcastSchedule == true) {
+        unawaited(
+          _loadDay(animeWitcherBroadcastDays[_selectedDay], refresh: true),
+        );
+      }
+    });
+    if (ref.watch(activeProviderProvider)?.supportsBroadcastSchedule != true) {
+      return const ProviderUnsupportedPage(title: 'جدول البث');
+    }
+
     ref.listen<int>(accountDataRevisionProvider, (previous, next) {
       if (previous == next) return;
       for (final token in List<CancelToken>.from(_requestTokens.values)) {

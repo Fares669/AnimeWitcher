@@ -3,6 +3,7 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/extensions/extension_manager.dart';
+import '../../../../core/extensions/item_provider_resolution.dart';
 import '../../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../home/presentation/view_all_screen.dart';
 
@@ -97,10 +98,12 @@ class AnimeInformationSection extends StatelessWidget {
       return;
     }
 
-    final provider = ProviderScope.containerOf(
-      context,
-      listen: false,
-    ).read(activeProviderProvider);
+    final container = ProviderScope.containerOf(context, listen: false);
+    final provider = resolveItemProvider(
+      container.read(extensionManagerProvider),
+      item.provider,
+      container.read(activeProviderProvider),
+    );
     if (provider is! AnimeWitcherNativeProvider) return;
 
     Navigator.of(context).push(

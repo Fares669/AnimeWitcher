@@ -7,7 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
-import '../../../core/extensions/native_provider_resolution.dart';
+import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/network/dio_client_provider.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../../core/utils/artwork_host_fallback.dart';
@@ -136,8 +137,8 @@ Future<ProviderMediaPage> loadMalRankingPage(
   MalRanking ranking,
   int offset,
 ) async {
-  final catalogue = ref.nativeProvider;
-  if (catalogue == null) {
+  final catalogue = ref.read(activeProviderProvider);
+  if (catalogue is! AnimeWitcherNativeProvider) {
     return const ProviderMediaPage(items: [], nextOffset: 0, hasMore: false);
   }
   final page = offset ~/ malRankingPageSize + 1;
@@ -160,6 +161,10 @@ Future<ProviderMediaPage> loadMalRankingPage(
 /// only offline, so View All cannot skip new titles on the first source page.
 final homeMalRankingPageProvider =
     FutureProvider.family<ProviderMediaPage, MalRanking>((ref, ranking) async {
+      final active = ref.watch(activeProviderProvider);
+      if (active is! AnimeWitcherNativeProvider) {
+        return const ProviderMediaPage(items: [], nextOffset: 0, hasMore: false);
+      }
       final storage = ref.read(storageServiceProvider);
       // Older snapshots did not preserve the source cursor after sparse pages.
       final key = 'mal_ranking_anilist_10_page_${ranking.name}';

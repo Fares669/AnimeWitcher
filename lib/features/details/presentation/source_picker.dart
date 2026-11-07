@@ -63,6 +63,9 @@ class _SourcePickerSheet extends StatefulWidget {
 }
 
 class _SourcePickerSheetState extends State<_SourcePickerSheet> {
+  StreamSourceLanguage? _language;
+  StreamSourceAudioType? _audioType;
+
   @override
   Widget build(BuildContext context) {
     return SafeArea(
@@ -126,36 +129,212 @@ class _SourcePickerSheetState extends State<_SourcePickerSheet> {
     if (sources.isEmpty) {
       return const _SourcePickerMessage('لم يتم العثور على مصادر تشغيل.');
     }
-
-    final rows = _buildSourcePickerRows(sources);
-    return ListView.builder(
-      shrinkWrap: true,
-      padding: const EdgeInsets.only(bottom: 12),
-      itemCount: rows.length,
-      itemBuilder: (context, index) {
-        final row = rows[index];
-        if (row.heading != null) {
-          return _SourceQualityHeader(label: row.heading!);
-        }
-
-        final source = row.source!;
-        return ListTile(
-          contentPadding: const EdgeInsetsDirectional.only(start: 36, end: 20),
-          leading: Icon(
-            widget.forDownload
-                ? Icons.file_download_outlined
-                : Icons.play_circle_outline,
+    final languages = availableStreamSourceLanguages(sources);
+    final language = languages.contains(_language) ? _language! : languages.first;
+    final languageSources = filterStreamSourcesByAudio(
+      sources,
+      language: language,
+    );
+    final audioTypes = availableStreamSourceAudioTypes(languageSources);
+    final audioType = audioTypes.contains(_audioType)
+        ? _audioType
+        : audioTypes.isEmpty
+        ? null
+        : audioTypes.first;
+    final rows = _buildSourcePickerRows(
+      filterStreamSourcesByAudio(
+        languageSources,
+        language: language,
+        audioType: audioType,
+      ),
+    );
+    return Column(
+      children: [
+        if (languages.length > 1 ||
+            languages.first != StreamSourceLanguage.unknown)
+          Padding(
+            padding: const EdgeInsetsDirectional.fromSTEB(20, 4, 20, 4),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  for (final option in languages)
+                    ChoiceChip(
+                      key: ValueKey('source-picker-language-${option.name}'),
+                      label: Text(option.label),
+                      selected: option == language,
+                      onSelected: (_) => setState(() {
+                        _language = option;
+                        _audioType = null;
+                      }),
+                    ),
+                ],
+              ),
+            ),
           ),
-          title: Text(
-            source.source,
-            style: const TextStyle(fontWeight: FontWeight.w600),
+        if (audioTypes.isNotEmpty)
+          Padding(
+            padding: const EdgeInsetsDirectional.fromSTEB(20, 0, 20, 6),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: [
+                  for (final option in audioTypes)
+                    ChoiceChip(
+                      key: ValueKey('source-picker-mode-${option.name}'),
+                      label: Text(option.label),
+                      visualDensity: VisualDensity.compact,
+                      labelPadding: const EdgeInsets.symmetric(horizontal: 2),
+                      selected: audioType == option,
+                      onSelected: (_) => setState(() => _audioType = option),
+                    ),
+                ],
+              ),
+            ),
           ),
-          onTap: () => Navigator.of(context).pop(source),
-        );
-      },
+        Flexible(
+          child: ListView.builder(
+            shrinkWrap: true,
+            padding: const EdgeInsets.only(bottom: 12),
+            itemCount: rows.length,
+            itemBuilder: (context, index) {
+              final row = rows[index];
+              if (row.heading != null) {
+                return _SourceQualityHeader(label: row.heading!);
+              }
+              final source = row.source!;
+              return ListTile(
+                contentPadding: const EdgeInsetsDirectional.only(
+                  start: 36,
+                  end: 20,
+                ),
+                leading: Icon(
+                  widget.forDownload
+                      ? Icons.file_download_outlined
+                      : Icons.play_circle_outline,
+                ),
+                title: Text(
+                  streamSourceDisplayName(source),
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                onTap: () => Navigator.of(context).pop(source),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }
+
+/// Only verified suffixes emitted by the Rift catalog are interpreted.
+/// Never infer audio language from URL, host, or available subtitle tracks.
+enum StreamSourceLanguage {
+  arabic('العربية'),
+  english('الإنجليزية'),
+  unknown('غير محدد');
+
+  const StreamSourceLanguage(this.label);
+  final String label;
+}
+
+enum StreamSourceAudioType {
+  subtitles('ترجمة'),
+  dubbed('دبلجة');
+
+  const StreamSourceAudioType(this.label);
+  final String label;
+}
+
+class StreamSourceAudioMetadata {
+  const StreamSourceAudioMetadata({
+    required this.serverName,
+    required this.language,
+    required this.audioType,
+  });
+
+  final String serverName;
+  final StreamSourceLanguage language;
+  final StreamSourceAudioType? audioType;
+}
+
+final _riftAudioSuffix = RegExp(
+  r'\s*\((عربي مترجم|عربي مدبلج|إنجليزي مترجم|إنجليزي مدبلج|Arabic sub|Arabic dub|English sub|English dub)\)\s*$',
+  caseSensitive: false,
+);
+
+StreamSourceAudioMetadata streamSourceAudioMetadata(StreamResult source) {
+  final label = source.source.trim();
+  final suffix = _riftAudioSuffix.firstMatch(label);
+  if (suffix == null) {
+    return StreamSourceAudioMetadata(
+      serverName: label,
+      language: StreamSourceLanguage.unknown,
+      audioType: null,
+    );
+  }
+  final name = label.substring(0, suffix.start).trim();
+  if (name.isEmpty) {
+    return StreamSourceAudioMetadata(
+      serverName: label,
+      language: StreamSourceLanguage.unknown,
+      audioType: null,
+    );
+  }
+  final variant = suffix.group(1)!.toLowerCase();
+  return StreamSourceAudioMetadata(
+    serverName: name,
+    language: variant.startsWith('عربي') || variant.startsWith('arabic')
+        ? StreamSourceLanguage.arabic
+        : StreamSourceLanguage.english,
+    audioType: variant.endsWith('مترجم') || variant.endsWith('sub')
+        ? StreamSourceAudioType.subtitles
+        : StreamSourceAudioType.dubbed,
+  );
+}
+
+String streamSourceDisplayName(StreamResult source) =>
+    streamSourceAudioMetadata(source).serverName;
+
+List<StreamSourceLanguage> availableStreamSourceLanguages(
+  List<StreamResult> sources,
+) {
+  final available = sources
+      .map((source) => streamSourceAudioMetadata(source).language)
+      .toSet();
+  return [
+    for (final language in StreamSourceLanguage.values)
+      if (available.contains(language)) language,
+  ];
+}
+
+List<StreamSourceAudioType> availableStreamSourceAudioTypes(
+  List<StreamResult> sources,
+) {
+  final available = sources
+      .map((source) => streamSourceAudioMetadata(source).audioType)
+      .toSet();
+  return [
+    for (final audioType in StreamSourceAudioType.values)
+      if (available.contains(audioType)) audioType,
+  ];
+}
+
+List<StreamResult> filterStreamSourcesByAudio(
+  List<StreamResult> sources, {
+  required StreamSourceLanguage language,
+  StreamSourceAudioType? audioType,
+}) => [
+  for (final source in sources)
+    if (streamSourceAudioMetadata(source).language == language &&
+        (audioType == null ||
+            streamSourceAudioMetadata(source).audioType == audioType))
+      source,
+];
 
 class _SourcePickerLoadingLabel extends StatelessWidget {
   const _SourcePickerLoadingLabel();

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,6 +9,7 @@ import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/news/presentation/open_news.dart';
 import 'package:animewitcher/features/onboarding/first_run_setup_screen.dart';
+import 'package:animewitcher/features/library/presentation/library_provider.dart';
 import 'package:animewitcher/shared/widgets/account_avatar_button.dart';
 import 'package:animewitcher/shared/widgets/app_navigation_bars.dart';
 import 'package:animewitcher/shared/widgets/app_side_menu.dart';
@@ -38,6 +41,7 @@ class AppScaffold extends ConsumerStatefulWidget {
 
 class _AppScaffoldState extends ConsumerState<AppScaffold> {
   bool _askedForLayout = false;
+  int? _previousBranchIndex;
 
   @override
   void initState() {
@@ -116,6 +120,22 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
     void onDestination(TaskbarDestination destination) =>
         _onItemTapped(destination.branchIndex, context);
     final currentIndex = widget.navigationShell.currentIndex;
+    if (_previousBranchIndex != currentIndex) {
+      _previousBranchIndex = currentIndex;
+      if (currentIndex == TaskbarDestination.library.branchIndex) {
+        // StatefulShellRoute retains pages across tab switches. initState()
+        // on LibraryScreen runs only once, so refresh on every actual entry.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted &&
+              widget.navigationShell.currentIndex ==
+                  TaskbarDestination.library.branchIndex) {
+            unawaited(
+              ref.read(libraryProvider.notifier).refreshVisibleFromServer(),
+            );
+          }
+        });
+      }
+    }
 
     // Every layout shares the same fixed browse menu, independent of the
     // customizable taskbar order and visibility.
