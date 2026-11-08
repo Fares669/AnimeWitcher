@@ -6,6 +6,7 @@ import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/services/download_v2/download_file_planner_v2.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/services/download_v2/manga_chapter_manifest_v2.dart';
+import 'package:animewitcher/core/storage/anime_rift_account_scope.dart';
 import 'package:animewitcher/core/storage/provider_local_library.dart'
     show animeRiftProviderId;
 import 'package:animewitcher/core/utils/episode_label.dart';
@@ -14,6 +15,39 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 void main() {
+  test('Rift episode with logical identity uses the same anime title folder as Witcher', () async {
+    final temp = await _useTestDownloads();
+    addTearDown(AnimeRiftLocalAccountScope.reset);
+    AnimeRiftLocalAccountScope.activate('linked-user');
+    final item = MultimediaItem(
+      title: 'Same Show',
+      url: 'https://anime-rift.com/anime/42',
+      posterUrl: '',
+    );
+    final logicalId = logicalDownloadIdFor(
+      animeId: item.url,
+      episodeKey: 'https://anime-rift.com/anime/42/episode/7',
+      variantKey: 'sub|1080p',
+      providerId: animeRiftProviderId,
+    );
+    final native = await downloadDestinationPathV2(
+      item,
+      filename: 'episode.mp4',
+      providerId: 'com.fares669.animewitcher.native',
+    );
+    final rift = await downloadDestinationPathV2(
+      item,
+      filename: 'episode.mp4',
+      providerId: animeRiftProviderId,
+      logicalId: logicalId,
+    );
+    expect(p.dirname(rift), p.dirname(native));
+    expect(p.dirname(rift), p.join(temp.path, 'anime', 'Same Show'));
+    expect(p.basename(rift), startsWith('episode-'));
+    expect(rift, endsWith('.mp4'));
+    expect(rift, isNot(native));
+  });
+
   test('different providers never share episode destinations', () async {
     final temp = await _useTestDownloads();
     final item = MultimediaItem(title: 'Example', url: '/anime', posterUrl: '');

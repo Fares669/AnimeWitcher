@@ -320,8 +320,16 @@ Future<String> downloadDestinationPathV2(
     );
   }
   final title = _downloadFolderName(item.title, fallback: 'Unknown');
-  final scope = downloadProviderScopeV2(providerId);
-  final accountHash = isAnimeRiftDownloadProviderV2(providerId)
+  // Rift episodes use the same readable Downloads/anime/<title> folder as
+  // AnimeWitcher. Their provider/account-qualified logical ID already gives
+  // each file a distinct suffix, keeping simultaneous downloads isolated.
+  // Keep the older scoped path if no logical ID is supplied; otherwise two
+  // providers could write the same unsuffixed server filename.
+  final sharedRiftFolder =
+      isAnimeRiftDownloadProviderV2(providerId) && logicalId != null;
+  final scope = sharedRiftFolder ? null : downloadProviderScopeV2(providerId);
+  final accountHash =
+      !sharedRiftFolder && isAnimeRiftDownloadProviderV2(providerId)
       ? AnimeRiftLocalAccountScope.accountHash
       : null;
   final directory = await _downloadMediaDirectoryV2('anime', <String>[

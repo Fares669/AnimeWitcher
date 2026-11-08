@@ -46,7 +46,7 @@ void main() {
   });
 
   test(
-    'guest IDs/paths remain original; account A and B get isolated IDs/paths',
+    'Rift guest and linked episode downloads share the native folder but keep distinct filenames',
     () async {
       final item = MultimediaItem(
         title: 'Series',
@@ -69,12 +69,15 @@ void main() {
       final guestId = id();
       final guestPath = await path();
       expect(guestPath, isNot(contains('.accounts')));
+      expect(p.basename(p.dirname(guestPath)), 'Series');
 
       AnimeRiftLocalAccountScope.activate('account-A');
       final aHash = AnimeRiftLocalAccountScope.accountHash!;
       final aId = id();
       final aPath = await path();
-      expect(aPath, contains(p.join('.accounts', aHash)));
+      expect(p.dirname(aPath), p.dirname(guestPath));
+      expect(aPath, isNot(contains('.providers')));
+      expect(aPath, isNot(contains('.accounts')));
       final aDescriptor = _descriptor();
       expect(aDescriptor['accountHash'], aHash);
       expect(downloadBelongsToCurrentRiftAccountV2(aDescriptor), isTrue);
@@ -82,6 +85,7 @@ void main() {
       AnimeRiftLocalAccountScope.activate('account-B');
       final bId = id();
       final bPath = await path();
+      expect(p.dirname(bPath), p.dirname(aPath));
       expect(bId, isNot(aId));
       expect(bPath, isNot(aPath));
       expect(bPath, isNot(guestPath));
