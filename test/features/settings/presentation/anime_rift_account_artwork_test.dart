@@ -75,5 +75,14 @@ void main() {
     expect(avatar.foregroundImage, isA<NetworkImage>());
     expect(find.byKey(const ValueKey('rift-profile-banner')), findsOneWidget);
     expect(find.byKey(const ValueKey('rift-my-comments')), findsOneWidget);
+    final commentsRect = tester.getRect(
+      find.byKey(const ValueKey('rift-my-comments')),
+    );
+    final accessRect = tester.getRect(
+      find.byKey(const ValueKey('settings-animerift-account')),
+    );
+    expect(accessRect.size, commentsRect.size);
+    expect(accessRect.left, commentsRect.left);
+    expect(accessRect.right, commentsRect.right);
   });
 }

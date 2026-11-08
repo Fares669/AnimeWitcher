@@ -361,6 +361,7 @@ class _AnimeRiftAccountTileState extends ConsumerState<_AnimeRiftAccountTile> {
             english: 'Anime Rift account access',
             arabic: 'وصول حساب Anime Rift',
           ),
+          subtitleIsDescription: true,
           subtitle: waiting
               ? appText(
                   context,

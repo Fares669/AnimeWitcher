@@ -87,25 +87,27 @@ class AnimeRiftAccountScreen extends ConsumerWidget {
                     ),
                   ),
                 ),
-              if (linked && rift != null)
+              if (rift != null)
                 SettingsGroup(
                   title: 'إدارة الحساب',
                   children: [
-                    SettingsTile(
-                      key: const ValueKey('rift-my-comments'),
-                      icon: Icons.chat_bubble_outline_rounded,
-                      title: 'تعليقاتي',
-                      subtitle: 'تعليقاتك ومراجعاتك على Anime Rift',
-                      onTap: () => Navigator.of(context).push<void>(
-                        MaterialPageRoute<void>(
-                          builder: (_) =>
-                              AnimeRiftMyCommentsScreen(provider: rift),
+                    if (linked)
+                      SettingsTile(
+                        key: const ValueKey('rift-my-comments'),
+                        icon: Icons.chat_bubble_outline_rounded,
+                        title: 'تعليقاتي',
+                        subtitle: 'تعليقاتك ومراجعاتك على Anime Rift',
+                        subtitleIsDescription: true,
+                        onTap: () => Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) =>
+                                AnimeRiftMyCommentsScreen(provider: rift),
+                          ),
                         ),
                       ),
-                    ),
+                    const AnimeRiftAccountSettingsTile(),
                   ],
                 ),
-              if (rift != null) const AnimeRiftAccountSettingsTile(),
             ],
           ),
         ),
