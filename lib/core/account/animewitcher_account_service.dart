@@ -123,6 +123,10 @@ class AnimeWitcherAccountService {
       <String, Future<void>>{};
   final Map<String, Future<void>> _libraryWriteQueues =
       <String, Future<void>>{};
+  final Map<String, MultimediaItem> _resolvedAnimeCache =
+      <String, MultimediaItem>{};
+  final Map<String, MultimediaItem> _resolvedMangaCache =
+      <String, MultimediaItem>{};
   Future<void> _pendingStorageWrite = Future<void>.value();
   int _mutationSerial = 0;
 
@@ -2000,19 +2004,40 @@ class AnimeWitcherAccountService {
       );
     }
     final generation = _sessionGeneration;
-    final values = await _authenticated<List<int>>((token) async {
-      return Future.wait([
+    final mediaKindKey = manga ? 'manga' : 'anime';
+    final cachedCounts = _storage.getCachedLibraryCounts(
+      providerKey: 'native',
+      accountKey: profile.uid,
+      mediaKindKey: mediaKindKey,
+    );
+    final values = await _authenticated<List<int?>>((token) async {
+      var anySucceeded = false;
+      Object? lastError;
+      final results = await Future.wait([
         for (final category in LibraryCategory.values)
-          _firestore.countLibraryDocuments(
-            'users/${profile.documentId}/'
-            '${category == LibraryCategory.favorite ? 'fav' : 'user'}_'
-            '${manga ? 'manga' : 'anime'}',
-            token,
-            type: category == LibraryCategory.favorite
-                ? null
-                : _cloudType(category),
-          ),
+          _firestore
+              .countLibraryDocuments(
+                'users/${profile.documentId}/'
+                '${category == LibraryCategory.favorite ? 'fav' : 'user'}_'
+                '${manga ? 'manga' : 'anime'}',
+                token,
+                type: category == LibraryCategory.favorite
+                    ? null
+                    : _cloudType(category),
+              )
+              .then<int?>((count) {
+                anySucceeded = true;
+                return count;
+              })
+              .catchError((Object error) {
+                lastError = error;
+                return cachedCounts[category.storageKey];
+              }),
       ]);
+      if (!anySucceeded && lastError != null) {
+        throw lastError!;
+      }
+      return results;
     });
     if (!_isCurrentProfile(profile) || generation != _sessionGeneration) {
       throw const AnimeWitcherAccountException(
@@ -2020,10 +2045,23 @@ class AnimeWitcherAccountService {
         'The active account changed.',
       );
     }
-    return {
+    final counts = <LibraryCategory, int>{
       for (var index = 0; index < LibraryCategory.values.length; index++)
-        LibraryCategory.values[index]: values[index],
+        if (values[index] case final int total)
+          LibraryCategory.values[index]: total,
     };
+    if (counts.isNotEmpty) {
+      await _storage.setCachedLibraryCounts(
+        providerKey: 'native',
+        accountKey: profile.uid,
+        mediaKindKey: mediaKindKey,
+        counts: {
+          for (final entry in counts.entries)
+            entry.key.storageKey: entry.value,
+        },
+      );
+    }
+    return counts;
   }
 
   /// Reads one shelf without interpreting absent documents as deletions or
@@ -2054,22 +2092,62 @@ class AnimeWitcherAccountService {
         '${favorite ? 'fav' : 'user'}_${manga ? 'manga' : 'anime'}';
     final path = 'users/${profile.documentId}/$collection';
     final type = favorite ? null : _cloudType(category);
-    final total =
-        cursor?.total ??
-        await _authenticated<int>(
-          (token) => _firestore.countLibraryDocuments(path, token, type: type),
-        );
-    final docs = await _authenticated(
-      (token) => _firestore.queryLibraryDocumentsPage(
+    final (int total, List<FirestoreDocument> docs) = await _authenticated((
+      token,
+    ) async {
+      final docsFuture = _firestore.queryLibraryDocumentsPage(
         path,
         token,
         type: type,
         startAfter: cursor?.document,
         limit: 30,
+      );
+      if (cursor != null) {
+        return (cursor.total, await docsFuture);
+      }
+      final countFuture = _firestore
+          .countLibraryDocuments(path, token, type: type)
+          .then<int?>((value) => value)
+          .catchError((Object _) => null);
+      final pageDocs = await docsFuture;
+      final counted = await countFuture;
+      final effectiveTotal =
+          counted ??
+          (pageDocs.length < 30
+              ? pageDocs.length
+              : (_storage.getCachedLibraryCounts(
+                      providerKey: 'native',
+                      accountKey: profile.uid,
+                      mediaKindKey: manga ? 'manga' : 'anime',
+                    )[category.storageKey] ??
+                    pageDocs.length));
+      return (effectiveTotal, pageDocs);
+    });
+    unawaited(
+      _storage.setCachedLibraryCounts(
+        providerKey: 'native',
+        accountKey: profile.uid,
+        mediaKindKey: manga ? 'manga' : 'anime',
+        counts: {category.storageKey: total},
       ),
     );
-    // Like the original APK, resolve legacy entries concurrently. Modern
-    // shelf documents already contain compact artwork and need no extra GET.
+    final localItems = _storage.getLibraryItems();
+    final localById = <String, MultimediaItem>{};
+    for (final item in localItems) {
+      if (item.provider == animeRiftProviderId) continue;
+      if (manga) {
+        if (item.contentType != MultimediaContentType.manga) continue;
+        final mangaId = _mangaIdFromItem(item);
+        if (mangaId.isNotEmpty) localById[mangaId] = item;
+      } else {
+        if (item.contentType == MultimediaContentType.manga) continue;
+        final animeId = AnimeWitcherSyncIds.animeIdFromUrl(item.url);
+        if (animeId != null) localById[animeId] = item;
+      }
+    }
+    // Like the original APK, modern shelf documents already contain embedded
+    // title/image/type/year fields and need no extra GET. Only un-migrated
+    // entries that also miss the local cache fall back to individual GETs.
     final resolved = await Future.wait(
       docs.map((doc) async {
         if (!_isCurrentProfile(profile) || generation != _sessionGeneration) {
@@ -2087,9 +2165,19 @@ class AnimeWitcherAccountService {
                   : _animeIdFromListDocument(doc));
         if (id == null) return null;
         return manga
-            ? (_mangaItemFromRemoteDocument(doc, id) ??
+            ? (_mangaItemFromRemoteDocument(
+                    doc,
+                    id,
+                    isFavorite: favorite,
+                    cached: localById[id] ?? _resolvedMangaCache[id],
+                  ) ??
                   await _itemForMangaId(id))
-            : (_itemFromCompact(doc.fields['animewitcher_item']) ??
+            : (_animeItemFromRemoteDocument(
+                    doc,
+                    id,
+                    isFavorite: favorite,
+                    cached: localById[id] ?? _resolvedAnimeCache[id],
+                  ) ??
                   await _itemForAnimeId(id));
       }),
     );
@@ -2199,9 +2287,11 @@ class AnimeWitcherAccountService {
         'This AnimeWitcher account has been suspended.',
       );
     }
+    final resolvedUid = (fields['uid'] ?? session.uid).toString();
+    _cacheProfileLibraryStatistics(resolvedUid, fields);
     return AnimeWitcherProfile(
       documentId: document.id,
-      uid: (fields['uid'] ?? session.uid).toString(),
+      uid: resolvedUid,
       signInMethod: session.signInMethod,
       // Firebase Auth is authoritative after a verified email change. The
       // official client asynchronously copies it back to Firestore.
@@ -2430,6 +2520,8 @@ class AnimeWitcherAccountService {
     _watchedWriteQueues.clear();
     _progressWriteQueues.clear();
     _libraryWriteQueues.clear();
+    _resolvedAnimeCache.clear();
+    _resolvedMangaCache.clear();
     try {
       await _auth.signOut();
     } catch (_) {}
@@ -2618,7 +2710,12 @@ class AnimeWitcherAccountService {
       final local = localByAnimeId[entry.key];
       if (local == null) {
         final item =
-            _itemFromCompact(remote.document.fields['animewitcher_item']) ??
+            _animeItemFromRemoteDocument(
+              remote.document,
+              entry.key,
+              isFavorite: remote.favorite && remote.category == null,
+              cached: _resolvedAnimeCache[entry.key],
+            ) ??
             await _itemForAnimeId(entry.key);
         if (item != null && _isCurrentProfile(profile)) {
           await _storage.addToLibrary(
@@ -2655,7 +2752,12 @@ class AnimeWitcherAccountService {
       }
 
       final remoteItem =
-          _itemFromCompact(remote.document.fields['animewitcher_item']) ??
+          _animeItemFromRemoteDocument(
+            remote.document,
+            entry.key,
+            isFavorite: remote.favorite && remote.category == null,
+            cached: local,
+          ) ??
           local;
       await _storage.addToLibrary(
         remoteItem,
@@ -2768,7 +2870,12 @@ class AnimeWitcherAccountService {
 
       if (local == null) {
         final item =
-            _mangaItemFromRemoteDocument(remote.document, mangaId) ??
+            _mangaItemFromRemoteDocument(
+              remote.document,
+              mangaId,
+              isFavorite: remote.favorite && remote.category == null,
+              cached: _resolvedMangaCache[mangaId],
+            ) ??
             await _itemForMangaId(mangaId);
         if (item != null && _isCurrentProfile(profile)) {
           await _storage.addToLibrary(
@@ -2802,7 +2909,13 @@ class AnimeWitcherAccountService {
       }
 
       final remoteItem =
-          _mangaItemFromRemoteDocument(remote.document, mangaId) ?? local;
+          _mangaItemFromRemoteDocument(
+            remote.document,
+            mangaId,
+            isFavorite: remote.favorite && remote.category == null,
+            cached: local,
+          ) ??
+          local;
       await _storage.addToLibrary(
         remoteItem,
         category: remote.category?.storageKey,
@@ -2883,6 +2996,10 @@ class AnimeWitcherAccountService {
     if (animeId == null || !_isCurrentProfile(profile)) return;
     final root = 'users/${profile.documentId}';
     final compact = _compactItem(item);
+    final animeType =
+        (item.catalogType != null && item.catalogType!.trim().isNotEmpty)
+        ? item.catalogType!.trim()
+        : (item.contentType == MultimediaContentType.movie ? 'Movie' : 'TV');
 
     if (category == null) {
       await _authenticated(
@@ -2897,6 +3014,10 @@ class AnimeWitcherAccountService {
             'doc_ref': 'anime_list/$animeId',
             'type': _cloudType(category),
             'views': 0,
+            'name': item.title,
+            'image': item.posterUrl,
+            'anime_type': animeType,
+            if (item.year != null) 'year': '${item.year}',
             'animewitcher_item': compact,
           },
           token,
@@ -2912,6 +3033,11 @@ class AnimeWitcherAccountService {
           <String, dynamic>{
             'anime_doc_id': 'anime_list/$animeId',
             'views': 0,
+            'name': item.title,
+            'image': item.posterUrl,
+            'type': animeType,
+            'anime_type': animeType,
+            if (item.year != null) 'year': '${item.year}',
             'animewitcher_item': compact,
           },
           token,
@@ -2966,6 +3092,11 @@ class AnimeWitcherAccountService {
       if (!_isCurrentProfile(profile)) return;
       final root = 'users/${profile.documentId}';
       final mangaReference = FirestoreReference('manga_list/$mangaId');
+      final compact = _compactItem(item);
+      final mangaType =
+          (item.catalogType != null && item.catalogType!.trim().isNotEmpty)
+          ? item.catalogType!.trim()
+          : 'Manga';
 
       if (primaryCategory == null) {
         await _authenticated(
@@ -2980,6 +3111,10 @@ class AnimeWitcherAccountService {
               'doc_ref': mangaReference,
               'type': _cloudType(primaryCategory),
               'views': 0,
+              'name': item.title,
+              'image': item.posterUrl,
+              'manga_type': mangaType,
+              'animewitcher_item': compact,
             },
             token,
             serverTimestampFields: const <String>{'date'},
@@ -2991,7 +3126,15 @@ class AnimeWitcherAccountService {
         await _authenticated(
           (token) => _firestore.setDocumentWithServerTimestamps(
             '$root/fav_manga/$mangaId',
-            <String, dynamic>{'manga_doc_id': mangaReference, 'views': 0},
+            <String, dynamic>{
+              'manga_doc_id': mangaReference,
+              'views': 0,
+              'name': item.title,
+              'image': item.posterUrl,
+              'type': mangaType,
+              'manga_type': mangaType,
+              'animewitcher_item': compact,
+            },
             token,
             serverTimestampFields: const <String>{'date'},
           ),
@@ -4198,12 +4341,17 @@ class AnimeWitcherAccountService {
   // -------------------------------------------------------------------------
 
   Future<MultimediaItem?> _itemForAnimeId(String animeId) async {
+    final cached = _resolvedAnimeCache[animeId];
+    if (cached != null) return cached;
     final document = await _authenticated(
       (token) => _firestore.getDocument('anime_list/$animeId', token),
     );
     if (document == null) return null;
     final own = _itemFromCompact(document.fields['animewitcher_item']);
-    if (own != null) return own;
+    if (own != null) {
+      _resolvedAnimeCache[animeId] = own;
+      return own;
+    }
     final source = document.fields;
     final details = _map(source['details']);
     final poster = _map(source['poster']);
@@ -4225,7 +4373,7 @@ class AnimeWitcherAccountService {
     final rawType = _firstString(<dynamic>[source['type'], details['type']]);
     final isMovie =
         rawType.toLowerCase().contains('movie') || rawType.contains('فيلم');
-    return MultimediaItem(
+    final item = MultimediaItem(
       title: title,
       url: AnimeWitcherSyncIds.mainUrl(animeId),
       posterUrl: posterUrl,
@@ -4242,6 +4390,131 @@ class AnimeWitcherAccountService {
       catalogType: rawType.isEmpty ? null : rawType,
       score: _doubleValue(details['mal_mean'] ?? details['mal_score']),
     );
+    _resolvedAnimeCache[animeId] = item;
+    return item;
+  }
+
+  MultimediaItem? _animeItemFromRemoteDocument(
+    FirestoreDocument document,
+    String animeId, {
+    bool isFavorite = false,
+    MultimediaItem? cached,
+  }) {
+    final compact = _itemFromCompact(document.fields['animewitcher_item']);
+    if (compact != null) {
+      _resolvedAnimeCache[animeId] = compact;
+      return compact;
+    }
+    final fields = document.fields;
+    final details = _map(fields['details']);
+    final poster = _map(fields['poster']);
+    final title =
+        _optionalString(fields['name']) ??
+        _optionalString(fields['english_title']);
+    final posterUrl = _firstString(<dynamic>[
+      fields['image'],
+      poster['large'],
+      fields['poster_uri'],
+      poster['medium'],
+      fields['cover_uri'],
+    ]);
+    if (title != null && posterUrl.isNotEmpty) {
+      final rawType = _firstString(<dynamic>[
+        fields['anime_type'],
+        if (isFavorite) fields['type'],
+        details['type'],
+      ]);
+      final isMovie =
+          rawType.toLowerCase().contains('movie') || rawType.contains('فيلم');
+      final banner = _firstString(<dynamic>[
+        fields['cover_uri'],
+        cached?.bannerUrl,
+        poster['large'],
+        fields['image'],
+        fields['poster_uri'],
+      ]);
+      final item = MultimediaItem(
+        title: title,
+        url: AnimeWitcherSyncIds.mainUrl(animeId),
+        posterUrl: posterUrl,
+        bannerUrl: banner.isEmpty ? posterUrl : banner,
+        description:
+            _optionalString(fields['story']) ??
+            _optionalString(fields['description']) ??
+            _optionalString(details['story']) ??
+            cached?.description,
+        contentType: isMovie
+            ? MultimediaContentType.movie
+            : (cached?.contentType == MultimediaContentType.movie
+                  ? MultimediaContentType.movie
+                  : MultimediaContentType.anime),
+        provider: animeWitcherProvider,
+        year: _yearValue(details['year'] ?? fields['year']) ?? cached?.year,
+        catalogType: rawType.isEmpty ? cached?.catalogType : rawType,
+        score:
+            _doubleValue(details['mal_mean'] ?? details['mal_score']) ??
+            cached?.score,
+        status: cached?.status ?? ShowStatus.ongoing,
+      );
+      _resolvedAnimeCache[animeId] = item;
+      return item;
+    }
+    if (cached != null &&
+        cached.title.trim().isNotEmpty &&
+        cached.posterUrl.trim().isNotEmpty) {
+      return cached;
+    }
+    return null;
+  }
+
+  void _cacheProfileLibraryStatistics(String uid, Map<String, dynamic> fields) {
+    final animeCounts = _extractLibraryStats(fields['statistics_user_anime']);
+    if (animeCounts.isNotEmpty) {
+      unawaited(
+        _storage.setCachedLibraryCounts(
+          providerKey: 'native',
+          accountKey: uid,
+          mediaKindKey: 'anime',
+          counts: animeCounts,
+        ),
+      );
+    }
+    final mangaCounts = _extractLibraryStats(fields['statistics_user_manga']);
+    if (mangaCounts.isNotEmpty) {
+      unawaited(
+        _storage.setCachedLibraryCounts(
+          providerKey: 'native',
+          accountKey: uid,
+          mediaKindKey: 'manga',
+          counts: mangaCounts,
+        ),
+      );
+    }
+  }
+
+  Map<String, int> _extractLibraryStats(dynamic raw) {
+    final map = _map(raw);
+    if (map.isEmpty) return const <String, int>{};
+    final counts = <String, int>{};
+    void put(LibraryCategory category, Iterable<String> keys) {
+      for (final key in keys) {
+        final value = _nullableInt(map[key]);
+        if (value != null && value >= 0) {
+          counts[category.storageKey] = value;
+          return;
+        }
+      }
+    }
+
+    put(LibraryCategory.watching, const <String>['watching']);
+    put(LibraryCategory.completed, const <String>['completed']);
+    put(LibraryCategory.planToWatch, const <String>['pin', 'pinned']);
+    put(LibraryCategory.continueLater, const <String>['onHold', 'on_Hold']);
+    put(
+      LibraryCategory.notInterested,
+      const <String>['noWatching', 'no_watching'],
+    );
+    return counts;
   }
 
   Map<String, dynamic> _compactItem(MultimediaItem item) => <String, dynamic>{
@@ -4308,26 +4581,70 @@ class AnimeWitcherAccountService {
   }
 
   Future<MultimediaItem?> _itemForMangaId(String mangaId) async {
+    final cached = _resolvedMangaCache[mangaId];
+    if (cached != null) return cached;
     final document = await _authenticated(
       (token) => _firestore.getDocument('manga_list/$mangaId', token),
     );
     if (document == null) return null;
-    return _mangaItemFromFields(document.fields, mangaId);
+    final mapped = _mangaItemFromFields(document.fields, mangaId);
+    if (mapped != null) {
+      _resolvedMangaCache[mangaId] = mapped;
+    }
+    return mapped;
   }
 
   MultimediaItem? _mangaItemFromRemoteDocument(
     FirestoreDocument document,
-    String mangaId,
-  ) {
+    String mangaId, {
+    bool isFavorite = false,
+    MultimediaItem? cached,
+  }) {
     final compact = _itemFromCompact(document.fields['animewitcher_item']);
     if (compact != null && compact.contentType == MultimediaContentType.manga) {
+      _resolvedMangaCache[mangaId] = compact;
       return compact;
     }
     for (final key in const <String>['mangaModel', 'manga_model']) {
       final source = _map(document.fields[key]);
       if (source.isEmpty) continue;
       final mapped = _mangaItemFromFields(source, mangaId);
-      if (mapped != null) return mapped;
+      if (mapped != null) {
+        _resolvedMangaCache[mangaId] = mapped;
+        return mapped;
+      }
+    }
+    final fields = document.fields;
+    final hasEmbeddedManga =
+        _optionalString(
+              fields['name'] ?? fields['manga_name'] ?? fields['title'],
+            ) !=
+            null &&
+        _optionalString(
+              fields['image'] ??
+                  fields['poster_uri'] ??
+                  fields['cover_uri'] ??
+                  _map(fields['poster'])['large'] ??
+                  _map(fields['poster'])['medium'],
+            ) !=
+            null;
+    if (hasEmbeddedManga) {
+      final mangaType = _optionalString(
+        fields['manga_type'] ?? (isFavorite ? fields['type'] : null),
+      );
+      final mapped = _mangaItemFromFields(<String, dynamic>{
+        ...fields,
+        'type': mangaType ?? '',
+      }, mangaId);
+      if (mapped != null) {
+        _resolvedMangaCache[mangaId] = mapped;
+        return mapped;
+      }
+    }
+    if (cached != null &&
+        cached.title.trim().isNotEmpty &&
+        cached.posterUrl.trim().isNotEmpty) {
+      return cached;
     }
     return null;
   }

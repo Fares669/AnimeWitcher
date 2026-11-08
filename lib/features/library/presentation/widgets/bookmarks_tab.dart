@@ -49,6 +49,8 @@ class _BookmarksTabState extends ConsumerState<BookmarksTab>
         page.hasMore
             ? LibraryItemsGrid(
                 items: const [],
+                heroPrefix:
+                    'lib_bookmark_${libraryState.mediaKind.storageKey}_${libraryState.category.storageKey}',
                 totalCount: page.total,
                 hasMore: true,
                 loadingMore: page.loading,
@@ -65,6 +67,8 @@ class _BookmarksTabState extends ConsumerState<BookmarksTab>
         items: widget.sort == null
             ? items
             : sortLibraryItems(items, widget.sort!),
+        heroPrefix:
+            'lib_bookmark_${libraryState.mediaKind.storageKey}_${libraryState.category.storageKey}',
         totalCount: page.total,
         hasMore: page.hasMore,
         loadingMore: page.loading,
@@ -149,6 +153,7 @@ class LibraryItemsGrid extends StatelessWidget {
             return false;
           },
           child: GridView.builder(
+            key: PageStorageKey<String>('library-scroll-$heroPrefix'),
             padding: EdgeInsets.fromLTRB(
               gridHorizontalPadding,
               LayoutConstants.spacingMd,

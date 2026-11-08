@@ -50,7 +50,13 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     // phones. Other shelves load only after the user selects them.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      unawaited(ref.read(libraryProvider.notifier).refreshVisibleFromServer());
+      final profile = ref.read(deviceProfileProvider).asData?.value;
+      final isTv = profile?.isTv == true || context.isTv;
+      if (isTv || context.isTabletOrLarger) {
+        unawaited(
+          ref.read(libraryProvider.notifier).refreshVisibleFromServer(),
+        );
+      }
     });
   }
 
@@ -78,16 +84,16 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final profile = ref.watch(deviceProfileProvider).asData?.value;
+    final isTv = profile?.isTv == true || context.isTv;
+    final isWidescreen = isTv || context.isTabletOrLarger;
     ref.listen(activeProviderProvider, (previous, next) {
-      if (previous?.packageName != next?.packageName) {
+      if (isWidescreen && previous?.packageName != next?.packageName) {
         unawaited(
           ref.read(libraryProvider.notifier).refreshVisibleFromServer(),
         );
       }
     });
-    final profile = ref.watch(deviceProfileProvider).asData?.value;
-    final isTv = profile?.isTv == true || context.isTv;
-    final isWidescreen = isTv || context.isTabletOrLarger;
 
     if (isWidescreen) return _buildWide(context);
 

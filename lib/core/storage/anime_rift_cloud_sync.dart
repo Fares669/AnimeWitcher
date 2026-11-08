@@ -175,7 +175,7 @@ class _CloudListCursor {
   }) : buffered = List<Object?>.from(bufferedRows);
   final List<Object?> rows;
   final List<Object?> buffered;
-  final int? total;
+  int? total;
   bool hasMore;
   bool serverHasMore;
   int nextPage = 1;
@@ -265,6 +265,28 @@ class AnimeRiftCloudSync {
     _cursorAccount = account;
   }
 
+  Future<void> _persistOverviewCounts(
+    StorageService storage,
+    String account,
+    Map<String, int> counts,
+  ) async {
+    if (counts.isEmpty) return;
+    final mapped = <String, int>{
+      if (counts['my_list_favorites'] case final int fav)
+        LibraryCategory.favorite.storageKey: fav,
+      for (final entry in _categoryForList.entries)
+        if (counts[_overviewForList[entry.key]] case final int count)
+          entry.value.storageKey: count,
+    };
+    if (mapped.isEmpty) return;
+    await storage.setCachedLibraryCounts(
+      providerKey: animeRiftProviderId,
+      accountKey: account,
+      mediaKindKey: 'anime',
+      counts: mapped,
+    );
+  }
+
   /// An overview is shared with the library tabs and selected-list import.
   /// Reuse it briefly while navigating; an explicit shelf refresh fetches a
   /// fresh overview so changes made in the official app are still visible.
@@ -317,7 +339,7 @@ class AnimeRiftCloudSync {
   }) async {
     _bindAccount(account);
     var cursor = _cursors[list];
-    if (!loadNextPage || cursor == null) {
+    if (cursor == null) {
       final allRows = _cloudRows(first);
       final rows = allRows.take(30).toList();
       cursor = _CloudListCursor(
@@ -331,6 +353,45 @@ class AnimeRiftCloudSync {
         serverHasMore: _hasMore(first),
       );
       _cursors[list] = cursor;
+    } else if (!loadNextPage) {
+      final allRows = _cloudRows(first);
+      if (cursor.rows.length <= 30) {
+        final rows = allRows.take(30).toList();
+        cursor = _CloudListCursor(
+          rows,
+          expectedCount ?? cursor.total,
+          (expectedCount == null || rows.length < expectedCount) &&
+              (_hasMore(first) ||
+                  allRows.length > rows.length ||
+                  (expectedCount != null && rows.length < expectedCount)),
+          bufferedRows: allRows.skip(30).toList(),
+          serverHasMore: _hasMore(first),
+        );
+        _cursors[list] = cursor;
+      } else {
+        final targetLength = expectedCount != null
+            ? cursor.rows.length.clamp(30, expectedCount)
+            : cursor.rows.length;
+        final merged = <Object?>[];
+        final seen = <String>{};
+        for (final row in allRows.take(30)) {
+          if (seen.add(_rowIdentity(row))) merged.add(row);
+        }
+        for (final row in cursor.rows) {
+          if (merged.length >= targetLength) break;
+          if (seen.add(_rowIdentity(row))) merged.add(row);
+        }
+        final total = expectedCount ?? cursor.total;
+        cursor.rows
+          ..clear()
+          ..addAll(merged);
+        cursor.total = total;
+        cursor.hasMore =
+            (total == null || cursor.rows.length < total) &&
+            (cursor.buffered.isNotEmpty ||
+                cursor.serverHasMore ||
+                (total != null && cursor.rows.length < total));
+      }
     } else if (cursor.hasMore && cursor.buffered.isNotEmpty) {
       // The server can send its entire library in one response, ignoring the
       // requested page. Never discard rows 31+ or repeatedly GET page one.
@@ -475,6 +536,8 @@ class AnimeRiftCloudSync {
     // Scrolling another 30 posters must not refetch the same overview and
     // hold the grid behind an unrelated account summary request.
     final counts = await overviewRequest;
+    _requireAccount(account);
+    await _persistOverviewCounts(storage, account, counts);
     _requireAccount(account);
     final countKey = category == LibraryCategory.favorite
         ? 'my_list_favorites'
@@ -718,6 +781,8 @@ class AnimeRiftCloudSync {
     Map<String, int> counts = const {};
     try {
       counts = parseMyListOverviewCounts(await _reader.fetchMyListOverview());
+      _requireAccount(account);
+      await _persistOverviewCounts(storage, account, counts);
       _requireAccount(account);
     } on AnimeRiftAccessUnavailable {
       _requireAccount(account);

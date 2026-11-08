@@ -367,6 +367,17 @@ void main() {
       ),
       hasLength(46),
     );
+    final scrollable = tester.state<ScrollableState>(
+      find.descendant(
+        of: find.byKey(const ValueKey('library-grid-anime-watching')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    final offsetAfterScroll = scrollable.position.pixels;
+    expect(offsetAfterScroll, greaterThan(0));
+    provider.refresh();
+    await tester.pump();
+    expect(scrollable.position.pixels, offsetAfterScroll);
   });
   testWidgets('phone library shows Rift entries instead of native entries', (
     tester,

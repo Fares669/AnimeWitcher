@@ -851,4 +851,77 @@ void main() {
       expect(service.isMangaChapterWatchedCached('m1', '7'), isTrue);
     },
   );
+
+  test(
+    'fetchLibraryPage resolves official v1.4.9 embedded anime and manga fields without detail GETs and caches counts',
+    () async {
+      final firestore = _Firestore();
+      final storage = _Storage();
+      final remoteDate = DateTime.utc(2026, 10, 1, 12);
+      firestore.collections['users/profile-1/user_anime'] = <FirestoreDocument>[
+        _remote(
+          path: 'users/profile-1/user_anime/a1',
+          fields: <String, dynamic>{
+            'doc_ref': 'anime_list/a1',
+            'name': 'Bleach TYBW',
+            'image': 'https://img.example/a1.webp',
+            'anime_type': 'TV',
+            'year': 2022,
+            'type': 'completed',
+            'views': 0,
+            'date': remoteDate,
+          },
+        ),
+      ];
+      firestore.collections['users/profile-1/user_manga'] = <FirestoreDocument>[
+        _remote(
+          path: 'users/profile-1/user_manga/m1',
+          fields: <String, dynamic>{
+            'doc_ref': 'manga_list/m1',
+            'name': 'Solo Leveling',
+            'image': 'https://img.example/m1.webp',
+            'manga_type': 'مانهوا',
+            'type': 'watching',
+            'views': 0,
+            'date': remoteDate,
+          },
+        ),
+      ];
+
+      final service = await _signedInService(firestore, storage: storage);
+      firestore.detailRequests.clear();
+
+      final animePage = await service.fetchLibraryPage(
+        category: LibraryCategory.completed,
+        manga: false,
+      );
+      final mangaPage = await service.fetchLibraryPage(
+        category: LibraryCategory.watching,
+        manga: true,
+      );
+
+      expect(firestore.detailRequests, isEmpty);
+      expect(animePage.items.single.title, 'Bleach TYBW');
+      expect(animePage.items.single.posterUrl, 'https://img.example/a1.webp');
+      expect(animePage.items.single.year, 2022);
+      expect(mangaPage.items.single.title, 'Solo Leveling');
+      expect(mangaPage.items.single.posterUrl, 'https://img.example/m1.webp');
+      expect(
+        storage.getCachedLibraryCounts(
+          providerKey: 'native',
+          accountKey: 'uid-1',
+          mediaKindKey: 'anime',
+        )['completed'],
+        1,
+      );
+      expect(
+        storage.getCachedLibraryCounts(
+          providerKey: 'native',
+          accountKey: 'uid-1',
+          mediaKindKey: 'manga',
+        )['watching'],
+        1,
+      );
+    },
+  );
 }

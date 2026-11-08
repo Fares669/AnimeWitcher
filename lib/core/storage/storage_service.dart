@@ -540,6 +540,78 @@ class StorageService {
     );
   }
 
+  String _libraryCountsCacheKey({
+    required String providerKey,
+    required String accountKey,
+    required String mediaKindKey,
+  }) =>
+      'library_cached_counts_v1:$providerKey:'
+      '${Uri.encodeComponent(accountKey)}:$mediaKindKey';
+
+  Map<String, int> getCachedLibraryCounts({
+    required String providerKey,
+    required String accountKey,
+    required String mediaKindKey,
+  }) {
+    final raw = getString(
+      _libraryCountsCacheKey(
+        providerKey: providerKey,
+        accountKey: accountKey,
+        mediaKindKey: mediaKindKey,
+      ),
+    );
+    if (raw == null || raw.isEmpty) return const <String, int>{};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return const <String, int>{};
+      final result = <String, int>{};
+      for (final entry in decoded.entries) {
+        final key = _normalizeLibraryCategory(entry.key);
+        final value = entry.value;
+        final count = value is num
+            ? value.toInt()
+            : int.tryParse(value?.toString() ?? '');
+        if (count != null && count >= 0) {
+          result[key] = count;
+        }
+      }
+      return result;
+    } catch (_) {
+      return const <String, int>{};
+    }
+  }
+
+  Future<void> setCachedLibraryCounts({
+    required String providerKey,
+    required String accountKey,
+    required String mediaKindKey,
+    required Map<String, int> counts,
+    bool merge = true,
+  }) async {
+    final current = merge
+        ? Map<String, int>.from(
+            getCachedLibraryCounts(
+              providerKey: providerKey,
+              accountKey: accountKey,
+              mediaKindKey: mediaKindKey,
+            ),
+          )
+        : <String, int>{};
+    for (final entry in counts.entries) {
+      if (entry.value >= 0) {
+        current[_normalizeLibraryCategory(entry.key)] = entry.value;
+      }
+    }
+    await setString(
+      _libraryCountsCacheKey(
+        providerKey: providerKey,
+        accountKey: accountKey,
+        mediaKindKey: mediaKindKey,
+      ),
+      jsonEncode(current),
+    );
+  }
+
   // --- Settings ---
 
   Future<void> saveThemeMode(String mode) async {

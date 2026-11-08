@@ -62,6 +62,7 @@ String _posterUrl(Map<String, Object?> source) {
     if (nested.isNotEmpty) return nested;
   }
   return _firstText(source, const <String>[
+    'image',
     'poster_uri',
     'posterUrl',
     'poster_url',

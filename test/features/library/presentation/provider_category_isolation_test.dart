@@ -121,6 +121,50 @@ void main() {
       isNull,
     );
   });
+
+  test(
+    'cached library counts are returned while server counts are still loading for Rift and AnimeWitcher',
+    () async {
+      AnimeRiftLocalAccountScope.activate('count-cached-fixture');
+      addTearDown(AnimeRiftLocalAccountScope.reset);
+      final storage = _Storage();
+      await storage.setCachedLibraryCounts(
+        providerKey: animeRiftProviderId,
+        accountKey: AnimeRiftLocalAccountScope.accountHash!,
+        mediaKindKey: 'anime',
+        counts: {'completed': 507, 'pinned': 51},
+      );
+      final account = AnimeWitcherAccountService(
+        storage: storage,
+        secureStorage: SecureTokenStorage(storage),
+      );
+      final container = ProviderContainer(
+        overrides: [
+          storageServiceProvider.overrideWithValue(storage),
+          animeWitcherAccountServiceProvider.overrideWithValue(account),
+          activeProviderProvider.overrideWith(
+            () => _Active(_Source(animeRiftProviderId)),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      final notifier = container.read(libraryProvider.notifier);
+      expect(
+        notifier.categoryCount(
+          LibraryMediaKind.anime,
+          LibraryCategory.completed,
+        ),
+        507,
+      );
+      expect(
+        notifier.categoryCount(
+          LibraryMediaKind.anime,
+          LibraryCategory.planToWatch,
+        ),
+        51,
+      );
+    },
+  );
   test(
     'delayed selection stays on its original provider after switching',
     () async {

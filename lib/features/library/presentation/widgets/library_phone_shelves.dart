@@ -73,6 +73,7 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
   final Map<(LibraryMediaKind, LibraryCategory), List<MultimediaItem>> _lists =
       <(LibraryMediaKind, LibraryCategory), List<MultimediaItem>>{};
   final Map<(LibraryMediaKind, LibraryCategory), int?> _tabCounts = {};
+  final PageStorageBucket _scrollBucket = PageStorageBucket();
   Object? _listsFor;
 
   @override
@@ -214,8 +215,9 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
   Widget _listBody(
     LibraryRepository repository,
     LibraryMediaKind kind,
-    _LibraryListTab tab,
-  ) {
+    _LibraryListTab tab, {
+    required bool isActive,
+  }) {
     if (tab.key == LibraryShelfPrefs.recentKey) {
       return RecentWatchedBody(
         key: const ValueKey<String>('library-recent'),
@@ -239,9 +241,11 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
             hasMore: page.hasMore,
             loadingMore: page.loading,
             loadFailed: page.loadFailed,
-            onLoadMore: () => ref
-                .read(libraryProvider.notifier)
-                .loadNextPage(mediaKind: kind, category: category),
+            onLoadMore: isActive
+                ? () => ref
+                      .read(libraryProvider.notifier)
+                      .loadNextPage(mediaKind: kind, category: category)
+                : null,
           );
   }
 
@@ -301,6 +305,7 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
           _prefs.sort,
           dataRevision,
           ref.read(libraryProvider.notifier).countRevision,
+          ref.read(libraryProvider.notifier).pageRevision,
           providerId,
           AnimeRiftLocalAccountScope.accountHash,
           remoteTotals,
@@ -335,65 +340,72 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
           '${tabs.map((tab) => tab.key).join('-')}',
         );
 
-        return DefaultTabController(
-          key: controllerKey,
-          length: tabs.isEmpty ? 1 : tabs.length,
-          initialIndex: selectedIndex < 0 ? 0 : selectedIndex,
-          child: Builder(
-            builder: (tabContext) {
-              final controller = DefaultTabController.of(tabContext);
+        return PageStorage(
+          bucket: _scrollBucket,
+          child: DefaultTabController(
+            key: controllerKey,
+            length: tabs.isEmpty ? 1 : tabs.length,
+            initialIndex: selectedIndex < 0 ? 0 : selectedIndex,
+            child: Builder(
+              builder: (tabContext) {
+                final controller = DefaultTabController.of(tabContext);
 
-              Widget body;
-              if (_section == LibraryPhoneSection.characters) {
-                body = const CharactersScreen(
-                  key: ValueKey<String>('library-characters'),
-                  favoritesOnly: true,
-                  embedded: true,
-                );
-              } else if (searching) {
-                final shown = _matches(_entries(kind!, repository, history));
-                body = shown.isEmpty
-                    ? Center(
-                        child: Text(
-                          _t(context, 'Nothing matches', 'لا توجد نتائج'),
-                          key: const ValueKey<String>('library-search-empty'),
-                        ),
-                      )
-                    : LibraryItemsGrid(
-                        key: ValueKey<String>(
-                          'library-grid-${kind.storageKey}-search',
-                        ),
-                        items: shown,
-                        heroPrefix: 'lib_search_${kind.storageKey}',
-                      );
-              } else if (tabs.isEmpty) {
-                body = LibraryEmptyState(mediaKind: kind!);
-              } else {
-                body = NotificationListener<ScrollEndNotification>(
-                  onNotification: (notification) {
-                    if (notification.metrics.axis != Axis.horizontal) {
+                Widget body;
+                if (_section == LibraryPhoneSection.characters) {
+                  body = const CharactersScreen(
+                    key: ValueKey<String>('library-characters'),
+                    favoritesOnly: true,
+                    embedded: true,
+                  );
+                } else if (searching) {
+                  final shown = _matches(_entries(kind!, repository, history));
+                  body = shown.isEmpty
+                      ? Center(
+                          child: Text(
+                            _t(context, 'Nothing matches', 'لا توجد نتائج'),
+                            key: const ValueKey<String>('library-search-empty'),
+                          ),
+                        )
+                      : LibraryItemsGrid(
+                          key: ValueKey<String>(
+                            'library-grid-${kind.storageKey}-search',
+                          ),
+                          items: shown,
+                          heroPrefix: 'lib_search_${kind.storageKey}',
+                        );
+                } else if (tabs.isEmpty) {
+                  body = LibraryEmptyState(mediaKind: kind!);
+                } else {
+                  body = NotificationListener<ScrollEndNotification>(
+                    onNotification: (notification) {
+                      if (notification.metrics.axis != Axis.horizontal) {
+                        return false;
+                      }
+                      final index = controller.index;
+                      if (index >= 0 && index < tabs.length) {
+                        _selectList(kind!, tabs[index]);
+                      }
                       return false;
-                    }
-                    final index = controller.index;
-                    if (index >= 0 && index < tabs.length) {
-                      _selectList(kind!, tabs[index]);
-                    }
-                    return false;
-                  },
-                  child: TabBarView(
-                    key: const ValueKey<String>('library-list-pager'),
-                    controller: controller,
-                    // TabBarView builds adjacent pages lazily. Do not decode
-                    // and sort every stored shelf on each swipe/scroll frame.
-                    children: [
-                      for (final tab in tabs)
-                        Builder(
-                          builder: (_) => _listBody(repository, kind!, tab),
-                        ),
-                    ],
-                  ),
-                );
-              }
+                    },
+                    child: TabBarView(
+                      key: const ValueKey<String>('library-list-pager'),
+                      controller: controller,
+                      // TabBarView builds adjacent pages lazily. Do not decode
+                      // and sort every stored shelf on each swipe/scroll frame.
+                      children: [
+                        for (final tab in tabs)
+                          Builder(
+                            builder: (_) => _listBody(
+                              repository,
+                              kind!,
+                              tab,
+                              isActive: tab.key == selected?.key,
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                }
 
               return Scaffold(
                 appBar: AppBar(
@@ -464,8 +476,9 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
                         ),
                 ),
                 body: body,
-              );
-            },
+                );
+              },
+            ),
           ),
         );
       },
