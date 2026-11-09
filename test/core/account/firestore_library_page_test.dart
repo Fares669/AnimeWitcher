@@ -4,6 +4,46 @@ import 'package:animewitcher/core/account/firestore_rest_client.dart';
 
 void main() {
   test(
+    'poster batchGET uses a field mask and decodes streamed Firestore rows',
+    () async {
+      final requests = <RequestOptions>[];
+      final dio = Dio();
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (request, handler) {
+            requests.add(request);
+            handler.resolve(
+              Response<dynamic>(
+                requestOptions: request,
+                statusCode: 200,
+                data:
+                    '{"found":{"name":"projects/animewitcher-1c66d/databases/(default)/documents/anime_list/show-1","fields":{"poster":{"mapValue":{"fields":{"large":{"stringValue":"https://cdn.example/large.jpg"}}}}}}}\n'
+                    '{"missing":"projects/animewitcher-1c66d/databases/(default)/documents/anime_list/show-2"}\n',
+              ),
+            );
+          },
+        ),
+      );
+      final client = FirestoreRestClient(dio: dio);
+      final result = await client.fetchCatalogPosterFields([
+        'show-1',
+        'show-2',
+      ], 'fixture');
+      expect(requests, hasLength(1));
+      expect(requests.single.path, endsWith('/documents:batchGet'));
+      final body = requests.single.data as Map;
+      expect((body['documents'] as List).length, 2);
+      expect((body['mask'] as Map)['fieldPaths'], contains('poster'));
+      expect(requests.single.headers['Authorization'], 'Bearer fixture');
+      expect(
+        (result['show-1']?['poster'] as Map)['large'],
+        'https://cdn.example/large.jpg',
+      );
+      expect(result.containsKey('show-2'), isFalse);
+    },
+  );
+
+  test(
     'library page bounds reads and keeps filter and tie-break cursor',
     () async {
       final requests = <RequestOptions>[];

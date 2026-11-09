@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:dio/dio.dart';
@@ -158,6 +159,63 @@ class FirestoreRestClient {
           : await _hydrateContinueWatchingDocument(document, idToken);
     } on DioException catch (error) {
       if (error.response?.statusCode == 404) return null;
+      throw _firestoreException(error);
+    }
+  }
+
+  /// Fetch only catalog poster metadata for the visible library page.
+  /// Firestore batchGet returns newline-delimited JSON (or a JSON list in
+  /// mocked responses); never download full documents one by one for artwork.
+  Future<Map<String, Map<String, dynamic>>> fetchCatalogPosterFields(
+    List<String> animeIds,
+    String idToken,
+  ) async {
+    if (animeIds.isEmpty) return const {};
+    final ids = animeIds.toSet();
+    try {
+      final response = await _dio.post<dynamic>(
+        '$_documentsBase:batchGet',
+        data: {
+          'documents': [
+            for (final id in ids) _documentResource('anime_list/$id'),
+          ],
+          'mask': const {
+            'fieldPaths': [
+              'poster',
+              'poster_uri',
+              'poster_url_aniList',
+              'posterUrlAniList',
+            ],
+          },
+        },
+        options: _options(idToken)..responseType = ResponseType.plain,
+      );
+      final data = response.data;
+      final List<dynamic> rows;
+      if (data is List) {
+        rows = data;
+      } else if (data is String) {
+        final trimmed = data.trim();
+        rows = trimmed.startsWith('[')
+            ? List<dynamic>.from(jsonDecode(trimmed) as List)
+            : [
+                for (final line in const LineSplitter().convert(trimmed))
+                  if (line.trim().isNotEmpty) jsonDecode(line),
+              ];
+      } else {
+        rows = [data];
+      }
+      final found = <String, Map<String, dynamic>>{};
+      for (final row in rows) {
+        final document = _decodeDocument(_map(row)['found']);
+        if (document != null &&
+            document.path == 'anime_list/${document.id}' &&
+            ids.contains(document.id)) {
+          found[document.id] = document.fields;
+        }
+      }
+      return found;
+    } on DioException catch (error) {
       throw _firestoreException(error);
     }
   }

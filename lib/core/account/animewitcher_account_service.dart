@@ -10,6 +10,7 @@ import '../storage/library_category.dart';
 import '../storage/provider_local_library.dart';
 import '../storage/secure_token_storage.dart';
 import '../storage/storage_service.dart';
+import '../utils/artwork_host_fallback.dart';
 import '../utils/episode_label.dart';
 import 'animewitcher_account_config.dart';
 import 'animewitcher_account_models.dart';
@@ -125,6 +126,7 @@ class AnimeWitcherAccountService {
       <String, Future<void>>{};
   final Map<String, MultimediaItem> _resolvedAnimeCache =
       <String, MultimediaItem>{};
+  final Map<String, String?> _libraryLargePosterCache = <String, String?>{};
   final Map<String, MultimediaItem> _resolvedMangaCache =
       <String, MultimediaItem>{};
   Future<void> _pendingStorageWrite = Future<void>.value();
@@ -2056,8 +2058,7 @@ class AnimeWitcherAccountService {
         accountKey: profile.uid,
         mediaKindKey: mediaKindKey,
         counts: {
-          for (final entry in counts.entries)
-            entry.key.storageKey: entry.value,
+          for (final entry in counts.entries) entry.key.storageKey: entry.value,
         },
       );
     }
@@ -2145,6 +2146,51 @@ class AnimeWitcherAccountService {
         if (animeId != null) localById[animeId] = item;
       }
     }
+    final largePosters = <String, String>{};
+    if (!manga && _storage.isHighQualityPostersEnabled()) {
+      final missingIds = <String>{};
+      for (final doc in docs) {
+        final id = favorite
+            ? _animeIdFromFavorite(doc)
+            : _animeIdFromListDocument(doc);
+        if (id == null) continue;
+        final embedded = _largeLibraryPoster(doc.fields);
+        if (embedded.isNotEmpty) {
+          largePosters[id] = embedded;
+        } else if (_libraryLargePosterCache.containsKey(id)) {
+          if (_libraryLargePosterCache[id] case final String cached) {
+            largePosters[id] = cached;
+          }
+        } else {
+          missingIds.add(id);
+        }
+      }
+      if (missingIds.isNotEmpty) {
+        try {
+          // One masked catalog read for the visible 30 cards; never make a
+          // missing/blocked poster endpoint delay the whole library page.
+          final catalog = await _authenticated(
+            (token) => _firestore.fetchCatalogPosterFields(
+              missingIds.toList(growable: false),
+              token,
+            ),
+          ).timeout(const Duration(seconds: 5));
+          if (!_isCurrentProfile(profile) || generation != _sessionGeneration) {
+            throw const AnimeWitcherAccountException(
+              'session-changed',
+              'The active account changed.',
+            );
+          }
+          for (final id in missingIds) {
+            final poster = _largeLibraryPoster(catalog[id] ?? const {});
+            _libraryLargePosterCache[id] = poster.isEmpty ? null : poster;
+            if (poster.isNotEmpty) largePosters[id] = poster;
+          }
+        } catch (_) {
+          // Offline: use the shelf's cached poster; a later visit can retry.
+        }
+      }
+    }
     // Like the original APK, modern shelf documents already contain embedded
     // title/image/type/year fields and need no extra GET. Only un-migrated
     // entries that also miss the local cache fall back to individual GETs.
@@ -2164,7 +2210,7 @@ class AnimeWitcherAccountService {
                   ? _animeIdFromFavorite(doc)
                   : _animeIdFromListDocument(doc));
         if (id == null) return null;
-        return manga
+        final item = manga
             ? (_mangaItemFromRemoteDocument(
                     doc,
                     id,
@@ -2179,6 +2225,16 @@ class AnimeWitcherAccountService {
                     cached: localById[id] ?? _resolvedAnimeCache[id],
                   ) ??
                   await _itemForAnimeId(id));
+        final poster = largePosters[id];
+        if (!manga && item != null && poster != null) {
+          final upgraded = item.copyWith(
+            posterUrl: poster,
+            fullPosterUrl: poster,
+          );
+          _resolvedAnimeCache[id] = upgraded;
+          return upgraded;
+        }
+        return item;
       }),
     );
     if (!_isCurrentProfile(profile) || generation != _sessionGeneration) {
@@ -2521,6 +2577,7 @@ class AnimeWitcherAccountService {
     _progressWriteQueues.clear();
     _libraryWriteQueues.clear();
     _resolvedAnimeCache.clear();
+    _libraryLargePosterCache.clear();
     _resolvedMangaCache.clear();
     try {
       await _auth.signOut();
@@ -4467,6 +4524,27 @@ class AnimeWitcherAccountService {
     return null;
   }
 
+  /// Match catalog search's large-poster preference, not the shelf document's
+  /// `image` field (a thumbnail copied when the user added the title).
+  String _largeLibraryPoster(Map<String, dynamic> fields) {
+    final poster = _map(fields['poster']);
+    final candidates = preferReachableArtwork(<String>[
+      for (final key in const [
+        'original',
+        'full',
+        'extraLarge',
+        'extra_large',
+        'extralarge',
+        'xlarge',
+        'large',
+      ])
+        _optionalString(poster[key]) ?? '',
+      _optionalString(fields['poster_url_aniList']) ?? '',
+      _optionalString(fields['posterUrlAniList']) ?? '',
+    ]);
+    return candidates.isEmpty ? '' : candidates.first;
+  }
+
   void _cacheProfileLibraryStatistics(String uid, Map<String, dynamic> fields) {
     final animeCounts = _extractLibraryStats(fields['statistics_user_anime']);
     if (animeCounts.isNotEmpty) {
@@ -4510,10 +4588,10 @@ class AnimeWitcherAccountService {
     put(LibraryCategory.completed, const <String>['completed']);
     put(LibraryCategory.planToWatch, const <String>['pin', 'pinned']);
     put(LibraryCategory.continueLater, const <String>['onHold', 'on_Hold']);
-    put(
-      LibraryCategory.notInterested,
-      const <String>['noWatching', 'no_watching'],
-    );
+    put(LibraryCategory.notInterested, const <String>[
+      'noWatching',
+      'no_watching',
+    ]);
     return counts;
   }
 

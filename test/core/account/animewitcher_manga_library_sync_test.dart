@@ -15,6 +15,11 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../support/memory_storage_service.dart';
 
 final class _Storage extends MemoryStorageService {
+  bool highQualityPosters = false;
+
+  @override
+  bool isHighQualityPostersEnabled() => highQualityPosters;
+
   final Map<String, MultimediaItem> library = <String, MultimediaItem>{};
   final Map<String, String?> categories = <String, String?>{};
   final Map<String, bool> favorites = <String, bool>{};
@@ -164,6 +169,22 @@ final class _Firestore extends FirestoreRestClient {
       <String, FirestoreDocument>{};
   Completer<void>? blockDetails;
   final List<String> detailRequests = <String>[];
+  final List<List<String>> posterBatchRequests = <List<String>>[];
+  bool failPosterBatch = false;
+
+  @override
+  Future<Map<String, Map<String, dynamic>>> fetchCatalogPosterFields(
+    List<String> animeIds,
+    String idToken,
+  ) async {
+    posterBatchRequests.add(List<String>.of(animeIds));
+    if (failPosterBatch) throw StateError('poster endpoint unavailable');
+    return {
+      for (final id in animeIds)
+        if (documents['anime_list/$id'] case final FirestoreDocument doc)
+          id: doc.fields,
+    };
+  }
 
   @override
   Future<void> setDocumentWithServerTimestamps(
@@ -330,6 +351,185 @@ FirestoreDocument _remote({
 }) => FirestoreDocument(id: path.split('/').last, path: path, fields: fields);
 
 void main() {
+  test('native library upgrades compact low-quality poster when HQ is on', () async {
+    final firestore = _Firestore();
+    final storage = _Storage()..highQualityPosters = true;
+    const small = 'https://cdn.example/low-quality.jpg';
+    const large = 'https://cdn.example/full-quality.jpg';
+    firestore.collections['users/profile-1/user_anime'] = [
+      _remote(
+        path: 'users/profile-1/user_anime/show-1',
+        fields: {
+          'type': 'watching',
+          'date': DateTime.utc(2026, 1, 1),
+          'image': small,
+          'animewitcher_item': {
+            'title': 'Show One',
+            'url': 'https://animewitcher.com/anime/show-1',
+            'posterUrl': small,
+            'type': 'anime',
+          },
+        },
+      ),
+    ];
+    firestore.documents['anime_list/show-1'] = _remote(
+      path: 'anime_list/show-1',
+      fields: {
+        'poster': {'large': large},
+        'poster_uri': small,
+      },
+    );
+    final service = await _signedInService(firestore, storage: storage);
+    final result = await service.fetchLibraryPage(
+      category: LibraryCategory.watching,
+    );
+    expect(result.items.single.posterUrl, large);
+    expect(firestore.posterBatchRequests, [
+      ['show-1'],
+    ]);
+    expect(
+      firestore.detailRequests,
+      isEmpty,
+      reason:
+          'Library poster quality must not trigger per-title full detail GETs',
+    );
+  });
+
+  test('native library keeps compact poster with HQ disabled', () async {
+    final firestore = _Firestore();
+    final storage = _Storage()..highQualityPosters = false;
+    const small = 'https://cdn.example/low-quality.jpg';
+    firestore.collections['users/profile-1/user_anime'] = [
+      _remote(
+        path: 'users/profile-1/user_anime/show-1',
+        fields: {
+          'type': 'watching',
+          'date': DateTime.utc(2026, 1, 1),
+          'image': small,
+          'animewitcher_item': {
+            'title': 'Show One',
+            'url': 'https://animewitcher.com/anime/show-1',
+            'posterUrl': small,
+            'type': 'anime',
+          },
+        },
+      ),
+    ];
+    final service = await _signedInService(firestore, storage: storage);
+    final result = await service.fetchLibraryPage(
+      category: LibraryCategory.watching,
+    );
+    expect(result.items.single.posterUrl, small);
+    expect(firestore.posterBatchRequests, isEmpty);
+    expect(firestore.detailRequests, isEmpty);
+  });
+
+  test('native library does not query catalog when shelf already has a large poster', () async {
+    final firestore = _Firestore();
+    final storage = _Storage()..highQualityPosters = true;
+    const small = 'https://cdn.example/low.jpg';
+    const large = 'https://cdn.example/high.jpg';
+    firestore.collections['users/profile-1/user_anime'] = [
+      _remote(
+        path: 'users/profile-1/user_anime/show-2',
+        fields: {
+          'type': 'watching',
+          'date': DateTime.utc(2026, 1, 1),
+          'image': small,
+          'poster': {'large': large},
+          'animewitcher_item': {
+            'title': 'Show Two',
+            'url': 'https://animewitcher.com/anime/show-2',
+            'posterUrl': small,
+            'type': 'anime',
+          },
+        },
+      ),
+    ];
+    final service = await _signedInService(firestore, storage: storage);
+    final page = await service.fetchLibraryPage(
+      category: LibraryCategory.watching,
+    );
+    expect(page.items.single.posterUrl, large);
+    expect(firestore.posterBatchRequests, isEmpty);
+  });
+
+  test('native library batches missing poster lookups and caches successful results', () async {
+    final firestore = _Firestore();
+    final storage = _Storage()..highQualityPosters = true;
+    firestore.collections['users/profile-1/user_anime'] = [
+      for (var i = 0; i < 3; i++)
+        _remote(
+          path: 'users/profile-1/user_anime/show-$i',
+          fields: {
+            'type': 'watching',
+            'date': DateTime.utc(2026, 1, 1),
+            'image': 'https://cdn.example/small-$i.jpg',
+            'animewitcher_item': {
+              'title': 'Show $i',
+              'url': 'https://animewitcher.com/anime/show-$i',
+              'posterUrl': 'https://cdn.example/small-$i.jpg',
+              'type': 'anime',
+            },
+          },
+        ),
+    ];
+    for (var i = 0; i < 3; i++) {
+      firestore.documents['anime_list/show-$i'] = _remote(
+        path: 'anime_list/show-$i',
+        fields: {
+          'poster': {'large': 'https://cdn.example/large-$i.jpg'},
+        },
+      );
+    }
+    final service = await _signedInService(firestore, storage: storage);
+    for (var request = 0; request < 2; request++) {
+      final page = await service.fetchLibraryPage(
+        category: LibraryCategory.watching,
+      );
+      expect(page.items.map((item) => item.posterUrl), [
+        for (var i = 0; i < 3; i++) 'https://cdn.example/large-$i.jpg',
+      ]);
+    }
+    expect(firestore.posterBatchRequests, hasLength(1));
+    expect(firestore.posterBatchRequests.single, [
+      'show-0',
+      'show-1',
+      'show-2',
+    ]);
+    expect(firestore.detailRequests, isEmpty);
+  });
+
+  test(
+    'unavailable high-quality poster service keeps library thumbnails visible',
+    () async {
+      final firestore = _Firestore()..failPosterBatch = true;
+      final storage = _Storage()..highQualityPosters = true;
+      firestore.collections['users/profile-1/user_anime'] = [
+        _remote(
+          path: 'users/profile-1/user_anime/show-3',
+          fields: {
+            'type': 'watching',
+            'date': DateTime.utc(2026, 1, 1),
+            'image': 'https://cdn.example/small.jpg',
+            'animewitcher_item': {
+              'title': 'Show Three',
+              'url': 'https://animewitcher.com/anime/show-3',
+              'posterUrl': 'https://cdn.example/small.jpg',
+              'type': 'anime',
+            },
+          },
+        ),
+      ];
+      final service = await _signedInService(firestore, storage: storage);
+      final page = await service.fetchLibraryPage(
+        category: LibraryCategory.watching,
+      );
+      expect(page.items.single.posterUrl, 'https://cdn.example/small.jpg');
+      expect(firestore.detailRequests, isEmpty);
+    },
+  );
+
   test(
     'legacy library details are requested concurrently, not one by one',
     () async {
@@ -852,76 +1052,73 @@ void main() {
     },
   );
 
-  test(
-    'fetchLibraryPage resolves official v1.4.9 embedded anime and manga fields without detail GETs and caches counts',
-    () async {
-      final firestore = _Firestore();
-      final storage = _Storage();
-      final remoteDate = DateTime.utc(2026, 10, 1, 12);
-      firestore.collections['users/profile-1/user_anime'] = <FirestoreDocument>[
-        _remote(
-          path: 'users/profile-1/user_anime/a1',
-          fields: <String, dynamic>{
-            'doc_ref': 'anime_list/a1',
-            'name': 'Bleach TYBW',
-            'image': 'https://img.example/a1.webp',
-            'anime_type': 'TV',
-            'year': 2022,
-            'type': 'completed',
-            'views': 0,
-            'date': remoteDate,
-          },
-        ),
-      ];
-      firestore.collections['users/profile-1/user_manga'] = <FirestoreDocument>[
-        _remote(
-          path: 'users/profile-1/user_manga/m1',
-          fields: <String, dynamic>{
-            'doc_ref': 'manga_list/m1',
-            'name': 'Solo Leveling',
-            'image': 'https://img.example/m1.webp',
-            'manga_type': 'مانهوا',
-            'type': 'watching',
-            'views': 0,
-            'date': remoteDate,
-          },
-        ),
-      ];
+  test('fetchLibraryPage resolves official v1.4.9 embedded anime and manga fields without detail GETs and caches counts', () async {
+    final firestore = _Firestore();
+    final storage = _Storage();
+    final remoteDate = DateTime.utc(2026, 10, 1, 12);
+    firestore.collections['users/profile-1/user_anime'] = <FirestoreDocument>[
+      _remote(
+        path: 'users/profile-1/user_anime/a1',
+        fields: <String, dynamic>{
+          'doc_ref': 'anime_list/a1',
+          'name': 'Bleach TYBW',
+          'image': 'https://img.example/a1.webp',
+          'anime_type': 'TV',
+          'year': 2022,
+          'type': 'completed',
+          'views': 0,
+          'date': remoteDate,
+        },
+      ),
+    ];
+    firestore.collections['users/profile-1/user_manga'] = <FirestoreDocument>[
+      _remote(
+        path: 'users/profile-1/user_manga/m1',
+        fields: <String, dynamic>{
+          'doc_ref': 'manga_list/m1',
+          'name': 'Solo Leveling',
+          'image': 'https://img.example/m1.webp',
+          'manga_type': 'مانهوا',
+          'type': 'watching',
+          'views': 0,
+          'date': remoteDate,
+        },
+      ),
+    ];
 
-      final service = await _signedInService(firestore, storage: storage);
-      firestore.detailRequests.clear();
+    final service = await _signedInService(firestore, storage: storage);
+    firestore.detailRequests.clear();
 
-      final animePage = await service.fetchLibraryPage(
-        category: LibraryCategory.completed,
-        manga: false,
-      );
-      final mangaPage = await service.fetchLibraryPage(
-        category: LibraryCategory.watching,
-        manga: true,
-      );
+    final animePage = await service.fetchLibraryPage(
+      category: LibraryCategory.completed,
+      manga: false,
+    );
+    final mangaPage = await service.fetchLibraryPage(
+      category: LibraryCategory.watching,
+      manga: true,
+    );
 
-      expect(firestore.detailRequests, isEmpty);
-      expect(animePage.items.single.title, 'Bleach TYBW');
-      expect(animePage.items.single.posterUrl, 'https://img.example/a1.webp');
-      expect(animePage.items.single.year, 2022);
-      expect(mangaPage.items.single.title, 'Solo Leveling');
-      expect(mangaPage.items.single.posterUrl, 'https://img.example/m1.webp');
-      expect(
-        storage.getCachedLibraryCounts(
-          providerKey: 'native',
-          accountKey: 'uid-1',
-          mediaKindKey: 'anime',
-        )['completed'],
-        1,
-      );
-      expect(
-        storage.getCachedLibraryCounts(
-          providerKey: 'native',
-          accountKey: 'uid-1',
-          mediaKindKey: 'manga',
-        )['watching'],
-        1,
-      );
-    },
-  );
+    expect(firestore.detailRequests, isEmpty);
+    expect(animePage.items.single.title, 'Bleach TYBW');
+    expect(animePage.items.single.posterUrl, 'https://img.example/a1.webp');
+    expect(animePage.items.single.year, 2022);
+    expect(mangaPage.items.single.title, 'Solo Leveling');
+    expect(mangaPage.items.single.posterUrl, 'https://img.example/m1.webp');
+    expect(
+      storage.getCachedLibraryCounts(
+        providerKey: 'native',
+        accountKey: 'uid-1',
+        mediaKindKey: 'anime',
+      )['completed'],
+      1,
+    );
+    expect(
+      storage.getCachedLibraryCounts(
+        providerKey: 'native',
+        accountKey: 'uid-1',
+        mediaKindKey: 'manga',
+      )['watching'],
+      1,
+    );
+  });
 }
