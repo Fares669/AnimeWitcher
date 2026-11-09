@@ -49,7 +49,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     // Desktop's first opened shelf has the same bounded server query as
     // phones. Other shelves load only after the user selects them.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
+      if (!mounted || !TickerMode.valuesOf(context).enabled) return;
       final profile = ref.read(deviceProfileProvider).asData?.value;
       final isTv = profile?.isTv == true || context.isTv;
       if (isTv || context.isTabletOrLarger) {
@@ -88,7 +88,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     final isTv = profile?.isTv == true || context.isTv;
     final isWidescreen = isTv || context.isTabletOrLarger;
     ref.listen(activeProviderProvider, (previous, next) {
-      if (isWidescreen && previous?.packageName != next?.packageName) {
+      if (isWidescreen && TickerMode.valuesOf(context).enabled &&
+          previous?.packageName != next?.packageName) {
         unawaited(
           ref.read(libraryProvider.notifier).refreshVisibleFromServer(),
         );

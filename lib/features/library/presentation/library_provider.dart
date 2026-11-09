@@ -306,12 +306,6 @@ class Library extends _$Library {
     );
     final category = _categoryFor(mediaKind);
     final items = _visibleItems(mediaKind, category);
-    Future<void>.microtask(() {
-      if (!ref.mounted) return;
-      for (final kind in LibraryMediaKind.values) {
-        unawaited(refreshServerCounts(kind));
-      }
-    });
     return items.isEmpty
         ? LibraryEmpty(category, mediaKind)
         : LibrarySuccess(items, category, mediaKind);
@@ -360,6 +354,11 @@ class Library extends _$Library {
         ? AnimeRiftLocalAccountScope.accountHash
         : service.accountUid;
     if (account == null) return;
+    // Details and account widgets read this provider too. Fetch counts only
+    // when the user opens a library shelf, not when the provider is built.
+    for (final mediaKind in LibraryMediaKind.values) {
+      unawaited(refreshServerCounts(mediaKind));
+    }
     page.loading = true;
     page.loadFailed = false;
     refresh();

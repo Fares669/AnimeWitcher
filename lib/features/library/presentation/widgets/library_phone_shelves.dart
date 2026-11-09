@@ -85,11 +85,11 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
         ? LibraryPhoneSection.manga
         : LibraryPhoneSection.anime;
     _selectedListKey = library.category.storageKey;
-    if (ref.read(activeProviderProvider)?.packageName != animeRiftProviderId) {
-      Future<void>.microtask(_syncHistory);
-    }
-    Future<void>.microtask(() {
-      if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !TickerMode.valuesOf(context).enabled) return;
+      if (ref.read(activeProviderProvider)?.packageName != animeRiftProviderId) {
+        unawaited(_syncHistory());
+      }
       final state = ref.read(libraryProvider);
       unawaited(
         ref
@@ -275,7 +275,10 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
         ? Object.hashAll(LibraryCategory.values.map(provider.cloudLibraryTotal))
         : 0;
     ref.listen(activeProviderProvider, (previous, next) {
-      if (previous?.packageName == next?.packageName) return;
+      if (previous?.packageName == next?.packageName ||
+          !TickerMode.valuesOf(context).enabled) {
+        return;
+      }
       _lists.clear();
       _tabCounts.clear();
       _listsFor = null;
