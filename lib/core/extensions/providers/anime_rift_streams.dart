@@ -20,7 +20,7 @@ class AnimeRiftStreams {
   AnimeRiftStreams(this.api, this.episodeNumber, {Dio? externalDio})
     : _external = externalDio ?? createAnimeWitcherDio();
   final AnimeRiftApiClient api;
-  final Future<int> Function(String animeId, String episodeId) episodeNumber;
+  final Future<num> Function(String animeId, String episodeId) episodeNumber;
   final Dio _external;
   final _sources =
       <
@@ -376,8 +376,11 @@ class AnimeRiftStreams {
     final choices = await loadSources(url, download: ref.download);
     if (choices.isEmpty) throw const AnimeRiftPlaybackUnavailable();
     var authenticationRequired = false;
+    // A source catalogue can contain more than six server/quality choices.
+    // A fixed prefix silently excludes working servers near the end. Each
+    // candidate is attempted once; explicit user selections stay pinned.
     final candidates = ref.host == null
-        ? _fallbackSources(choices).take(6)
+        ? _fallbackSources(choices)
         : choices.take(1);
     for (final source in candidates) {
       try {

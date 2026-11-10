@@ -222,6 +222,7 @@ class ContinueWatchingNotifier extends Notifier<List<HistoryItem>> {
           .queuePlayback(
             item.url,
             episodeIdentity: animeRiftEpisodeIdForSync(lastEpisodeUrl),
+            episodeServerNumber: num.tryParse(episodeServerNumber ?? ''),
             position: position,
             duration: duration,
             season: season,

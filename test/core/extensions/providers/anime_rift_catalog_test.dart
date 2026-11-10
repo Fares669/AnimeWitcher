@@ -21,6 +21,8 @@ class CatalogFixture extends AnimeRiftApiClient {
   Map<String, dynamic>? lastQuery;
   Map<String, dynamic>? lastBody;
   String? lastMethod;
+  bool pagedEpisodes = false;
+  bool repeatingEpisodePage = false;
   @override
   Future<Map<String, dynamic>> request(
     String path,
@@ -132,7 +134,16 @@ class CatalogFixture extends AnimeRiftApiClient {
           ],
         },
       };
-    if (path == 'library/episodes/42')
+    if (path == 'library/episodes/42') {
+      if (pagedEpisodes && query?['page'] == 1 && !repeatingEpisodePage) {
+        return {
+          'items': [
+            {'_id': 'ep2', 'episode_number': 2},
+            {'_id': 'ep3', 'episode_number': 2.5},
+          ],
+          'hasNext': false,
+        };
+      }
       return {
         'items': [
           {'_id': 'ep2', 'episode_number': 2},
@@ -143,7 +154,9 @@ class CatalogFixture extends AnimeRiftApiClient {
             'title_translations': {'ar': 'البداية'},
           },
         ],
+        'hasNext': pagedEpisodes,
       };
+    }
     throw StateError('Unexpected path');
   }
 
@@ -381,6 +394,47 @@ void main() {
       expect(page.hasMore, isFalse);
       expect((await provider.getBroadcastSchedulePage('الأحد')).items, isEmpty);
       expect(api.calls.where((p) => p == 'library/schedule'), hasLength(1));
+    },
+  );
+
+  test(
+    'episode lists follow server pages without duplicate episodes',
+    () async {
+      final api = CatalogFixture()..pagedEpisodes = true;
+      final provider = AnimeRiftProvider(client: api);
+      final episodes = await provider.getEpisodes(
+        'https://anime-rift.com/anime/42',
+      );
+      expect(episodes.map((episode) => episode.url), [
+        'https://anime-rift.com/anime/42/episode/ep1',
+        'https://anime-rift.com/anime/42/episode/ep2',
+        'https://anime-rift.com/anime/42/episode/ep3',
+      ]);
+      expect(episodes.last.serverNumber, '2.5');
+      expect(episodes.last.serverName, 'حلقة 2.5');
+      expect(api.lastQuery?['page'], 1);
+      expect(
+        api.calls.where((call) => call == 'library/episodes/42'),
+        hasLength(2),
+      );
+    },
+  );
+
+  test(
+    'episode lists reject a gateway that repeats the same first page',
+    () async {
+      final api = CatalogFixture()
+        ..pagedEpisodes = true
+        ..repeatingEpisodePage = true;
+      await expectLater(
+        AnimeRiftProvider(client: api)
+            .getEpisodes('https://anime-rift.com/anime/42'),
+        throwsA(isA<AnimeRiftAccessUnavailable>()),
+      );
+      expect(
+        api.calls.where((call) => call == 'library/episodes/42'),
+        hasLength(2),
+      );
     },
   );
   test(

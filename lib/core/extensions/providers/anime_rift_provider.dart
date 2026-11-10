@@ -32,7 +32,7 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
   late final AnimeRiftCloudSync _cloudSync = AnimeRiftCloudSync(
     AnimeRiftCloudApiReader(_api),
   );
-  final _episodeNumbers = <String, int>{};
+  final _episodeNumbers = <String, num>{};
   // The comments GET contract has no verified per-viewer liked flag. Remember
   // only locally acknowledged reactions, scoped to the linked account, so
   // reopening the page in this app session does not disguise one's own like.
@@ -73,7 +73,7 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
     externalDio: _externalDio,
   );
 
-  Future<int> _episodeNumber(String anime, String episode) async {
+  Future<num> _episodeNumber(String anime, String episode) async {
     final key = '$anime:$episode';
     if (!_episodeNumbers.containsKey(key))
       await getEpisodes('$mainUrl/anime/$anime');
@@ -129,7 +129,7 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
 
   Future<Map<String, dynamic>> setCloudEpisodeWatched(
     String id,
-    int number,
+    num number,
     bool watched, {
     required String accountHash,
   }) => _api.setEpisodeViewed(id, number, watched, accountHash: accountHash);
@@ -922,37 +922,66 @@ class AnimeRiftProvider extends AnimeWitcherProvider {
   @override
   Future<List<Episode>> getEpisodes(String url) async {
     final id = _catalogId(url);
-    final data = await _api.request(
-      'library/episodes/$id',
-      'ANIME.LIBRARY.EPISODES.ALL',
-      query: {'sort_by_latest': 1, 'with_arcs': true, 'with_favorites': true},
-    );
-    final rows = data['items'];
-    if (rows is! List) throw const AnimeRiftAccessUnavailable();
     final episodes = <Episode>[];
     final seen = <String>{};
-    for (final row in rows.whereType<Map<dynamic, dynamic>>()) {
-      final episodeId = row['_id'];
-      final number = row['episode_number'];
-      if (episodeId is! String ||
-          !_safeId.hasMatch(episodeId) ||
-          number is! num ||
-          !seen.add(episodeId))
-        continue;
-      _episodeNumbers['$id:$episodeId'] = number.toInt();
-      episodes.add(
-        Episode(
-          name: _episodeTitle(row, number),
-          isFiller: row['is_filler'] == true,
-          airDate: row['airedAt'] is String ? row['airedAt'] as String : null,
-          url: '$mainUrl/anime/$id/episode/$episodeId',
-          season: 1,
-          episode: number.toInt(),
-          posterUrl: _art(row['thumbnail']),
-        ),
+    // A large series may be split across server pages. The episode-list API
+    // exposes no partial-result cursor to the UI, so never quietly present a
+    // truncated first page as the complete series.
+    for (var page = 0; page < 256; page++) {
+      final data = await _api.request(
+        'library/episodes/$id',
+        'ANIME.LIBRARY.EPISODES.ALL',
+        query: {
+          'sort_by_latest': 1,
+          'with_arcs': true,
+          'with_favorites': true,
+          if (page > 0) 'page': page,
+        },
       );
+      final rows = data['items'];
+      if (rows is! List) throw const AnimeRiftAccessUnavailable();
+      final initialCount = episodes.length;
+      for (final row in rows.whereType<Map<dynamic, dynamic>>()) {
+        final episodeId = row['_id'];
+        final number = row['episode_number'];
+        if (episodeId is! String ||
+            !_safeId.hasMatch(episodeId) ||
+            number is! num ||
+            !number.isFinite ||
+            number <= 0 ||
+            number > 100000 ||
+            !seen.add(episodeId))
+          continue;
+        _episodeNumbers['$id:$episodeId'] = number;
+        episodes.add(
+          Episode(
+            name: _episodeTitle(row, number),
+            isFiller: row['is_filler'] == true,
+            airDate: row['airedAt'] is String ? row['airedAt'] as String : null,
+            url: '$mainUrl/anime/$id/episode/$episodeId',
+            season: 1,
+            episode: number.toInt(),
+            // The shared Episode model uses an int index. Retain the exact
+            // server value separately for fractional specials and playback.
+            serverNumber: number.toString(),
+            // Make fractional specials visible in existing episode, history
+            // and download labels without changing other providers' models.
+            serverName: number != number.roundToDouble() ? 'حلقة $number' : '',
+            posterUrl: _art(row['thumbnail']),
+          ),
+        );
+      }
+      if (data['hasNext'] != true) break;
+      if (episodes.length == initialCount || page == 255) {
+        // The gateway ignored 'page' or exceeded the bounded page window.
+        // Reject instead of downloading the same first page forever.
+        throw const AnimeRiftAccessUnavailable();
+      }
     }
-    episodes.sort((a, b) => a.episode.compareTo(b.episode));
+    episodes.sort(
+      (a, b) =>
+          (num.parse(a.serverNumber!)).compareTo(num.parse(b.serverNumber!)),
+    );
     return episodes;
   }
 

@@ -382,6 +382,7 @@ void main() {
     final account = AnimeRiftLocalAccountScope.accountHash!;
     await client.setEpisodeViewed('anime-42', 3, true, accountHash: account);
     await client.setEpisodeViewed('anime-42', 3, false, accountHash: account);
+    await client.setEpisodeViewed('anime-42', 12.5, true, accountHash: account);
     await client.rateAnime(
       'anime-42',
       story: 9,
@@ -391,6 +392,7 @@ void main() {
       accountHash: account,
     );
     expect(writes.map((o) => o.uri.path), [
+      '/api/v4/watch_history/watch',
       '/api/v4/watch_history/watch',
       '/api/v4/watch_history/watch',
       '/api/v4/my_list/rate',
@@ -409,6 +411,12 @@ void main() {
     });
     expect(writes[2].data, {
       'animeId': 'anime-42',
+      'viewed': true,
+      'episode_number': 12.5,
+      'useLastInteractedEpisode': false,
+    });
+    expect(writes[3].data, {
+      'animeId': 'anime-42',
       'general_rating': 7.5,
       'story_rating': 9.0,
       'characters_rating': 7.0,
@@ -420,6 +428,7 @@ void main() {
       expect(options.headers['authorization'], 'Bearer rift-user-token');
     }
     for (final (index, scope) in const [
+      'USER.WATCH_HISTORY.WATCHED',
       'USER.WATCH_HISTORY.WATCHED',
       'USER.WATCH_HISTORY.WATCHED',
       'USER.MY_LIST.RATE',
@@ -447,7 +456,7 @@ void main() {
       ),
       throwsArgumentError,
     );
-    expect(writes, hasLength(3));
+    expect(writes, hasLength(4));
   });
 
   test(

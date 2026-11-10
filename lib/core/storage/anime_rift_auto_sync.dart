@@ -33,7 +33,7 @@ class AnimeRiftCloudWriter implements AnimeRiftVerifiedCloudWriter {
     Future<Map<String, dynamic>> Function()? readFavorites,
     Future<Map<String, dynamic>> Function(
       String,
-      int,
+      num,
       bool, {
       required String accountHash,
     })?
@@ -89,7 +89,7 @@ class AnimeRiftCloudWriter implements AnimeRiftVerifiedCloudWriter {
   final Future<Map<String, dynamic>> Function()? _readFavorites;
   final Future<Map<String, dynamic>> Function(
     String,
-    int,
+    num,
     bool, {
     required String accountHash,
   })?
@@ -271,7 +271,11 @@ class AnimeRiftCloudWriter implements AnimeRiftVerifiedCloudWriter {
       if (setter == null) return false;
       final number = change.value['episode_number'];
       final viewed = change.value['viewed'];
-      if (number is! int || number <= 0 || viewed is! bool) {
+      if (number is! num ||
+          !number.isFinite ||
+          number <= 0 ||
+          number > 100000 ||
+          viewed is! bool) {
         throw const FormatException('Invalid Rift watched episode state');
       }
       await setter(id, number, viewed, accountHash: accountHash);
@@ -538,9 +542,19 @@ class AnimeRiftAutoSyncCoordinator {
     _scheduleRefresh();
   }
 
-  Future<void> queueWatched(String url, int episodeNumber, bool viewed) async {
+  Future<void> queueWatched(String url, num episodeNumber, bool viewed) async {
     if (!_canRecordLocalChange) return;
     await _journal.queueWatched(url, episodeNumber, viewed);
+    _scheduleRefresh();
+  }
+
+  Future<void> queueWatchedMany(
+    String url,
+    Set<num> episodeNumbers,
+    bool viewed,
+  ) async {
+    if (!_canRecordLocalChange || episodeNumbers.isEmpty) return;
+    await _journal.queueWatchedMany(url, episodeNumbers, viewed);
     _scheduleRefresh();
   }
 
@@ -581,6 +595,7 @@ class AnimeRiftAutoSyncCoordinator {
   Future<void> queuePlayback(
     String url, {
     String? episodeIdentity,
+    num? episodeServerNumber,
     required int position,
     required int duration,
     int? season,
@@ -613,8 +628,13 @@ class AnimeRiftAutoSyncCoordinator {
       season: season,
       episode: episode,
     );
-    if (nearCompletion && episode != null && episode > 0) {
-      await _journal.queueWatched(url, episode, true);
+    final watchedNumber = episodeServerNumber ?? episode;
+    if (nearCompletion &&
+        watchedNumber != null &&
+        watchedNumber.isFinite &&
+        watchedNumber > 0 &&
+        watchedNumber <= 100000) {
+      await _journal.queueWatched(url, watchedNumber, true);
     }
     _playbackSnapshots[key] = (when: now, position: position);
     if (_playbackSnapshots.length > 128) {

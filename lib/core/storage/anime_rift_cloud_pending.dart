@@ -133,14 +133,64 @@ class AnimeRiftCloudPendingJournal {
   Future<void> queueFavorite(String url, bool favorite) =>
       _upsert('favorite', catalogUrl(url), {'favorite': favorite});
 
-  Future<void> queueWatched(String url, int episodeNumber, bool viewed) {
-    if (episodeNumber <= 0 || episodeNumber > 100000) {
+  Future<void> queueWatched(String url, num episodeNumber, bool viewed) {
+    if (!episodeNumber.isFinite ||
+        episodeNumber <= 0 ||
+        episodeNumber > 100000) {
       throw ArgumentError.value(episodeNumber, 'episodeNumber');
     }
+    final canonicalNumber = episodeNumber == episodeNumber.truncateToDouble()
+        ? episodeNumber.toInt()
+        : episodeNumber;
     return _upsert('watched', catalogUrl(url), {
-      'episode_number': episodeNumber,
+      'episode_number': canonicalNumber,
       'viewed': viewed,
     });
+  }
+
+  /// Persist a user's multi-select action atomically. This does not use the
+  /// unverified native watch_many HTTP contract; the verified writer still
+  /// sends each desired episode state separately when flushing.
+  Future<void> queueWatchedMany(
+    String url,
+    Iterable<num> episodeNumbers,
+    bool viewed,
+  ) async {
+    final numbers = episodeNumbers
+        .map(
+          (number) => number.isFinite && number == number.truncateToDouble()
+              ? number.toInt()
+              : number,
+        )
+        .toSet();
+    if (numbers.length > 10000 ||
+        numbers.any(
+          (number) => !number.isFinite || number <= 0 || number > 100000,
+        )) {
+      throw ArgumentError('Invalid Rift watched episode numbers');
+    }
+    if (numbers.isEmpty) return;
+    final canonical = catalogUrl(url);
+    final account = currentAccount;
+    if (account == null) throw const AnimeRiftAuthenticationRequired();
+    await _mutate(account, (changes) {
+      for (final number in numbers) {
+        final draft = AnimeRiftCloudPendingChange(
+          kind: 'watched',
+          url: canonical,
+          value: {'episode_number': number, 'viewed': viewed},
+          revision: 1,
+        );
+        final previous = changes[draft.key];
+        changes[draft.key] = AnimeRiftCloudPendingChange(
+          kind: draft.kind,
+          url: draft.url,
+          value: draft.value,
+          revision: (previous?.revision ?? 0) + 1,
+        );
+      }
+    });
+    requireAccount(account);
   }
 
   Future<void> queueRating(String url, AnimeRiftRating rating) {

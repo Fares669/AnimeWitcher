@@ -14,6 +14,7 @@ class FakeRiftCommentsProvider extends AnimeRiftProvider {
   int reactionCount = 0;
   bool? termsAccepted;
   bool? replyAllowed;
+  bool? canReplyToNext;
   String? reactedId;
   AnimeRiftCommentTarget? reactedTarget;
   int loadCount = 0;
@@ -33,6 +34,7 @@ class FakeRiftCommentsProvider extends AnimeRiftProvider {
     return AnimeRiftCommentPage(
       termsAccepted: termsAccepted,
       replyAllowed: replyAllowed,
+      canReplyToNext: canReplyToNext,
       items: const [
         AnimeRiftComment(
           id: 'comment1',
@@ -87,6 +89,34 @@ class EmptyFirstPageRiftProvider extends FakeRiftCommentsProvider {
         AnimeRiftComment(
           id: 'visible-on-page-two',
           text: 'تعليق في الصفحة التالية',
+          author: 'مستخدم',
+          likes: 0,
+          replies: 0,
+          spoiler: false,
+        ),
+      ],
+      hasMore: false,
+    );
+  }
+}
+
+class EmptyManyPagesRiftProvider extends FakeRiftCommentsProvider {
+  final requestedPages = <int>[];
+
+  @override
+  Future<AnimeRiftCommentPage> loadComments(
+    AnimeRiftCommentTarget target, {
+    int page = 0,
+  }) async {
+    requestedPages.add(page);
+    if (page < 5) {
+      return const AnimeRiftCommentPage(items: [], hasMore: true);
+    }
+    return const AnimeRiftCommentPage(
+      items: [
+        AnimeRiftComment(
+          id: 'comment-on-page-six',
+          text: 'تعليق بعد صفحات فارغة',
           author: 'مستخدم',
           likes: 0,
           replies: 0,
@@ -216,6 +246,32 @@ void main() {
     expect(find.text('تعليق في الصفحة التالية'), findsOneWidget);
     expect(provider.requestedPages, [0, 1]);
   });
+
+  testWidgets(
+    'empty comment pages offer a way to continue past the initial probe',
+    (tester) async {
+      final provider = EmptyManyPagesRiftProvider();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AnimeRiftCommentsScreen(
+            provider: provider,
+            target: const AnimeRiftCommentTarget(
+              animeId: 'anime42',
+              title: 'أنمي',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(provider.requestedPages, [0, 1, 2, 3]);
+      await tester.tap(find.text('تحميل المزيد من التعليقات'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('تحميل المزيد من التعليقات'));
+      await tester.pumpAndSettle();
+      expect(provider.requestedPages, [0, 1, 2, 3, 4, 5]);
+      expect(find.text('تعليق بعد صفحات فارغة'), findsOneWidget);
+    },
+  );
   testWidgets(
     'AnimeRift anime comments show remote list and post with own account',
     (tester) async {
@@ -460,4 +516,26 @@ void main() {
     expect(find.byKey(const ValueKey('rift-comment-input')), findsNothing);
     expect(find.textContaining('لا يسمح بالرد'), findsOneWidget);
   });
+
+  testWidgets(
+    'explicit canReplyToNext false disables nested reply publishing',
+    (tester) async {
+      final provider = FakeRiftCommentsProvider()..canReplyToNext = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AnimeRiftCommentsScreen(
+            provider: provider,
+            target: const AnimeRiftCommentTarget(
+              animeId: 'anime42',
+              parentId: 'parent9',
+              title: 'أنمي',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('rift-comment-input')), findsNothing);
+      expect(find.textContaining('لا يسمح بالرد'), findsOneWidget);
+    },
+  );
 }

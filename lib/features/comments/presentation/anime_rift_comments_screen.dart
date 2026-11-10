@@ -43,6 +43,7 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
   bool? _serverUserIdPresent;
   bool? _termsAccepted;
   bool? _replyAllowed;
+  bool? _canReplyToNext;
   int _nextPage = 0;
   int _requestGeneration = 0;
   Object? _error;
@@ -50,7 +51,8 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
   bool get _canPublish =>
       _linked &&
       _termsAccepted != false &&
-      (widget.target.parentId == null || _replyAllowed != false);
+      (widget.target.parentId == null ||
+          (_replyAllowed != false && _canReplyToNext != false));
 
   @override
   void initState() {
@@ -107,6 +109,7 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
         _serverUserIdPresent = page.serverUserIdPresent;
         _termsAccepted = page.termsAccepted;
         _replyAllowed = page.replyAllowed;
+        _canReplyToNext = page.canReplyToNext;
         _comments = page.items;
         _hasMore = page.hasMore;
         _nextPage = nextPage;
@@ -337,6 +340,19 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
                 ),
               ),
             ),
+            if (_hasMore)
+              Center(
+                child: FilledButton(
+                  onPressed: _moreLoading ? null : _loadMore,
+                  child: _moreLoading
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('تحميل المزيد من التعليقات'),
+                ),
+              ),
           ],
         ),
       );

@@ -78,6 +78,8 @@ final episodeWatchRepositoryProvider = Provider<EpisodeWatchRepository>((ref) {
     () => ref.read(riftAutoSyncProvider).scheduleLocalChange(),
     (url, number, watched) =>
         ref.read(riftAutoSyncProvider).queueWatched(url, number, watched),
+    (url, numbers, watched) =>
+        ref.read(riftAutoSyncProvider).queueWatchedMany(url, numbers, watched),
   );
 });
 
@@ -89,6 +91,7 @@ class EpisodeWatchRepository {
     this._notifyChanged, [
     this._onRiftLocalChange,
     this._onRiftWatchedChange,
+    this._onRiftWatchedMany,
   ]);
 
   final StorageService _storageService;
@@ -96,8 +99,17 @@ class EpisodeWatchRepository {
   final AnimeWitcherAccountService _accountService;
   final void Function() _notifyChanged;
   final Future<void> Function()? _onRiftLocalChange;
-  final Future<void> Function(String url, int episodeNumber, bool watched)?
+  final Future<void> Function(String url, num episodeNumber, bool watched)?
   _onRiftWatchedChange;
+  final Future<void> Function(String url, Set<num> numbers, bool watched)?
+  _onRiftWatchedMany;
+
+  /// Native Rift can have special episodes numbered 12.5, while the shared
+  /// Episode.episode index must remain an int for other providers.
+  num _riftServerNumber(Episode episode) {
+    final actual = num.tryParse(episode.serverNumber ?? '');
+    return actual != null && actual.isFinite ? actual : episode.episode;
+  }
 
   static const String _legacyStorageKey = 'episode_watch_overrides_v1';
   static const String _storageKey = 'episode_watch_states_v2';
@@ -247,8 +259,9 @@ class EpisodeWatchRepository {
     }
     await _local().setWatched(item.url, episode, watched);
     _notifyChanged();
-    if (episode.episode > 0 && _onRiftWatchedChange != null) {
-      await _onRiftWatchedChange(item.url, episode.episode, watched);
+    final number = _riftServerNumber(episode);
+    if (number > 0 && _onRiftWatchedChange != null) {
+      await _onRiftWatchedChange(item.url, number, watched);
     } else {
       await _onRiftLocalChange?.call();
     }
@@ -265,14 +278,19 @@ class EpisodeWatchRepository {
     final selectedEpisodes = episodes.toList(growable: false);
     await _local().setManyWatched(item.url, selectedEpisodes, watched);
     _notifyChanged();
-    if (_onRiftWatchedChange == null) {
+    if (_onRiftWatchedChange == null && _onRiftWatchedMany == null) {
       await _onRiftLocalChange?.call();
       return;
     }
-    for (final number
-        in selectedEpisodes.map((episode) => episode.episode).toSet()) {
-      if (number > 0) {
-        await _onRiftWatchedChange(item.url, number, watched);
+    final numbers = selectedEpisodes
+        .map(_riftServerNumber)
+        .where((number) => number.isFinite && number > 0 && number <= 100000)
+        .toSet();
+    if (_onRiftWatchedMany case final batch?) {
+      await batch(item.url, numbers, watched);
+    } else if (_onRiftWatchedChange case final single?) {
+      for (final number in numbers) {
+        await single(item.url, number, watched);
       }
     }
   }

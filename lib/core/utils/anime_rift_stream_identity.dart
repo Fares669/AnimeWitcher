@@ -9,7 +9,7 @@ class AnimeRiftSourceIdentity {
     this.download = false,
   });
   final String anime, episode;
-  final int? number;
+  final num? number;
   final String? host, quality;
   final bool download;
   static final _id = RegExp(r'^[A-Za-z0-9_-]+$');
@@ -43,8 +43,10 @@ class AnimeRiftSourceIdentity {
         !_id.hasMatch(p[7]) ||
         !const {'play', 'download'}.contains(p[8]))
       return null;
-    final number = int.tryParse(p[10]);
-    if (number == null || number < 0) return null;
+    final number = num.tryParse(p[10]);
+    if (number == null || !number.isFinite || number <= 0 || number > 100000) {
+      return null;
+    }
     return AnimeRiftSourceIdentity(
       p[1],
       p[3],

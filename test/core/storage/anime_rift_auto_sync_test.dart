@@ -31,6 +31,16 @@ class _MemoryStorage extends StorageService {
   }
 }
 
+class _CountingStorage extends _MemoryStorage {
+  int writes = 0;
+
+  @override
+  Future<void> setString(String key, String? value) async {
+    writes++;
+    await super.setString(key, value);
+  }
+}
+
 class _GatedStorage extends _MemoryStorage {
   final started = Completer<void>();
   final release = Completer<void>();
@@ -1148,6 +1158,106 @@ void main() {
       expect(
         AnimeRiftCloudPendingJournal(storage).pending(alice),
         hasLength(2),
+      );
+    },
+  );
+
+  test(
+    'fractional Rift specials retain their watch identity through restart',
+    () async {
+      final storage = _MemoryStorage();
+      final journal = AnimeRiftCloudPendingJournal(storage);
+      AnimeRiftLocalAccountScope.activate('fractional-account');
+      final account = AnimeRiftLocalAccountScope.accountHash!;
+      await journal.queueWatched(_title, 12.5, true);
+      await journal.queueWatched(_title, 12, false);
+
+      final restored = AnimeRiftCloudPendingJournal(storage).pending(account);
+      expect(restored, hasLength(2));
+      expect(
+        restored
+            .singleWhere((change) => change.value['episode_number'] == 12.5)
+            .value['viewed'],
+        isTrue,
+      );
+      expect(
+        restored
+            .singleWhere((change) => change.value['episode_number'] == 12)
+            .value['viewed'],
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'near-complete fractional playback queues the real server number',
+    () async {
+      final storage = _MemoryStorage();
+      final provider = _FakeRift('fractional-playback');
+      await provider.restoreAccountSession();
+      final account = AnimeRiftLocalAccountScope.accountHash!;
+      final sync = AnimeRiftAutoSyncCoordinator(
+        storage: storage,
+        activeRift: () => provider,
+        debounce: const Duration(days: 1),
+      );
+      addTearDown(sync.dispose);
+      await sync.queuePlayback(
+        _title,
+        episodeIdentity: 'ep-fraction',
+        position: 95,
+        duration: 100,
+        episode: 12,
+        episodeServerNumber: 12.5,
+      );
+      final watched = AnimeRiftCloudPendingJournal(storage)
+          .pending(account)
+          .singleWhere((change) => change.kind == 'watched');
+      expect(watched.value['episode_number'], 12.5);
+    },
+  );
+
+  test(
+    'multi-select watched action persists 100 episodes in one write',
+    () async {
+      final storage = _CountingStorage();
+      final provider = _FakeRift('bulk-watched');
+      await provider.restoreAccountSession();
+      final account = AnimeRiftLocalAccountScope.accountHash!;
+      final sync = AnimeRiftAutoSyncCoordinator(
+        storage: storage,
+        activeRift: () => provider,
+        debounce: const Duration(days: 1),
+      );
+      addTearDown(sync.dispose);
+
+      final numbers = {
+        for (var index = 1; index <= 100; index++) index.toDouble(),
+      };
+      await sync.queueWatchedMany(_title, numbers, true);
+      expect(storage.writes, 1);
+      final restored = AnimeRiftCloudPendingJournal(storage).pending(account);
+      expect(restored, hasLength(100));
+      expect(
+        restored.every((change) => change.value['viewed'] == true),
+        isTrue,
+      );
+
+      await sync.queueWatchedMany(_title, {12.5, 12}, false);
+      expect(storage.writes, 2);
+      final changed = AnimeRiftCloudPendingJournal(storage).pending(account);
+      expect(changed, hasLength(101));
+      expect(
+        changed
+            .singleWhere((change) => change.value['episode_number'] == 12)
+            .revision,
+        2,
+      );
+      expect(
+        changed
+            .singleWhere((change) => change.value['episode_number'] == 12.5)
+            .value['viewed'],
+        false,
       );
     },
   );

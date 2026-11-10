@@ -35,6 +35,9 @@ class StreamFixture extends AnimeRiftApiClient {
   String host2Name = 'CR2';
   String videoToken = 'ephemeral';
   String? unavailableHost;
+  final unavailableHosts = <String>{};
+  final additionalHosts = <String>[];
+  num episodeNumberFromServer = 7;
 
   @override
   AnimeRiftAccountIdentity? get accountIdentity => identity;
@@ -62,7 +65,7 @@ class StreamFixture extends AnimeRiftApiClient {
     if (path == 'library/episodes/anime42')
       return {
         'items': [
-          {'_id': 'ep7', 'episode_number': 7},
+          {'_id': 'ep7', 'episode_number': episodeNumberFromServer},
         ],
       };
     if (path == 'library/episode/sources') {
@@ -76,6 +79,14 @@ class StreamFixture extends AnimeRiftApiClient {
             'sub_title': 'ar_sub',
             'qualities': host1Qualities,
           },
+          for (final host in additionalHosts)
+            {
+              '_id': host,
+              'server_name': host,
+              'provider': 'cr2',
+              'sub_title': 'ar_sub',
+              'qualities': ['1080P'],
+            },
           if (duplicateSourceLabels)
             {
               '_id': 'host2',
@@ -127,7 +138,10 @@ class StreamFixture extends AnimeRiftApiClient {
       if ((body?['is_download'] == true && requireDownloadAuth) ||
           body?['hostId'] == authRequiredHost)
         return {'require_auth': true};
-      if (body?['hostId'] == unavailableHost) return {'can_play': false};
+      if (body?['hostId'] == unavailableHost ||
+          unavailableHosts.contains(body?['hostId'])) {
+        return {'can_play': false};
+      }
       if (denyPlayback) return {'can_play': false, 'requires_ad': true};
       return {
         'sessionId': 'ephemeral-session',
@@ -324,6 +338,50 @@ void main() {
     expect(checks.length, lessThanOrEqualTo(6));
     expect(checks.map((call) => call.body?['hostId']), contains('watchonly'));
   });
+
+  test(
+    'automatic playback does not silently skip the seventh server',
+    () async {
+      final api = StreamFixture()
+        ..host1Qualities = ['1080P']
+        ..additionalHosts.addAll([
+          for (var index = 0; index < 7; index++) 'extra$index',
+        ])
+        ..unavailableHosts.addAll([
+          'host1',
+          for (var index = 0; index < 6; index++) 'extra$index',
+        ]);
+      final provider = AnimeRiftProvider(client: api);
+
+      final result = await provider.loadStreams(episodeUrl);
+      expect(result.single.source, contains('extra6'));
+      final attempted = api.calls
+          .where((call) => call.path.endsWith('/can_play'))
+          .map((call) => call.body?['hostId'])
+          .toList();
+      expect(attempted.length, greaterThan(6));
+      expect(attempted.last, 'extra6');
+    },
+  );
+
+  test(
+    'fractional episode numbers survive source eligibility requests',
+    () async {
+      final api = StreamFixture()..episodeNumberFromServer = 12.5;
+      final provider = AnimeRiftProvider(client: api);
+      final episodes = await provider.getEpisodes(
+        'https://anime-rift.com/anime/anime42',
+      );
+      expect(episodes.single.serverNumber, '12.5');
+      expect(episodes.single.serverName, 'حلقة 12.5');
+
+      await provider.loadStreams(episodes.single.url);
+      final sources = api.calls.singleWhere(
+        (call) => call.path == 'library/episode/sources',
+      );
+      expect(sources.body?['episode_number'], 12.5);
+    },
+  );
 
   test('automatic download tries another permitted host after an unavailable first host', () async {
     final api = StreamFixture()

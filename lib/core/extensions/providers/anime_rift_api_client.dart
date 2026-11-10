@@ -1677,11 +1677,12 @@ class AnimeRiftApiClient {
   /// Sending viewed=false unmarks this episode (not the whole anime).
   Future<Map<String, dynamic>> setEpisodeViewed(
     String animeId,
-    int episodeNumber,
+    num episodeNumber,
     bool viewed, {
     required String accountHash,
   }) {
     if (!RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(animeId) ||
+        !episodeNumber.isFinite ||
         episodeNumber <= 0 ||
         episodeNumber > 100000) {
       throw ArgumentError('Invalid Rift anime or episode number');
