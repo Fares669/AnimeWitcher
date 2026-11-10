@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:animewitcher/core/extensions/providers/anime_rift_comments.dart';
 import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
+import 'package:animewitcher/core/storage/anime_rift_account_scope.dart';
 import 'package:animewitcher/features/comments/presentation/anime_rift_comments_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -128,6 +129,54 @@ class EmptyManyPagesRiftProvider extends FakeRiftCommentsProvider {
   }
 }
 
+/// The first, empty gateway page can carry account-specific restrictions
+/// that later result pages omit entirely.
+class RestrictedFirstPageRiftProvider extends FakeRiftCommentsProvider {
+  @override
+  Future<AnimeRiftCommentPage> loadComments(
+    AnimeRiftCommentTarget target, {
+    int page = 0,
+  }) async {
+    if (page == 0) {
+      return const AnimeRiftCommentPage(
+        items: [],
+        hasMore: true,
+        replyAllowed: false,
+        canReplyToNext: false,
+        termsAccepted: false,
+      );
+    }
+    return const AnimeRiftCommentPage(
+      items: [
+        AnimeRiftComment(
+          id: 'visible-comment',
+          text: 'رد من الصفحة الثانية',
+          author: 'مستخدم',
+          likes: 0,
+          replies: 0,
+          spoiler: false,
+        ),
+      ],
+      hasMore: false,
+    );
+  }
+}
+
+class GatedRiftCommentsProvider extends FakeRiftCommentsProvider {
+  final started = Completer<void>();
+  final release = Completer<void>();
+
+  @override
+  Future<AnimeRiftCommentPage> loadComments(
+    AnimeRiftCommentTarget target, {
+    int page = 0,
+  }) async {
+    if (!started.isCompleted) started.complete();
+    await release.future;
+    return super.loadComments(target, page: page);
+  }
+}
+
 class UnrecognizedRiftSessionProvider extends FakeRiftCommentsProvider {
   @override
   Future<AnimeRiftCommentPage> loadComments(
@@ -172,6 +221,62 @@ class NativeViewerReactionProvider extends FakeRiftCommentsProvider {
 }
 
 void main() {
+  tearDown(AnimeRiftLocalAccountScope.reset);
+
+  testWidgets(
+    'comments response from account A is dropped after switching to B',
+    (tester) async {
+      AnimeRiftLocalAccountScope.activate('rift-alice');
+      final provider = GatedRiftCommentsProvider();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AnimeRiftCommentsScreen(
+            provider: provider,
+            target: const AnimeRiftCommentTarget(
+              animeId: 'anime42',
+              title: 'أنمي',
+            ),
+          ),
+        ),
+      );
+      await provider.started.future;
+      AnimeRiftLocalAccountScope.activate('rift-bob');
+      provider.release.complete();
+      await tester.pumpAndSettle();
+      expect(find.text('تعليق من ريفت'), findsNothing);
+      expect(find.text('تعذّر تحميل تعليقات AnimeRift.'), findsOneWidget);
+      expect(find.text('إعادة المحاولة'), findsOneWidget);
+    },
+  );
+
+  testWidgets('in-flight like from account A cannot appear under account B', (
+    tester,
+  ) async {
+    AnimeRiftLocalAccountScope.activate('rift-alice');
+    final pending = Completer<void>();
+    final provider = FakeRiftCommentsProvider()..reactionCompletion = pending;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AnimeRiftCommentsScreen(
+          provider: provider,
+          target: const AnimeRiftCommentTarget(
+            animeId: 'anime42',
+            title: 'أنمي',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('الإعجابات'));
+    await tester.pump();
+    expect(find.byIcon(Icons.favorite_rounded), findsOneWidget);
+    AnimeRiftLocalAccountScope.activate('rift-bob');
+    pending.complete();
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.favorite_border_rounded), findsOneWidget);
+    expect(find.text('2'), findsOneWidget);
+  });
+
   testWidgets('server-origin like is shown after a fresh screen and provider', (
     tester,
   ) async {
@@ -246,6 +351,29 @@ void main() {
     expect(find.text('تعليق في الصفحة التالية'), findsOneWidget);
     expect(provider.requestedPages, [0, 1]);
   });
+
+  testWidgets(
+    'a later comments page cannot clear an earlier permission denial',
+    (tester) async {
+      final provider = RestrictedFirstPageRiftProvider();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AnimeRiftCommentsScreen(
+            provider: provider,
+            target: const AnimeRiftCommentTarget(
+              animeId: 'anime42',
+              parentId: 'parent9',
+              title: 'أنمي',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('رد من الصفحة الثانية'), findsOneWidget);
+      expect(find.byKey(const ValueKey('rift-comment-input')), findsNothing);
+      expect(find.textContaining('قبول إرشادات المجتمع'), findsOneWidget);
+    },
+  );
 
   testWidgets(
     'empty comment pages offer a way to continue past the initial probe',

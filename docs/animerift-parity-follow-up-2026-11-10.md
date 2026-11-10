@@ -50,6 +50,30 @@ client-side regression review, **not** a claim of complete server or iOS parity.
 
 ## Testing
 
+### Follow-up fixes after the first commit
+
+- **Previously red GitHub Flutter checks:** an optional Rift HTTP proxy read
+  exposed uninitialized Hive access in lightweight fake settings stores. The
+  shared in-memory test store now handles `getString` / `setString`, and the
+  isolated provider registration test supplies disabled proxy settings.
+  This fixes test harness setup, not production proxy permissions.
+- **Lazy library contract:** the account-settings test no longer demands a
+  favorites download before the library is opened. It checks that no such
+  request occurs in settings, preserving the requested lazy-loading policy.
+- **Download startup CI guard:** tests accept equivalent, Dart-formatted
+  multiline `catchError` callbacks instead of matching a single layout.
+- **Comment permissions:** denial flags survive later pages that omit them,
+  including automatic empty-page advancement. Account-specific optimistic
+  reactions are dropped when the active Rift account changes mid-request.
+  A comments list response fetched for the previous account is discarded,
+  with a visible retry state, instead of showing its comments under the new
+  account. A regression test gates the response during the account switch.
+
+The earlier CI job on commit `c4713ca1` reported 22 failing cases; these
+changes address the identified fixture/expectation failures. A new full CI
+result is required before describing the PR as green.
+
+
 Focused tests cover fallback past six options, fractional playback and watched
 sync, pagination/deduplication, reply rights and continuation through empty
 comment pages. Run against the current branch:

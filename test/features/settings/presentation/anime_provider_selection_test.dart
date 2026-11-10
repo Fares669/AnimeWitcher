@@ -84,6 +84,7 @@ class _RiftAccountFixture extends AnimeRiftApiClient {
   bool linked = false;
   final codes = <String>[];
   var signOuts = 0;
+  var favoritesFetches = 0;
   final cloudFavorites = <Object>[];
 
   @override
@@ -109,7 +110,10 @@ class _RiftAccountFixture extends AnimeRiftApiClient {
   @override
   Future<Map<String, dynamic>> fetchFavoriteAnime({
     CancelToken? cancelToken,
-  }) async => {'items': cloudFavorites};
+  }) async {
+    favoritesFetches++;
+    return {'items': cloudFavorites};
+  }
 
   @override
   Future<Map<String, dynamic>> fetchMyList(
@@ -387,36 +391,40 @@ void main() {
     expect(find.byType(ListTile), findsWidgets);
   });
 
-  testWidgets('Rift cloud sync has no manual button in account settings', (
-    tester,
-  ) async {
-    AnimeRiftLocalAccountScope.activate('fixture-rift-account');
-    final storage = _CloudStorage();
-    final fixture = _RiftAccountFixture()..linked = true;
-    fixture.cloudFavorites.add({
-      'anime': {'_id': 'synced1', 'title': 'Synced Anime'},
-    });
-    await tester.pumpWidget(
-      _app(
-        [AnimeRiftProvider(client: fixture)],
-        _SavedSettings(animeRiftProviderId),
-        storage: storage,
-      ),
-    );
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('animerift-cloud-sync')), findsNothing);
-    expect(
-      ProviderLocalLibrary(
-        storage,
-        animeRiftProviderId,
-      ).items(LibraryCategory.favorite).map((item) => item.title),
-      contains('Synced Anime'),
-    );
-    expect(
-      find.byKey(const ValueKey('settings-animerift-account')),
-      findsOneWidget,
-    );
-  });
+  testWidgets(
+    'Rift settings do not fetch library shelves before opening them',
+    (tester) async {
+      AnimeRiftLocalAccountScope.activate('fixture-rift-account');
+      final storage = _CloudStorage();
+      final fixture = _RiftAccountFixture()..linked = true;
+      fixture.cloudFavorites.add({
+        'anime': {'_id': 'synced1', 'title': 'Synced Anime'},
+      });
+      await tester.pumpWidget(
+        _app(
+          [AnimeRiftProvider(client: fixture)],
+          _SavedSettings(animeRiftProviderId),
+          storage: storage,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('animerift-cloud-sync')), findsNothing);
+      // Account settings should not silently fetch all cloud favorites. Rift
+      // library shelves are lazy and refresh when the user opens the library.
+      expect(fixture.favoritesFetches, 0);
+      expect(
+        ProviderLocalLibrary(
+          storage,
+          animeRiftProviderId,
+        ).items(LibraryCategory.favorite).map((item) => item.title),
+        isEmpty,
+      );
+      expect(
+        find.byKey(const ValueKey('settings-animerift-account')),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets('disables selection when no anime provider is registered', (
     tester,

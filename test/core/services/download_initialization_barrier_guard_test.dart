@@ -23,7 +23,12 @@ void main() {
       expect(callback, contains('unawaited('));
       expect(callback, contains('downloadManagerV2Provider'));
       expect(callback, contains('.initialize()'));
-      expect(callback, contains('.catchError((Object error)'));
+      // dart format may wrap the callback parameter across multiple lines.
+      // Assert the error observer structurally, not at one exact line width.
+      expect(
+        callback,
+        matches(RegExp(r'\.catchError\(\(\s*Object error\s*,?\s*\)')),
+      );
     },
   );
 }

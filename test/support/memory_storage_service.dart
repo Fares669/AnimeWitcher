@@ -1,4 +1,3 @@
-import 'package:animewitcher/core/storage/download_persistence_worker.dart';
 import 'package:animewitcher/core/services/download_concurrency.dart';
 import 'package:animewitcher/core/services/download_parallel.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
@@ -6,9 +5,21 @@ import 'package:animewitcher/core/storage/storage_service.dart';
 /// In-memory settings box for download-queue tests. Only settings getters
 /// used by Settings / DownloadService wiring are implemented.
 class MemoryStorageService extends StorageService {
-  MemoryStorageService({DownloadPersistenceWorker? downloadPersistenceWorker})
-    : super(downloadPersistenceWorker: downloadPersistenceWorker);
+  MemoryStorageService({super.downloadPersistenceWorker});
   final Map<String, dynamic> settings = <String, dynamic>{};
+
+  // Keep string settings in memory instead of accessing uninitialized Hive.
+  @override
+  String? getString(String key) => settings[key] as String?;
+
+  @override
+  Future<void> setString(String key, String? value) async {
+    if (value == null) {
+      settings.remove(key);
+    } else {
+      settings[key] = value;
+    }
+  }
 
   @override
   String? getActiveProviderId() => settings['active_provider_id'] as String?;

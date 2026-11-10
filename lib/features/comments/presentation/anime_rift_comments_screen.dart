@@ -54,6 +54,23 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
       (widget.target.parentId == null ||
           (_replyAllowed != false && _canReplyToNext != false));
 
+  // Optional permissions can be omitted on subsequent pages. Never discard a
+  // previously explicit denial when advancing an empty page or loading more.
+  static bool? _permission(bool? existing, bool? incoming) =>
+      existing == false || incoming == false ? false : incoming ?? existing;
+
+  void _discardStaleAccountResponse() {
+    _reactions.clear();
+    _reactionAccountHash = AnimeRiftLocalAccountScope.accountHash;
+    setState(() {
+      _comments = const [];
+      _error = StateError('AnimeRift account changed during comments request');
+      _hasMore = false;
+      _linked = false;
+      _initialLoading = false;
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -91,8 +108,12 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
     });
     try {
       final linked = await widget.provider.restoreAccountSession();
+      final requestedAccount = AnimeRiftLocalAccountScope.accountHash;
       var page = await widget.provider.loadComments(widget.target);
       var nextPage = 1;
+      var termsAccepted = page.termsAccepted;
+      var replyAllowed = page.replyAllowed;
+      var canReplyToNext = page.canReplyToNext;
       // An empty first page can still advertise further results (e.g. after
       // server-side moderation). The empty-list UI has no scroll controller,
       // so it could never reach page 1 without this bounded advance.
@@ -101,15 +122,22 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
           widget.target,
           page: nextPage++,
         );
+        termsAccepted = _permission(termsAccepted, page.termsAccepted);
+        replyAllowed = _permission(replyAllowed, page.replyAllowed);
+        canReplyToNext = _permission(canReplyToNext, page.canReplyToNext);
       }
       if (!mounted || generation != _requestGeneration) return;
+      if (requestedAccount != AnimeRiftLocalAccountScope.accountHash) {
+        _discardStaleAccountResponse();
+        return;
+      }
       _acceptServerReactions(page.items);
       setState(() {
         _linked = linked;
         _serverUserIdPresent = page.serverUserIdPresent;
-        _termsAccepted = page.termsAccepted;
-        _replyAllowed = page.replyAllowed;
-        _canReplyToNext = page.canReplyToNext;
+        _termsAccepted = termsAccepted;
+        _replyAllowed = replyAllowed;
+        _canReplyToNext = canReplyToNext;
         _comments = page.items;
         _hasMore = page.hasMore;
         _nextPage = nextPage;
@@ -127,6 +155,7 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
   Future<void> _loadMore() async {
     if (_moreLoading || !_hasMore || _initialLoading) return;
     final generation = _requestGeneration;
+    final requestedAccount = AnimeRiftLocalAccountScope.accountHash;
     setState(() => _moreLoading = true);
     try {
       final page = await widget.provider.loadComments(
@@ -134,6 +163,10 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
         page: _nextPage,
       );
       if (!mounted || generation != _requestGeneration) return;
+      if (requestedAccount != AnimeRiftLocalAccountScope.accountHash) {
+        _discardStaleAccountResponse();
+        return;
+      }
       _acceptServerReactions(page.items);
       setState(() {
         final known = _comments.map((comment) => comment.id).toSet();
@@ -143,6 +176,9 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
         ];
         _hasMore = page.hasMore;
         _nextPage++;
+        _termsAccepted = _permission(_termsAccepted, page.termsAccepted);
+        _replyAllowed = _permission(_replyAllowed, page.replyAllowed);
+        _canReplyToNext = _permission(_canReplyToNext, page.canReplyToNext);
       });
     } catch (error) {
       if (mounted && generation == _requestGeneration) _message(error);
@@ -185,6 +221,14 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
   }
 
   ({bool liked, int count})? _reactionFor(AnimeRiftComment comment) {
+    // An account can change while this route remains mounted (for example,
+    // after relinking from settings). Never show the previous account's
+    // optimistic reaction or count while the new account is active.
+    final account = AnimeRiftLocalAccountScope.accountHash;
+    if (_reactionAccountHash != account) {
+      _reactions.clear();
+      _reactionAccountHash = account;
+    }
     final pending = _reactions[comment.id];
     if (pending != null) return pending;
     if (comment.likedByMe case final liked?) {
@@ -250,7 +294,13 @@ class _AnimeRiftCommentsScreenState extends State<AnimeRiftCommentsScreen> {
       }
     } finally {
       _reactingIds.remove(comment.id);
-      if (mounted) setState(() {});
+      if (mounted) {
+        if (accountAtStart != AnimeRiftLocalAccountScope.accountHash) {
+          _reactions.clear();
+          _reactionAccountHash = AnimeRiftLocalAccountScope.accountHash;
+        }
+        setState(() {});
+      }
     }
   }
 
