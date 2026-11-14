@@ -186,34 +186,30 @@ Future<void> main(List<String> args) async {
 
   Future<void> starvation() async {
     final file = File('${root.path}/video.mp4')..writeAsBytesSync([1, 2, 3, 4]);
-    final pending = List.generate(
+    List.generate(
       32,
       (i) =>
           InternetAddress.lookup('native-open-$i.invalid')
               .then<Object?>((_) => null, onError: (Object _) => null),
     );
+    await Future<void>.delayed(Duration(milliseconds: 300));
+    var blocked = false;
     try {
-      await Future<void>.delayed(Duration(milliseconds: 300));
-      var blocked = false;
-      try {
-        await file.exists().timeout(Duration(milliseconds: 300));
-      } on TimeoutException {
-        blocked = true;
-      }
-      check(blocked, 'control async file operation must be blocked by DNS');
-      final p = ReproPlayer();
-      players.add(p);
-      final opening = p.open(Media(file.path));
-      final next = ReproPlayer.lock.synchronized(() {});
-      await Future.wait([opening, next]).timeout(Duration(seconds: 2));
-      check(
-        p.commands.single[0] == 'loadfile',
-        'local open must not create a temporary playlist',
-      );
-      print('PASS: production native open and shared lock survive stalled DNS');
-    } finally {
-      await Future.wait(pending);
+      await file.exists().timeout(Duration(milliseconds: 300));
+    } on TimeoutException {
+      blocked = true;
     }
+    check(blocked, 'control async file operation must be blocked by DNS');
+    final p = ReproPlayer();
+    players.add(p);
+    final opening = p.open(Media(file.path));
+    final next = ReproPlayer.lock.synchronized(() {});
+    await Future.wait([opening, next]).timeout(Duration(seconds: 2));
+    check(
+      p.commands.single[0] == 'loadfile',
+      'local open must not create a temporary playlist',
+    );
+    print('PASS: production native open and shared lock survive stalled DNS');
   }
 
   try {

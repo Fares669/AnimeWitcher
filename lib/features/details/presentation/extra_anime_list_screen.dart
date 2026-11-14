@@ -7,13 +7,15 @@ import '../../../core/account/animewitcher_character_models.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/item_provider_resolution.dart';
 import '../../../core/router/app_router.dart';
 import '../../../shared/widgets/catalog_page.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import 'widgets/details_poster_grid.dart';
 
-typedef ExtraAnimeListLoader =
-    Future<List<MultimediaItem>> Function(AnimeWitcherProvider provider);
+typedef ExtraAnimeListLoader = Future<List<MultimediaItem>> Function(
+  AnimeWitcherProvider provider,
+);
 
 class ExtraAnimeListScreen extends ConsumerStatefulWidget {
   const ExtraAnimeListScreen({
@@ -105,6 +107,7 @@ class _ExtraAnimeListScreenState extends ConsumerState<ExtraAnimeListScreen> {
   final List<MultimediaItem> _items = <MultimediaItem>[];
   Object? _error;
   bool _loading = true;
+  int _generation = 0;
 
   @override
   void initState() {
@@ -114,12 +117,30 @@ class _ExtraAnimeListScreenState extends ConsumerState<ExtraAnimeListScreen> {
     });
   }
 
+  @override
+  void didUpdateWidget(covariant ExtraAnimeListScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.source.url != widget.source.url ||
+        oldWidget.source.provider != widget.source.provider) {
+      ++_generation;
+      _items.clear();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_load());
+      });
+    }
+  }
+
   Future<void> _load() async {
-    final provider = ref.read(activeProviderProvider);
+    final generation = ++_generation;
+    final provider = resolveItemProvider(
+      ref.read(extensionManagerProvider),
+      widget.source.provider,
+      ref.read(activeProviderProvider),
+    );
     if (provider == null) {
       if (mounted) {
         setState(() {
-          _error = StateError('AnimeWitcher Native unavailable');
+          _error = StateError('Source provider unavailable');
           _loading = false;
         });
       }
@@ -131,7 +152,7 @@ class _ExtraAnimeListScreenState extends ConsumerState<ExtraAnimeListScreen> {
     });
     try {
       final items = await widget.load(provider);
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       setState(() {
         _items
           ..clear()
@@ -139,7 +160,7 @@ class _ExtraAnimeListScreenState extends ConsumerState<ExtraAnimeListScreen> {
         _loading = false;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       setState(() {
         _error = error;
         _loading = false;
@@ -179,9 +200,8 @@ class _ExtraAnimeListScreenState extends ConsumerState<ExtraAnimeListScreen> {
             showRelationBadge: widget.showRelationBadge,
             onTap: () {
               final target = _inheritProvider(item);
-              DetailsRoute(
-                $extra: DetailsRouteExtra(item: target),
-              ).push<void>(context);
+              DetailsRoute($extra: DetailsRouteExtra(item: target))
+                  .push<void>(context);
             },
           );
         },
@@ -189,5 +209,3 @@ class _ExtraAnimeListScreenState extends ConsumerState<ExtraAnimeListScreen> {
     );
   }
 }
-
-

@@ -1,16 +1,25 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:animewitcher/core/account/animewitcher_account_models.dart';
 import 'package:animewitcher/core/account/animewitcher_account_service.dart';
 import 'package:animewitcher/core/account/firestore_rest_client.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
+import 'package:animewitcher/core/services/app_diagnostics.dart';
+import 'package:animewitcher/core/services/download_v2/download_v2_diagnostics.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
+import 'package:animewitcher/core/storage/provider_local_library.dart';
 import 'package:animewitcher/core/storage/secure_token_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/memory_storage_service.dart';
 
 final class _Storage extends MemoryStorageService {
+  bool highQualityPosters = false;
+
+  @override
+  bool isHighQualityPostersEnabled() => highQualityPosters;
+
   final Map<String, MultimediaItem> library = <String, MultimediaItem>{};
   final Map<String, String?> categories = <String, String?>{};
   final Map<String, bool> favorites = <String, bool>{};
@@ -147,6 +156,10 @@ final class _Write {
 
 final class _Firestore extends FirestoreRestClient {
   final List<_Write> writes = <_Write>[];
+  final List<String> queries = <String>[];
+  bool offline = false;
+  String? failedCollection;
+  final stageError = StateError('private token https://private.example/uid-1');
   final List<_ArrayTransform> arrayTransforms = <_ArrayTransform>[];
   bool failArrayTransforms = false;
   final List<String> deletes = <String>[];
@@ -154,6 +167,24 @@ final class _Firestore extends FirestoreRestClient {
       <String, List<FirestoreDocument>>{};
   final Map<String, FirestoreDocument> documents =
       <String, FirestoreDocument>{};
+  Completer<void>? blockDetails;
+  final List<String> detailRequests = <String>[];
+  final List<List<String>> posterBatchRequests = <List<String>>[];
+  bool failPosterBatch = false;
+
+  @override
+  Future<Map<String, Map<String, dynamic>>> fetchCatalogPosterFields(
+    List<String> animeIds,
+    String idToken,
+  ) async {
+    posterBatchRequests.add(List<String>.of(animeIds));
+    if (failPosterBatch) throw StateError('poster endpoint unavailable');
+    return {
+      for (final id in animeIds)
+        if (documents['anime_list/$id'] case final FirestoreDocument doc)
+          id: doc.fields,
+    };
+  }
 
   @override
   Future<void> setDocumentWithServerTimestamps(
@@ -184,9 +215,43 @@ final class _Firestore extends FirestoreRestClient {
     String orderField = 'date',
     bool descending = true,
     int pageSize = 100,
-  }) async => List<FirestoreDocument>.from(
-    collections[collectionPath] ?? const <FirestoreDocument>[],
-  );
+  }) async {
+    queries.add(collectionPath);
+    if (offline) throw StateError('offline');
+    return List<FirestoreDocument>.from(
+      collections[collectionPath] ?? const <FirestoreDocument>[],
+    );
+  }
+
+  final List<({String path, String? type, FirestoreDocument? cursor})>
+  pageRequests = [];
+
+  @override
+  Future<List<FirestoreDocument>> queryLibraryDocumentsPage(
+    String collectionPath,
+    String idToken, {
+    String? type,
+    FirestoreDocument? startAfter,
+    int limit = 30,
+  }) async {
+    pageRequests.add((path: collectionPath, type: type, cursor: startAfter));
+    final docs = (collections[collectionPath] ?? [])
+        .where((d) => type == null || d.fields['type'] == type)
+        .toList();
+    final start = startAfter == null
+        ? 0
+        : docs.indexWhere((d) => d.path == startAfter.path) + 1;
+    return docs.skip(start).take(limit).toList();
+  }
+
+  @override
+  Future<int> countLibraryDocuments(
+    String collectionPath,
+    String idToken, {
+    String? type,
+  }) async => (collections[collectionPath] ?? [])
+      .where((d) => type == null || d.fields['type'] == type)
+      .length;
 
   @override
   Future<void> transformArrayFieldValues(
@@ -216,20 +281,25 @@ final class _Firestore extends FirestoreRestClient {
     String collectionPath,
     String idToken, {
     int pageSize = 100,
-  }) async => List<FirestoreDocument>.from(
-    collections[collectionPath] ?? const <FirestoreDocument>[],
-  );
+  }) async {
+    if (collectionPath == failedCollection) throw stageError;
+    return List<FirestoreDocument>.from(
+      collections[collectionPath] ?? const <FirestoreDocument>[],
+    );
+  }
 
   @override
-  Future<FirestoreDocument?> getDocument(
-    String path,
-    String idToken,
-  ) async => documents[path];
+  Future<FirestoreDocument?> getDocument(String path, String idToken) async {
+    detailRequests.add(path);
+    if (blockDetails != null) await blockDetails!.future;
+    return documents[path];
+  }
 }
 
 Future<AnimeWitcherAccountService> _signedInService(
   _Firestore firestore, {
   _Storage? storage,
+  AppDiagnostics? diagnostics,
 }) async {
   final backing = storage ?? _Storage();
   final secure = _SecureStorage(backing);
@@ -248,15 +318,18 @@ Future<AnimeWitcherAccountService> _signedInService(
     email: 'reader@example.com',
     userName: 'Reader',
   );
-  secure.values['animewitcher_account_session_v1'] =
-      jsonEncode(session.toJson());
-  secure.values['animewitcher_account_profile_v1'] =
-      jsonEncode(profile.toJson());
+  secure.values['animewitcher_account_session_v1'] = jsonEncode(
+    session.toJson(),
+  );
+  secure.values['animewitcher_account_profile_v1'] = jsonEncode(
+    profile.toJson(),
+  );
 
   final service = AnimeWitcherAccountService(
     storage: backing,
     secureStorage: secure,
     firestore: firestore,
+    diagnostics: diagnostics,
   );
   await service.restoreCachedSession();
   expect(service.isSignedIn, isTrue);
@@ -275,63 +348,513 @@ MultimediaItem _manga() => MultimediaItem(
 FirestoreDocument _remote({
   required String path,
   required Map<String, dynamic> fields,
-}) => FirestoreDocument(
-  id: path.split('/').last,
-  path: path,
-  fields: fields,
-);
+}) => FirestoreDocument(id: path.split('/').last, path: path, fields: fields);
 
 void main() {
-  test('manga list write uses user_manga and official reference fields', () async {
+  test('native library upgrades compact low-quality poster when HQ is on', () async {
     final firestore = _Firestore();
-    final service = await _signedInService(firestore);
-
-    await service.saveMangaLibraryItem(
-      _manga(),
-      LibraryCategory.watching,
-      favorite: false,
+    final storage = _Storage()..highQualityPosters = true;
+    const small = 'https://cdn.example/low-quality.jpg';
+    const large = 'https://cdn.example/full-quality.jpg';
+    firestore.collections['users/profile-1/user_anime'] = [
+      _remote(
+        path: 'users/profile-1/user_anime/show-1',
+        fields: {
+          'type': 'watching',
+          'date': DateTime.utc(2026, 1, 1),
+          'image': small,
+          'animewitcher_item': {
+            'title': 'Show One',
+            'url': 'https://animewitcher.com/anime/show-1',
+            'posterUrl': small,
+            'type': 'anime',
+          },
+        },
+      ),
+    ];
+    firestore.documents['anime_list/show-1'] = _remote(
+      path: 'anime_list/show-1',
+      fields: {
+        'poster': {'large': large},
+        'poster_uri': small,
+      },
     );
-
-    final listWrite = firestore.writes.singleWhere(
-      (write) => write.path == 'users/profile-1/user_manga/m1',
+    final service = await _signedInService(firestore, storage: storage);
+    final result = await service.fetchLibraryPage(
+      category: LibraryCategory.watching,
     );
-    expect(listWrite.fields['type'], 'watching');
-    expect(listWrite.fields['views'], 0);
-    expect(listWrite.fields.containsKey('manga_id'), isFalse);
-    final reference = listWrite.fields['doc_ref'];
-    expect(reference, isA<FirestoreReference>());
-    expect((reference as FirestoreReference).path, 'manga_list/m1');
-    expect(listWrite.serverTimestampFields, <String>{'date'});
+    expect(result.items.single.posterUrl, large);
+    expect(firestore.posterBatchRequests, [
+      ['show-1'],
+    ]);
     expect(
-      firestore.writes.any((write) => write.path.contains('user_anime')),
-      isFalse,
+      firestore.detailRequests,
+      isEmpty,
+      reason:
+          'Library poster quality must not trigger per-title full detail GETs',
     );
   });
 
-  test('manga favorite write uses fav_manga and manga_doc_id reference', () async {
+  test('native library keeps compact poster with HQ disabled', () async {
     final firestore = _Firestore();
-    final service = await _signedInService(firestore);
-
-    await service.saveMangaLibraryItem(
-      _manga(),
-      LibraryCategory.planToWatch,
-      favorite: true,
+    final storage = _Storage()..highQualityPosters = false;
+    const small = 'https://cdn.example/low-quality.jpg';
+    firestore.collections['users/profile-1/user_anime'] = [
+      _remote(
+        path: 'users/profile-1/user_anime/show-1',
+        fields: {
+          'type': 'watching',
+          'date': DateTime.utc(2026, 1, 1),
+          'image': small,
+          'animewitcher_item': {
+            'title': 'Show One',
+            'url': 'https://animewitcher.com/anime/show-1',
+            'posterUrl': small,
+            'type': 'anime',
+          },
+        },
+      ),
+    ];
+    final service = await _signedInService(firestore, storage: storage);
+    final result = await service.fetchLibraryPage(
+      category: LibraryCategory.watching,
     );
-
-    final favorite = firestore.writes.singleWhere(
-      (write) => write.path == 'users/profile-1/fav_manga/m1',
-    );
-    expect(favorite.fields['views'], 0);
-    expect(favorite.fields.containsKey('manga_id'), isFalse);
-    final reference = favorite.fields['manga_doc_id'];
-    expect(reference, isA<FirestoreReference>());
-    expect((reference as FirestoreReference).path, 'manga_list/m1');
-    expect(favorite.serverTimestampFields, <String>{'date'});
-    expect(
-      firestore.writes.any((write) => write.path.contains('fav_anime')),
-      isFalse,
-    );
+    expect(result.items.single.posterUrl, small);
+    expect(firestore.posterBatchRequests, isEmpty);
+    expect(firestore.detailRequests, isEmpty);
   });
+
+  test('native library does not query catalog when shelf already has a large poster', () async {
+    final firestore = _Firestore();
+    final storage = _Storage()..highQualityPosters = true;
+    const small = 'https://cdn.example/low.jpg';
+    const large = 'https://cdn.example/high.jpg';
+    firestore.collections['users/profile-1/user_anime'] = [
+      _remote(
+        path: 'users/profile-1/user_anime/show-2',
+        fields: {
+          'type': 'watching',
+          'date': DateTime.utc(2026, 1, 1),
+          'image': small,
+          'poster': {'large': large},
+          'animewitcher_item': {
+            'title': 'Show Two',
+            'url': 'https://animewitcher.com/anime/show-2',
+            'posterUrl': small,
+            'type': 'anime',
+          },
+        },
+      ),
+    ];
+    final service = await _signedInService(firestore, storage: storage);
+    final page = await service.fetchLibraryPage(
+      category: LibraryCategory.watching,
+    );
+    expect(page.items.single.posterUrl, large);
+    expect(firestore.posterBatchRequests, isEmpty);
+  });
+
+  test('native library batches missing poster lookups and caches successful results', () async {
+    final firestore = _Firestore();
+    final storage = _Storage()..highQualityPosters = true;
+    firestore.collections['users/profile-1/user_anime'] = [
+      for (var i = 0; i < 3; i++)
+        _remote(
+          path: 'users/profile-1/user_anime/show-$i',
+          fields: {
+            'type': 'watching',
+            'date': DateTime.utc(2026, 1, 1),
+            'image': 'https://cdn.example/small-$i.jpg',
+            'animewitcher_item': {
+              'title': 'Show $i',
+              'url': 'https://animewitcher.com/anime/show-$i',
+              'posterUrl': 'https://cdn.example/small-$i.jpg',
+              'type': 'anime',
+            },
+          },
+        ),
+    ];
+    for (var i = 0; i < 3; i++) {
+      firestore.documents['anime_list/show-$i'] = _remote(
+        path: 'anime_list/show-$i',
+        fields: {
+          'poster': {'large': 'https://cdn.example/large-$i.jpg'},
+        },
+      );
+    }
+    final service = await _signedInService(firestore, storage: storage);
+    for (var request = 0; request < 2; request++) {
+      final page = await service.fetchLibraryPage(
+        category: LibraryCategory.watching,
+      );
+      expect(page.items.map((item) => item.posterUrl), [
+        for (var i = 0; i < 3; i++) 'https://cdn.example/large-$i.jpg',
+      ]);
+    }
+    expect(firestore.posterBatchRequests, hasLength(1));
+    expect(firestore.posterBatchRequests.single, [
+      'show-0',
+      'show-1',
+      'show-2',
+    ]);
+    expect(firestore.detailRequests, isEmpty);
+  });
+
+  test(
+    'unavailable high-quality poster service keeps library thumbnails visible',
+    () async {
+      final firestore = _Firestore()..failPosterBatch = true;
+      final storage = _Storage()..highQualityPosters = true;
+      firestore.collections['users/profile-1/user_anime'] = [
+        _remote(
+          path: 'users/profile-1/user_anime/show-3',
+          fields: {
+            'type': 'watching',
+            'date': DateTime.utc(2026, 1, 1),
+            'image': 'https://cdn.example/small.jpg',
+            'animewitcher_item': {
+              'title': 'Show Three',
+              'url': 'https://animewitcher.com/anime/show-3',
+              'posterUrl': 'https://cdn.example/small.jpg',
+              'type': 'anime',
+            },
+          },
+        ),
+      ];
+      final service = await _signedInService(firestore, storage: storage);
+      final page = await service.fetchLibraryPage(
+        category: LibraryCategory.watching,
+      );
+      expect(page.items.single.posterUrl, 'https://cdn.example/small.jpg');
+      expect(firestore.detailRequests, isEmpty);
+    },
+  );
+
+  test(
+    'legacy library details are requested concurrently, not one by one',
+    () async {
+      final firestore = _Firestore()..blockDetails = Completer<void>();
+      firestore.collections['users/profile-1/user_anime'] = [
+        for (var i = 0; i < 3; i++)
+          _remote(
+            path: 'users/profile-1/user_anime/a$i',
+            fields: {'type': 'watching', 'date': DateTime.utc(2026, 1, 1)},
+          ),
+      ];
+      for (var i = 0; i < 3; i++) {
+        firestore.documents['anime_list/a$i'] = _remote(
+          path: 'anime_list/a$i',
+          fields: {'name': 'Anime $i', 'poster_uri': ''},
+        );
+      }
+      final service = await _signedInService(firestore);
+      final loading = service.fetchLibraryPage(
+        category: LibraryCategory.watching,
+      );
+      try {
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        expect(
+          firestore.detailRequests,
+          hasLength(3),
+          reason: 'Old APK starts all missing-detail tasks together',
+        );
+      } finally {
+        firestore.blockDetails!.complete();
+      }
+      final page = await loading;
+      expect(page.items.map((item) => item.title), [
+        'Anime 0',
+        'Anime 1',
+        'Anime 2',
+      ]);
+      expect(page.total, 3);
+      expect(page.hasMore, isFalse);
+      expect(firestore.pageRequests, hasLength(1));
+    },
+  );
+
+  test(
+    'display page returns 30 shelf items and total without reconciliation',
+    () async {
+      final firestore = _Firestore();
+      final storage = _Storage();
+      final local = _manga();
+      await storage.addToLibrary(
+        local,
+        category: 'completed',
+        favorite: true,
+        updatedAt: 10,
+        syncedAccountUid: 'uid-1',
+        syncedAt: 10,
+      );
+      firestore.collections['users/profile-1/user_manga'] = List.generate(
+        65,
+        (i) => _remote(
+          path: 'users/profile-1/user_manga/m$i',
+          fields: {
+            'type': 'watching',
+            'date': DateTime.utc(2026, 1, 1),
+            'animewitcher_item': {
+              'title': 'Manga $i',
+              'url': 'https://animewitcher.com/manga/m$i',
+              'posterUrl': '',
+              'type': 'manga',
+            },
+          },
+        ),
+      );
+      final service = await _signedInService(firestore, storage: storage);
+      final first = await service.fetchLibraryPage(
+        category: LibraryCategory.watching,
+        manga: true,
+      );
+      expect(first.items, hasLength(30));
+      expect(first.total, 65);
+      expect(first.hasMore, isTrue);
+      final second = await service.fetchLibraryPage(
+        category: LibraryCategory.watching,
+        manga: true,
+        cursor: first.nextCursor,
+      );
+      expect(second.items, hasLength(30));
+      expect(second.items.first.title, 'Manga 30');
+      final last = await service.fetchLibraryPage(
+        category: LibraryCategory.watching,
+        manga: true,
+        cursor: second.nextCursor,
+      );
+      expect(last.items, hasLength(5));
+      expect(last.hasMore, isFalse);
+      expect(firestore.pageRequests, hasLength(3));
+      expect(firestore.queries, isEmpty);
+      expect(firestore.writes, isEmpty);
+      expect(firestore.deletes, isEmpty);
+      expect(storage.library.keys, [local.url]);
+      expect(storage.categories[local.url], 'completed');
+      expect(storage.favorites[local.url], isTrue);
+      await expectLater(
+        service.fetchLibraryPage(
+          category: LibraryCategory.completed,
+          manga: true,
+          cursor: first.nextCursor,
+        ),
+        throwsArgumentError,
+      );
+    },
+  );
+
+  test(
+    'automatic sync uploads dirty library entries without snapshot reads',
+    () async {
+      final firestore = _Firestore();
+      final storage = _Storage();
+      await storage.addToLibrary(
+        _manga(),
+        category: 'watching',
+        updatedAt: 20,
+        syncedAccountUid: 'uid-1',
+        syncedAt: 10,
+      );
+      final service = await _signedInService(firestore, storage: storage);
+      await service.syncAll(includeLibrary: false);
+      expect(firestore.queries, isEmpty);
+      expect(
+        firestore.writes.any((w) => w.path == 'users/profile-1/user_manga/m1'),
+        isTrue,
+      );
+      expect(storage.library, hasLength(1));
+    },
+  );
+
+  test(
+    'syncAll records five successful stages with only safe fields',
+    () async {
+      final sink = InMemoryDownloadDiagnosticsV2();
+      final service = await _signedInService(
+        _Firestore(),
+        diagnostics: AppDiagnostics(sink: sink),
+      );
+
+      await service.syncAll();
+
+      expect(sink.transportEvents, hasLength(5));
+      expect(
+        sink.transportEvents.map((event) => event['status']),
+        unorderedEquals([
+          'animeLibrary',
+          'mangaLibrary',
+          'watchedEpisodes',
+          'watchedManga',
+          'continueWatching',
+        ]),
+      );
+      for (final event in sink.transportEvents) {
+        expect(event, {
+          'event': 'native.sync.stage',
+          'status': isA<String>(),
+          'durationMs': isNonNegative,
+          'result': true,
+        });
+      }
+    },
+  );
+
+  test('syncAll identifies failed stage and preserves its error', () async {
+    final sink = InMemoryDownloadDiagnosticsV2();
+    final firestore = _Firestore()
+      ..failedCollection = 'users/profile-1/chapters_watched';
+    final service = await _signedInService(
+      firestore,
+      diagnostics: AppDiagnostics(sink: sink),
+    );
+
+    await expectLater(service.syncAll(), throwsA(same(firestore.stageError)));
+
+    expect(sink.transportEvents, hasLength(5));
+    final failed = sink.transportEvents.where(
+      (event) => event['result'] == false,
+    );
+    expect(failed.single, {
+      'event': 'native.sync.stage',
+      'status': 'watchedManga',
+      'durationMs': isNonNegative,
+      'result': false,
+    });
+    expect(
+      sink.transportEvents.where((event) => event['result'] == true),
+      hasLength(4),
+    );
+    expect(sink.transportEvents.toString(), isNot(contains('private')));
+    expect(sink.transportEvents.toString(), isNot(contains('uid-1')));
+    expect(service.snapshot.lastSyncAt, isNull);
+  });
+
+  test(
+    'opening Witcher anime library requests only native anime shelves',
+    () async {
+      final firestore = _Firestore();
+      final service = await _signedInService(firestore);
+
+      await service.refreshLibraryForDisplay();
+
+      expect(firestore.queries, [
+        'users/profile-1/fav_anime',
+        'users/profile-1/user_anime',
+      ]);
+      expect(firestore.writes, isEmpty);
+    },
+  );
+
+  test(
+    'opening Witcher manga library does not synchronize unrelated account data',
+    () async {
+      final firestore = _Firestore();
+      final service = await _signedInService(firestore);
+
+      await service.refreshLibraryForDisplay(manga: true);
+
+      expect(firestore.queries, [
+        'users/profile-1/fav_manga',
+        'users/profile-1/user_manga',
+      ]);
+      expect(firestore.writes, isEmpty);
+    },
+  );
+
+  test(
+    'repeated Witcher shelf requests coalesce onto one cloud read',
+    () async {
+      final firestore = _Firestore();
+      final service = await _signedInService(firestore);
+      await Future.wait([
+        service.refreshLibraryForDisplay(),
+        service.refreshLibraryForDisplay(),
+      ]);
+      expect(firestore.queries, [
+        'users/profile-1/fav_anime',
+        'users/profile-1/user_anime',
+      ]);
+    },
+  );
+
+  test(
+    'Witcher library cache stays intact when the network is offline',
+    () async {
+      final firestore = _Firestore()..offline = true;
+      final storage = _Storage();
+      final cached = _manga();
+      await storage.addToLibrary(
+        cached,
+        category: LibraryCategory.watching.storageKey,
+      );
+      final service = await _signedInService(firestore, storage: storage);
+      await expectLater(
+        service.refreshLibraryForDisplay(manga: true),
+        throwsStateError,
+      );
+      expect(storage.library[cached.url], cached);
+      expect(
+        storage.categories[cached.url],
+        LibraryCategory.watching.storageKey,
+      );
+    },
+  );
+  test(
+    'manga list write uses user_manga and official reference fields',
+    () async {
+      final firestore = _Firestore();
+      final service = await _signedInService(firestore);
+
+      await service.saveMangaLibraryItem(
+        _manga(),
+        LibraryCategory.watching,
+        favorite: false,
+      );
+
+      final listWrite = firestore.writes.singleWhere(
+        (write) => write.path == 'users/profile-1/user_manga/m1',
+      );
+      expect(listWrite.fields['type'], 'watching');
+      expect(listWrite.fields['views'], 0);
+      expect(listWrite.fields.containsKey('manga_id'), isFalse);
+      final reference = listWrite.fields['doc_ref'];
+      expect(reference, isA<FirestoreReference>());
+      expect((reference as FirestoreReference).path, 'manga_list/m1');
+      expect(listWrite.serverTimestampFields, <String>{'date'});
+      expect(
+        firestore.writes.any((write) => write.path.contains('user_anime')),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'manga favorite write uses fav_manga and manga_doc_id reference',
+    () async {
+      final firestore = _Firestore();
+      final service = await _signedInService(firestore);
+
+      await service.saveMangaLibraryItem(
+        _manga(),
+        LibraryCategory.planToWatch,
+        favorite: true,
+      );
+
+      final favorite = firestore.writes.singleWhere(
+        (write) => write.path == 'users/profile-1/fav_manga/m1',
+      );
+      expect(favorite.fields['views'], 0);
+      expect(favorite.fields.containsKey('manga_id'), isFalse);
+      final reference = favorite.fields['manga_doc_id'];
+      expect(reference, isA<FirestoreReference>());
+      expect((reference as FirestoreReference).path, 'manga_list/m1');
+      expect(favorite.serverTimestampFields, <String>{'date'});
+      expect(
+        firestore.writes.any((write) => write.path.contains('fav_anime')),
+        isFalse,
+      );
+    },
+  );
 
   test('removing manga deletes both official manga documents only', () async {
     final firestore = _Firestore();
@@ -354,118 +877,128 @@ void main() {
     );
   });
 
-  test('manga library round-trips from cloud across relaunch and remote delete', () async {
-    final firestore = _Firestore();
-    final storage = _Storage();
-    final remoteDate = DateTime.utc(2026, 9, 20, 12);
-    firestore.collections['users/profile-1/user_manga'] =
-        <FirestoreDocument>[
-      _remote(
-        path: 'users/profile-1/user_manga/m1',
+  test(
+    'manga library round-trips from cloud across relaunch and remote delete',
+    () async {
+      final firestore = _Firestore();
+      final storage = _Storage();
+      final remoteDate = DateTime.utc(2026, 9, 20, 12);
+      firestore.collections['users/profile-1/user_manga'] = <FirestoreDocument>[
+        _remote(
+          path: 'users/profile-1/user_manga/m1',
+          fields: <String, dynamic>{
+            'doc_ref': 'manga_list/m1',
+            'type': 'watching',
+            'views': 0,
+            'date': remoteDate,
+          },
+        ),
+      ];
+      firestore.collections['users/profile-1/fav_manga'] = <FirestoreDocument>[
+        _remote(
+          path: 'users/profile-1/fav_manga/m1',
+          fields: <String, dynamic>{
+            'manga_doc_id': 'manga_list/m1',
+            'views': 0,
+            'date': remoteDate,
+          },
+        ),
+      ];
+      firestore.documents['manga_list/m1'] = _remote(
+        path: 'manga_list/m1',
         fields: <String, dynamic>{
-          'doc_ref': 'manga_list/m1',
-          'type': 'watching',
-          'views': 0,
-          'date': remoteDate,
+          'name': 'Manga One',
+          'type': 'مانهوا',
+          'poster_uri': 'https://img.example/m1.webp',
+          'story': 'Story',
         },
-      ),
-    ];
-    firestore.collections['users/profile-1/fav_manga'] =
-        <FirestoreDocument>[
-      _remote(
-        path: 'users/profile-1/fav_manga/m1',
-        fields: <String, dynamic>{
-          'manga_doc_id': 'manga_list/m1',
-          'views': 0,
-          'date': remoteDate,
-        },
-      ),
-    ];
-    firestore.documents['manga_list/m1'] = _remote(
-      path: 'manga_list/m1',
-      fields: <String, dynamic>{
-        'name': 'Manga One',
-        'type': 'مانهوا',
-        'poster_uri': 'https://img.example/m1.webp',
-        'story': 'Story',
-      },
-    );
+      );
 
-    var service = await _signedInService(firestore, storage: storage);
-    await service.syncAll();
+      var service = await _signedInService(firestore, storage: storage);
+      await service.syncAll();
 
-    var manga = storage.library.values.single;
-    expect(manga.contentType, MultimediaContentType.manga);
-    expect(manga.title, 'Manga One');
-    expect(storage.categories[manga.url], LibraryCategory.watching.storageKey);
-    expect(storage.favorites[manga.url], isTrue);
-    expect(storage.syncedUid[manga.url], 'uid-1');
+      var manga = storage.library.values.single;
+      expect(manga.contentType, MultimediaContentType.manga);
+      expect(manga.title, 'Manga One');
+      expect(
+        storage.categories[manga.url],
+        LibraryCategory.watching.storageKey,
+      );
+      expect(storage.favorites[manga.url], isTrue);
+      expect(storage.syncedUid[manga.url], 'uid-1');
 
-    service = await _signedInService(firestore, storage: storage);
-    await service.syncAll();
-    expect(storage.library.values.single.title, 'Manga One');
+      service = await _signedInService(firestore, storage: storage);
+      await service.syncAll();
+      expect(storage.library.values.single.title, 'Manga One');
 
-    firestore.collections['users/profile-1/user_manga'] =
-        const <FirestoreDocument>[];
-    firestore.collections['users/profile-1/fav_manga'] =
-        const <FirestoreDocument>[];
+      firestore.collections['users/profile-1/user_manga'] =
+          const <FirestoreDocument>[];
+      firestore.collections['users/profile-1/fav_manga'] =
+          const <FirestoreDocument>[];
 
-    service = await _signedInService(firestore, storage: storage);
-    await service.syncAll();
-    expect(storage.library, isEmpty);
-  });
-  test('manga read selection uses APK chapters_watched array contract', () async {
-    final firestore = _Firestore();
-    final service = await _signedInService(firestore);
+      service = await _signedInService(firestore, storage: storage);
+      await service.syncAll();
+      expect(storage.library, isEmpty);
+    },
+  );
+  test(
+    'manga read selection uses APK chapters_watched array contract',
+    () async {
+      final firestore = _Firestore();
+      final service = await _signedInService(firestore);
 
-    await service.setMangaChaptersWatched(
-      mangaId: 'm1',
-      chapterIds: const <String>['5', '6'],
-      watched: true,
-    );
+      await service.setMangaChaptersWatched(
+        mangaId: 'm1',
+        chapterIds: const <String>['5', '6'],
+        watched: true,
+      );
 
-    final transform = firestore.arrayTransforms.single;
-    expect(transform.path, 'users/profile-1/chapters_watched/m1');
-    expect(transform.field, 'chapters_watched');
-    expect(transform.values, <String>['5', '6']);
-    expect(transform.append, isTrue);
-    expect(transform.baseFields['user_id'], 'profile-1');
-    expect(transform.baseFields['last_chapter_watched_id'], '6');
-    expect(service.isMangaChapterWatchedCached('m1', '5'), isTrue);
-    expect(service.isMangaChapterWatchedCached('m1', '6'), isTrue);
-  });
+      final transform = firestore.arrayTransforms.single;
+      expect(transform.path, 'users/profile-1/chapters_watched/m1');
+      expect(transform.field, 'chapters_watched');
+      expect(transform.values, <String>['5', '6']);
+      expect(transform.append, isTrue);
+      expect(transform.baseFields['user_id'], 'profile-1');
+      expect(transform.baseFields['last_chapter_watched_id'], '6');
+      expect(service.isMangaChapterWatchedCached('m1', '5'), isTrue);
+      expect(service.isMangaChapterWatchedCached('m1', '6'), isTrue);
+    },
+  );
 
-  test('manga unread selection removes chapters without extra field writes', () async {
-    final firestore = _Firestore();
-    final service = await _signedInService(firestore);
+  test(
+    'manga unread selection removes chapters without extra field writes',
+    () async {
+      final firestore = _Firestore();
+      final service = await _signedInService(firestore);
 
-    await service.setMangaChaptersWatched(
-      mangaId: 'm1',
-      chapterIds: const <String>['5', '6'],
-      watched: false,
-    );
+      await service.setMangaChaptersWatched(
+        mangaId: 'm1',
+        chapterIds: const <String>['5', '6'],
+        watched: false,
+      );
 
-    final transform = firestore.arrayTransforms.single;
-    expect(transform.path, 'users/profile-1/chapters_watched/m1');
-    expect(transform.field, 'chapters_watched');
-    expect(transform.values, <String>['5', '6']);
-    expect(transform.append, isFalse);
-    expect(transform.baseFields, isEmpty);
-  });
+      final transform = firestore.arrayTransforms.single;
+      expect(transform.path, 'users/profile-1/chapters_watched/m1');
+      expect(transform.field, 'chapters_watched');
+      expect(transform.values, <String>['5', '6']);
+      expect(transform.append, isFalse);
+      expect(transform.baseFields, isEmpty);
+    },
+  );
 
   test('syncAll loads APK chapters_watched state for manga', () async {
     final firestore = _Firestore();
     firestore.collections['users/profile-1/chapters_watched'] =
         <FirestoreDocument>[
-      _remote(
-        path: 'users/profile-1/chapters_watched/m1',
-        fields: <String, dynamic>{
-          'chapters_watched': <String>['12', '13'],
-          'last_chapter_watched_id': '13',
-          'user_id': 'profile-1',
-        },
-      ),
-    ];
+          _remote(
+            path: 'users/profile-1/chapters_watched/m1',
+            fields: <String, dynamic>{
+              'chapters_watched': <String>['12', '13'],
+              'last_chapter_watched_id': '13',
+              'user_id': 'profile-1',
+            },
+          ),
+        ];
     final service = await _signedInService(firestore);
 
     await service.syncAll();
@@ -475,20 +1008,117 @@ void main() {
     expect(service.isMangaChapterWatchedCached('m1', '14'), isFalse);
   });
 
-  test('manga read cache updates optimistically while cloud is offline', () async {
-    final firestore = _Firestore()..failArrayTransforms = true;
-    final service = await _signedInService(firestore);
-
-    await expectLater(
-      service.setMangaChaptersWatched(
-        mangaId: 'm1',
-        chapterIds: const <String>['7'],
-        watched: true,
-      ),
-      throwsStateError,
+  test('syncAll ignores legacy Rift manga records in native storage', () async {
+    final firestore = _Firestore();
+    final storage = _Storage();
+    final rift = _manga().copyWith(
+      provider: animeRiftProviderId,
+      syncData: const <String, String>{'mangaId': 'rift-m1'},
+      url: 'https://animewitcher.com/manga/rift-m1',
     );
+    storage.library[rift.url] = rift;
+    storage.categories[rift.url] = LibraryCategory.planToWatch.storageKey;
+    storage.updatedAt[rift.url] = 100;
+    storage.syncedAt[rift.url] = 100;
+    storage.syncedUid[rift.url] = 'uid-1';
+    final service = await _signedInService(firestore, storage: storage);
 
-    expect(service.isMangaChapterWatchedCached('m1', '7'), isTrue);
+    await service.syncAll();
+
+    expect(storage.library[rift.url]?.provider, animeRiftProviderId);
+    expect(
+      firestore.writes.any((write) => write.path.contains('rift-m1')),
+      isFalse,
+    );
+    expect(firestore.deletes.any((path) => path.contains('rift-m1')), isFalse);
   });
 
+  test(
+    'manga read cache updates optimistically while cloud is offline',
+    () async {
+      final firestore = _Firestore()..failArrayTransforms = true;
+      final service = await _signedInService(firestore);
+
+      await expectLater(
+        service.setMangaChaptersWatched(
+          mangaId: 'm1',
+          chapterIds: const <String>['7'],
+          watched: true,
+        ),
+        throwsStateError,
+      );
+
+      expect(service.isMangaChapterWatchedCached('m1', '7'), isTrue);
+    },
+  );
+
+  test('fetchLibraryPage resolves official v1.4.9 embedded anime and manga fields without detail GETs and caches counts', () async {
+    final firestore = _Firestore();
+    final storage = _Storage();
+    final remoteDate = DateTime.utc(2026, 10, 1, 12);
+    firestore.collections['users/profile-1/user_anime'] = <FirestoreDocument>[
+      _remote(
+        path: 'users/profile-1/user_anime/a1',
+        fields: <String, dynamic>{
+          'doc_ref': 'anime_list/a1',
+          'name': 'Bleach TYBW',
+          'image': 'https://img.example/a1.webp',
+          'anime_type': 'TV',
+          'year': 2022,
+          'type': 'completed',
+          'views': 0,
+          'date': remoteDate,
+        },
+      ),
+    ];
+    firestore.collections['users/profile-1/user_manga'] = <FirestoreDocument>[
+      _remote(
+        path: 'users/profile-1/user_manga/m1',
+        fields: <String, dynamic>{
+          'doc_ref': 'manga_list/m1',
+          'name': 'Solo Leveling',
+          'image': 'https://img.example/m1.webp',
+          'manga_type': 'مانهوا',
+          'type': 'watching',
+          'views': 0,
+          'date': remoteDate,
+        },
+      ),
+    ];
+
+    final service = await _signedInService(firestore, storage: storage);
+    firestore.detailRequests.clear();
+
+    final animePage = await service.fetchLibraryPage(
+      category: LibraryCategory.completed,
+      manga: false,
+    );
+    final mangaPage = await service.fetchLibraryPage(
+      category: LibraryCategory.watching,
+      manga: true,
+    );
+
+    expect(firestore.detailRequests, isEmpty);
+    expect(animePage.items.single.title, 'Bleach TYBW');
+    expect(animePage.items.single.posterUrl, 'https://img.example/a1.webp');
+    expect(animePage.items.single.year, 2022);
+    expect(mangaPage.items.single.title, 'Solo Leveling');
+    expect(mangaPage.items.single.posterUrl, 'https://img.example/m1.webp');
+    expect(
+      storage.getCachedLibraryCounts(
+        providerKey: 'native',
+        accountKey: 'uid-1',
+        mediaKindKey: 'anime',
+      )['completed'],
+      1,
+    );
+    expect(
+      storage.getCachedLibraryCounts(
+        providerKey: 'native',
+        accountKey: 'uid-1',
+        mediaKindKey: 'manga',
+      )['watching'],
+      1,
+    );
+  });
 }

@@ -7,16 +7,86 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:dio/dio.dart';
 
 import '../../../../core/account/account_providers.dart';
-import '../../../../core/account/animewitcher_character_models.dart';
 import '../../../../core/extensions/extension_manager.dart';
 import '../../../../core/extensions/base_provider.dart';
 import '../../../../core/extensions/providers/animewitcher_native_provider.dart';
+import '../../../../core/extensions/providers/anime_rift_provider.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import 'search_domain.dart';
 
 part 'search_provider.g.dart';
 
 enum SearchFilter { content, live }
+
+/// Non-anime tabs use their own catalog, independently of the selected anime
+/// provider and of extension registration order.
+AnimeWitcherProvider? searchCatalogProvider(
+  SearchDomain domain,
+  Iterable<AnimeWitcherProvider> providers, {
+  AnimeWitcherProvider? activeAnimeProvider,
+}) {
+  if (domain == SearchDomain.anime || domain == SearchDomain.all) return null;
+  if (domain == SearchDomain.characters &&
+      activeAnimeProvider?.supportsCharacters == true) {
+    return activeAnimeProvider;
+  }
+  if (domain == SearchDomain.manga) {
+    for (final provider in providers) {
+      if (provider is AnimeWitcherNativeProvider) return provider;
+    }
+    for (final provider in providers) {
+      if (provider.supportedTypes.contains(ProviderType.manga)) return provider;
+    }
+    return null;
+  }
+  // Animation and characters are exposed by the native catalog API.
+  for (final provider in providers) {
+    if (provider is AnimeWitcherNativeProvider) return provider;
+  }
+  return null;
+}
+
+/// Filter options for anime follow the chosen provider; other catalogs keep
+/// their own provider regardless of the anime selection.
+Future<ProviderSearchFilterOptions> searchFilterOptionsFor(
+  SearchDomain domain,
+  AnimeWitcherProvider? animeProvider,
+  AnimeWitcherProvider? catalogProvider,
+) async {
+  if (!domain.capabilities.showFilter) {
+    return const ProviderSearchFilterOptions();
+  }
+  if (domain == SearchDomain.anime) {
+    return await animeProvider?.getSearchFilterOptions() ??
+        const ProviderSearchFilterOptions();
+  }
+  if (domain == SearchDomain.manga) {
+    return await catalogProvider?.getMangaSearchFilterOptions() ??
+        const ProviderSearchFilterOptions();
+  }
+  if (domain == SearchDomain.animation && catalogProvider != null) {
+    final options = await catalogProvider.getSearchFilterOptions();
+    return ProviderSearchFilterOptions(
+      statuses: options.statuses,
+      types: options.types,
+      ageRatings: options.ageRatings,
+      years: options.years,
+      seasons: options.seasons,
+      genres: options.genres
+          .where((genre) => genre != 'انميشن')
+          .toList(growable: false),
+    );
+  }
+  return const ProviderSearchFilterOptions();
+}
+
+bool searchFilterRequestIsStale(
+  SearchDomain domain,
+  String? initialAnimeProviderId,
+  String? currentAnimeProviderId,
+) =>
+    domain == SearchDomain.anime &&
+    initialAnimeProviderId != currentAnimeProviderId;
 
 class ProviderSearchResult {
   final String providerId;
@@ -34,7 +104,7 @@ class ProviderSearchResult {
 
 class SearchAggregateState {
   final List<ProviderSearchResult> results;
-  final List<AnimeWitcherCharacterHit> characters;
+  final List<Actor> characters;
   final bool isLoading;
   final bool isLoadingMore;
   final bool hasMore;
@@ -53,7 +123,7 @@ class SearchAggregateState {
 
   SearchAggregateState copyWith({
     List<ProviderSearchResult>? results,
-    List<AnimeWitcherCharacterHit>? characters,
+    List<Actor>? characters,
     bool? isLoading,
     bool? isLoadingMore,
     bool? hasMore,
@@ -119,7 +189,7 @@ Stream<SearchAggregateState> searchAllProviders(
     return filter == SearchFilter.live ? isLiveOnly : !isLiveOnly;
   }).toList();
   debugPrint(
-    '[SEARCH DBG] searchAllProviders called: query="$query", providers=${providers.length}, cancelled=${isCancelled()}',
+    '[SEARCH DBG] searchAllProviders called: queryLength=${query.runes.length}, providers=${providers.length}, cancelled=${isCancelled()}',
   );
 
   if (providers.isEmpty) {
@@ -391,8 +461,15 @@ class SearchFilterNotifier extends _$SearchFilterNotifier {
 
 class SearchProviderFiltersNotifier extends Notifier<ProviderSearchFilters> {
   @override
-  ProviderSearchFilters build() =>
-      const ProviderSearchFilters(sort: 'favorites');
+  ProviderSearchFilters build() {
+    final domain = ref.watch(searchDomainProvider);
+    final provider = domain == SearchDomain.anime
+        ? ref.watch(activeProviderProvider)
+        : null;
+    return ProviderSearchFilters(
+      sort: provider is AnimeRiftProvider ? 'year_asc' : 'favorites',
+    );
+  }
 
   void set(ProviderSearchFilters value) => state = value;
 }
@@ -449,7 +526,20 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
       _domain = next;
       _reload(clearExisting: true);
     });
-    ref.listen(accountDataRevisionProvider, (_, _) => _reload());
+    // An account switch must immediately hide the previous account's items.
+    // A failed replacement request must never reveal its cached results.
+    ref.listen(
+      accountDataRevisionProvider,
+      (_, _) => _reload(clearExisting: true),
+    );
+    ref.listen(activeProviderProvider, (previous, next) {
+      if (previous?.packageName == next?.packageName) return;
+      if (_domain == SearchDomain.anime ||
+          _domain == SearchDomain.characters ||
+          _domain == SearchDomain.all) {
+        _reload(clearExisting: true);
+      }
+    });
     _query = ref.read(searchQueryProvider);
     _domain = ref.read(searchDomainProvider);
     _filters = ref.read(searchProviderFiltersProvider);
@@ -457,20 +547,16 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     return const SearchAggregateState(isLoading: true);
   }
 
-  AnimeWitcherProvider? _provider() {
-    final providers = ref
-        .read(extensionManagerProvider.notifier)
-        .getAllProviders()
-        .where((provider) {
-          final liveOnly =
-              provider.supportedTypes.isNotEmpty &&
-              provider.supportedTypes.every(
-                (type) => type == ProviderType.livestream,
-              );
-          return !liveOnly;
-        })
-        .toList(growable: false);
-    return providers.isEmpty ? null : providers.first;
+  AnimeWitcherProvider? _provider([SearchDomain? domain]) {
+    if ((domain ?? _domain) == SearchDomain.anime ||
+        (domain ?? _domain) == SearchDomain.all) {
+      return ref.read(activeProviderProvider);
+    }
+    return searchCatalogProvider(
+      domain ?? _domain,
+      ref.read(extensionManagerProvider.notifier).getAllProviders(),
+      activeAnimeProvider: ref.read(activeProviderProvider),
+    );
   }
 
   Future<ProviderMediaPage> _loadPage(
@@ -479,10 +565,16 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     SearchDomain domain,
   ) {
     final pageSize = provider.searchPageSize;
+    final filters =
+        domain == SearchDomain.anime &&
+            _domain == SearchDomain.all &&
+            provider is AnimeRiftProvider
+        ? const ProviderSearchFilters(sort: 'year_asc')
+        : _filters;
     return switch (domain) {
       SearchDomain.anime => provider.searchPage(
         _query,
-        _filters,
+        filters,
         offset: offset,
         limit: pageSize,
       ),
@@ -511,28 +603,11 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     };
   }
 
-  Future<AnimeWitcherCharacterPage> _loadCharacterPage(
+  Future<ProviderCharacterPage> _loadCharacterPage(
     AnimeWitcherProvider provider,
     int page,
-  ) async {
-    if (provider is! AnimeWitcherNativeProvider) {
-      return const AnimeWitcherCharacterPage(
-        items: <AnimeWitcherCharacterHit>[],
-        page: 0,
-        hasMore: false,
-      );
-    }
-    if (page == 0) {
-      return provider.searchCharacters(_query);
-    }
-    if (_query.trim().isNotEmpty) {
-      return AnimeWitcherCharacterPage(
-        items: const <AnimeWitcherCharacterHit>[],
-        page: page,
-        hasMore: false,
-      );
-    }
-    return provider.getCharactersPage(page: page);
+  ) {
+    return provider.searchCharacterPage(_query.trim(), page: page);
   }
 
   /// The first page of each category at once, for [SearchDomain.all]: one
@@ -548,22 +623,33 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
       SearchDomain.animation,
       SearchDomain.manga,
     ];
-    Future<ProviderMediaPage?> mediaPage(SearchDomain domain) =>
-        _loadPage(provider, 0, domain).then<ProviderMediaPage?>(
-          (page) => page,
-          onError: (Object e) {
-            debugPrint('[SEARCH ALL] ${domain.name} failed: $e');
-            return null;
-          },
-        );
-    final characterPage = _loadCharacterPage(provider, 0)
-        .then<AnimeWitcherCharacterPage?>(
-          (page) => page,
-          onError: (Object e) {
-            debugPrint('[SEARCH ALL] characters failed: $e');
-            return null;
-          },
-        );
+    Future<ProviderMediaPage?> mediaPage(SearchDomain domain) {
+      final catalog = domain == SearchDomain.anime
+          ? provider
+          : _provider(domain);
+      if (catalog == null) return Future.value(null);
+      return _loadPage(catalog, 0, domain).then<ProviderMediaPage?>(
+        (page) => page,
+        onError: (Object e) {
+          debugPrint('[SEARCH ALL] ${domain.name} failed: $e');
+          return null;
+        },
+      );
+    }
+
+    final charactersProvider = _provider(SearchDomain.characters);
+    final characterPage = charactersProvider == null
+        ? Future<ProviderCharacterPage?>.value(null)
+        : _loadCharacterPage(
+            charactersProvider,
+            0,
+          ).then<ProviderCharacterPage?>(
+            (page) => page,
+            onError: (Object e) {
+              debugPrint('[SEARCH ALL] characters failed: $e');
+              return null;
+            },
+          );
     final pages = await Future.wait(media.map(mediaPage));
     final characters = await characterPage;
 
@@ -580,7 +666,7 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
               results: pages[i]!.items,
             ),
       ],
-      characters: characters?.items ?? const <AnimeWitcherCharacterHit>[],
+      characters: characters?.items ?? const <Actor>[],
       isLoading: false,
     );
   }
@@ -653,7 +739,11 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
           isLoading: false,
           isLoadingMore: false,
           hasMore: false,
-          errorMessage: hasCards ? null : 'Unable to load search results.',
+          errorMessage: hasCards
+              ? null
+              : (e is AnimeRiftAccessUnavailable
+                    ? e.toString()
+                    : 'Unable to load search results.'),
           clearError: hasCards,
         );
       }
@@ -673,12 +763,13 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
         final page = await _loadCharacterPage(provider, state.nextOffset);
         if (generation != _generation || requestDomain != _domain) return;
         final seen = <String>{};
-        final merged = <AnimeWitcherCharacterHit>[];
-        for (final item in <AnimeWitcherCharacterHit>[
-          ...state.characters,
-          ...page.items,
-        ]) {
-          if (seen.add(item.id)) merged.add(item);
+        final merged = <Actor>[];
+        for (final item in <Actor>[...state.characters, ...page.items]) {
+          final id = item.id?.trim() ?? '';
+          final key = id.isNotEmpty
+              ? id
+              : '${item.name.trim().toLowerCase()}|${item.image ?? ''}';
+          if (seen.add(key)) merged.add(item);
         }
         state = SearchAggregateState(
           characters: merged,
@@ -745,11 +836,15 @@ Stream<SearchAggregateState> searchResults(Ref ref) {
   final providerFilters = ref.watch(searchProviderFiltersProvider);
   final manager = ref.read(extensionManagerProvider.notifier);
 
-  debugPrint('[SEARCH DBG] searchResults PROVIDER BUILT — query="$query"');
+  debugPrint(
+    '[SEARCH DBG] searchResults PROVIDER BUILT — queryLength=${query.runes.length}',
+  );
 
   var cancelled = false;
   ref.onDispose(() {
-    debugPrint('[SEARCH DBG] searchResults DISPOSED — query="$query"');
+    debugPrint(
+      '[SEARCH DBG] searchResults DISPOSED — queryLength=${query.runes.length}',
+    );
     cancelled = true;
   });
 
@@ -773,7 +868,7 @@ class SearchSuggestionState {
   /// Searching every category: what the others found.
   final List<MultimediaItem> animation;
   final List<MultimediaItem> manga;
-  final List<AnimeWitcherCharacterHit> characters;
+  final List<Actor> characters;
   final bool isLoading;
   final String query;
 
@@ -798,7 +893,7 @@ class SearchSuggestionState {
     List<MultimediaItem>? items,
     List<MultimediaItem>? animation,
     List<MultimediaItem>? manga,
-    List<AnimeWitcherCharacterHit>? characters,
+    List<Actor>? characters,
     bool? isLoading,
     String? query,
   }) {
@@ -817,18 +912,42 @@ class SearchSuggestionState {
 @riverpod
 class SearchSuggestionController extends _$SearchSuggestionController {
   Timer? _debounce;
+  int _generation = 0;
 
   @override
   SearchSuggestionState build() {
+    ref.listen(accountDataRevisionProvider, (_, _) {
+      // Invalidate the in-flight generation and purge the previous account's
+      // instant suggestions before requesting the current account's catalog.
+      _restartForCatalogChange();
+    });
+    ref.listen(activeProviderProvider, (previous, next) {
+      if (previous?.packageName == next?.packageName) return;
+      final domain = ref.read(searchDomainProvider);
+      if (domain != SearchDomain.anime &&
+          domain != SearchDomain.characters &&
+          domain != SearchDomain.all) {
+        return;
+      }
+      _restartForCatalogChange();
+    });
+    ref.listen(searchDomainProvider, (_, _) => _restartForCatalogChange());
     ref.onDispose(() {
       _debounce?.cancel();
     });
     return const SearchSuggestionState();
   }
 
+  void _restartForCatalogChange() {
+    final query = state.query;
+    clear();
+    onQueryChanged(query);
+  }
+
   void onQueryChanged(String query) {
     if (query == state.query) return;
 
+    final generation = ++_generation;
     final trimmed = query.trim();
     if (trimmed.length < 2) {
       _debounce?.cancel();
@@ -844,7 +963,7 @@ class SearchSuggestionController extends _$SearchSuggestionController {
       return;
     }
 
-    state = state.copyWith(query: query, isLoading: true);
+    state = SearchSuggestionState(query: query, isLoading: true);
 
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 350), () async {
@@ -852,7 +971,20 @@ class SearchSuggestionController extends _$SearchSuggestionController {
         final manager = ref.read(extensionManagerProvider.notifier);
         final providers = manager.getAllProviders();
         final domain = ref.read(searchDomainProvider);
-        final provider = providers.isEmpty ? null : providers.first;
+        final animationProvider = searchCatalogProvider(
+          SearchDomain.animation,
+          providers,
+        );
+        final mangaProvider = searchCatalogProvider(
+          SearchDomain.manga,
+          providers,
+        );
+        final charactersProvider = searchCatalogProvider(
+          SearchDomain.characters,
+          providers,
+          activeAnimeProvider: ref.read(activeProviderProvider),
+        );
+        final animeProvider = ref.read(activeProviderProvider);
         const none = ProviderSearchFilters();
         Future<List<MultimediaItem>> quiet(
           Future<ProviderMediaPage> Function() request,
@@ -863,9 +995,10 @@ class SearchSuggestionController extends _$SearchSuggestionController {
         // the full search does, and a category that fails is left out.
         final everything = domain == SearchDomain.all;
         final animationFuture =
-            provider != null && (everything || domain == SearchDomain.animation)
+            animationProvider != null &&
+                (everything || domain == SearchDomain.animation)
             ? quiet(
-                () => provider.searchAnimationPage(
+                () => animationProvider.searchAnimationPage(
                   query,
                   none,
                   offset: 0,
@@ -874,23 +1007,31 @@ class SearchSuggestionController extends _$SearchSuggestionController {
               )
             : Future.value(const <MultimediaItem>[]);
         final mangaFuture =
-            provider != null && (everything || domain == SearchDomain.manga)
+            mangaProvider != null &&
+                (everything || domain == SearchDomain.manga)
             ? quiet(
-                () =>
-                    provider.searchMangaPage(query, none, offset: 0, limit: 20),
+                () => mangaProvider.searchMangaPage(
+                  query,
+                  none,
+                  offset: 0,
+                  limit: 20,
+                ),
               )
             : Future.value(const <MultimediaItem>[]);
         final charactersFuture =
             (everything || domain == SearchDomain.characters) &&
-                provider is AnimeWitcherNativeProvider
-            ? provider
-                  .searchCharacters(query)
+                charactersProvider?.supportsCharacters == true
+            ? charactersProvider!
+                  .searchCharacterPage(query)
                   .then((page) => page.items)
-                  .catchError((Object _) => const <AnimeWitcherCharacterHit>[])
-            : Future.value(const <AnimeWitcherCharacterHit>[]);
+                  .catchError((Object _) => const <Actor>[])
+            : Future.value(const <Actor>[]);
         final animeFuture =
-            provider != null && (everything || domain == SearchDomain.anime)
-            ? provider.search(query)
+            animeProvider != null &&
+                (everything || domain == SearchDomain.anime)
+            ? animeProvider
+                  .search(query)
+                  .catchError((Object _) => const <MultimediaItem>[])
             : Future.value(const <MultimediaItem>[]);
         final anime = await animeFuture;
         final animation = await animationFuture;
@@ -912,7 +1053,7 @@ class SearchSuggestionController extends _$SearchSuggestionController {
             .where((item) => item.title.trim().isNotEmpty && seen.add(item.url))
             .take(30)
             .toList(growable: false);
-        if (state.query == query) {
+        if (ref.mounted && generation == _generation && state.query == query) {
           state = state.copyWith(
             suggestions: suggestions,
             items: items,
@@ -923,7 +1064,7 @@ class SearchSuggestionController extends _$SearchSuggestionController {
           );
         }
       } catch (_) {
-        if (state.query == query) {
+        if (ref.mounted && generation == _generation && state.query == query) {
           state = state.copyWith(
             suggestions: const [],
             items: const [],
@@ -938,6 +1079,7 @@ class SearchSuggestionController extends _$SearchSuggestionController {
   }
 
   void clear() {
+    _generation++;
     _debounce?.cancel();
     state = const SearchSuggestionState();
   }

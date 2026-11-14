@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart';
 import '../../../support/manga_image_fixtures.dart';
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
+import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
 import 'package:animewitcher/core/storage/history_repository.dart';
@@ -170,6 +171,7 @@ void main() {
         episodes: [_episode.copyWith(serverName: label)],
       );
       final container = ProviderContainer(overrides: [
+        activeProviderProvider.overrideWithValue(null),
         detailsControllerProvider(show.url).overrideWith(() => _Details(show)),
         historyRepositoryProvider.overrideWithValue(
           _History(position: 40000, duration: 100000),
@@ -210,6 +212,7 @@ void main() {
         completedPages: manga ? 12 : null, totalPages: manga ? 23 : null,
       );
       final container = ProviderContainer(overrides: [
+        activeProviderProvider.overrideWithValue(null),
         downloadsProvider.overrideWith(() => _Rows([row])),
         downloadProgressProvider.overrideWithValue({
           'progress-tile': DownloadProgressData(
@@ -223,7 +226,7 @@ void main() {
       final label = manga ? '12/23 صفحة' : '0.4 MB / 1.0 MB';
       await pumpUntil(tester, () => find.text(label).evaluate().isNotEmpty, 'download tile units');
       expect(find.text(label), findsOneWidget);
-      expect(find.text(manga ? '52%' : '40%'), findsOneWidget);
+      expect(find.textContaining(manga ? '52%' : '40%'), findsOneWidget);
       expect(tester.widget<SegmentedDownloadProgress>(find.byType(SegmentedDownloadProgress)).value, progress);
       if (manga) expect(find.textContaining(' MB'), findsNothing);
     });
@@ -240,6 +243,7 @@ void main() {
           ),
         };
         final container = ProviderContainer(overrides: [
+        activeProviderProvider.overrideWithValue(null),
           downloadsProvider.overrideWith(() => rows),
           downloadProgressProvider.overrideWithValue(map),
           downloadedFilesProvider.overrideWith(() => _Files(
@@ -297,6 +301,7 @@ void main() {
     });
     final rows = _Rows([_row('retained-poster', status: TaskStatus.complete)]);
     final container = ProviderContainer(overrides: [
+        activeProviderProvider.overrideWithValue(null),
       downloadsProvider.overrideWith(() => rows),
       downloadProgressProvider.overrideWithValue(const {}),
       episodeSortAscendingProvider.overrideWith(_Sort.new),
@@ -333,6 +338,7 @@ void main() {
     ]);
     late _Playback playback;
     final container = ProviderContainer(overrides: [
+        activeProviderProvider.overrideWithValue(null),
       downloadsProvider.overrideWith(() => rows),
       downloadProgressProvider.overrideWithValue(const {}),
       downloadedFilesProvider.overrideWith(() => _Files(

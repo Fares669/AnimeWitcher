@@ -1,5 +1,7 @@
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart';
+import 'package:animewitcher/core/storage/provider_local_library.dart';
 import 'package:animewitcher/core/services/download_url_refresh.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -22,10 +24,15 @@ class _MemoryBackend implements DownloadUrlRefreshBackend {
 }
 
 class _FakeProvider extends AnimeWitcherProvider {
-  _FakeProvider({this.sources = const [], this.resolved = const []});
+  _FakeProvider({
+    this.sources = const [],
+    this.resolved = const [],
+    this.resolvedByUrl = const {},
+  });
 
   List<StreamResult> sources;
   List<StreamResult> resolved;
+  Map<String, List<StreamResult>> resolvedByUrl;
   String? lastResolvedUrl;
   String? lastSourcesUrl;
   var prepared = false;
@@ -68,12 +75,27 @@ class _FakeProvider extends AnimeWitcherProvider {
   @override
   Future<List<StreamResult>> loadStreams(String url) async {
     lastResolvedUrl = url;
-    return resolved;
+    return resolvedByUrl[url] ?? resolved;
   }
 
   @override
   void prepareForNetworkRetry() {
     prepared = true;
+  }
+}
+
+class _RiftLoginGatedProvider extends _FakeProvider {
+  @override
+  String get packageName => animeRiftProviderId;
+
+  @override
+  Future<List<StreamResult>> loadDownloadStreamSources(String url) async {
+    throw const AnimeRiftAuthenticationRequired();
+  }
+
+  @override
+  Future<List<StreamResult>> loadDownloadStreams(String url) async {
+    throw const AnimeRiftAuthenticationRequired();
   }
 }
 
@@ -249,6 +271,35 @@ void main() {
     expect(result?.headers['Referer'], 'https://provider.test/');
   });
 
+  test('fresh source list wins over a stale direct refresh token', () async {
+    const stale = 'https://cdn.test/video.mp4?token=old';
+    const fresh = 'https://cdn.test/video.mp4?token=new';
+    final provider = _FakeProvider(
+      sources: const [
+        StreamResult(url: fresh, source: 'Server A', quality: '1080p'),
+      ],
+      resolvedByUrl: const {
+        'stale-source': [
+          StreamResult(url: stale, source: 'Server A', quality: '1080p'),
+        ],
+      },
+    );
+    final refresher = DownloadUrlRefresher(providerForId: (_) => provider);
+    const descriptor = DownloadUrlRefreshDescriptor(
+      trackingUrl: 'episode',
+      providerId: 'fake.provider',
+      source: 'Server A',
+      quality: '1080p',
+      refreshUrl: 'stale-source',
+      updatedAtMillis: 1,
+    );
+
+    final result = await refresher.refresh(descriptor, currentUrl: stale);
+
+    expect(provider.lastSourcesUrl, descriptor.trackingUrl);
+    expect(result?.url, fresh);
+  });
+
   test('fallback source reload preserves source and quality', () async {
     final provider = _FakeProvider(
       sources: const [
@@ -299,6 +350,24 @@ void main() {
     const refresher = DownloadUrlRefresher(providerForId: _noProvider);
 
     expect(await refresher.refresh(descriptor, currentUrl: 'expired'), isNull);
+  });
+  test('Rift renewal preserves the account sign-in gate', () async {
+    const descriptor = DownloadUrlRefreshDescriptor(
+      trackingUrl: 'https://anime-rift.com/anime/anime42/episode/ep7',
+      providerId: animeRiftProviderId,
+      source: 'CR2 (عربي مترجم)',
+      quality: '1080P',
+      updatedAtMillis: 1,
+    );
+    final provider = _RiftLoginGatedProvider();
+    final refresher = DownloadUrlRefresher(
+      providerForId: (id) => id == animeRiftProviderId ? provider : null,
+    );
+    await expectLater(
+      refresher.refresh(descriptor, currentUrl: ''),
+      throwsA(isA<AnimeRiftAuthenticationRequired>()),
+    );
+    expect(provider.prepared, isTrue);
   });
 }
 

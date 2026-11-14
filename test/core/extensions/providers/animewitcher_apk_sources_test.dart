@@ -75,19 +75,24 @@ Map<String, dynamic> _homeSectionsDocument() {
   };
 }
 
-Map<String, dynamic> _algoliaHits({String title = 'Hit'}) {
+Map<String, dynamic> _algoliaHits({
+  String title = 'Hit',
+  String animeId = 'hit-1',
+  int page = 0,
+  int nbPages = 1,
+}) {
   return <String, dynamic>{
     'hits': <Map<String, dynamic>>[
       <String, dynamic>{
-        'objectID': 'hit-1',
-        'anime_id': 'hit-1',
+        'objectID': animeId,
+        'anime_id': animeId,
         'name': title,
         'tags': <String>['اكشن'],
         'poster_uri': 'https://cdn.example.test/hit.jpg',
       },
     ],
-    'page': 0,
-    'nbPages': 1,
+    'page': page,
+    'nbPages': nbPages,
   };
 }
 
@@ -105,6 +110,7 @@ bool _isAlgolia(Uri uri) =>
 
 ({Dio dio, List<RequestOptions> requests}) _stubDio({
   bool searchActive = true,
+  bool paginateHome = false,
   int Function(RequestOptions options)? statusFor,
 }) {
   final requests = <RequestOptions>[];
@@ -147,7 +153,17 @@ bool _isAlgolia(Uri uri) =>
             path.contains('/indexes/series/naruto')) {
           data = _algoliaObject();
         } else if (_isAlgolia(options.uri)) {
-          data = _algoliaHits();
+          if (paginateHome) {
+            final page = int.tryParse(_queryParams(options)['page'] ?? '') ?? 0;
+            data = _algoliaHits(
+              title: 'Hit on page $page',
+              animeId: 'hit-${page + 1}',
+              page: page,
+              nbPages: 3,
+            );
+          } else {
+            data = _algoliaHits();
+          }
         }
         handler.resolve(
           Response<dynamic>(
@@ -354,12 +370,13 @@ void main() {
     expect(query.headers['X-Algolia-API-Key'], 'search-key');
   });
 
-  test('home view-more is searchAsync page 0 with 200 hits', () async {
-    final stub = _stubDio();
-    final page = await _provider(stub.dio).getHomeSectionPage('Latest');
+  test('home view-more loads pages beyond the first as the user scrolls', () async {
+    final stub = _stubDio(paginateHome: true);
+    final provider = _provider(stub.dio);
+    final page = await provider.getHomeSectionPage('Latest');
 
     expect(page.items, isNotEmpty);
-    expect(page.hasMore, isFalse);
+    expect(page.hasMore, isTrue);
     final query = stub.requests.singleWhere(
       (request) =>
           _isAlgolia(request.uri) &&
@@ -371,12 +388,32 @@ void main() {
     expect(params['hitsPerPage'], '200');
     expect(params['page'], '0');
 
-    final extra = await _provider(stub.dio).getHomeSectionPage(
+    final extra = await provider.getHomeSectionPage(
       'Latest',
-      offset: 200,
+      offset: page.nextOffset,
     );
-    expect(extra.items, isEmpty);
-    expect(extra.hasMore, isFalse);
+    expect(extra.items, isNotEmpty);
+    expect(extra.items.single.url, isNot(page.items.single.url));
+    expect(extra.hasMore, isTrue);
+    final nextQuery = stub.requests.lastWhere(
+      (request) =>
+          _isAlgolia(request.uri) &&
+          request.uri.path.endsWith('/indexes/series/query'),
+    );
+    expect(_queryParams(nextQuery)['page'], '1');
+
+    final last = await provider.getHomeSectionPage(
+      'Latest',
+      offset: extra.nextOffset,
+    );
+    expect(last.items, isNotEmpty);
+    expect(last.hasMore, isFalse);
+    final lastQuery = stub.requests.lastWhere(
+      (request) =>
+          _isAlgolia(request.uri) &&
+          request.uri.path.endsWith('/indexes/series/query'),
+    );
+    expect(_queryParams(lastQuery)['page'], '2');
   });
 
   test('similar titles query series_similar with 11 hits and search key',

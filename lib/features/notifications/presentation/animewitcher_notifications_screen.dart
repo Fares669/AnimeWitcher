@@ -5,6 +5,8 @@ import '../../../core/account/account_providers.dart';
 import '../../../core/account/animewitcher_account_models.dart';
 import '../../../core/account/animewitcher_notification_models.dart';
 import '../../../core/account/firestore_rest_client.dart';
+import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/utils/request_generation.dart';
 import '../../../core/utils/avatar_image.dart';
@@ -13,6 +15,7 @@ import '../../../shared/widgets/account_notifications_button.dart';
 import '../../../shared/widgets/app_page_header.dart';
 import '../../../shared/widgets/mouse_drag_refresh_indicator.dart';
 import '../../comments/presentation/animewitcher_replies_screen.dart';
+import '../../more/presentation/provider_unsupported_page.dart';
 
 class AnimeWitcherNotificationsScreen extends ConsumerStatefulWidget {
   const AnimeWitcherNotificationsScreen({super.key});
@@ -37,6 +40,9 @@ class _NotificationsState
   String? get _accountId =>
       ref.read(animeWitcherAccountServiceProvider).snapshot.profile?.documentId;
 
+  bool get _supported =>
+      ref.read(activeProviderProvider) is AnimeWitcherNativeProvider;
+
   @override
   void initState() {
     super.initState();
@@ -53,7 +59,10 @@ class _NotificationsState
   }
 
   bool _current(int generation, String? accountId) =>
-      mounted && _generation.isCurrent(generation) && _accountId == accountId;
+      mounted &&
+      _supported &&
+      _generation.isCurrent(generation) &&
+      _accountId == accountId;
 
   void _onScroll() {
     if (_scroll.position.extentAfter < 300 &&
@@ -67,6 +76,7 @@ class _NotificationsState
 
   Future<void> _load({bool more = false}) async {
     if (!mounted ||
+        !_supported ||
         _pending.isNotEmpty ||
         (more && (_loading || _loadingMore || !_hasMore))) {
       return;
@@ -146,7 +156,7 @@ class _NotificationsState
   }
 
   Future<void> _act(AnimeWitcherNotification item, String action) async {
-    if (_pending.contains(item.path)) return;
+    if (!mounted || !_supported || _pending.contains(item.path)) return;
     final generation = _generation.current;
     final accountId = _accountId;
     setState(() => _pending.add(item.path));
@@ -217,6 +227,25 @@ class _NotificationsState
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(activeProviderProvider, (previous, next) {
+      if (identical(previous, next)) return;
+      _generation.begin();
+      _pending.clear();
+      _items = [];
+      _cursor = null;
+      _hasMore = false;
+      _error = null;
+      _loading = true;
+      _loadingMore = false;
+      if (next is AnimeWitcherNativeProvider) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _load();
+        });
+      }
+    });
+    if (ref.watch(activeProviderProvider) is! AnimeWitcherNativeProvider) {
+      return const ProviderUnsupportedPage(title: 'الإشعارات');
+    }
     final account = ref
         .watch(animeWitcherAccountControllerProvider)
         .asData

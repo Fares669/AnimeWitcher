@@ -7,9 +7,11 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../domain/entity/manga.dart';
 import '../../domain/entity/multimedia_item.dart';
+import '../../storage/anime_rift_account_scope.dart';
 import '../../utils/episode_label.dart';
 import '../download_parallel.dart';
 import 'download_v2_identity.dart';
+import 'anime_rift_download_metadata_v2.dart';
 import 'manga_chapter_manifest_v2.dart';
 
 final class DownloadSourceMetadataV2 {
@@ -208,8 +210,11 @@ String _legacyDownloadFolderNameV2(String value, {required String fallback}) {
 }
 
 bool _safeLegacyDownloadLeafV2(String value) =>
-    value.isNotEmpty && value != '.' && value != '..' &&
-    !value.contains('/') && !value.contains('\\') &&
+    value.isNotEmpty &&
+    value != '.' &&
+    value != '..' &&
+    !value.contains('/') &&
+    !value.contains('\\') &&
     !RegExp(r'[\x00-\x1f\x7f-\x9f]').hasMatch(value) &&
     p.windows.basename(value) == value &&
     utf8.encode(value).length <= 255 &&
@@ -245,7 +250,11 @@ Future<String> firstWritableDownloadDirectoryV2(
 String _pathBelowDownloadDirectoryV2(String directory, List<String> segments) {
   final result = p.joinAll(<String>[directory, ...segments]);
   if (!p.isWithin(p.normalize(directory), p.normalize(result))) {
-    throw ArgumentError.value(segments, 'segments', 'Path escapes media directory');
+    throw ArgumentError.value(
+      segments,
+      'segments',
+      'Path escapes media directory',
+    );
   }
   return result;
 }
@@ -265,7 +274,8 @@ Future<List<String>> _downloadMediaRootsV2(String mediaType) async {
     return roots;
   }
   final downloads = await getDownloadsDirectory();
-  final root = downloads?.path ??
+  final root =
+      downloads?.path ??
       p.join((await getApplicationDocumentsDirectory()).path, 'Downloads');
   return <String>[p.join(root, mediaType)];
 }
@@ -275,7 +285,9 @@ Future<String> _downloadMediaDirectoryV2(
   List<String> segments,
 ) async {
   final roots = await _downloadMediaRootsV2(mediaType);
-  final paths = roots.map((root) => _pathBelowDownloadDirectoryV2(root, segments));
+  final paths = roots.map(
+    (root) => _pathBelowDownloadDirectoryV2(root, segments),
+  );
   if (Platform.isAndroid) {
     return firstWritableDownloadDirectoryV2(paths.map(Directory.new));
   }
@@ -290,6 +302,8 @@ Future<String> downloadDestinationPathV2(
   MultimediaItem item, {
   Episode? episode,
   required String filename,
+  String? providerId,
+  DownloadLogicalId? logicalId,
 }) async {
   if (filename.isEmpty ||
       filename == '.' ||
@@ -299,11 +313,69 @@ Future<String> downloadDestinationPathV2(
       p.isAbsolute(filename) ||
       p.windows.basename(filename) != filename ||
       utf8.encode(filename).length > 255) {
-    throw ArgumentError.value(filename, 'filename', 'Expected one filename leaf');
+    throw ArgumentError.value(
+      filename,
+      'filename',
+      'Expected one filename leaf',
+    );
   }
   final title = _downloadFolderName(item.title, fallback: 'Unknown');
-  final directory = await _downloadMediaDirectoryV2('anime', <String>[title]);
-  return _pathBelowDownloadDirectoryV2(directory, <String>[filename]);
+  // Rift episodes use the same readable Downloads/anime/<title> folder as
+  // AnimeWitcher. Their provider/account-qualified logical ID already gives
+  // each file a distinct suffix, keeping simultaneous downloads isolated.
+  // Keep the older scoped path if no logical ID is supplied; otherwise two
+  // providers could write the same unsuffixed server filename.
+  final sharedRiftFolder =
+      isAnimeRiftDownloadProviderV2(providerId) && logicalId != null;
+  final scope = sharedRiftFolder ? null : downloadProviderScopeV2(providerId);
+  final accountHash =
+      !sharedRiftFolder && isAnimeRiftDownloadProviderV2(providerId)
+      ? AnimeRiftLocalAccountScope.accountHash
+      : null;
+  final directory = await _downloadMediaDirectoryV2('anime', <String>[
+    if (scope != null) ...['.providers', scope],
+    if (accountHash != null) ...['.accounts', accountHash],
+    title,
+  ]);
+  final destinationFilename = logicalId == null
+      ? filename
+      : _filenameForLogicalDownloadV2(filename, logicalId);
+  return _pathBelowDownloadDirectoryV2(directory, <String>[
+    destinationFilename,
+  ]);
+}
+
+String _filenameForLogicalDownloadV2(
+  String filename,
+  DownloadLogicalId logicalId,
+) {
+  final digest = logicalId.value.startsWith('dl_')
+      ? logicalId.value.substring(3)
+      : logicalId.value;
+  final suffix = digest.length <= 12 ? digest : digest.substring(0, 12);
+  final extension = p.extension(filename);
+  final stem = filename.substring(0, filename.length - extension.length);
+  final marker = '-$suffix';
+  const maxBytes = 244; // leaves room for the transport ".assembling" suffix
+  final reservedBytes = utf8.encode('$marker$extension').length;
+  final maxStemBytes = maxBytes - reservedBytes;
+  final boundedStem = _utf8Prefix(stem, maxStemBytes);
+  final safeStem = boundedStem.isEmpty ? 'video' : boundedStem;
+  return '$safeStem$marker$extension';
+}
+
+String _utf8Prefix(String value, int maxBytes) {
+  if (maxBytes <= 0) return '';
+  final buffer = StringBuffer();
+  var used = 0;
+  for (final rune in value.runes) {
+    final part = String.fromCharCode(rune);
+    final bytes = utf8.encode(part).length;
+    if (used + bytes > maxBytes) break;
+    buffer.write(part);
+    used += bytes;
+  }
+  return buffer.toString();
 }
 
 /// Produces a readable chapter directory:

@@ -23,6 +23,7 @@ import 'episode_browse.dart';
 import 'episode_search.dart';
 import 'episode_view_mode.dart';
 import 'details_hero_actions.dart';
+
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 
 import 'package:animewitcher/core/providers/device_info_provider.dart';
@@ -72,13 +73,14 @@ String detailsPlayActionLabel(
   );
 
   final position = targetEpisode != null
-      ? historyRepo.getEpisodePosition(
-          targetEpisode.url,
-          mainUrl: item.url,
+      ? historyPositionForItem(
+          historyRepo,
+          item,
+          episodeUrl: targetEpisode.url,
           season: targetEpisode.season,
           episode: targetEpisode.episode,
         )
-      : historyRepo.getPosition(item.url);
+      : historyPositionForItem(historyRepo, item);
 
   final label = position > 5000 ? l10n.resume : l10n.play;
   if (targetEpisode == null || isMovie) return label;
@@ -181,21 +183,23 @@ class DetailsActionButtons extends HookConsumerWidget {
     );
 
     final pos = targetEpisode != null
-        ? historyRepo.getEpisodePosition(
-            targetEpisode.url,
-            mainUrl: item.url,
+        ? historyPositionForItem(
+            historyRepo,
+            item,
+            episodeUrl: targetEpisode.url,
             season: targetEpisode.season,
             episode: targetEpisode.episode,
           )
-        : historyRepo.getPosition(item.url);
+        : historyPositionForItem(historyRepo, item);
     final dur = targetEpisode != null
-        ? historyRepo.getEpisodeDuration(
-            targetEpisode.url,
-            mainUrl: item.url,
+        ? historyDurationForItem(
+            historyRepo,
+            item,
+            episodeUrl: targetEpisode.url,
             season: targetEpisode.season,
             episode: targetEpisode.episode,
           )
-        : historyRepo.getDuration(item.url);
+        : historyDurationForItem(historyRepo, item);
 
     final playLabel = detailsPlayActionLabel(
       context,
@@ -214,7 +218,10 @@ class DetailsActionButtons extends HookConsumerWidget {
               details!.episodes!.isNotEmpty)
           ? () async {
               await ref
-                  .read(detailsControllerProvider(item.url).notifier)
+                  .read(
+                    detailsControllerProvider(detailsControllerKey(item))
+                        .notifier,
+                  )
                   .handlePlayPress(context, details!);
 
               // Phase 10 Fix: TV Focus restoration on return from player
@@ -273,9 +280,8 @@ class DetailsActionButtons extends HookConsumerWidget {
               child: LinearProgressIndicator(
                 value: progress,
                 minHeight: 6,
-                backgroundColor: Theme.of(
-                  context,
-                ).colorScheme.onSurface.withValues(alpha: 0.1),
+                backgroundColor: Theme.of(context).colorScheme.onSurface
+                    .withValues(alpha: 0.1),
                 valueColor: AlwaysStoppedAnimation<Color>(
                   Theme.of(context).colorScheme.primary,
                 ),
@@ -362,9 +368,8 @@ class SliverDetailsDesktopEpisodeGrid extends ConsumerWidget {
               children: [
                 Text(
                   AppLocalizations.of(context)!.episodes,
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: Theme.of(context).textTheme.headlineSmall
+                      ?.copyWith(fontWeight: FontWeight.bold),
                 ),
                 DetailsEpisodeFilterBar(itemUrl: itemUrl),
               ],
@@ -394,6 +399,14 @@ class SliverDetailsDesktopEpisodeGrid extends ConsumerWidget {
                   startIndex,
                   endIndex,
                 );
+
+                if (crossAxisCount == 1) {
+                  return EpisodeCard(
+                    key: ValueKey(rowEpisodes.single.url),
+                    episode: rowEpisodes.single,
+                    parentItem: parentItem,
+                  );
+                }
 
                 return IntrinsicHeight(
                   child: Row(
@@ -452,6 +465,9 @@ class SliverEpisodeCardGrid extends StatelessWidget {
       separatorBuilder: (_, _) => SizedBox(height: mainAxisSpacing),
       itemBuilder: (context, rowIndex) {
         final startIndex = rowIndex * crossAxisCount;
+        // A single card already determines its row height. IntrinsicHeight
+        // adds a speculative layout pass to every newly visible episode.
+        if (crossAxisCount == 1) return children[startIndex];
         return IntrinsicHeight(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -644,11 +660,7 @@ class DetailsEpisodeFilterBar extends ConsumerWidget {
 
     return SizedBox(
       height: 40,
-      child: _buildLanguageToggle(
-        context,
-        ref,
-        detailsState.selectedDubStatus,
-      ),
+      child: _buildLanguageToggle(context, ref, detailsState.selectedDubStatus),
     );
   }
 
@@ -764,18 +776,16 @@ class _LanguageButtonState extends State<_LanguageButton> {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
           decoration: BoxDecoration(
             color: widget.isSelected
-                ? Theme.of(
-                    context,
-                  ).colorScheme.primary.withValues(alpha: 40 / 255)
+                ? Theme.of(context).colorScheme.primary
+                      .withValues(alpha: 40 / 255)
                 : Colors.transparent,
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
               color: _isFocused
                   ? Colors.white
                   : (widget.isSelected
-                        ? Theme.of(
-                            context,
-                          ).colorScheme.primary.withValues(alpha: 80 / 255)
+                        ? Theme.of(context).colorScheme.primary
+                              .withValues(alpha: 80 / 255)
                         : Colors.transparent),
               width: _isFocused ? 2 : 1,
             ),
@@ -813,9 +823,8 @@ class DetailsChip extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: Theme.of(
-          context,
-        ).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w500),
+        style: Theme.of(context).textTheme.bodySmall
+            ?.copyWith(fontWeight: FontWeight.w500),
       ),
     );
   }
@@ -927,6 +936,16 @@ class DetailsDesktopEpisodeColumn extends ConsumerWidget {
     final startIndex = rowIndex * crossAxisCount;
     final endIndex = (startIndex + crossAxisCount).clamp(0, episodes.length);
     final rowEpisodes = episodes.sublist(startIndex, endIndex);
+
+    if (crossAxisCount == 1) {
+      return EpisodeCard(
+        key: ValueKey(rowEpisodes.single.url),
+        episode: rowEpisodes.single,
+        parentItem: parentItem,
+        plain: plain,
+        vertical: vertical,
+      );
+    }
 
     return IntrinsicHeight(
       child: Row(

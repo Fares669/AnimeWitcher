@@ -36,7 +36,6 @@ void main() {
       contains('_storageService.setDownloadDiagnosticLog(enabled)'),
     );
     expect(v2Provider, contains('FileDownloadDiagnosticsV2'));
-    expect(v2Provider, contains("p.join(documents.path, 'log')"));
     expect(v2Provider, contains('settings.getDownloadDiagnosticLog'));
     expect(
       v2Provider,

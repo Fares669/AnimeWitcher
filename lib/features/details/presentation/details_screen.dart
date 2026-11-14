@@ -7,6 +7,8 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/router/app_router.dart';
 import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/providers/anime_rift_provider.dart';
+import '../../../core/extensions/item_provider_resolution.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../home/presentation/view_all_screen.dart';
 
@@ -17,6 +19,9 @@ import '../../characters/presentation/anime_characters_screen.dart';
 import '../../characters/presentation/character_details_screen.dart';
 import 'related_anime_screen.dart';
 import '../../comments/presentation/animewitcher_comments_screen.dart';
+import '../../comments/presentation/anime_rift_comments_screen.dart';
+import '../../../core/extensions/providers/anime_rift_provider.dart';
+import '../../../core/extensions/providers/anime_rift_comments.dart';
 import '../../../core/utils/window_controls_inset.dart';
 import '../../../core/utils/image_fallbacks.dart';
 import '../../../core/utils/resume_episode.dart';
@@ -32,6 +37,7 @@ import 'package:animewitcher/shared/widgets/multimedia_card.dart';
 import '../../library/presentation/library_provider.dart';
 import '../../library/presentation/library_auth.dart';
 import '../../../core/storage/library_category.dart';
+import '../../../core/storage/provider_local_library.dart';
 import '../../../core/account/account_providers.dart';
 import '../../settings/presentation/account_screen.dart';
 
@@ -184,6 +190,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   final GlobalKey _extraTabsKey = GlobalKey();
   int? _userRating;
   bool _loadingUserRating = false;
+  int _riftRatingLoadRevision = 0;
   bool _loadedUserRatingSignedIn = false;
   String? _loadedUserRatingAnimeId;
 
@@ -207,16 +214,26 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     const favoriteRed = Color(0xFFFF3B30);
     final colors = Theme.of(context).colorScheme;
     final commentTarget = animeWitcherAnimeCommentTarget(item);
+    final riftCommentTarget = AnimeRiftCommentTarget.forAnime(item);
     final LibraryCategory? currentCategory =
-        libraryNotifier.itemCategory(item.url) as LibraryCategory?;
+        (item.provider == animeRiftProviderId
+                ? libraryNotifier.itemCategory(
+                    item.url,
+                    providerId: item.provider,
+                  )
+                : libraryNotifier.itemCategory(item.url))
+            as LibraryCategory?;
 
     return <AppleLiquidGlassToolbarButton>[
-      if (includeComments && commentTarget != null)
+      if (includeComments &&
+          (commentTarget != null || riftCommentTarget != null))
         AppleLiquidGlassToolbarButton(
           tooltip: appText(context, english: 'Comments', arabic: 'التعليقات'),
           icon: Icons.chat_bubble_outline_rounded,
           color: foregroundColor,
-          onPressed: () => _openAnimeComments(context, commentTarget),
+          onPressed: () => commentTarget != null
+              ? _openAnimeComments(context, commentTarget)
+              : _openRiftComments(context, riftCommentTarget!),
         ),
       AppleLiquidGlassToolbarButton(
         tooltip: isFavorite
@@ -235,7 +252,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
             : Icons.favorite_border_rounded,
         color: isFavorite ? favoriteRed : foregroundColor,
         onPressed: () async {
-          if (!await _ensureSignedInForLibrary(context)) return;
+          if (!await _ensureSignedInForLibrary(context, item)) return;
           await libraryNotifier.setFavorite(item, !isFavorite);
         },
       ),
@@ -278,7 +295,13 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     Color? fallbackColor,
   }) {
     final LibraryCategory? category =
-        libraryNotifier.itemCategory(item.url) as LibraryCategory?;
+        (item.provider == animeRiftProviderId
+                ? libraryNotifier.itemCategory(
+                    item.url,
+                    providerId: item.provider,
+                  )
+                : libraryNotifier.itemCategory(item.url))
+            as LibraryCategory?;
     return Wrap(
       spacing: 12,
       runSpacing: 12,
@@ -356,6 +379,14 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
             fallbackColor: fallbackColor,
             onPressed: () => _openAnimeComments(context, target),
           ),
+        if (AnimeRiftCommentTarget.forAnime(item) case final target?)
+          DetailsHeroIconButton(
+            icon: Icons.chat_bubble_outline_rounded,
+            tooltip: appText(context, english: 'Comments', arabic: 'التعليقات'),
+            foregroundColor: foregroundColor,
+            fallbackColor: fallbackColor,
+            onPressed: () => _openRiftComments(context, target),
+          ),
         DetailsHeroIconButton(
           icon: (_userRating ?? 0) > 0
               ? Icons.star_rounded
@@ -388,7 +419,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   String? _firstTrailerUrl(MultimediaItem item) {
     final trailers =
         ref
-            .watch(detailsControllerProvider(widget.item.url))
+            .watch(detailsControllerProvider(detailsControllerKey(widget.item)))
             .trailers
             .asData
             ?.value ??
@@ -420,6 +451,23 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     );
     if (!mounted || !appleUsesPersistentLiquidGlassHeader) return;
     setState(() {});
+  }
+
+  Future<void> _openRiftComments(
+    BuildContext context,
+    AnimeRiftCommentTarget target,
+  ) async {
+    final provider = ref
+        .read(extensionManagerProvider.notifier)
+        .getProvider(animeRiftProviderId);
+    if (provider is! AnimeRiftProvider) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            AnimeRiftCommentsScreen(provider: provider, target: target),
+      ),
+    );
+    if (mounted && appleUsesPersistentLiquidGlassHeader) setState(() {});
   }
 
   String _libraryCategoryLabel(BuildContext context, LibraryCategory category) {
@@ -487,10 +535,10 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     MultimediaItem item,
     String value,
   ) async {
-    if (!await _ensureSignedInForLibrary(context)) return;
+    if (!await _ensureSignedInForLibrary(context, item)) return;
     final notifier = ref.read(libraryProvider.notifier);
     if (value == _removeLibraryAction) {
-      await notifier.clearItemCategory(item.url);
+      await notifier.clearItemCategory(item.url, providerId: item.provider);
       return;
     }
     LibraryCategory? category;
@@ -505,7 +553,11 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     }
   }
 
-  Future<bool> _ensureSignedInForLibrary(BuildContext context) async {
+  Future<bool> _ensureSignedInForLibrary(
+    BuildContext context,
+    MultimediaItem item,
+  ) async {
+    if (item.provider == animeRiftProviderId) return true;
     if (ref.read(animeWitcherAccountServiceProvider).isSignedIn) {
       return true;
     }
@@ -623,7 +675,10 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     resetEpisodeBrowse();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref
-          .read(detailsControllerProvider(widget.item.url).notifier)
+          .read(
+            detailsControllerProvider(detailsControllerKey(widget.item))
+                .notifier,
+          )
           .loadDetails(widget.item, autoPlay: widget.autoPlay);
     });
   }
@@ -637,6 +692,35 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   }
 
   Future<void> _loadUserRatingFor(MultimediaItem item) async {
+    if (item.provider == animeRiftProviderId) {
+      final id = item.url;
+      if (_loadingUserRating) return;
+      final loadRevision = ++_riftRatingLoadRevision;
+      setState(() => _loadingUserRating = true);
+      int? rating;
+      var linked = false;
+      try {
+        rating = (await loadRiftRating(ref, item))?.general.round();
+        linked =
+            ref.read(activeProviderProvider) is AnimeRiftProvider &&
+            (ref.read(
+              activeProviderProvider,
+            ) as AnimeRiftProvider).isAccountLinked;
+      } catch (_) {
+        // Never query the Witcher session for a Rift item.
+      }
+      if (!mounted ||
+          item.url != widget.item.url ||
+          loadRevision != _riftRatingLoadRevision)
+        return;
+      setState(() {
+        _userRating = rating;
+        _loadedUserRatingAnimeId = id;
+        _loadedUserRatingSignedIn = linked;
+        _loadingUserRating = false;
+      });
+      return;
+    }
     final service = _accountServiceOrNull();
     if (service == null) {
       if (!mounted) return;
@@ -686,8 +770,12 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   }
 
   void _ensureUserRatingLoaded(MultimediaItem item) {
-    final animeId = animeWitcherAnimeIdFromItem(item);
-    final signedIn = _accountServiceOrNull()?.isSignedIn ?? false;
+    final isRift = item.provider == animeRiftProviderId;
+    final animeId = isRift ? item.url : animeWitcherAnimeIdFromItem(item);
+    final active = isRift ? ref.read(activeProviderProvider) : null;
+    final signedIn = isRift
+        ? active is AnimeRiftProvider && active.isAccountLinked
+        : _accountServiceOrNull()?.isSignedIn ?? false;
     if (_loadingUserRating ||
         (_loadedUserRatingAnimeId == animeId &&
             _loadedUserRatingSignedIn == signedIn)) {
@@ -699,7 +787,8 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   }
 
   Future<void> _rateAnimeFromHero(MultimediaItem item) async {
-    final animeId = animeWitcherAnimeIdFromItem(item);
+    final isRift = item.provider == animeRiftProviderId;
+    final animeId = isRift ? item.url : animeWitcherAnimeIdFromItem(item);
     if (_loadedUserRatingAnimeId != animeId || !_loadedUserRatingSignedIn) {
       await _loadUserRatingFor(item);
     }
@@ -709,18 +798,35 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       ref,
       ratings: AnimeDetailsRatings.fromItem(item),
       initialRating: _userRating ?? 0,
+      item: item,
+      onOptimisticRating: isRift
+          ? (rating) {
+              if (!mounted || item.url != widget.item.url) return;
+              ++_riftRatingLoadRevision;
+              setState(() {
+                _userRating = rating;
+                _loadingUserRating = false;
+                _loadedUserRatingAnimeId = animeId;
+                _loadedUserRatingSignedIn = true;
+              });
+            }
+          : null,
     );
     if (!mounted || !outcome.changed) return;
     setState(() {
       _userRating = outcome.rating;
-      _loadedUserRatingAnimeId = animeWitcherAnimeIdFromItem(item);
-      _loadedUserRatingSignedIn = _accountServiceOrNull()?.isSignedIn ?? false;
+      _loadedUserRatingAnimeId = animeId;
+      _loadedUserRatingSignedIn = isRift
+          ? ref.read(activeProviderProvider) is AnimeRiftProvider
+          : _accountServiceOrNull()?.isSignedIn ?? false;
     });
   }
 
   Future<void> _refreshDetails() {
     return ref
-        .read(detailsControllerProvider(widget.item.url).notifier)
+        .read(
+          detailsControllerProvider(detailsControllerKey(widget.item)).notifier,
+        )
         .refreshDetails();
   }
 
@@ -765,7 +871,10 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
 
   @override
   Widget build(BuildContext context) {
-    ref.listen(detailsControllerProvider(widget.item.url), (prev, next) {
+    ref.listen(detailsControllerProvider(detailsControllerKey(widget.item)), (
+      prev,
+      next,
+    ) {
       if (!widget.autoPlay || _didTriggerAutoPlay) return;
       final prevState = prev ?? const DetailsState();
       final nextState = next;
@@ -792,7 +901,10 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!context.mounted) return;
         ref
-            .read(detailsControllerProvider(widget.item.url).notifier)
+            .read(
+              detailsControllerProvider(detailsControllerKey(widget.item))
+                  .notifier,
+            )
             .handlePlayPress(
               context,
               item,
@@ -805,41 +917,54 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     // membership globally instead of only inside the currently selected list.
     ref.watch(libraryProvider);
     final libraryNotifier = ref.read(libraryProvider.notifier);
-    final isFavorite = libraryNotifier.isFavorite(widget.item.url);
+    final isFavorite = widget.item.provider == animeRiftProviderId
+        ? libraryNotifier.isFavorite(
+            widget.item.url,
+            providerId: widget.item.provider,
+          )
+        : libraryNotifier.isFavorite(widget.item.url);
     final isLarge = context.isTabletOrLarger;
 
     final detailsAsync = ref.watch(
-      detailsControllerProvider(widget.item.url).select((s) => s.details),
+      detailsControllerProvider(detailsControllerKey(widget.item))
+          .select((s) => s.details),
     );
     final details = detailsAsync.value;
     final episodesAsync = ref.watch(
-      detailsControllerProvider(widget.item.url).select((s) => s.episodes),
+      detailsControllerProvider(detailsControllerKey(widget.item))
+          .select((s) => s.episodes),
     );
     final castAsync = ref.watch(
-      detailsControllerProvider(widget.item.url).select((s) => s.cast),
+      detailsControllerProvider(detailsControllerKey(widget.item))
+          .select((s) => s.cast),
     );
     final trailersAsync = ref.watch(
-      detailsControllerProvider(widget.item.url).select((s) => s.trailers),
+      detailsControllerProvider(detailsControllerKey(widget.item))
+          .select((s) => s.trailers),
     );
     final relatedAsync = ref.watch(
-      detailsControllerProvider(widget.item.url).select((s) => s.related),
+      detailsControllerProvider(detailsControllerKey(widget.item))
+          .select((s) => s.related),
     );
     final recommendationsAsync = ref.watch(
-      detailsControllerProvider(widget.item.url)
+      detailsControllerProvider(detailsControllerKey(widget.item))
           .select((s) => s.recommendations),
     );
     final currentItem = ref.watch(
-      detailsControllerProvider(widget.item.url).select((s) => s.item),
+      detailsControllerProvider(detailsControllerKey(widget.item))
+          .select((s) => s.item),
     );
     final initialPageReady = ref.watch(
-      detailsControllerProvider(widget.item.url).select((s) => s.isShellReady),
+      detailsControllerProvider(detailsControllerKey(widget.item))
+          .select((s) => s.isShellReady),
     );
     // Movies and one-episode anime share the exact same mobile layout, so
     // iPhone/iPad-small pages must not rebuild just because isMovie resolves.
     // Desktop still uses the flag for hero-specific playback presentation.
     final isMovie = isLarge
         ? ref.watch(
-            detailsControllerProvider(widget.item.url).select((s) => s.isMovie),
+            detailsControllerProvider(detailsControllerKey(widget.item))
+                .select((s) => s.isMovie),
           )
         : false;
     final item = mergeDetailsItem(
@@ -849,7 +974,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     );
     _ensureUserRatingLoaded(item);
     final selectedEpisodeCount = ref.watch(
-      detailsControllerProvider(widget.item.url)
+      detailsControllerProvider(detailsControllerKey(widget.item))
           .select((state) => state.selectedEpisodeKeys.length),
     );
 
@@ -927,7 +1052,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         details: item,
         detailsState: detailsAsync,
         isMovie: false,
-        itemUrl: widget.item.url,
+        itemUrl: detailsControllerKey(widget.item),
         onRefresh: _refreshDetails,
         onPosterTap: () => _showPosterViewer(context, item),
         heroActions: _buildDesktopHeroActionRow(
@@ -984,7 +1109,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
 
   void _toggleEpisodes() {
     final controller = ref.read(
-      detailsControllerProvider(widget.item.url).notifier,
+      detailsControllerProvider(detailsControllerKey(widget.item)).notifier,
     );
     if (!_episodesExpanded) {
       setState(() {
@@ -1066,7 +1191,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           DetailsSeasonsBar(
-            itemUrl: widget.item.url,
+            itemUrl: detailsControllerKey(widget.item),
             current: item,
             onOpen: (child) => _openExtraAnime(item, child),
           ),
@@ -1101,7 +1226,9 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              DetailsSeasonListWrapper(itemUrl: widget.item.url),
+              DetailsSeasonListWrapper(
+                itemUrl: detailsControllerKey(widget.item),
+              ),
               const SizedBox(height: 12),
             ],
           ),
@@ -1109,7 +1236,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       ),
       SliverDetailsEpisodeList(
         parentItem: item,
-        itemUrl: widget.item.url,
+        itemUrl: detailsControllerKey(widget.item),
         isMovie: false,
         transition: _episodesReveal,
         transitionOffset: const Offset(0, -0.045),
@@ -1123,11 +1250,13 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
 
     final selectedLabel = 'تم تحديد $selectedCount';
     final controller = ref.read(
-      detailsControllerProvider(widget.item.url).notifier,
+      detailsControllerProvider(detailsControllerKey(widget.item)).notifier,
     );
 
     Future<void> downloadSelected() async {
-      final state = ref.read(detailsControllerProvider(widget.item.url));
+      final state = ref.read(
+        detailsControllerProvider(detailsControllerKey(widget.item)),
+      );
       final episodes = state.seasonMap.values
           .expand((season) => season)
           .where(
@@ -1346,7 +1475,13 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     target.openDetails(context);
   }
 
-  void _openCharacter(Actor actor) {
+  void _openCharacter(MultimediaItem item, Actor actor) {
+    if (item.provider == animeRiftProviderId) {
+      ref
+          .read(notificationServiceProvider)
+          .showInfo('تفاصيل الشخصية غير متاحة حاليًا لدى Anime Rift.');
+      return;
+    }
     final id = actor.id?.trim() ?? '';
     if (id.isEmpty) return;
     Navigator.of(context).push(
@@ -1376,7 +1511,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
 
   void _onExtraTabBecameVisible(int index) {
     final controller = ref.read(
-      detailsControllerProvider(widget.item.url).notifier,
+      detailsControllerProvider(detailsControllerKey(widget.item)).notifier,
     );
     switch (index) {
       case detailsExtraCharactersTabIndex:
@@ -1405,15 +1540,15 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       (value) => _recommendationsWithoutRelatedLists(value, related),
     );
     final relatedHasMore = ref.watch(
-      detailsControllerProvider(widget.item.url)
+      detailsControllerProvider(detailsControllerKey(widget.item))
           .select((state) => state.relatedHasMore),
     );
     final similarHasMore = ref.watch(
-      detailsControllerProvider(widget.item.url)
+      detailsControllerProvider(detailsControllerKey(widget.item))
           .select((state) => state.similarHasMore),
     );
     final controller = ref.read(
-      detailsControllerProvider(widget.item.url).notifier,
+      detailsControllerProvider(detailsControllerKey(widget.item)).notifier,
     );
     return DetailsExtraTabs(
       key: _extraTabsKey,
@@ -1427,7 +1562,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       contentPadding: contentPadding,
       onTabBecameVisible: _onExtraTabBecameVisible,
       onAnimeTap: (child) => _openExtraAnime(item, child),
-      onCharacterTap: _openCharacter,
+      onCharacterTap: (actor) => _openCharacter(item, actor),
       onShowMoreSimilar: () {
         Navigator.of(context).push(
           MaterialPageRoute<void>(
@@ -1534,7 +1669,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         details: item,
         detailsState: detailsState,
         isMovie: isMovie,
-        itemUrl: widget.item.url,
+        itemUrl: detailsControllerKey(widget.item),
         onRefresh: _refreshDetails,
         onPosterTap: () => _showPosterViewer(context, item),
         heroActions: _buildDesktopHeroActionRow(
@@ -1602,7 +1737,10 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     if (episodesState.hasError) {
       return _DetailsLoadFailure(
         onRetry: () => ref
-            .read(detailsControllerProvider(widget.item.url).notifier)
+            .read(
+              detailsControllerProvider(detailsControllerKey(widget.item))
+                  .notifier,
+            )
             .retryEpisodes(),
         title: appText(
           context,
@@ -1648,9 +1786,22 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     return genres;
   }
 
-  void _openGenreResults(BuildContext context, String genre) {
-    final provider = ref.read(activeProviderProvider);
-    if (provider == null) return;
+  void _openGenreResults(
+    BuildContext context,
+    MultimediaItem item,
+    String genre,
+  ) {
+    final provider = resolveItemProvider(
+      ref.read(extensionManagerProvider),
+      item.provider,
+      ref.read(activeProviderProvider),
+    );
+    if (provider == null) {
+      ref
+          .read(notificationServiceProvider)
+          .showError('مزود هذا العمل غير متاح.');
+      return;
+    }
 
     final filters = ProviderSearchFilters(genres: <String>{genre});
     Navigator.of(context).push(
@@ -1718,7 +1869,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
                   ),
                   clipBehavior: Clip.antiAlias,
                   child: InkWell(
-                    onTap: () => _openGenreResults(context, genre),
+                    onTap: () => _openGenreResults(context, item, genre),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 14,
@@ -1806,7 +1957,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         DetailsSeasonsBar(
-          itemUrl: widget.item.url,
+          itemUrl: detailsControllerKey(widget.item),
           current: item,
           onOpen: (child) => _openExtraAnime(item, child),
         ),
@@ -1826,11 +1977,13 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
                 : Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      DetailsSeasonListWrapper(itemUrl: widget.item.url),
+                      DetailsSeasonListWrapper(
+                        itemUrl: detailsControllerKey(widget.item),
+                      ),
                       const SizedBox(height: 16),
                       DetailsDesktopEpisodeColumn(
                         parentItem: item,
-                        itemUrl: widget.item.url,
+                        itemUrl: detailsControllerKey(widget.item),
                         isMovie: false,
                       ),
                     ],

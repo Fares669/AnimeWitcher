@@ -506,7 +506,9 @@ class _ApplePersistentGlassHeaderOverlayState
   }
 
   void _syncNativeNow() {
-    if (!mounted) return;
+    // The retired native glass overlay has no platform channel handler on
+    // Linux/Windows/Android, and is currently disabled on iOS as well.
+    if (!_usesNativeAppleLiquidGlass || !mounted) return;
     final state = _nativeState();
     final signature = jsonEncode(state);
     if (signature == _lastNativeSignature) return;
@@ -1787,12 +1789,16 @@ class BlurredMenuPanel extends StatelessWidget {
     this.fallbackIcon = Icons.circle_outlined,
     this.iconForValue,
     this.leadingBuilder,
+    this.onReverseSelected,
+    this.reverseAscending = false,
   });
 
   final List<AppleNativeMenuItem> items;
   final String selectedValue;
   final Color tint;
   final ValueChanged<String> onPick;
+  final ValueChanged<String>? onReverseSelected;
+  final bool reverseAscending;
 
   /// Drawn when an item names no icon of its own.
   final IconData fallbackIcon;
@@ -1852,6 +1858,11 @@ class BlurredMenuPanel extends StatelessWidget {
                         fallbackIcon,
                     leadingBuilder: leadingBuilder,
                     onTap: () => onPick(item.value),
+                    onReverseTap: onReverseSelected == null
+                        ? null
+                        : () => onReverseSelected!(item.value),
+                    reverseAscending:
+                        selectedValue == item.value && reverseAscending,
                   ),
               ],
             ),
@@ -1870,6 +1881,8 @@ class _MenuRow extends StatelessWidget {
     required this.fallbackIcon,
     required this.leadingBuilder,
     required this.onTap,
+    this.onReverseTap,
+    this.reverseAscending = false,
   });
 
   final AppleNativeMenuItem item;
@@ -1878,6 +1891,8 @@ class _MenuRow extends StatelessWidget {
   final IconData fallbackIcon;
   final Widget Function(AppleNativeMenuItem item, Color color)? leadingBuilder;
   final VoidCallback onTap;
+  final VoidCallback? onReverseTap;
+  final bool reverseAscending;
 
   @override
   Widget build(BuildContext context) {
@@ -1907,17 +1922,37 @@ class _MenuRow extends StatelessWidget {
                   : (leadingBuilder?.call(item, color) ??
                         Icon(fallbackIcon, size: 18, color: color)),
             ),
-            Text(
-              item.label,
-              style: TextStyle(
-                color: item.destructive
-                    ? scheme.error
-                    : (selected ? scheme.primary : null),
-                fontWeight: selected || item.destructive
-                    ? FontWeight.w600
-                    : null,
+            Flexible(
+              child: Text(
+                item.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: item.destructive
+                      ? scheme.error
+                      : (selected ? scheme.primary : null),
+                  fontWeight: selected || item.destructive
+                      ? FontWeight.w600
+                      : null,
+                ),
               ),
             ),
+            if (onReverseTap != null) ...[
+              const SizedBox(width: 14),
+              IconButton(
+                key: ValueKey<String>('reverse-sort-${item.value}'),
+                tooltip: 'عكس اتجاه الترتيب',
+                visualDensity: VisualDensity.compact,
+                onPressed: onReverseTap,
+                icon: Icon(
+                  reverseAscending
+                      ? Icons.arrow_upward_rounded
+                      : Icons.arrow_downward_rounded,
+                  color: color,
+                  size: 19,
+                ),
+              ),
+            ],
           ],
         ),
       ),

@@ -1,4 +1,8 @@
 import 'package:animewitcher/core/storage/storage_service.dart';
+import 'package:animewitcher/core/extensions/base_provider.dart';
+import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
 import 'package:animewitcher/features/onboarding/first_run_setup_screen.dart';
 import 'package:animewitcher/features/settings/presentation/general_settings_provider.dart';
 import 'package:animewitcher/features/player/presentation/widgets/skip_segment_overlay.dart';
@@ -57,11 +61,33 @@ class _TaskbarStorage extends MemoryStorageService {
       player[key] = value;
 }
 
+class _RiftAccountClient extends AnimeRiftApiClient {
+  @override
+  bool get isAccountLinked => true;
+
+  @override
+  AnimeRiftAccountIdentity? get accountIdentity =>
+      const AnimeRiftAccountIdentity(
+        id: 'rift-account',
+        displayName: 'Rift account',
+      );
+
+  @override
+  Future<bool> restoreAccountSession() async => true;
+}
+
+class _RiftSelected extends ActiveProvider {
+  @override
+  AnimeWitcherProvider? build() =>
+      AnimeRiftProvider(client: _RiftAccountClient());
+}
+
 void main() {
   Future<void> pumpAt(
     WidgetTester tester,
     Size size, {
     StorageService? storage,
+    bool riftSelected = false,
   }) async {
     // The window itself, not only the drawing surface: the screen decides
     // between its wide and narrow layouts from the window's size.
@@ -71,6 +97,8 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          if (riftSelected)
+            activeProviderProvider.overrideWith(_RiftSelected.new),
           storageServiceProvider.overrideWithValue(
             storage ?? MemoryStorageService(),
           ),
@@ -107,6 +135,19 @@ void main() {
     await pumpAt(tester, const Size(1280, 800));
     final seen = await walkSteps(tester);
     expect(seen, containsAllInOrder(['المظهر', 'صفحة الأنمي', 'المشغل']));
+  });
+
+  testWidgets('account setup shows only the selected Rift identity', (
+    tester,
+  ) async {
+    await pumpAt(tester, const Size(1280, 800), riftSelected: true);
+    for (var i = 0; i < 3; i++) {
+      await tester.tap(find.text('التالي'));
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('Rift account'), findsOneWidget);
+    expect(find.text('حساب AnimeWitcher'), findsNothing);
+    expect(find.textContaining('تسجيل الدخول غير متاح'), findsNothing);
   });
 
   testWidgets('every step draws stacked on a phone-sized window', (

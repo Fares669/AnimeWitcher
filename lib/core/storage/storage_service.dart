@@ -21,6 +21,7 @@ import 'scoped_cache_files.dart';
 import '../domain/entity/multimedia_item.dart';
 import '../services/download_concurrency.dart';
 import '../services/download_parallel.dart';
+import '../services/download_v2/anime_rift_download_metadata_v2.dart';
 import '../utils/safe_uri.dart';
 
 part 'storage_service.g.dart';
@@ -536,6 +537,78 @@ class StorageService {
         'library_selected_category',
         defaultValue: _defaultLibraryCategory,
       ),
+    );
+  }
+
+  String _libraryCountsCacheKey({
+    required String providerKey,
+    required String accountKey,
+    required String mediaKindKey,
+  }) =>
+      'library_cached_counts_v1:$providerKey:'
+      '${Uri.encodeComponent(accountKey)}:$mediaKindKey';
+
+  Map<String, int> getCachedLibraryCounts({
+    required String providerKey,
+    required String accountKey,
+    required String mediaKindKey,
+  }) {
+    final raw = getString(
+      _libraryCountsCacheKey(
+        providerKey: providerKey,
+        accountKey: accountKey,
+        mediaKindKey: mediaKindKey,
+      ),
+    );
+    if (raw == null || raw.isEmpty) return const <String, int>{};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return const <String, int>{};
+      final result = <String, int>{};
+      for (final entry in decoded.entries) {
+        final key = _normalizeLibraryCategory(entry.key);
+        final value = entry.value;
+        final count = value is num
+            ? value.toInt()
+            : int.tryParse(value?.toString() ?? '');
+        if (count != null && count >= 0) {
+          result[key] = count;
+        }
+      }
+      return result;
+    } catch (_) {
+      return const <String, int>{};
+    }
+  }
+
+  Future<void> setCachedLibraryCounts({
+    required String providerKey,
+    required String accountKey,
+    required String mediaKindKey,
+    required Map<String, int> counts,
+    bool merge = true,
+  }) async {
+    final current = merge
+        ? Map<String, int>.from(
+            getCachedLibraryCounts(
+              providerKey: providerKey,
+              accountKey: accountKey,
+              mediaKindKey: mediaKindKey,
+            ),
+          )
+        : <String, int>{};
+    for (final entry in counts.entries) {
+      if (entry.value >= 0) {
+        current[_normalizeLibraryCategory(entry.key)] = entry.value;
+      }
+    }
+    await setString(
+      _libraryCountsCacheKey(
+        providerKey: providerKey,
+        accountKey: accountKey,
+        mediaKindKey: mediaKindKey,
+      ),
+      jsonEncode(current),
     );
   }
 
@@ -1451,6 +1524,14 @@ class StorageService {
     double? lastProgress,
     int? lastExpectedBytes,
   }) async {
+    final isRift = isAnimeRiftDownloadProviderV2(item.provider);
+    if (isRift) {
+      item = animeRiftDownloadItemSnapshotV2(item);
+      if (episode != null)
+        episode = animeRiftDownloadEpisodeSnapshotV2(episode);
+      trackingUrl = animeRiftDownloadTrackingIdentityV2(trackingUrl ?? '');
+      taskSnapshot = null;
+    }
     await _downloadMetadata('hive.put', [
       taskId,
       {
@@ -1486,9 +1567,20 @@ class StorageService {
     double? lastProgress,
     int? lastExpectedBytes,
   }) async {
+    final existing = await getDownloadMetadata(taskId);
+    final existingItem = existing?['item'];
+    final existingProvider = existingItem is Map
+        ? existingItem['provider']?.toString()
+        : null;
+    final isRift = isAnimeRiftDownloadProviderV2(existingProvider);
     final map = <String, dynamic>{};
     if (trackingUrl != null && trackingUrl.isNotEmpty) {
-      map['trackingUrl'] = trackingUrl;
+      final safeTracking = isRift
+          ? animeRiftDownloadTrackingIdentityV2(trackingUrl)
+          : trackingUrl;
+      if (safeTracking != null && safeTracking.isNotEmpty) {
+        map['trackingUrl'] = safeTracking;
+      }
     }
     if (filePath != null && filePath.isNotEmpty) {
       map['filePath'] = filePath;
@@ -1496,7 +1588,7 @@ class StorageService {
     if (logicalId != null && logicalId.trim().isNotEmpty) {
       map['logicalId'] = logicalId.trim();
     }
-    if (taskSnapshot != null) {
+    if (taskSnapshot != null && !isRift) {
       map['taskSnapshot'] = Map<String, dynamic>.from(taskSnapshot);
     }
     if (queueWaiting != null) {

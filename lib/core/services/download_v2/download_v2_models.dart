@@ -1,4 +1,5 @@
 import 'download_v2_identity.dart';
+import 'anime_rift_download_metadata_v2.dart';
 
 const int kLogicalDownloadSchemaVersionV2 = 2;
 
@@ -224,7 +225,7 @@ final class LogicalDownloadRecordV2 {
     'taskId': taskId,
     'intent': intent.name,
     'destinationPath': destinationPath,
-    'sourceDescriptor': Map<String, Object?>.from(sourceDescriptor),
+    'sourceDescriptor': safeDownloadSourceDescriptorV2(sourceDescriptor),
     if (expectedBytes != null) 'expectedBytes': expectedBytes,
     if (completedAtMillis != null) 'completedAtMillis': completedAtMillis,
     if (failureCategory != null) 'failureCategory': failureCategory!.name,
@@ -288,7 +289,9 @@ final class LogicalDownloadRecordV2 {
       taskId: taskId,
       intent: intent,
       destinationPath: destinationPath,
-      sourceDescriptor: Map<String, Object?>.from(rawSource),
+      sourceDescriptor: safeDownloadSourceDescriptorV2(
+        Map<String, Object?>.from(rawSource),
+      ),
       expectedBytes: _asInt(map['expectedBytes']),
       completedAtMillis: _asInt(map['completedAtMillis']),
       failureCategory: _enumByName(

@@ -4,6 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 
 import 'widgets/download_log_dialog.dart';
+import 'widgets/anime_provider_picker.dart';
+import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/providers/anime_rift_provider.dart';
+import '../../../shared/widgets/account_avatar_button.dart';
 
 import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:flutter/foundation.dart';
@@ -146,6 +150,16 @@ class SettingsScreen extends ConsumerWidget {
                   ref.read(appThemeStyleProvider.notifier).select(style),
             ),
           ),
+          const AnimeProviderSettingsTile(),
+          if (ref.watch(activeProviderProvider) is AnimeRiftProvider)
+            const AnimeRiftAccountSettingsTile()
+          else
+            SettingsTile(
+              key: const ValueKey('settings-witcher-account'),
+              icon: Icons.account_circle_outlined,
+              title: 'حساب AnimeWitcher',
+              onTap: () => openAccountScreen(context),
+            ),
           SettingsTile(
             icon: Icons.view_carousel_rounded,
             title: 'شريط المواسم',

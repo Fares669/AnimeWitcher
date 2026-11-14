@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_account_config.dart';
+import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
 import 'package:animewitcher/core/navigation/app_layout_style.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/core/theme/theme_provider.dart';
@@ -12,7 +14,7 @@ import 'package:animewitcher/features/details/presentation/widgets/details_seaso
 import 'package:animewitcher/features/player/data/anime4k.dart';
 import 'package:animewitcher/features/player/data/anime4k_download.dart';
 import 'package:animewitcher/features/player/presentation/widgets/anime4k_player_sheet.dart';
-import 'package:animewitcher/features/settings/presentation/account_screen.dart';
+import 'package:animewitcher/shared/widgets/account_avatar_button.dart';
 import 'package:animewitcher/features/settings/presentation/general_settings_provider.dart';
 import 'package:animewitcher/features/settings/presentation/player_settings_provider.dart';
 import 'package:animewitcher/shared/widgets/live_previews.dart';
@@ -187,11 +189,7 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
   }
 
   void _openSignIn() {
-    Navigator.of(context, rootNavigator: true).push(
-      MaterialPageRoute<void>(
-        builder: (_) => const AnimeWitcherAccountScreen(),
-      ),
-    );
+    openAccountScreen(context);
   }
 
   @override
@@ -201,8 +199,14 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
     final isLast = _index >= steps.length - 1;
     final wide = MediaQuery.sizeOf(context).width >= 820;
     final themeStyle = ref.watch(appThemeStyleProvider);
-    final account = ref.watch(animeWitcherAccountControllerProvider);
-    final profile = account.asData?.value.profile;
+    final activeProvider = ref.watch(activeProviderProvider);
+    final rift = activeProvider is AnimeRiftProvider ? activeProvider : null;
+    if (rift != null) ref.watch(accountDataRevisionProvider);
+    final profile = rift == null
+        ? ref.watch(animeWitcherAccountControllerProvider).asData?.value.profile
+        : null;
+    final linkedRift = rift?.isAccountLinked == true;
+    final riftName = rift?.accountIdentity?.displayName?.trim() ?? '';
 
     final options = _StepPanel(
       stepNumber: _index + 1,
@@ -217,7 +221,10 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
         _Step.appearance => 'ألوان التطبيق ومكان قائمة التنقل.',
         _Step.details => 'كيف تظهر المواسم والأفلام فوق الحلقات.',
         _Step.player => 'تحسين الصورة وتخطي المقدمة والخاتمة.',
-        _Step.account => 'اختياري: سجّل الدخول لحفظ مكتبتك وسجل مشاهدتك.',
+        _Step.account =>
+          rift != null
+              ? 'اختياري: اربط حساب Anime Rift لاستيراد قوائمك والوصول للتنزيلات المسموحة.'
+              : 'اختياري: سجّل الدخول لحفظ مكتبتك وسجل مشاهدتك.',
       },
       onBack: _index == 0 ? null : () => setState(() => _index--),
       onNext: isLast ? _finish : () => setState(() => _index++),
@@ -374,7 +381,7 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
           ),
         ],
         _Step.account => [
-          if (!AnimeWitcherAccountConfig.firebaseConfigured)
+          if (rift == null && !AnimeWitcherAccountConfig.firebaseConfigured)
             Text(
               key: const ValueKey<String>('setup-account-unavailable'),
               'تسجيل الدخول غير متاح في هذه النسخة من التطبيق: بُنيت بدون مفتاح خدمة الحساب. النسخ من GitHub فيها تسجيل الدخول.',
@@ -382,6 +389,14 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
                 color: Colors.white.withValues(alpha: 0.7),
                 height: 1.5,
               ),
+            )
+          else if (linkedRift)
+            _OptionTile(
+              selected: true,
+              icon: Icons.verified_user_rounded,
+              title: riftName.isNotEmpty ? riftName : 'Anime Rift',
+              subtitle: 'حساب Anime Rift مرتبط',
+              onTap: _openSignIn,
             )
           else if (profile != null)
             _OptionTile(
@@ -397,7 +412,9 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
             FilledButton.tonalIcon(
               onPressed: _openSignIn,
               icon: const Icon(Icons.login_rounded),
-              label: Text('تسجيل الدخول'),
+              label: Text(
+                rift != null ? 'ربط حساب Anime Rift' : 'تسجيل الدخول',
+              ),
               style: FilledButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(
@@ -449,7 +466,9 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
               skipIntro: _skipIntro,
               skipCredits: _skipCredits,
             ),
-            _Step.account => _AccountPreview(signedIn: profile != null),
+            _Step.account => _AccountPreview(
+              signedIn: linkedRift || profile != null,
+            ),
           },
         ),
       ),

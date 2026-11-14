@@ -1,7 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
 import 'package:flutter/foundation.dart';
+
+import '../utils/playback_log_redaction.dart';
+
+bool _matchesMirrorHost(String target, String allowed) {
+  final hostname = target.toLowerCase();
+  final domain = allowed.trim().toLowerCase();
+  if (domain.isEmpty) return false;
+  return hostname == domain ||
+      (InternetAddress.tryParse(domain) == null &&
+          hostname.endsWith('.$domain'));
+}
 
 class ProxyOptions {
   final List<String> mirrorHosts;
@@ -32,7 +44,16 @@ class LocalProxyService {
 
   static LocalProxyService get instance => _instance;
 
-  LocalProxyService._internal();
+  LocalProxyService._internal() : _lookup = InternetAddress.lookup;
+
+  @visibleForTesting
+  LocalProxyService.forTesting(this._lookup);
+
+  final Future<List<InternetAddress>> Function(String) _lookup;
+
+  void _debugPrint(String? message) {
+    debugPrint(redactPlaybackLog(message ?? ''));
+  }
 
   HttpServer? _server;
   int _serverPort = 0;
@@ -48,13 +69,13 @@ class LocalProxyService {
       _server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       _serverPort = _server!.port;
       if (kDebugMode) {
-        debugPrint("LocalProxyService: Started on port $_serverPort");
+        _debugPrint("LocalProxyService: Started on port $_serverPort");
       }
 
       _server!.listen(_handleRequest);
     } catch (e) {
       if (kDebugMode) {
-        debugPrint("LocalProxyService: Failed to start server: $e");
+        _debugPrint("LocalProxyService: Failed to start server: $e");
       }
     }
   }
@@ -71,9 +92,9 @@ class LocalProxyService {
     if (server != null) {
       try {
         await server.close(force: true);
-        if (kDebugMode) debugPrint("LocalProxyService: shut down cleanly");
+        if (kDebugMode) _debugPrint("LocalProxyService: shut down cleanly");
       } catch (e) {
-        if (kDebugMode) debugPrint("LocalProxyService: shutdown error: $e");
+        if (kDebugMode) _debugPrint("LocalProxyService: shutdown error: $e");
       }
     }
   }
@@ -103,7 +124,86 @@ class LocalProxyService {
     final scheme = uri.scheme.toLowerCase();
     if (scheme != 'http' && scheme != 'https') return false;
     if (uri.host.isEmpty) return false;
+    if (uri.userInfo.isNotEmpty || uri.port <= 0) return false;
     return true;
+  }
+
+  // Only these non-credential headers may follow a change of origin. A deny-list
+  // cannot recognize provider-specific API keys or session header names.
+  static const _crossOriginHeaders = {
+    'accept',
+    'accept-encoding',
+    'accept-language',
+    'range',
+    'if-range',
+    'if-modified-since',
+    'if-none-match',
+    'user-agent',
+    'cache-control',
+    'pragma',
+  };
+
+  bool _sameOrigin(Uri a, Uri b) =>
+      a.scheme == b.scheme && a.host == b.host && a.port == b.port;
+
+  bool _isPublicAddress(InternetAddress address) {
+    final bytes = address.rawAddress;
+    if (address.type == InternetAddressType.IPv6) {
+      // Check embedded IPv4 in mapped addresses and the well-known NAT64 /96.
+      // Public DNS64 destinations must still work on IPv6-only mobile networks.
+      final mapped =
+          bytes.take(10).every((b) => b == 0) &&
+          bytes[10] == 255 &&
+          bytes[11] == 255;
+      final nat64 =
+          bytes[0] == 0 &&
+          bytes[1] == 0x64 &&
+          bytes[2] == 0xff &&
+          bytes[3] == 0x9b &&
+          bytes.skip(4).take(8).every((b) => b == 0);
+      if (mapped || nat64) {
+        return _isPublicAddress(
+          InternetAddress.fromRawAddress(bytes.sublist(12)),
+        );
+      }
+      // Global unicast only: excludes loopback, unspecified, ULA, site-local,
+      // link-local, multicast, and IPv4-compatible local destinations.
+      return bytes[0] & 0xe0 == 0x20 &&
+          !(bytes[0] == 0x20 &&
+              bytes[1] == 0x02); // 6to4 can embed private IPv4.
+    }
+    if (address.type != InternetAddressType.IPv4) return false;
+    final a = bytes[0];
+    final b = bytes[1];
+    return !(a == 0 ||
+        a == 10 ||
+        a == 127 ||
+        a >= 224 ||
+        (a == 100 && b >= 64 && b <= 127) ||
+        (a == 169 && b == 254) ||
+        (a == 172 && b >= 16 && b <= 31) ||
+        (a == 192 && (b == 168 || b == 0)) ||
+        (a == 198 && (b == 18 || b == 19)));
+  }
+
+  Future<List<InternetAddress>> _publicAddresses(Uri uri) async {
+    if (!_isProxyableUrl(uri.toString())) {
+      throw const FormatException('Invalid proxy target');
+    }
+    final host = uri.host.startsWith('[')
+        ? uri.host.substring(1, uri.host.length - 1)
+        : uri.host;
+    final literal = InternetAddress.tryParse(host);
+    final addresses = literal != null
+        ? [literal]
+        : await _lookup(host).timeout(const Duration(seconds: 10));
+    if (addresses.isEmpty ||
+        addresses.any((address) => !_isPublicAddress(address))) {
+      throw const SocketException(
+        'Proxy target must resolve to public addresses',
+      );
+    }
+    return addresses;
   }
 
   /// Stores a generated M3U8 content and returns the local URL to access it.
@@ -127,6 +227,7 @@ class LocalProxyService {
     Map<String, String>? headers,
     ProxyOptions? options,
     bool forceM3u8Extension = false,
+    bool stripIncomingCredentials = false,
   }) {
     if (_server == null) startServer();
     final encoded = Uri.encodeComponent(targetUrl);
@@ -148,11 +249,45 @@ class LocalProxyService {
       url += "&o=$optB64";
     }
 
+    if (stripIncomingCredentials) {
+      url += "&s=1";
+    }
+
     if (forceM3u8Extension) {
       url += "&extension=.m3u8";
     }
 
     return url;
+  }
+
+  /// Builds a child proxy URL while keeping credential-bearing headers scoped
+  /// to the parent playlist origin. Cross-origin children receive only the
+  /// small non-credential allow-list and cannot inherit mirror cookies/options.
+  String getChildProxyUrl(
+    String targetUrl, {
+    required Uri parentUrl,
+    Map<String, String>? headers,
+    ProxyOptions? options,
+    bool forceM3u8Extension = false,
+  }) {
+    final target = Uri.parse(targetUrl);
+    final sameOrigin = _sameOrigin(parentUrl, target);
+    final scopedHeaders = headers == null
+        ? null
+        : sameOrigin
+        ? headers
+        : Map<String, String>.fromEntries(
+            headers.entries.where(
+              (entry) => _crossOriginHeaders.contains(entry.key.toLowerCase()),
+            ),
+          );
+    return getProxyUrl(
+      targetUrl,
+      headers: scopedHeaders,
+      options: sameOrigin ? options : null,
+      forceM3u8Extension: forceM3u8Extension,
+      stripIncomingCredentials: !sameOrigin,
+    );
   }
 
   Future<void> _handleRequest(HttpRequest request) async {
@@ -183,13 +318,13 @@ class LocalProxyService {
       request.response.statusCode = HttpStatus.notFound;
       unawaited(request.response.close());
     } catch (e) {
-      if (kDebugMode) debugPrint("LocalProxyService: Server Error: $e");
+      if (kDebugMode) _debugPrint("LocalProxyService: Server Error: $e");
       try {
         request.response.statusCode = HttpStatus.internalServerError;
         unawaited(request.response.close());
       } catch (e) {
         if (kDebugMode) {
-          debugPrint(
+          _debugPrint(
             'LocalProxyService._handleRequest: error response failed: $e',
           );
         }
@@ -233,16 +368,17 @@ class LocalProxyService {
     // stream URL it returns to us. Audit B4.
     if (!_isProxyableUrl(targetUrl)) {
       if (kDebugMode) {
-        debugPrint("[PROXY] Rejecting non-proxyable URL: $targetUrl");
+        _debugPrint("[PROXY] Rejecting non-proxyable URL");
       }
       request.response.statusCode = HttpStatus.badRequest;
       unawaited(request.response.close());
       return;
     }
 
-    if (kDebugMode) debugPrint("[PROXY] Incoming Request for: $targetUrl");
+    if (kDebugMode) _debugPrint("[PROXY] Incoming Request for: $targetUrl");
 
     final Map<String, String> stickyHeaders = {};
+    final stripIncomingCredentials = request.uri.queryParameters['s'] == '1';
     final hBase64 = request.uri.queryParameters['h'];
     if (hBase64 != null) {
       try {
@@ -252,7 +388,7 @@ class LocalProxyService {
         map.forEach((key, value) => stickyHeaders[key] = value.toString());
       } catch (e) {
         if (kDebugMode) {
-          debugPrint("[PROXY] Failed to parse sticky headers: $e");
+          _debugPrint("[PROXY] Failed to parse sticky headers: $e");
         }
       }
     }
@@ -266,7 +402,7 @@ class LocalProxyService {
           jsonDecode(decoded) as Map<String, dynamic>,
         );
       } catch (e) {
-        if (kDebugMode) debugPrint("[PROXY] Failed to parse options: $e");
+        if (kDebugMode) _debugPrint("[PROXY] Failed to parse options: $e");
       }
     }
 
@@ -289,15 +425,70 @@ class LocalProxyService {
     // gzip + Range as incompatible and return 200 (full file) instead of 206
     // (partial), which breaks seeking.
     client.autoUncompress = isRequestM3u8;
-    client.badCertificateCallback = (cert, host, port) => true;
+    client.connectionFactory = (uri, proxyHost, proxyPort) async {
+      if (proxyHost != null || proxyPort != null) {
+        throw const SocketException('Unexpected upstream proxy');
+      }
+      // Validate at connect time and pass the actual checked IP to the socket:
+      // a second hostname lookup by HttpClient must not permit DNS rebinding.
+      // For HTTPS, establish TCP to that checked IP first, then perform TLS
+      // over the same socket using the original hostname for SNI and
+      // certificate validation.
+      final addresses = await _publicAddresses(uri);
+      ConnectionTask<Socket>? connecting;
+      Socket? connectedSocket;
+      var cancelled = false;
+      Future<Socket> connect() async {
+        for (var index = 0; index < addresses.length; index++) {
+          if (cancelled) {
+            throw const SocketException('Proxy connection cancelled');
+          }
+          final address = addresses[index];
+          connecting = await Socket.startConnect(address, uri.port);
+          if (cancelled) connecting!.cancel();
+          try {
+            final socket = await connecting!.socket;
+            connectedSocket = socket;
+            if (cancelled) {
+              socket.destroy();
+              throw const SocketException('Proxy connection cancelled');
+            }
+            if (uri.scheme != 'https') return socket;
+            final secure = await SecureSocket.secure(socket, host: uri.host);
+            connectedSocket = secure;
+            if (cancelled) {
+              secure.destroy();
+              throw const SocketException('Proxy connection cancelled');
+            }
+            return secure;
+          } on IOException {
+            connectedSocket?.destroy();
+            connectedSocket = null;
+            if (cancelled || index == addresses.length - 1) rethrow;
+          }
+        }
+        throw const SocketException('No public proxy address available');
+      }
+
+      return ConnectionTask.fromSocket(connect(), () {
+        cancelled = true;
+        connecting?.cancel();
+        connectedSocket?.destroy();
+      });
+    };
 
     try {
+      await _publicAddresses(Uri.parse(targetUrl));
       final req = await client.getUrl(Uri.parse(targetUrl));
 
       // 1. Process incoming request headers first (Player headers)
       final Map<String, String> mergedCookies = {};
       request.headers.forEach((name, values) {
         final lowerName = name.toLowerCase();
+        if (stripIncomingCredentials &&
+            !_crossOriginHeaders.contains(lowerName)) {
+          return;
+        }
         if (lowerName == 'cookie') {
           for (final v in values) {
             for (final pair in v.split(';')) {
@@ -311,7 +502,7 @@ class LocalProxyService {
             }
           }
         } else if (lowerName == 'range' && isRequestM3u8) {
-          // debugPrint("[PROXY] Stripping Range header for M3U8 request to force status 200");
+          // _debugPrint("[PROXY] Stripping Range header for M3U8 request to force status 200");
           // Skip Range header for M3U8 to ensure we get the full file for rewriting
         } else if (lowerName != 'host' &&
             lowerName != 'content-length' &&
@@ -350,7 +541,7 @@ class LocalProxyService {
             .map((e) => "${e.key}=${e.value}")
             .join("; ");
         req.headers.set("Cookie", cookieString);
-        // debugPrint("[PROXY] Final Cookie String: $cookieString");
+        // _debugPrint("[PROXY] Final Cookie String: $cookieString");
       }
 
       // 4. Sanitize and Default Headers
@@ -364,26 +555,28 @@ class LocalProxyService {
       if (kDebugMode) {
         final rangeHeader = req.headers.value('range');
         if (rangeHeader != null) {
-          debugPrint('[PROXY] Range request: $rangeHeader → $targetUrl');
-          debugPrint(
+          _debugPrint('[PROXY] Range request: $rangeHeader → $targetUrl');
+          _debugPrint(
             '[PROXY] accept-encoding: ${req.headers.value('accept-encoding')}',
           );
         }
       }
-      final response = await _fetchWithRedirects(
+      final upstream = await _fetchWithRedirects(
         client,
         req,
         targetUrl,
         options,
+        stickyHeaders,
       );
+      final response = upstream.response;
       if (kDebugMode) {
         final rangeHeader = req.headers.value('range');
         if (rangeHeader != null) {
-          debugPrint(
+          _debugPrint(
             '[PROXY] CDN responded: ${response.statusCode}, content-range: ${response.headers.value('content-range')}',
           );
         }
-        debugPrint(
+        _debugPrint(
           "[PROXY] Response Status: ${response.statusCode}, Content-Type: ${response.headers.contentType}",
         );
       }
@@ -396,10 +589,10 @@ class LocalProxyService {
       // contentLength" when we write the larger rewritten body.
       final isResponseM3u8 = _isM3u8(
         response.headers.contentType?.mimeType,
-        targetUrl,
+        upstream.url,
       );
       if (kDebugMode) {
-        debugPrint("[PROXY] Detected isM3u8: $isResponseM3u8 for $targetUrl");
+        _debugPrint("[PROXY] Detected isM3u8: $isResponseM3u8 for $targetUrl");
       }
 
       // Detect CDN edge gzip-decompression mismatch: some CDNs (e.g. Cloudflare
@@ -426,7 +619,7 @@ class LocalProxyService {
           hasContentRange &&
           !hasContentLength;
       if (kDebugMode && misleadingContentRange) {
-        debugPrint(
+        _debugPrint(
           '[PROXY] Detected CDN edge-decompression mismatch — converting '
           '206→200 and dropping content-range for $targetUrl',
         );
@@ -485,7 +678,7 @@ class LocalProxyService {
       if (isResponseM3u8 &&
           (response.statusCode == 200 || response.statusCode == 206)) {
         if (kDebugMode) {
-          debugPrint("[PROXY] Triggering M3U8 rewrite for: $targetUrl");
+          _debugPrint("[PROXY] Triggering M3U8 rewrite for: $targetUrl");
         }
         request.response.headers.contentType = ContentType(
           "application",
@@ -495,18 +688,22 @@ class LocalProxyService {
         await _rewriteM3u8Response(
           response,
           request,
-          targetUrl,
-          stickyHeaders,
-          options,
+          upstream.url,
+          upstream.headers,
+          upstream.options,
+          stripIncomingCredentials:
+              stripIncomingCredentials || upstream.crossedOrigin,
         );
       } else {
         // Pipe binary data (segments, keys, etc.)
         await response.pipe(request.response);
       }
     } catch (e) {
-      if (kDebugMode) debugPrint("LocalProxyService: Proxy Request Error: $e");
+      if (kDebugMode) _debugPrint("LocalProxyService: Proxy Request Error: $e");
       request.response.statusCode = HttpStatus.badGateway;
       await request.response.close();
+    } finally {
+      client.close(force: true);
     }
   }
 
@@ -539,7 +736,7 @@ class LocalProxyService {
     bool isMirrorSite = false;
     if (options != null) {
       isMirrorSite = options.mirrorHosts.any(
-        (host) => targetUri.host.contains(host),
+        (host) => _matchesMirrorHost(targetUri.host, host),
       );
     }
 
@@ -577,20 +774,31 @@ class LocalProxyService {
     }
   }
 
-  /// Manually follow redirects to ensure headers (Referer/User-Agent) are preserved
-  Future<HttpClientResponse> _fetchWithRedirects(
+  /// Validate every hop and retain credentials only within the same origin.
+  Future<
+    ({
+      HttpClientResponse response,
+      String url,
+      Map<String, String> headers,
+      ProxyOptions? options,
+      bool crossedOrigin,
+    })
+  >
+  _fetchWithRedirects(
     HttpClient client,
     HttpClientRequest initialRequest,
     String currentUrl,
     ProxyOptions? options,
+    Map<String, String> stickyHeaders,
   ) async {
     HttpClientRequest currentReq = initialRequest;
     currentReq.followRedirects = false; // We handle it
 
     int redirectCount = 0;
     const maxRedirects = 5;
+    var crossedOrigin = false;
 
-    while (redirectCount < maxRedirects) {
+    while (true) {
       final response = await currentReq.close();
 
       if (response.statusCode == HttpStatus.movedPermanently ||
@@ -599,20 +807,49 @@ class LocalProxyService {
           response.statusCode == HttpStatus.temporaryRedirect ||
           response.statusCode == HttpStatus.permanentRedirect) {
         final location = response.headers.value('location');
-        if (location == null) return response;
+        if (location == null) {
+          return (
+            response: response,
+            url: currentUrl,
+            headers: stickyHeaders,
+            options: options,
+            crossedOrigin: crossedOrigin,
+          );
+        }
 
+        // Release redirect bodies even if the next hop is invalid or over limit.
+        await response.drain<void>();
+        if (redirectCount >= maxRedirects) {
+          throw const HttpException('Too many proxy redirects');
+        }
         final nextUrl = Uri.parse(currentUrl).resolve(location).toString();
+        await _publicAddresses(Uri.parse(nextUrl));
+        final crossOrigin = !_sameOrigin(
+          Uri.parse(currentUrl),
+          Uri.parse(nextUrl),
+        );
+        if (crossOrigin) {
+          crossedOrigin = true;
+          stickyHeaders = Map.fromEntries(
+            stickyHeaders.entries.where(
+              (entry) => _crossOriginHeaders.contains(entry.key.toLowerCase()),
+            ),
+          );
+          // Do not restore the original referer/cookies on later same-origin hops.
+          options = null;
+        }
         redirectCount++;
 
         final nextReq = await client.getUrl(Uri.parse(nextUrl));
         nextReq.followRedirects = false;
 
-        // PRESERVE CRITICAL HEADERS
-        initialRequest.headers.forEach((name, values) {
+        // Copy the previous hop, never the original credential-bearing request.
+        currentReq.headers.forEach((name, values) {
           final lowerName = name.toLowerCase();
           if (lowerName != 'host' &&
               lowerName != 'content-length' &&
-              lowerName != 'connection') {
+              lowerName != 'connection' &&
+              (!crossOrigin || _crossOriginHeaders.contains(lowerName))) {
             for (final v in values) {
               nextReq.headers.add(name, v);
             }
@@ -625,11 +862,15 @@ class LocalProxyService {
         currentReq = nextReq;
         currentUrl = nextUrl;
       } else {
-        return response;
+        return (
+          response: response,
+          url: currentUrl,
+          headers: stickyHeaders,
+          options: options,
+          crossedOrigin: crossedOrigin,
+        );
       }
     }
-
-    throw Exception("Too many redirects");
   }
 
   bool _isM3u8(String? mimeType, String url) {
@@ -650,13 +891,14 @@ class LocalProxyService {
     HttpRequest clientRequest,
     String originalUrl,
     Map<String, String> stickyHeaders,
-    ProxyOptions? options,
-  ) async {
+    ProxyOptions? options, {
+    required bool stripIncomingCredentials,
+  }) async {
     final contentBytes = await sourceResponse.toList();
     final allBytes = contentBytes.expand((x) => x).toList();
 
     if (!_isValidM3u8(allBytes)) {
-      // debugPrint("[PROXY] M3U8 Validation Failed for: $originalUrl");
+      // _debugPrint("[PROXY] M3U8 Validation Failed for: $originalUrl");
       // Fallback to binary pipe
       clientRequest.response.add(allBytes);
       await clientRequest.response.close();
@@ -664,7 +906,7 @@ class LocalProxyService {
     }
 
     final content = utf8.decode(allBytes, allowMalformed: true);
-    // debugPrint("[PROXY] Rewriting M3U8 content (${content.length} chars)");
+    // _debugPrint("[PROXY] Rewriting M3U8 content (${content.length} chars)");
     final baseUrl = Uri.parse(originalUrl);
 
     final rewritten = content
@@ -679,8 +921,14 @@ class LocalProxyService {
                 match,
               ) {
                 final uri = match.group(1)!;
-                final r = _rewriteUrl(uri, baseUrl, stickyHeaders, options);
-                // debugPrint("[PROXY] Rewrote Tag URI: $uri");
+                final r = _rewriteUrl(
+                  uri,
+                  baseUrl,
+                  stickyHeaders,
+                  options,
+                  stripIncomingCredentials: stripIncomingCredentials,
+                );
+                // _debugPrint("[PROXY] Rewrote Tag URI: $uri");
                 return 'URI="$r"';
               });
             }
@@ -694,15 +942,16 @@ class LocalProxyService {
             stickyHeaders,
             options,
             isSegment: true,
+            stripIncomingCredentials: stripIncomingCredentials,
           );
-          // debugPrint("[PROXY] Rewrote Segment: $trimmed");
+          // _debugPrint("[PROXY] Rewrote Segment: $trimmed");
           return r;
         })
         .join('\n');
 
     clientRequest.response.add(utf8.encode(rewritten));
     await clientRequest.response.close();
-    // debugPrint("[PROXY] M3U8 Rewrite Complete for: $originalUrl");
+    // _debugPrint("[PROXY] M3U8 Rewrite Complete for: $originalUrl");
   }
 
   bool _isValidM3u8(List<int> bytes) {
@@ -712,14 +961,14 @@ class LocalProxyService {
             .decode(bytes.take(50).toList(), allowMalformed: true)
             .trim();
         if (kDebugMode) {
-          debugPrint(
-            "[PROXY] M3U8 Validation Check: '${content.substring(0, content.length > 10 ? 10 : content.length)}...'",
+          _debugPrint(
+            '[PROXY] Playlist marker present: ${content.contains("#EXT")}',
           );
         }
         return content.contains("#EXT");
       }
     } catch (e) {
-      if (kDebugMode) debugPrint('LocalProxyService._isValidM3u8: $e');
+      if (kDebugMode) _debugPrint('LocalProxyService._isValidM3u8: $e');
     }
     return false;
   }
@@ -730,6 +979,7 @@ class LocalProxyService {
     Map<String, String> stickyHeaders,
     ProxyOptions? options, {
     bool isSegment = false,
+    bool stripIncomingCredentials = false,
   }) {
     try {
       Uri resolved = baseUrl.resolve(uri);
@@ -739,7 +989,7 @@ class LocalProxyService {
       bool isHostMatch = false;
       if (options != null) {
         isHostMatch = options.mirrorHosts.any(
-          (host) => resolved.host.contains(host),
+          (host) => _matchesMirrorHost(resolved.host, host),
         );
       }
 
@@ -748,10 +998,19 @@ class LocalProxyService {
           (resolved.host == baseUrl.host || isHostMatch)) {
         resolved = resolved.replace(query: baseUrl.query);
       }
+      final sameOrigin = _sameOrigin(baseUrl, resolved);
       final proxyUrl = getProxyUrl(
         resolved.toString(),
-        headers: stickyHeaders,
-        options: options,
+        headers: sameOrigin
+            ? stickyHeaders
+            : Map.fromEntries(
+                stickyHeaders.entries.where(
+                  (entry) =>
+                      _crossOriginHeaders.contains(entry.key.toLowerCase()),
+                ),
+              ),
+        options: sameOrigin ? options : null,
+        stripIncomingCredentials: stripIncomingCredentials || !sameOrigin,
       );
       // FFmpeg's HLS demuxer calls av_match_ext(url, allowed_extensions) on
       // segment URLs. It uses strrchr(url, '.') to extract the extension, so

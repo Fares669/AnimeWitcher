@@ -8,6 +8,8 @@ DownloadItem _download({
   String? logicalId,
   String trackingUrl = '',
   String destinationPath = '',
+  String? provider,
+  TaskStatus status = TaskStatus.running,
 }) {
   return DownloadItem(
     task: DownloadTask(
@@ -15,9 +17,14 @@ DownloadItem _download({
       url: 'https://example.test/$taskId',
       filename: '$taskId.mp4',
     ),
-    status: TaskStatus.running,
+    status: status,
     progress: 0.5,
-    item: MultimediaItem(title: 'Show', url: 'anime://show', posterUrl: ''),
+    item: MultimediaItem(
+      title: 'Show',
+      url: 'anime://show',
+      posterUrl: '',
+      provider: provider,
+    ),
     logicalId: logicalId,
     trackingUrl: trackingUrl,
     destinationPath: destinationPath,
@@ -27,6 +34,33 @@ DownloadItem _download({
 
 void main() {
   group('V2 downloads UI logical identity', () {
+    test('same tracking URL remains separate across providers', () {
+      final first = _download(
+        taskId: 'first',
+        trackingUrl: 'episode://same',
+        status: TaskStatus.complete,
+      );
+      final second = _download(
+        taskId: 'second',
+        trackingUrl: 'episode://same',
+        provider: 'animerift',
+        status: TaskStatus.complete,
+      );
+      final episode = Episode(name: 'one', url: 'episode://same');
+      final rift = MultimediaItem(
+        title: 'Show',
+        url: 'anime://show',
+        posterUrl: '',
+        provider: 'animerift',
+      );
+      expect(downloadsPointAtSameTarget(first, second), isFalse);
+      expect(groupDownloadsByEpisodeOrFile([first, second]), hasLength(2));
+      expect(
+        completedEpisodeDownload([first, second], rift, episode),
+        same(second),
+      );
+    });
+
     test(
       'known different logical ids do not fall through to fallback matching',
       () {

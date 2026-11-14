@@ -5,6 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/account/account_providers.dart';
 import '../../../core/account/animewitcher_account_config.dart';
 import '../../../core/account/animewitcher_account_models.dart';
+import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/providers/anime_rift_provider.dart';
+import '../../../core/extensions/providers/anime_rift_account_content.dart';
+import '../../../core/storage/anime_rift_account_scope.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/utils/localized_text.dart';
 import '../../../core/utils/artwork_quality.dart';
@@ -13,12 +17,203 @@ import '../../../shared/widgets/custom_widgets.dart';
 import '../../../shared/widgets/account_notifications_button.dart';
 import '../../../shared/widgets/glass_dialog.dart';
 import '../../comments/presentation/animewitcher_my_comments_screen.dart';
+import '../../comments/presentation/anime_rift_my_comments_screen.dart';
 import 'account_management_screens.dart';
 import 'account_privacy_settings_screen.dart';
 import 'account_ui_helpers.dart';
 import 'widgets/settings_widgets.dart';
+import 'widgets/anime_provider_picker.dart';
+import 'rift_account_profile_provider.dart';
 
 enum _AccountFormMode { signIn, createAccount }
+
+/// Rift account access uses its own secure session and identity. No
+/// AnimeWitcher profile or logout action is shown on this page.
+class AnimeRiftAccountScreen extends ConsumerWidget {
+  const AnimeRiftAccountScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final provider = ref.watch(activeProviderProvider);
+    ref.watch(accountDataRevisionProvider);
+    final rift = provider is AnimeRiftProvider ? provider : null;
+    final linked = rift?.isAccountLinked == true;
+    final account = AnimeRiftLocalAccountScope.accountHash;
+    final profile = linked && account != null
+        ? ref.watch(riftAccountProfileProvider(account))
+        : null;
+    final name =
+        profile?.asData?.value?.name ??
+        (linked ? rift?.accountIdentity?.displayName?.trim() : null);
+
+    return Scaffold(
+      extendBodyBehindAppBar: true,
+      appBar: AppPageAppBar(
+        title: appText(
+          context,
+          english: 'Anime Rift account',
+          arabic: 'حساب Anime Rift',
+        ),
+        canPop: Navigator.of(context).canPop(),
+      ),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 720),
+          child: ListView(
+            padding: EdgeInsets.only(
+              top:
+                  appPageHeaderContentTopInset(context) +
+                  LayoutConstants.spacingMd,
+              bottom: 100,
+            ),
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: _RiftAccountBanner(
+                  name: name?.isNotEmpty == true ? name! : 'Anime Rift',
+                  linked: linked,
+                  profile: profile?.asData?.value,
+                ),
+              ),
+              if (linked && profile?.hasError == true)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: TextButton.icon(
+                    onPressed: () =>
+                        ref.invalidate(riftAccountProfileProvider(account!)),
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text(
+                      'تعذر جلب صورة الحساب والغلاف — إعادة المحاولة',
+                    ),
+                  ),
+                ),
+              if (rift != null)
+                SettingsGroup(
+                  title: 'إدارة الحساب',
+                  children: [
+                    if (linked)
+                      SettingsTile(
+                        key: const ValueKey('rift-my-comments'),
+                        icon: Icons.chat_bubble_outline_rounded,
+                        title: 'تعليقاتي',
+                        subtitle: 'تعليقاتك ومراجعاتك على Anime Rift',
+                        subtitleIsDescription: true,
+                        onTap: () => Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) =>
+                                AnimeRiftMyCommentsScreen(provider: rift),
+                          ),
+                        ),
+                      ),
+                    const AnimeRiftAccountSettingsTile(),
+                  ],
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Matches AnimeWitcher's account banner layout without mixing accounts.
+class _RiftAccountBanner extends StatelessWidget {
+  const _RiftAccountBanner({
+    required this.name,
+    required this.linked,
+    this.profile,
+  });
+
+  final String name;
+  final bool linked;
+  final AnimeRiftAccountProfile? profile;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final cover = profile?.coverUrl;
+    final photo = profile?.avatarUrl;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: SizedBox(
+        height: 168,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [colors.primaryContainer, colors.secondaryContainer],
+                ),
+              ),
+            ),
+            if (cover != null)
+              KeyedSubtree(
+                key: const ValueKey('rift-profile-banner'),
+                child: ArtworkDecode(
+                  paintedWidth: MediaQuery.sizeOf(context).width,
+                  builder: (context, width) => Image.network(
+                    cover,
+                    fit: BoxFit.cover,
+                    cacheWidth: width,
+                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                  ),
+                ),
+              ),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    Colors.black.withValues(alpha: 0.78),
+                    Colors.black.withValues(alpha: 0.35),
+                  ],
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    key: const ValueKey('rift-profile-avatar'),
+                    radius: 46,
+                    backgroundColor: colors.primaryContainer,
+                    foregroundImage: photo == null ? null : NetworkImage(photo),
+                    onForegroundImageError: photo == null ? null : (_, _) {},
+                    child: const Icon(Icons.person_rounded, size: 44),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.headlineSmall
+                              ?.copyWith(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                        ),
+                        Text(
+                          linked ? 'حساب Anime Rift مرتبط بهذا الجهاز' : 'اربط حساب Anime Rift للوصول إلى المحتوى المحمي',
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 class AnimeWitcherAccountScreen extends ConsumerStatefulWidget {
   const AnimeWitcherAccountScreen({super.key});
@@ -63,11 +258,7 @@ class _AnimeWitcherAccountScreenState
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(
-        title: appText(
-          context,
-          english: 'Account',
-          arabic: 'الحساب',
-        ),
+        title: appText(context, english: 'Account', arabic: 'الحساب'),
         canPop: canPop,
         actions: [if (profile != null) const AccountNotificationsButton()],
       ),
@@ -123,10 +314,8 @@ class _AnimeWitcherAccountScreenState
             child: _ErrorBanner(
               message: appText(
                 context,
-                english:
-                    'Account sync is not configured in this build. Add the AnimeWitcher Firebase values through build secrets.',
-                arabic:
-                    'مزامنة الحساب غير مهيأة في هذه النسخة. أضف إعدادات Firebase الخاصة بـ AnimeWitcher من أسرار البناء.',
+                english: 'Account sync is not configured in this build. Add the AnimeWitcher Firebase values through build secrets.',
+                arabic: 'مزامنة الحساب غير مهيأة في هذه النسخة. أضف إعدادات Firebase الخاصة بـ AnimeWitcher من أسرار البناء.',
               ),
             ),
           ),
@@ -158,23 +347,19 @@ class _AnimeWitcherAccountScreenState
                   arabic: 'خلي تقدمك وقوائمك معك دائمًا',
                 ),
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
+                style: Theme.of(context).textTheme.headlineSmall
+                    ?.copyWith(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: LayoutConstants.spacingSm),
               Text(
                 appText(
                   context,
-                  english:
-                      'Sync watched episodes, resume positions, and all AnimeWitcher lists across devices.',
-                  arabic:
-                      'زامن الحلقات المشاهدة ومكان إكمال الحلقة وكل قوائم AnimeWitcher بين أجهزتك.',
+                  english: 'Sync watched episodes, resume positions, and all AnimeWitcher lists across devices.',
+                  arabic: 'زامن الحلقات المشاهدة ومكان إكمال الحلقة وكل قوائم AnimeWitcher بين أجهزتك.',
                 ),
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: colors.onSurfaceVariant,
-                ),
+                style: Theme.of(context).textTheme.bodyMedium
+                    ?.copyWith(color: colors.onSurfaceVariant),
               ),
             ],
           ),
@@ -715,10 +900,8 @@ class _AnimeWitcherAccountScreenState
       _showMessage(
         appText(
           context,
-          english:
-              'Verification link sent to the new email. Confirm it, then sign in again.',
-          arabic:
-              'أُرسل رابط التحقق إلى البريد الجديد. أكده ثم سجل الدخول مرة ثانية.',
+          english: 'Verification link sent to the new email. Confirm it, then sign in again.',
+          arabic: 'أُرسل رابط التحقق إلى البريد الجديد. أكده ثم سجل الدخول مرة ثانية.',
         ),
       );
     }
@@ -760,10 +943,8 @@ class _AnimeWitcherAccountScreenState
         content: Text(
           appText(
             dialogContext,
-            english:
-                'AnimeWitcher will receive a permanent deletion request. You will be signed out immediately.',
-            arabic:
-                'سيتلقى AnimeWitcher طلب حذف نهائي للحساب، وسيتم تسجيل خروجك فورًا.',
+            english: 'AnimeWitcher will receive a permanent deletion request. You will be signed out immediately.',
+            arabic: 'سيتلقى AnimeWitcher طلب حذف نهائي للحساب، وسيتم تسجيل خروجك فورًا.',
           ),
         ),
         actions: [
@@ -905,10 +1086,8 @@ class _AnimeWitcherAccountScreenState
         _showMessage(
           appText(
             context,
-            english:
-                'Account created. Open the verification link sent to your email, then sign in.',
-            arabic:
-                'تم إنشاء الحساب. افتح رابط التحقق المرسل إلى بريدك ثم سجل الدخول.',
+            english: 'Account created. Open the verification link sent to your email, then sign in.',
+            arabic: 'تم إنشاء الحساب. افتح رابط التحقق المرسل إلى بريدك ثم سجل الدخول.',
           ),
         );
       } else {
@@ -936,10 +1115,8 @@ class _AnimeWitcherAccountScreenState
         content: Text(
           appText(
             dialogContext,
-            english:
-                'Synced data stays in AnimeWitcher and local data stays on this device.',
-            arabic:
-                'ستبقى البيانات المزامنة في AnimeWitcher والبيانات المحلية على هذا الجهاز.',
+            english: 'Synced data stays in AnimeWitcher and local data stays on this device.',
+            arabic: 'ستبقى البيانات المزامنة في AnimeWitcher والبيانات المحلية على هذا الجهاز.',
           ),
         ),
         actions: [
@@ -1189,9 +1366,8 @@ class _BannerFact extends StatelessWidget {
           const SizedBox(width: 6),
           Text(
             label,
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-              color: Colors.white.withValues(alpha: 0.9),
-            ),
+            style: Theme.of(context).textTheme.labelMedium
+                ?.copyWith(color: Colors.white.withValues(alpha: 0.9)),
           ),
         ],
       ),

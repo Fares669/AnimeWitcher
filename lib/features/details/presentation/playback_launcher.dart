@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -9,6 +8,7 @@ import '../../../core/domain/stream_source_preferences.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/services/external_player_service.dart';
 import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/item_provider_resolution.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../settings/presentation/player_settings_provider.dart';
 import '../../settings/presentation/general_settings_provider.dart';
@@ -91,18 +91,11 @@ class PlaybackLauncher {
 
   AnimeWitcherProvider? _resolveProvider(MultimediaItem item) {
     final manager = _ref.read(extensionManagerProvider.notifier);
-    AnimeWitcherProvider? provider;
-    if (item.provider != null) {
-      try {
-        final val = item.provider!;
-        provider = manager.getAllProviders().firstWhere(
-          (p) => p.packageName == val || p.name == val,
-        );
-      } catch (e) {
-        if (kDebugMode) debugPrint('PlaybackLauncher._resolveProvider: $e');
-      }
-    }
-    return provider ?? _ref.read(activeProviderProvider);
+    return resolveItemProvider(
+      manager.getAllProviders(),
+      item.provider,
+      _ref.read(activeProviderProvider),
+    );
   }
 
   Episode? _canonicalEpisode(
@@ -570,7 +563,9 @@ class PlaybackLauncher {
     // External players still need a concrete resolved stream before launch.
     if (baseItem.url.isNotEmpty) {
       _ref
-          .read(detailsControllerProvider(baseItem.url).notifier)
+          .read(
+            detailsControllerProvider(detailsControllerKey(baseItem)).notifier,
+          )
           .setLaunching(true);
     }
     try {
@@ -595,7 +590,10 @@ class PlaybackLauncher {
     } finally {
       if (baseItem.url.isNotEmpty) {
         _ref
-            .read(detailsControllerProvider(baseItem.url).notifier)
+            .read(
+              detailsControllerProvider(detailsControllerKey(baseItem))
+                  .notifier,
+            )
             .setLaunching(false);
       }
     }

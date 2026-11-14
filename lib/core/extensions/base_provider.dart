@@ -1,33 +1,49 @@
 import 'package:dio/dio.dart';
+
 import '../domain/entity/manga.dart';
 import '../domain/entity/multimedia_item.dart';
 
 enum ProviderType { movie, series, anime, manga, livestream, other }
 
+class ProviderSeasonConfig {
+  const ProviderSeasonConfig({
+    required this.past,
+    required this.current,
+    required this.next,
+  });
+  final String past, current, next;
+}
+
 class ProviderSearchFilterOptions {
   final List<String> statuses;
   final List<String> types;
   final List<String> ageRatings;
+  final List<String> countries;
   final List<String> years;
   final List<String> seasons;
   final List<String> genres;
+  final List<String> tags;
 
   const ProviderSearchFilterOptions({
     this.statuses = const <String>[],
     this.types = const <String>[],
     this.ageRatings = const <String>[],
+    this.countries = const <String>[],
     this.years = const <String>[],
     this.seasons = const <String>[],
     this.genres = const <String>[],
+    this.tags = const <String>[],
   });
 
   bool get isEmpty =>
       statuses.isEmpty &&
       types.isEmpty &&
       ageRatings.isEmpty &&
+      countries.isEmpty &&
       years.isEmpty &&
       seasons.isEmpty &&
-      genres.isEmpty;
+      genres.isEmpty &&
+      tags.isEmpty;
 
   factory ProviderSearchFilterOptions.fromJson(Map<String, dynamic> json) {
     List<String> read(String key) {
@@ -44,9 +60,11 @@ class ProviderSearchFilterOptions {
       statuses: read('statuses'),
       types: read('types'),
       ageRatings: read('ageRatings'),
+      countries: read('countries'),
       years: read('years'),
       seasons: read('seasons'),
       genres: read('genres'),
+      tags: read('tags'),
     );
   }
 }
@@ -55,18 +73,22 @@ class ProviderSearchFilters {
   final Set<String> statuses;
   final Set<String> types;
   final Set<String> ageRatings;
+  final Set<String> countries;
   final Set<String> years;
   final Set<String> seasons;
   final Set<String> genres;
+  final Set<String> tags;
   final String sort;
 
   const ProviderSearchFilters({
     this.statuses = const <String>{},
     this.types = const <String>{},
     this.ageRatings = const <String>{},
+    this.countries = const <String>{},
     this.years = const <String>{},
     this.seasons = const <String>{},
     this.genres = const <String>{},
+    this.tags = const <String>{},
     this.sort = '',
   });
 
@@ -77,18 +99,22 @@ class ProviderSearchFilters {
       statuses.length +
       types.length +
       ageRatings.length +
+      countries.length +
       years.length +
       seasons.length +
-      genres.length;
+      genres.length +
+      tags.length;
 
   Map<String, dynamic> toJson() {
     return <String, dynamic>{
       'statuses': statuses.toList(growable: false),
       'types': types.toList(growable: false),
       'ageRatings': ageRatings.toList(growable: false),
+      if (countries.isNotEmpty) 'countries': countries.toList(growable: false),
       'years': years.toList(growable: false),
       'seasons': seasons.toList(growable: false),
       'genres': genres.toList(growable: false),
+      if (tags.isNotEmpty) 'tags': tags.toList(growable: false),
       'sort': sort,
     };
   }
@@ -97,18 +123,22 @@ class ProviderSearchFilters {
     Set<String>? statuses,
     Set<String>? types,
     Set<String>? ageRatings,
+    Set<String>? countries,
     Set<String>? years,
     Set<String>? seasons,
     Set<String>? genres,
+    Set<String>? tags,
     String? sort,
   }) {
     return ProviderSearchFilters(
       statuses: statuses ?? this.statuses,
       types: types ?? this.types,
       ageRatings: ageRatings ?? this.ageRatings,
+      countries: countries ?? this.countries,
       years: years ?? this.years,
       seasons: seasons ?? this.seasons,
       genres: genres ?? this.genres,
+      tags: tags ?? this.tags,
       sort: sort ?? this.sort,
     );
   }
@@ -124,6 +154,18 @@ class ProviderMediaPage {
     required this.nextOffset,
     required this.hasMore,
   });
+}
+
+class ProviderCharacterPage {
+  const ProviderCharacterPage({
+    required this.items,
+    required this.page,
+    required this.hasMore,
+  });
+
+  final List<Actor> items;
+  final int page;
+  final bool hasMore;
 }
 
 class ProviderNewsPage {
@@ -149,6 +191,7 @@ abstract class AnimeWitcherProvider {
   List<String> get languages;
   Set<ProviderType> get supportedTypes;
   bool get hasSearch => true;
+  bool get supportsCharacters => false;
   bool get isDebug => packageName.endsWith('.debug');
 
   /// Preferred provider-controlled batch sizes for paginated content.
@@ -163,6 +206,39 @@ abstract class AnimeWitcherProvider {
 
   // Key methods providers must implement
   Future<List<MultimediaItem>> search(String query, {CancelToken? cancelToken});
+
+  bool get supportsSeasons => false;
+  Future<ProviderSeasonConfig> getSeasonConfig() async =>
+      throw UnsupportedError('المواسم غير مدعومة.');
+  Future<List<String>> getAllSeasons({bool refresh = false}) async => [];
+  Future<ProviderMediaPage> getSeasonPage(
+    String season, {
+    int offset = 0,
+    int limit = 30,
+  }) async => throw UnsupportedError('المواسم غير مدعومة.');
+  bool get supportsBroadcastSchedule => false;
+  Future<ProviderMediaPage> getBroadcastSchedulePage(
+    String day, {
+    int offset = 0,
+    int limit = 30,
+    bool refresh = false,
+    CancelToken? cancelToken,
+  }) async => throw UnsupportedError('جدول البث غير مدعوم.');
+
+  Future<ProviderCharacterPage> getCharacterPage({int page = 0}) async {
+    return ProviderCharacterPage(
+      items: const <Actor>[],
+      page: page < 0 ? 0 : page,
+      hasMore: false,
+    );
+  }
+
+  Future<ProviderCharacterPage> searchCharacterPage(
+    String query, {
+    int page = 0,
+  }) {
+    return getCharacterPage(page: page);
+  }
 
   /// Optional provider-defined search filter values.
   Future<ProviderSearchFilterOptions> getSearchFilterOptions() async {
@@ -434,6 +510,12 @@ abstract class AnimeWitcherProvider {
   /// True when [url] represents a user-selected source token that must bypass
   /// automatic quality/source preference logic.
   bool isExplicitStreamSelection(String url) => false;
+
+  /// Download entitlement may differ from playback entitlement.
+  Future<List<StreamResult>> loadDownloadStreamSources(String url) =>
+      loadStreamSources(url);
+  Future<List<StreamResult>> loadDownloadStreams(String url) =>
+      loadStreams(url);
 
   // Resolves a playable stream URL. Deferred providers may accept one of the
   // opaque URLs returned by [loadStreamSources].

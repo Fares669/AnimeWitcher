@@ -1,9 +1,87 @@
 import 'package:animewitcher/features/player/data/anime4k.dart';
+import 'package:animewitcher/features/details/presentation/source_picker.dart';
 import 'package:animewitcher/features/player/presentation/widgets/player_settings_panel.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('player picker shows only available language and sub/dub modes', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(900, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: Scaffold(
+          body: Center(
+            child: PlayerSettingsPanel(
+              showAnime4k: false,
+              anime4kMode: Anime4kMode.off,
+              onAnime4kMode: (_) {},
+              showResize: false,
+              resizeIndex: 0,
+              resizeLabels: const <String>['Fit'],
+              onResize: (_) {},
+              showSpeed: false,
+              speed: 1,
+              maxSpeed: 2,
+              onSpeed: (_) {},
+              qualityLabel: '1080p · PD',
+              loadQualityChoices: () async => <PlayerPanelChoice>[
+                PlayerPanelChoice(
+                  label: 'PD',
+                  sectionLabel: '1080p',
+                  selected: true,
+                  language: StreamSourceLanguage.arabic,
+                  audioType: StreamSourceAudioType.subtitles,
+                  onTap: () {},
+                ),
+                PlayerPanelChoice(
+                  label: 'MF',
+                  sectionLabel: '720p',
+                  selected: false,
+                  language: StreamSourceLanguage.arabic,
+                  audioType: StreamSourceAudioType.dubbed,
+                  onTap: () {},
+                ),
+                PlayerPanelChoice(
+                  label: 'ST',
+                  sectionLabel: '480p',
+                  selected: false,
+                  language: StreamSourceLanguage.english,
+                  audioType: StreamSourceAudioType.subtitles,
+                  onTap: () {},
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('1080p · PD'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('player-source-language-arabic')), findsOneWidget);
+    expect(find.byKey(const ValueKey('player-source-language-english')), findsOneWidget);
+    expect(find.byKey(const ValueKey('player-source-mode-subtitles')), findsOneWidget);
+    expect(find.byKey(const ValueKey('player-source-mode-dubbed')), findsOneWidget);
+    expect(find.text('PD'), findsOneWidget);
+    expect(find.text('MF'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('player-source-mode-dubbed')));
+    await tester.pumpAndSettle();
+    expect(find.text('MF'), findsOneWidget);
+    expect(find.text('PD'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('player-source-language-english')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('player-source-mode-dubbed')), findsNothing);
+    expect(find.text('ST'), findsOneWidget);
+    expect(find.text('MF'), findsNothing);
+  });
+
   testWidgets('quality choices are grouped under quality headers', (tester) async {
     await tester.binding.setSurfaceSize(const Size(900, 600));
     addTearDown(() => tester.binding.setSurfaceSize(null));

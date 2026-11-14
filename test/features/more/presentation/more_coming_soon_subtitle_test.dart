@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_account_models.dart';
+import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/more/presentation/more_screen.dart';
 import 'package:animewitcher/features/more/presentation/broadcast_schedule_screen.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
@@ -13,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/test_fonts.dart';
 import '../../../support/debug_shots.dart';
+import '../../../support/memory_storage_service.dart';
 
 class _SignedOutAccount extends AnimeWitcherAccountController {
   @override
@@ -44,6 +46,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          storageServiceProvider.overrideWithValue(MemoryStorageService()),
           animeWitcherAccountControllerProvider.overrideWith(
             _SignedOutAccount.new,
           ),
@@ -117,9 +120,8 @@ void main() {
       );
       final image = await boundary.toImage(pixelRatio: 2);
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-      File(
-        '${artifacts.path}/coming_soon_menu_unaired_copy.png',
-      ).writeAsBytesSync(bytes!.buffer.asUint8List());
+      File('${artifacts.path}/coming_soon_menu_unaired_copy.png')
+          .writeAsBytesSync(bytes!.buffer.asUint8List());
     });
   });
 }

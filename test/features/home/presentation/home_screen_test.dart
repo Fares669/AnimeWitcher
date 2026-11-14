@@ -5,11 +5,15 @@ import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
 import 'package:animewitcher/core/providers/device_info_provider.dart';
+import 'package:animewitcher/core/storage/settings_repository.dart';
+import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/home/presentation/home_screen.dart';
 import 'package:animewitcher/features/home/presentation/widgets/media_horizontal_list.dart';
 import 'package:animewitcher/features/library/presentation/history_provider.dart';
 import 'package:animewitcher/features/search/data/mal_rankings.dart';
+import 'package:animewitcher/features/settings/presentation/general_settings_provider.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -20,6 +24,7 @@ import 'package:visibility_detector/visibility_detector.dart';
 
 import '../../../support/test_fonts.dart';
 import '../../../support/debug_shots.dart';
+import '../../../support/memory_storage_service.dart';
 
 const _brokenChapterId = 'RxOiaLyVTBIUObsclHrw';
 
@@ -32,7 +37,9 @@ MultimediaItem _item(String title, {String? catalogType}) {
   );
 }
 
-class _FakeHomeSource extends AnimeWitcherProvider {
+class _FakeHomeSource extends AnimeWitcherNativeProvider {
+  _FakeHomeSource() : super(Dio(), SettingsRepository(MemoryStorageService()));
+
   @override
   String get packageName => 'fake.home';
 
@@ -55,6 +62,12 @@ class _FakeHomeSource extends AnimeWitcherProvider {
   };
 
   @override
+  Future<ProviderNewsPage> getHomeNewsPage({
+    int offset = 0,
+    int limit = 10,
+  }) async => const ProviderNewsPage(items: [], nextOffset: 0, hasMore: false);
+
+  @override
   Future<MangaLatestChapterPage> getLatestMangaPage({
     int offset = 0,
     int limit = 30,
@@ -65,7 +78,7 @@ class _FakeHomeSource extends AnimeWitcherProvider {
           manga: MultimediaItem(
             title: 'Latest Manga',
             url: 'https://animewitcher.com/manga/latest',
-            posterUrl: '',
+            posterUrl: 'https://example.test/latest-manga.jpg',
             contentType: MultimediaContentType.manga,
             provider: packageName,
           ),
@@ -130,9 +143,16 @@ Widget _app({
   int rankingOffset = 10,
   ProviderMediaPage Function(MalRanking)? loadRanking,
 }) {
+  final source = _FakeHomeSource();
+  final storage = MemoryStorageService();
   return ProviderScope(
     overrides: [
-      activeProviderProvider.overrideWithValue(_FakeHomeSource()),
+      storageServiceProvider.overrideWithValue(storage),
+      extensionManagerProvider.overrideWithValue(<AnimeWitcherProvider>[
+        source,
+      ]),
+      activeProviderProvider.overrideWithValue(source),
+      mangaHasOwnTabProvider.overrideWithValue(false),
       continueWatchingProvider.overrideWith(_EmptyContinueWatching.new),
       homeMalRankingPageProvider.overrideWith(
         (ref, ranking) async =>

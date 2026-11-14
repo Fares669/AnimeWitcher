@@ -2,6 +2,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 
 void main() {
+  test('source-qualified identities isolate providers and retain old native IDs', () {
+    final legacy = logicalDownloadIdFor(animeId: '42', episodeKey: '1', variantKey: 'sub');
+    final native = logicalDownloadIdFor(animeId: '42', episodeKey: '1', variantKey: 'sub', providerId: 'com.fares669.animewitcher.native');
+    final rift = logicalDownloadIdFor(animeId: '42', episodeKey: '1', variantKey: 'sub', providerId: 'animerift');
+    final other = logicalDownloadIdFor(animeId: '42', episodeKey: '1', variantKey: 'sub', providerId: 'other');
+    expect(native, legacy);
+    expect(rift, isNot(legacy));
+    expect(other, isNot(rift));
+  });
+
   test('logical id is stable for the same logical episode', () {
     final first = logicalDownloadIdFor(
       animeId: 'anilist:21',

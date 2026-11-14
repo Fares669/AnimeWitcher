@@ -10,17 +10,24 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/domain/stream_source_preferences.dart';
-import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/base_provider.dart';
+import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/item_provider_resolution.dart';
+import '../../../core/extensions/providers/anime_rift_provider.dart';
 import '../../../core/network/dio_client_provider.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/services/download_parallel.dart';
 import '../../../core/services/download_url_refresh.dart';
 import '../../../core/services/download_v2/download_file_planner_v2.dart';
+import '../../../core/services/download_v2/anime_rift_download_metadata_v2.dart';
+import '../../../core/utils/anime_rift_identity.dart';
 import '../../../core/services/download_v2/download_manager_v2.dart';
 import '../../../core/services/download_v2/download_v2_identity.dart';
 import '../../../core/services/download_v2/download_v2_models.dart';
 import '../../../core/services/download_v2/download_v2_provider.dart';
+import '../../../core/storage/provider_local_library.dart'
+    show animeRiftProviderId;
+import '../../../core/storage/anime_rift_account_scope.dart';
 import '../../../core/storage/settings_repository.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../../shared/widgets/loading_dialog.dart';
@@ -73,6 +80,101 @@ String downloadFilenameV2({
   return '${sanitizedTitle.isEmpty ? 'video' : sanitizedTitle}$extension';
 }
 
+@visibleForTesting
+Set<String> existingBatchEpisodeKeysForProviderV2(
+  Iterable<LogicalDownloadRecordV2> records, {
+  required String mediaId,
+  required String providerId,
+}) {
+  final providerScope = downloadProviderScopeV2(providerId);
+  return <String>{
+    for (final record in records)
+      if (record.mediaKind == DownloadMediaKind.videoEpisode &&
+          downloadBelongsToCurrentRiftAccountV2(record.sourceDescriptor) &&
+          _downloadMediaIdV2(record.mediaId, providerId) ==
+              _downloadMediaIdV2(mediaId, providerId) &&
+          _batchRecordBelongsToProvider(record, providerId, providerScope) &&
+          (record.completedAtMillis != null ||
+              record.intent == DownloadUserIntent.active ||
+              record.intent == DownloadUserIntent.paused))
+        _downloadUnitKeyV2(record.unitKey, providerId),
+  };
+}
+
+String _downloadMediaIdV2(String value, String? providerId) =>
+    isAnimeRiftDownloadProviderV2(providerId)
+    ? canonicalAnimeRiftStorageUrl(value)
+    : value.trim();
+
+String _downloadUnitKeyV2(String value, String? providerId) =>
+    isAnimeRiftDownloadProviderV2(providerId)
+    ? canonicalAnimeRiftPlaybackStorageUrl(value)
+    : value.trim();
+
+@visibleForTesting
+String downloadMediaIdForItemV2(MultimediaItem item, String? providerId) {
+  if (isAnimeRiftDownloadProviderV2(providerId)) {
+    return _downloadMediaIdV2(item.url, providerId);
+  }
+  final imdbId = item.imdbId?.trim();
+  return item.tmdbId?.toString() ??
+      (imdbId?.isNotEmpty == true ? imdbId! : item.url.trim());
+}
+
+@visibleForTesting
+LogicalDownloadRecordV2? existingRiftDownloadForItemV2(
+  Iterable<LogicalDownloadRecordV2> records, {
+  required MultimediaItem item,
+  required String unitKey,
+  required String variantKey,
+}) {
+  final mediaIds = <String>{
+    downloadMediaIdForItemV2(item, animeRiftProviderId),
+    if (item.tmdbId != null) item.tmdbId.toString(),
+    if (item.imdbId?.trim().isNotEmpty == true) item.imdbId!.trim(),
+  };
+  return records.firstWhereOrNull(
+    (record) =>
+        record.mediaKind == DownloadMediaKind.videoEpisode &&
+        isAnimeRiftDownloadProviderV2(
+          record.sourceDescriptor['providerId']?.toString(),
+        ) &&
+        downloadBelongsToCurrentRiftAccountV2(record.sourceDescriptor) &&
+        mediaIds.contains(
+          _downloadMediaIdV2(record.mediaId, animeRiftProviderId),
+        ) &&
+        _downloadUnitKeyV2(record.unitKey, animeRiftProviderId) ==
+            _downloadUnitKeyV2(unitKey, animeRiftProviderId) &&
+        record.variantKey.trim() == variantKey.trim(),
+  );
+}
+
+@visibleForTesting
+Future<String?> downloadAccountHashForProviderV2(
+  AnimeWitcherProvider provider,
+) async {
+  if (!isAnimeRiftDownloadProviderV2(provider.packageName)) return null;
+  if (provider is! AnimeRiftProvider) {
+    throw StateError('Anime Rift account provider unavailable');
+  }
+  await provider.restoreAccountSession();
+  return AnimeRiftLocalAccountScope.accountHash;
+}
+
+bool _batchRecordBelongsToProvider(
+  LogicalDownloadRecordV2 record,
+  String providerId,
+  String? providerScope,
+) {
+  final recordedId = record.sourceDescriptor['providerId']?.toString().trim();
+  if (recordedId == null || recordedId.isEmpty) {
+    // Untagged V2 records retain historical deduplication. AnimeRift was
+    // introduced with explicit provider IDs and does not own legacy records.
+    return providerId != animeRiftProviderId;
+  }
+  return downloadProviderScopeV2(recordedId) == providerScope;
+}
+
 class DownloadLauncher {
   final Ref _ref;
   final Set<String> _launchingItems = <String>{};
@@ -91,19 +193,19 @@ class DownloadLauncher {
     try {
       final records = await _ref.read(logicalDownloadStoreV2Provider).all();
       if (!context.mounted) return;
-      final imdbId = item.imdbId?.trim();
-      final mediaId =
-          item.tmdbId?.toString() ??
-          (imdbId?.isNotEmpty == true ? imdbId! : item.url.trim());
-      final existingEpisodeKeys = <String>{
-        for (final record in records)
-          if (record.mediaKind == DownloadMediaKind.videoEpisode &&
-              record.mediaId == mediaId &&
-              (record.completedAtMillis != null ||
-                  record.intent == DownloadUserIntent.active ||
-                  record.intent == DownloadUserIntent.paused))
-            record.unitKey.trim(),
-      };
+      final provider = resolveItemProvider(
+        _ref.read(extensionManagerProvider.notifier).getAllProviders(),
+        item.provider,
+        _ref.read(activeProviderProvider),
+      );
+      final mediaId = downloadMediaIdForItemV2(item, provider?.packageName);
+      final existingEpisodeKeys = provider == null
+          ? <String>{}
+          : existingBatchEpisodeKeysForProviderV2(
+              records,
+              mediaId: mediaId,
+              providerId: provider.packageName,
+            );
       final ordered = List<Episode>.of(selectedEpisodes)
         ..sort((a, b) {
           final season = a.season.compareTo(b.season);
@@ -111,11 +213,14 @@ class DownloadLauncher {
         });
       final episodes = <Episode>[];
       for (final episode in ordered) {
-        final episodeKey = episode.url.trim();
+        final episodeKey = _downloadUnitKeyV2(
+          episode.url,
+          provider?.packageName,
+        );
         if (episodeKey.isEmpty || existingEpisodeKeys.contains(episodeKey)) {
           continue;
         }
-        final key = '${item.provider ?? ''}|${item.url}|${episode.url}';
+        final key = '${provider?.packageName ?? ''}|$mediaId|$episodeKey';
         if (_launchingItems.add(key)) {
           keys.add(key);
           episodes.add(episode);
@@ -137,18 +242,15 @@ class DownloadLauncher {
     final l10n = AppLocalizations.of(context)!;
     final notifications = _ref.read(notificationServiceProvider);
     final manager = _ref.read(extensionManagerProvider.notifier);
-    AnimeWitcherProvider? provider;
-    if (item.provider != null) {
-      provider = manager.getAllProviders().firstWhereOrNull(
-        (p) => p.packageName == item.provider || p.name == item.provider,
-      );
-    }
-    provider ??= _ref.read(activeProviderProvider);
+    final provider = resolveItemProvider(
+      manager.getAllProviders(),
+      item.provider,
+      _ref.read(activeProviderProvider),
+    );
     if (provider == null) {
       notifications.showError('لا يوجد مزود تشغيل نشط');
       return;
     }
-
     final messenger = ScaffoldMessenger.maybeOf(context);
     final sourceProgress = ValueNotifier<int>(0);
     void showSourceProgress() {
@@ -166,6 +268,9 @@ class DownloadLauncher {
 
     showSourceProgress();
     try {
+      final accountAtSelection = await downloadAccountHashForProviderV2(
+        provider,
+      );
       final allSources = List<List<StreamResult>?>.filled(
         episodes.length,
         null,
@@ -179,7 +284,7 @@ class DownloadLauncher {
           final results = await Future.wait(
             chunk.map((index) async {
               try {
-                final sources = await provider!.loadStreamSources(
+                final sources = await provider.loadDownloadStreamSources(
                   episodes[index].url,
                 );
                 if (sources.where((s) => s.url.trim().isNotEmpty).isEmpty) {
@@ -289,7 +394,7 @@ class DownloadLauncher {
           final resolved = await resolveBatchStreamSources(
             candidates,
             resolveCandidate: (candidate) =>
-                provider!.loadStreams(candidate.url),
+                provider.loadDownloadStreams(candidate.url),
           );
           final prioritized = orderStreamSourcesByPreference(
             resolved
@@ -308,11 +413,19 @@ class DownloadLauncher {
           StreamResult? stream;
           DownloadSourceMetadataV2? metadata;
           for (final option in prioritized) {
-            final probe = await probeDownloadSourceV2(
-              _ref.read(dioClientProvider),
-              option.url,
-              headers: option.headers,
-            ).timeout(const Duration(seconds: 15), onTimeout: () => null);
+            final probe =
+                await probeDownloadSourceV2(
+                  _ref.read(dioClientProvider),
+                  option.url,
+                  headers: option.headers,
+                ).timeout(
+                  Duration(
+                    seconds: isAnimeRiftDownloadProviderV2(provider.packageName)
+                        ? 25
+                        : 15,
+                  ),
+                  onTimeout: () => null,
+                );
             if (probe?.size != null) {
               stream = option;
               metadata = probe;
@@ -330,6 +443,10 @@ class DownloadLauncher {
             providerId: provider.packageName,
             episode: episode,
             forceEpisodeFilename: true,
+            expectedRiftAccountHash: accountAtSelection,
+            enforceRiftAccount: isAnimeRiftDownloadProviderV2(
+              provider.packageName,
+            ),
           );
           queued++;
         } catch (error) {
@@ -358,7 +475,8 @@ class DownloadLauncher {
   }) async {
     final resolveUrl = episodeUrl ?? episode?.url ?? item.url;
     if (resolveUrl.isEmpty) return;
-    final key = '${item.provider ?? ''}|${item.url}|$resolveUrl';
+    final key =
+        '${item.provider ?? ''}|${downloadMediaIdForItemV2(item, item.provider)}|${_downloadUnitKeyV2(resolveUrl, item.provider)}';
     if (!_launchingItems.add(key)) return;
     try {
       await _launch(context, item, episodeUrl: episodeUrl, episode: episode);
@@ -380,30 +498,25 @@ class DownloadLauncher {
         episode ?? item.episodes?.firstWhereOrNull((e) => e.url == resolveUrl);
 
     final manager = _ref.read(extensionManagerProvider.notifier);
-    AnimeWitcherProvider? provider;
-    if (item.provider != null) {
-      try {
-        final val = item.provider!;
-        provider = manager.getAllProviders().firstWhere(
-          (p) => p.packageName == val || p.name == val,
-        );
-      } catch (e) {
-        if (kDebugMode) debugPrint('DownloadLauncher.launch: $e');
-      }
-    }
-    provider ??= _ref.read(activeProviderProvider);
+    final provider = resolveItemProvider(
+      manager.getAllProviders(),
+      item.provider,
+      _ref.read(activeProviderProvider),
+    );
     if (provider == null) {
       _ref
           .read(notificationServiceProvider)
           .showError(l10n.errorPrefix('لا يوجد مزود تشغيل نشط'));
       return;
     }
-
     bool isCanceled = false;
     bool loadingDialogShown = false;
 
     try {
-      final sourceFuture = provider.loadStreamSources(resolveUrl);
+      final accountAtSelection = await downloadAccountHashForProviderV2(
+        provider,
+      );
+      final sourceFuture = provider.loadDownloadStreamSources(resolveUrl);
       final preferences = _ref.read(generalSettingsProvider);
       final StreamResult? selected;
       if (preferences.autoSelectStreamSource) {
@@ -413,7 +526,7 @@ class DownloadLauncher {
           qualityPriority: preferences.streamQualityPriority,
           serverPriority: preferences.streamServerPriority,
           resolveCandidate: (StreamResult candidate) =>
-              provider!.loadStreams(candidate.url),
+              provider.loadDownloadStreams(candidate.url),
         );
         if (selected == null) {
           throw Exception('لم يتم العثور على مصادر تشغيل.');
@@ -442,7 +555,7 @@ class DownloadLauncher {
             },
           ),
         );
-        final resolved = await provider.loadStreams(selected.url);
+        final resolved = await provider.loadDownloadStreams(selected.url);
         if (isCanceled || !context.mounted) return;
         if (loadingDialogShown) {
           Navigator.of(context, rootNavigator: true).pop();
@@ -463,6 +576,8 @@ class DownloadLauncher {
         resolveUrl,
         providerId: provider.packageName,
         episode: resolvedEpisode,
+        expectedRiftAccountHash: accountAtSelection,
+        enforceRiftAccount: isAnimeRiftDownloadProviderV2(provider.packageName),
       );
     } catch (e) {
       if (!context.mounted) return;
@@ -494,6 +609,8 @@ class DownloadLauncher {
     String resolveUrl, {
     required String providerId,
     Episode? episode,
+    String? expectedRiftAccountHash,
+    bool enforceRiftAccount = false,
   }) async {
     final l10n = AppLocalizations.of(context)!;
     final navContext = rootNavigatorKey.currentContext ?? context;
@@ -537,11 +654,17 @@ class DownloadLauncher {
       ),
     );
 
-    final metadata = await probeDownloadSourceV2(
-      _ref.read(dioClientProvider),
-      stream.url,
-      headers: stream.headers,
-    ).timeout(const Duration(seconds: 15), onTimeout: () => null);
+    final metadata =
+        await probeDownloadSourceV2(
+          _ref.read(dioClientProvider),
+          stream.url,
+          headers: stream.headers,
+        ).timeout(
+          Duration(
+            seconds: isAnimeRiftDownloadProviderV2(providerId) ? 25 : 15,
+          ),
+          onTimeout: () => null,
+        );
 
     if (!navContext.mounted) return;
     if (!isCanceled) {
@@ -644,6 +767,8 @@ class DownloadLauncher {
                       metadata: metadata,
                       providerId: providerId,
                       episode: episode,
+                      expectedRiftAccountHash: expectedRiftAccountHash,
+                      enforceRiftAccount: enforceRiftAccount,
                     );
                   } catch (error) {
                     if (!finalContext.mounted) return;
@@ -673,7 +798,13 @@ class DownloadLauncher {
     required String providerId,
     Episode? episode,
     bool forceEpisodeFilename = false,
+    String? expectedRiftAccountHash,
+    bool enforceRiftAccount = false,
   }) async {
+    if (enforceRiftAccount &&
+        expectedRiftAccountHash != AnimeRiftLocalAccountScope.accountHash) {
+      throw StateError('Anime Rift account changed during source selection');
+    }
     final episodeData =
         episode ?? item.episodes?.firstWhereOrNull((e) => e.url == resolveUrl);
     unawaited(cacheSkipSegmentsForDownloadV2(_ref, item, episodeData));
@@ -693,16 +824,17 @@ class DownloadLauncher {
       forceEpisodeFilename: forceEpisodeFilename,
     );
 
-    final destinationPath = await downloadDestinationPathV2(
-      item,
-      episode: episodeData,
-      filename: filename,
-    );
-    final imdbId = item.imdbId?.trim();
-    final animeId =
-        item.tmdbId?.toString() ??
-        (imdbId?.isNotEmpty == true ? imdbId! : item.url.trim());
-    final episodeKey = resolveUrl.trim();
+    final accountAtStart = isAnimeRiftDownloadProviderV2(providerId)
+        ? AnimeRiftLocalAccountScope.accountHash
+        : null;
+    final animeId = downloadMediaIdForItemV2(item, providerId);
+    final episodeKey = _downloadUnitKeyV2(resolveUrl, providerId);
+    if (isAnimeRiftDownloadProviderV2(providerId) &&
+        animeRiftDownloadTrackingIdentityV2(episodeKey) == null) {
+      throw StateError(
+        'Anime Rift download needs a stable provider episode identity',
+      );
+    }
     final audioVariant = switch (episodeData?.dubStatus) {
       DubStatus.dubbed => 'dub',
       DubStatus.subbed => 'sub',
@@ -716,13 +848,42 @@ class DownloadLauncher {
       animeId: animeId,
       episodeKey: episodeKey,
       variantKey: variantKey,
+      providerId: providerId,
     );
+    // Reuse the original record (including its historical ID, generation and
+    // file path). Alias recognition never migrates or renames a partial file.
+    if (isAnimeRiftDownloadProviderV2(providerId)) {
+      final existing = existingRiftDownloadForItemV2(
+        await _ref.read(logicalDownloadStoreV2Provider).all(),
+        item: item,
+        unitKey: episodeKey,
+        variantKey: variantKey,
+      );
+      if (existing != null) {
+        if (existing.completedAtMillis == null) {
+          await _ref.read(downloadManagerV2Provider).resume(existing.logicalId);
+        }
+        return;
+      }
+    }
+    final destinationPath = await downloadDestinationPathV2(
+      item,
+      episode: episodeData,
+      filename: filename,
+      providerId: providerId,
+      logicalId: logicalId,
+    );
+    if (isAnimeRiftDownloadProviderV2(providerId) &&
+        accountAtStart != AnimeRiftLocalAccountScope.accountHash) {
+      throw StateError('Anime Rift account changed during download setup');
+    }
     final descriptor = DownloadUrlRefreshDescriptor(
-      trackingUrl: resolveUrl,
+      trackingUrl: episodeKey,
       providerId: providerId,
       source: stream.source,
       quality: stream.quality,
       refreshUrl: stream.refreshUrl,
+      accountHash: accountAtStart,
       updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
     );
     final preference = _ref
@@ -748,9 +909,9 @@ class DownloadLauncher {
     if (!hasExistingMetadata) {
       await storage.saveDownloadMetadata(
         logicalId.value,
-        item,
+        item.copyWith(provider: providerId),
         episode: episodeData,
-        trackingUrl: resolveUrl,
+        trackingUrl: episodeKey,
         filePath: absolutePath,
         logicalId: logicalId.value,
       );
@@ -758,6 +919,10 @@ class DownloadLauncher {
 
     final downloadManager = _ref.read(downloadManagerV2Provider);
     try {
+      if (isAnimeRiftDownloadProviderV2(providerId) &&
+          accountAtStart != AnimeRiftLocalAccountScope.accountHash) {
+        throw StateError('Anime Rift account changed during download setup');
+      }
       await downloadManager.start(
         DownloadStartRequestV2(
           logicalId: logicalId,
@@ -775,9 +940,9 @@ class DownloadLauncher {
       if (hasExistingMetadata) {
         await storage.saveDownloadMetadata(
           logicalId.value,
-          item,
+          item.copyWith(provider: providerId),
           episode: episodeData,
-          trackingUrl: resolveUrl,
+          trackingUrl: episodeKey,
           filePath: absolutePath,
           logicalId: logicalId.value,
         );

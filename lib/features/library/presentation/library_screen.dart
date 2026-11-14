@@ -5,8 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 
 import '../../../core/providers/device_info_provider.dart';
+import '../../../core/extensions/extension_manager.dart';
 import '../../../core/storage/library_category.dart';
-import '../../../core/storage/library_repository.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../../core/utils/layout_constants.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
@@ -46,6 +46,18 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   void initState() {
     super.initState();
     _prefs = LibraryShelfPrefs(ref.read(storageServiceProvider));
+    // Desktop's first opened shelf has the same bounded server query as
+    // phones. Other shelves load only after the user selects them.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !TickerMode.valuesOf(context).enabled) return;
+      final profile = ref.read(deviceProfileProvider).asData?.value;
+      final isTv = profile?.isTv == true || context.isTv;
+      if (isTv || context.isTabletOrLarger) {
+        unawaited(
+          ref.read(libraryProvider.notifier).refreshVisibleFromServer(),
+        );
+      }
+    });
   }
 
   @override
@@ -75,6 +87,14 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     final profile = ref.watch(deviceProfileProvider).asData?.value;
     final isTv = profile?.isTv == true || context.isTv;
     final isWidescreen = isTv || context.isTabletOrLarger;
+    ref.listen(activeProviderProvider, (previous, next) {
+      if (isWidescreen && TickerMode.valuesOf(context).enabled &&
+          previous?.packageName != next?.packageName) {
+        unawaited(
+          ref.read(libraryProvider.notifier).refreshVisibleFromServer(),
+        );
+      }
+    });
 
     if (isWidescreen) return _buildWide(context);
 
@@ -90,18 +110,15 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   Widget _buildWide(BuildContext context) {
     final libraryState = ref.watch(libraryProvider);
     final history = ref.watch(watchHistoryProvider);
-    final repository = ref.read(libraryRepositoryProvider);
     final kind = libraryState.mediaKind;
     final category = libraryState.category;
-    final counts = <LibraryMediaKind, Map<LibraryCategory, int>>{
+    final counts = <LibraryMediaKind, Map<LibraryCategory, int?>>{
       for (final listKind in LibraryMediaKind.values)
-        listKind: <LibraryCategory, int>{
+        listKind: <LibraryCategory, int?>{
           for (final listCategory in LibraryCategory.values)
-            listCategory: libraryItemsFor(
-              repository,
-              listCategory,
-              listKind,
-            ).length,
+            listCategory: ref
+                .read(libraryProvider.notifier)
+                .categoryCount(listKind, listCategory),
         },
     };
     final recentCount = libraryRecentFor(
@@ -141,10 +158,20 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                     recentCount: recentCount,
                     prefs: _prefs,
                     onFilter: () => _openFilter(kind),
-                    onRecent: () => setState(() {
-                      _recent = true;
-                      _characters = false;
-                    }),
+                    onRecent: () {
+                      setState(() {
+                        _recent = true;
+                        _characters = false;
+                      });
+                      // Server history is fetched on demand, not each time
+                      // the user opens a cached anime/manga library shelf.
+                      unawaited(
+                        ref
+                            .read(watchHistoryProvider.notifier)
+                            .refreshFromServer()
+                            .catchError((Object _) {}),
+                      );
+                    },
                     onSelect: (listKind, listCategory) {
                       setState(() {
                         _recent = false;

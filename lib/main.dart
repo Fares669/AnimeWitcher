@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter_displaymode/flutter_displaymode.dart';
 import 'package:flutter/gestures.dart' show kDoubleTapSlop, kDoubleTapTimeout;
@@ -40,9 +41,49 @@ import 'core/providers/device_info_provider.dart';
 import 'shared/widgets/loading_indicator.dart';
 import 'features/settings/presentation/general_settings_provider.dart';
 import 'core/account/account_providers.dart';
+import 'core/storage/anime_rift_auto_sync.dart';
+import 'core/services/app_diagnostics.dart';
+
+/// Observes the existing foreground sync without adding requests or retries.
+@visibleForTesting
+Future<void> runNativeForegroundSync(
+  Future<void> Function() sync, {
+  AppDiagnostics? diagnostics,
+}) async {
+  final log = diagnostics ?? appDiagnostics;
+  final elapsed = Stopwatch()..start();
+  var succeeded = false;
+  log.record('native.sync.start', {'status': 'foreground'});
+  try {
+    await sync();
+    succeeded = true;
+  } catch (error) {
+    log.recordException('nativeSync', error);
+    rethrow;
+  } finally {
+    log.record('native.sync.complete', {
+      'status': 'foreground',
+      'durationMs': elapsed.elapsedMilliseconds,
+      'result': succeeded,
+    });
+  }
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // No exception strings, stacks or user identifiers are written to disk.
+  final previousFlutterError = FlutterError.onError;
+  FlutterError.onError = (details) {
+    appDiagnostics.recordException('flutter', details.exception);
+    previousFlutterError?.call(details);
+  };
+  final previousPlatformError = ui.PlatformDispatcher.instance.onError;
+  ui.PlatformDispatcher.instance.onError = (error, stack) {
+    appDiagnostics.recordException('platform', error);
+    return previousPlatformError?.call(error, stack) ?? false;
+  };
+  WidgetsBinding.instance.addTimingsCallback(appDiagnostics.recordFrameTimings);
+  appDiagnostics.record('app.start');
   await AppProgressiveHeaderBackdrop.preload();
   MediaKit.ensureInitialized();
 
@@ -174,6 +215,8 @@ class _AppRootState extends State<AppRoot> {
 
   Future<void> _init() async {
     _storageService = StorageService();
+    final started = Stopwatch()..start();
+    appDiagnostics.record('app.storage.init.start');
     try {
       await Future.wait([
         _storageService.init(),
@@ -219,7 +262,11 @@ class _AppRootState extends State<AppRoot> {
           _initialized = true;
         });
       }
+      appDiagnostics.record('app.storage.init.complete', {
+        'durationMs': started.elapsedMilliseconds,
+      });
     } catch (e, stack) {
+      appDiagnostics.recordException('startup', e);
       if (mounted) {
         setState(() {
           _error = e;
@@ -299,17 +346,29 @@ class _MyAppState extends ConsumerState<MyApp>
       windowManager.addListener(this);
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       unawaited(
-        ref
-            .read(downloadManagerV2Provider)
-            .initialize()
-            .catchError((Object error) {
-              if (kDebugMode) {
-                debugPrint(
-                  '[DownloadManagerV2] Startup initialization deferred: $error',
-                );
-              }
-            }),
+        ref.read(riftAutoSyncProvider).refreshHistory().catchError((
+          Object error,
+        ) {
+          if (kDebugMode) {
+            debugPrint(
+              '[AnimeRiftSync] Startup deferred (${error.runtimeType})',
+            );
+          }
+        }),
+      );
+      unawaited(
+        ref.read(downloadManagerV2Provider).initialize().catchError((
+          Object error,
+        ) {
+          appDiagnostics.recordException('downloadStartup', error);
+          if (kDebugMode) {
+            debugPrint(
+              '[DownloadManagerV2] Startup initialization deferred: $error',
+            );
+          }
+        }),
       );
       _checkAppUpdates();
       // The first-launch welcome (theme, skipping, sign-in) is part of the
@@ -329,31 +388,48 @@ class _MyAppState extends ConsumerState<MyApp>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    appDiagnostics.record('app.lifecycle', {
+      'status': state.name,
+      'memoryBytes': ProcessInfo.currentRss,
+    });
     if (state != AppLifecycleState.resumed) return;
+    // Resume flushes queued edits only. Startup/account linking fetches watch
+    // history separately, without downloading all six library shelves.
+    unawaited(
+      ref.read(riftAutoSyncProvider).flushPending().catchError((Object error) {
+        if (kDebugMode) {
+          debugPrint(
+            '[AnimeRiftSync] Foreground deferred (${error.runtimeType})',
+          );
+        }
+      }),
+    );
     final account = ref
         .read(animeWitcherAccountControllerProvider)
         .asData
         ?.value;
-    if (account?.isSignedIn != true) return;
+    if (account?.isSignedIn != true) {
+      appDiagnostics.record('native.sync.skipped', {'reason': 'signedOut'});
+      return;
+    }
 
     final now = DateTime.now();
     final previous = _lastForegroundAccountSyncAt;
     if (previous != null &&
         now.difference(previous) < const Duration(minutes: 1)) {
+      appDiagnostics.record('native.sync.skipped', {'reason': 'throttled'});
       return;
     }
     _lastForegroundAccountSyncAt = now;
     unawaited(
-      ref
-          .read(animeWitcherAccountControllerProvider.notifier)
-          .syncNow()
-          .catchError((Object error) {
-            if (kDebugMode) {
-              debugPrint(
-                '[AnimeWitcherAccount] Foreground sync deferred: $error',
-              );
-            }
-          }),
+      runNativeForegroundSync(
+        () =>
+            ref.read(animeWitcherAccountControllerProvider.notifier).syncNow(),
+      ).catchError((Object error) {
+        if (kDebugMode) {
+          debugPrint('[AnimeWitcherAccount] Foreground sync deferred');
+        }
+      }),
     );
   }
 

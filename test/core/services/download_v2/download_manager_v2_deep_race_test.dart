@@ -84,8 +84,22 @@ void main() {
     await _until(
       () => original.replaceCalls > 0 || f.gateway.started.length > 1,
     );
+    // replaceSource acknowledges the new URL before the coordinator has
+    // finished resuming that same writer. Observe the final transition rather
+    // than asserting during the still-running renewal command.
+    await _until(
+      () => original.resumeCalls > 0 || f.gateway.started.length > 1,
+    );
     await f.manager.reconcileAdmission();
-    expect(original.replaceCalls, 1);
+    expect(
+      original.replaceCalls,
+      1,
+      reason:
+          'renewal must retain the native writer: '
+          'starts=${f.gateway.started.length}, '
+          'resolverCalls=${f.resolver.calls}, '
+          'generation=${(await f.store.get(request.logicalId))?.generation}',
+    );
     expect(f.gateway.started, hasLength(1));
     expect(original.cancelCalls, 0);
     expect(original.resumeCalls, 1);
@@ -125,8 +139,24 @@ void main() {
     await _until(
       () => original.replaceCalls > 0 || f.gateway.started.length > 2,
     );
+    // The replacement completes before its queued admission state is saved.
+    // Wait for that durable state while retaining a fast failure path if a
+    // destructive extra generation was started.
+    await _untilAsync(
+      () async =>
+          (await f.store.get(request.logicalId))?.awaitingAdmission == true ||
+          f.gateway.started.length > 2,
+    );
     await f.manager.reconcileAdmission();
-    expect(original.replaceCalls, 1);
+    expect(
+      original.replaceCalls,
+      1,
+      reason:
+          'slot-pressure renewal must keep the original writer: '
+          'starts=${f.gateway.started.length}, '
+          'resolverCalls=${f.resolver.calls}, '
+          'generation=${(await f.store.get(request.logicalId))?.generation}',
+    );
     expect(original.resumeCalls, 0);
     expect(original.cancelCalls, 0);
     expect((await f.store.get(request.logicalId))?.generation, 1);
@@ -509,6 +539,16 @@ Future<void> _until(bool Function() condition) async {
   while (!condition()) {
     if (DateTime.now().isAfter(deadline))
       throw TimeoutException('Condition not reached');
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+}
+
+Future<void> _untilAsync(Future<bool> Function() condition) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 3));
+  while (!await condition()) {
+    if (DateTime.now().isAfter(deadline)) {
+      throw TimeoutException('Async condition not reached');
+    }
     await Future<void>.delayed(const Duration(milliseconds: 10));
   }
 }

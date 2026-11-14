@@ -4,8 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
+import '../../../../core/account/account_providers.dart';
+import '../../../../core/extensions/extension_manager.dart';
+import '../../../../core/extensions/providers/anime_rift_provider.dart';
+import '../../../../core/storage/anime_rift_account_scope.dart';
 import '../../../../core/storage/library_category.dart';
 import '../../../../core/storage/library_repository.dart';
+import '../../../../core/storage/provider_local_library.dart';
 import '../../../../core/storage/storage_service.dart';
 import '../../../../shared/widgets/app_search_field.dart';
 import '../../../../shared/widgets/app_side_menu.dart';
@@ -16,6 +21,7 @@ import '../history_provider.dart';
 import '../library_lists.dart';
 import '../library_media_kind.dart';
 import '../library_provider.dart';
+import '../library_state.dart';
 import 'bookmarks_tab.dart';
 
 String _t(BuildContext context, String en, String ar) => ar;
@@ -66,6 +72,8 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
 
   final Map<(LibraryMediaKind, LibraryCategory), List<MultimediaItem>> _lists =
       <(LibraryMediaKind, LibraryCategory), List<MultimediaItem>>{};
+  final Map<(LibraryMediaKind, LibraryCategory), int?> _tabCounts = {};
+  final PageStorageBucket _scrollBucket = PageStorageBucket();
   Object? _listsFor;
 
   @override
@@ -77,7 +85,21 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
         ? LibraryPhoneSection.manga
         : LibraryPhoneSection.anime;
     _selectedListKey = library.category.storageKey;
-    Future<void>.microtask(_syncHistory);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !TickerMode.valuesOf(context).enabled) return;
+      if (ref.read(activeProviderProvider)?.packageName != animeRiftProviderId) {
+        unawaited(_syncHistory());
+      }
+      final state = ref.read(libraryProvider);
+      unawaited(
+        ref
+            .read(libraryProvider.notifier)
+            .refreshVisibleFromServer(
+              category: state.category,
+              mediaKind: state.mediaKind,
+            ),
+      );
+    });
   }
 
   Future<void> _syncHistory() async {
@@ -103,7 +125,7 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
   ) => _lists.putIfAbsent(
     (kind, category),
     () => sortLibraryItems(
-      libraryItemsFor(repository, category, kind),
+      ref.read(libraryProvider.notifier).itemsForCategory(kind, category),
       _prefs.sort,
     ),
   );
@@ -156,7 +178,11 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
     }
     for (final category in LibraryCategory.values) {
       if (!_prefs.shows(category)) continue;
-      final count = _list(repository, kind, category).length;
+      // The server total can exceed the number of loaded poster cards.
+      final count = _tabCounts.putIfAbsent(
+        (kind, category),
+        () => ref.read(libraryProvider.notifier).categoryCount(kind, category),
+      );
       if (_prefs.hideEmpty && count == 0) continue;
       tabs.add((
         key: category.storageKey,
@@ -181,14 +207,17 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
     final category = tab.category;
     if (category != null) {
       unawaited(ref.read(libraryProvider.notifier).select(kind, category));
+    } else if (tab.key == LibraryShelfPrefs.recentKey) {
+      unawaited(_syncHistory());
     }
   }
 
   Widget _listBody(
     LibraryRepository repository,
     LibraryMediaKind kind,
-    _LibraryListTab tab,
-  ) {
+    _LibraryListTab tab, {
+    required bool isActive,
+  }) {
     if (tab.key == LibraryShelfPrefs.recentKey) {
       return RecentWatchedBody(
         key: const ValueKey<String>('library-recent'),
@@ -197,7 +226,10 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
     }
     final category = tab.category!;
     final items = _list(repository, kind, category);
-    return items.isEmpty
+    final page = ref
+        .read(libraryProvider.notifier)
+        .pageInfo(kind, category, loadedLocalCount: items.length);
+    return items.isEmpty && !page.hasMore && !page.loading
         ? LibraryEmptyState(mediaKind: kind)
         : LibraryItemsGrid(
             key: ValueKey<String>(
@@ -205,6 +237,15 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
             ),
             items: items,
             heroPrefix: 'lib_${kind.storageKey}_${category.storageKey}',
+            totalCount: page.total,
+            hasMore: page.hasMore,
+            loadingMore: page.loading,
+            loadFailed: page.loadFailed,
+            onLoadMore: isActive
+                ? () => ref
+                      .read(libraryProvider.notifier)
+                      .loadNextPage(mediaKind: kind, category: category)
+                : null,
           );
   }
 
@@ -227,6 +268,30 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
   @override
   Widget build(BuildContext context) {
     final library = ref.watch(libraryProvider);
+    final dataRevision = ref.watch(accountDataRevisionProvider);
+    final provider = ref.watch(activeProviderProvider);
+    final providerId = provider?.packageName;
+    final remoteTotals = provider is AnimeRiftProvider
+        ? Object.hashAll(LibraryCategory.values.map(provider.cloudLibraryTotal))
+        : 0;
+    ref.listen(activeProviderProvider, (previous, next) {
+      if (previous?.packageName == next?.packageName ||
+          !TickerMode.valuesOf(context).enabled) {
+        return;
+      }
+      _lists.clear();
+      _tabCounts.clear();
+      _listsFor = null;
+      final selected = ref.read(libraryProvider);
+      unawaited(
+        ref
+            .read(libraryProvider.notifier)
+            .refreshVisibleFromServer(
+              category: selected.category,
+              mediaKind: selected.mediaKind,
+            ),
+      );
+    });
     final history = ref.watch(watchHistoryProvider);
     final repository = ref.read(libraryRepositoryProvider);
     final colors = Theme.of(context).colorScheme;
@@ -234,9 +299,26 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
     return ListenableBuilder(
       listenable: _prefs,
       builder: (context, _) {
-        final listsFor = (library, _prefs.sort);
+        // A search query changes only the view, not the underlying library.
+        // Invalidate local shelf caches on actual data/account/page changes,
+        // not on harmless loading-state rebuilds.
+        final listsFor = (
+          library.category,
+          library.mediaKind,
+          _prefs.sort,
+          dataRevision,
+          ref.read(libraryProvider.notifier).countRevision,
+          ref.read(libraryProvider.notifier).pageRevision,
+          providerId,
+          AnimeRiftLocalAccountScope.accountHash,
+          remoteTotals,
+          library is LibrarySuccess
+              ? Object.hashAll(library.items.map((item) => item.url))
+              : 0,
+        );
         if (listsFor != _listsFor) {
           _lists.clear();
+          _tabCounts.clear();
           _listsFor = listsFor;
         }
 
@@ -261,60 +343,72 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
           '${tabs.map((tab) => tab.key).join('-')}',
         );
 
-        return DefaultTabController(
-          key: controllerKey,
-          length: tabs.isEmpty ? 1 : tabs.length,
-          initialIndex: selectedIndex < 0 ? 0 : selectedIndex,
-          child: Builder(
-            builder: (tabContext) {
-              final controller = DefaultTabController.of(tabContext);
+        return PageStorage(
+          bucket: _scrollBucket,
+          child: DefaultTabController(
+            key: controllerKey,
+            length: tabs.isEmpty ? 1 : tabs.length,
+            initialIndex: selectedIndex < 0 ? 0 : selectedIndex,
+            child: Builder(
+              builder: (tabContext) {
+                final controller = DefaultTabController.of(tabContext);
 
-              Widget body;
-              if (_section == LibraryPhoneSection.characters) {
-                body = const CharactersScreen(
-                  key: ValueKey<String>('library-characters'),
-                  favoritesOnly: true,
-                  embedded: true,
-                );
-              } else if (searching) {
-                final shown = _matches(_entries(kind!, repository, history));
-                body = shown.isEmpty
-                    ? Center(
-                        child: Text(
-                          _t(context, 'Nothing matches', 'لا توجد نتائج'),
-                          key: const ValueKey<String>('library-search-empty'),
-                        ),
-                      )
-                    : LibraryItemsGrid(
-                        key: ValueKey<String>(
-                          'library-grid-${kind.storageKey}-search',
-                        ),
-                        items: shown,
-                        heroPrefix: 'lib_search_${kind.storageKey}',
-                      );
-              } else if (tabs.isEmpty) {
-                body = LibraryEmptyState(mediaKind: kind!);
-              } else {
-                body = NotificationListener<ScrollEndNotification>(
-                  onNotification: (notification) {
-                    if (notification.metrics.axis != Axis.horizontal) {
+                Widget body;
+                if (_section == LibraryPhoneSection.characters) {
+                  body = const CharactersScreen(
+                    key: ValueKey<String>('library-characters'),
+                    favoritesOnly: true,
+                    embedded: true,
+                  );
+                } else if (searching) {
+                  final shown = _matches(_entries(kind!, repository, history));
+                  body = shown.isEmpty
+                      ? Center(
+                          child: Text(
+                            _t(context, 'Nothing matches', 'لا توجد نتائج'),
+                            key: const ValueKey<String>('library-search-empty'),
+                          ),
+                        )
+                      : LibraryItemsGrid(
+                          key: ValueKey<String>(
+                            'library-grid-${kind.storageKey}-search',
+                          ),
+                          items: shown,
+                          heroPrefix: 'lib_search_${kind.storageKey}',
+                        );
+                } else if (tabs.isEmpty) {
+                  body = LibraryEmptyState(mediaKind: kind!);
+                } else {
+                  body = NotificationListener<ScrollEndNotification>(
+                    onNotification: (notification) {
+                      if (notification.metrics.axis != Axis.horizontal) {
+                        return false;
+                      }
+                      final index = controller.index;
+                      if (index >= 0 && index < tabs.length) {
+                        _selectList(kind!, tabs[index]);
+                      }
                       return false;
-                    }
-                    final index = controller.index;
-                    if (index >= 0 && index < tabs.length) {
-                      _selectList(kind!, tabs[index]);
-                    }
-                    return false;
-                  },
-                  child: TabBarView(
-                    key: const ValueKey<String>('library-list-pager'),
-                    controller: controller,
-                    children: [
-                      for (final tab in tabs) _listBody(repository, kind!, tab),
-                    ],
-                  ),
-                );
-              }
+                    },
+                    child: TabBarView(
+                      key: const ValueKey<String>('library-list-pager'),
+                      controller: controller,
+                      // TabBarView builds adjacent pages lazily. Do not decode
+                      // and sort every stored shelf on each swipe/scroll frame.
+                      children: [
+                        for (final tab in tabs)
+                          Builder(
+                            builder: (_) => _listBody(
+                              repository,
+                              kind!,
+                              tab,
+                              isActive: tab.key == selected?.key,
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                }
 
               return Scaffold(
                 appBar: AppBar(
@@ -385,8 +479,9 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
                         ),
                 ),
                 body: body,
-              );
-            },
+                );
+              },
+            ),
           ),
         );
       },

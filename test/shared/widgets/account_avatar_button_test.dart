@@ -1,5 +1,9 @@
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_account_models.dart';
+import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/base_provider.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_api_client.dart';
+import 'package:animewitcher/core/extensions/providers/anime_rift_provider.dart';
 import 'package:animewitcher/shared/widgets/account_avatar_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -15,16 +19,41 @@ class _Account extends AnimeWitcherAccountController {
       AnimeWitcherAccountSnapshot(profile: profile);
 }
 
+class _RiftClient extends AnimeRiftApiClient {
+  @override
+  bool get isAccountLinked => true;
+
+  @override
+  AnimeRiftAccountIdentity? get accountIdentity =>
+      const AnimeRiftAccountIdentity(id: 'rift-1', displayName: 'Rift Viewer');
+
+  @override
+  Future<bool> restoreAccountSession() async => true;
+}
+
+class _SelectedProvider extends ActiveProvider {
+  _SelectedProvider(this.provider);
+  final AnimeWitcherProvider? provider;
+
+  @override
+  AnimeWitcherProvider? build() => provider;
+}
+
 Future<void> _pump(
   WidgetTester tester, {
   AnimeWitcherProfile? profile,
   VoidCallback? onTap,
+  bool rift = false,
 }) async {
+  final riftProvider = AnimeRiftProvider(client: _RiftClient());
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
         animeWitcherAccountControllerProvider.overrideWith(
           () => _Account(profile),
+        ),
+        activeProviderProvider.overrideWith(
+          () => _SelectedProvider(rift ? riftProvider : null),
         ),
       ],
       child: MaterialApp(
@@ -72,5 +101,25 @@ void main() {
       find.byKey(const ValueKey<String>('account-avatar-button')),
     );
     expect(taps, 1);
+  });
+
+  testWidgets('Rift selection never exposes the Witcher avatar or identity', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      rift: true,
+      profile: const AnimeWitcherProfile(
+        documentId: 'witcher-profile',
+        uid: 'witcher-user',
+        signInMethod: AnimeWitcherSignInMethod.email,
+        userName: 'Witcher User',
+      ),
+    );
+
+    expect(find.text('W'), findsNothing);
+    expect(find.byTooltip('Witcher User'), findsNothing);
+    expect(find.text('R'), findsOneWidget);
+    expect(find.byTooltip('Rift Viewer'), findsOneWidget);
   });
 }

@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 MultimediaItem _item({
   String url = 'https://animewitcher.com/anime/naruto',
+  String? provider,
   ShowStatus status = ShowStatus.ongoing,
   Map<String, String>? syncData,
   String? imdbId,
@@ -15,6 +16,7 @@ MultimediaItem _item({
     title: 'Naruto',
     url: url,
     posterUrl: '',
+    provider: provider,
     status: status,
     imdbId: imdbId,
     syncData: syncData,
@@ -22,6 +24,91 @@ MultimediaItem _item({
 }
 
 void main() {
+  test(
+    'Rift and other explicit sources cannot address Witcher social data',
+    () {
+      for (final provider in <String>[
+        'com.animerift.provider',
+        'some.other.provider',
+      ]) {
+        final item = _item(
+          provider: provider,
+          syncData: const <String, String>{'mangaId': 'naruto'},
+        );
+        expect(isAnimeWitcherCommentItem(item), isFalse);
+        expect(animeWitcherAnimeIdFromItem(item), isEmpty);
+        expect(animeWitcherAnimeCommentTarget(item), isNull);
+        expect(animeWitcherAnimeReviewTarget(item), isNull);
+        expect(
+          animeWitcherEpisodeCommentTarget(
+            item,
+            Episode(name: 'Episode', url: 'naruto|episode-1'),
+          ),
+          isNull,
+        );
+      }
+    },
+  );
+
+  test('legacy untagged and native Witcher IDs retain their routing', () {
+    for (final provider in <String?>[null, '', 'AnimeWitcher', animeWitcherNativeProviderId]) {
+      final item = _item(
+        provider: provider,
+        syncData: const <String, String>{'mangaId': 'manga-123'},
+      );
+      expect(animeWitcherAnimeIdFromItem(item), 'naruto');
+      expect(animeWitcherMangaIdFromItem(item), 'manga-123');
+      expect(
+        animeWitcherAnimeCommentTarget(item)?.collectionPath,
+        'anime_list/naruto/comments',
+      );
+      expect(
+        animeWitcherAnimeReviewTarget(item)?.collectionPath,
+        'anime_list/naruto/reviews',
+      );
+      expect(
+        animeWitcherEpisodeCommentTarget(
+          item,
+          Episode(name: 'Episode', url: 'naruto|episode-1'),
+        )?.collectionPath,
+        'anime_list/naruto/episodes/episode-1/comments',
+      );
+    }
+    // Legacy URL-only comment recognition remains compatible.
+    expect(
+      isAnimeWitcherCommentItem(
+        _item(url: 'https://animewitcher.com/watch/naruto'),
+      ),
+      isTrue,
+    );
+  });
+
+  test('Rift only exposes supplied public external scores, never AW votes', () {
+    final ratings = AnimeDetailsRatings.fromItem(
+      _item(
+        provider: 'com.animerift.provider',
+        imdbId: 'tt1234567',
+        syncData: const <String, String>{
+          'awScore': '9.9',
+          'awScoreCount': '1234',
+          'malId': '20',
+          'awMalScore': '7.6',
+          'awMalScoringUsers': '100',
+          'awImdbScore': '7.1',
+          'awReviewsClosed': 'true',
+        },
+      ),
+    );
+    expect(ratings.animeId, isEmpty);
+    expect(ratings.canRate, isFalse);
+    expect(ratings.witcherScore, isNull);
+    expect(ratings.witcherVoteCount, isNull);
+    expect(ratings.reviewsClosed, isFalse);
+    expect(ratings.malMean, 7.6);
+    expect(ratings.externalScore, 7.6);
+    expect(ratings.displayedExternalScoringUsers, 100);
+  });
+
   test('uses rating.rate and hides a missing Witcher vote count', () {
     final ratings = AnimeDetailsRatings.fromItem(
       _item(
@@ -152,21 +239,34 @@ void main() {
     expect(formatRatingScore(7.0), '7');
   });
 
-  test('hero rating state loads and renders the saved score for anime and manga', () {
-    final anime = File(
-      'lib/features/details/presentation/details_screen.dart',
-    ).readAsStringSync();
-    final manga = File(
-      'lib/features/manga/presentation/manga_details_screen.dart',
-    ).readAsStringSync();
+  test(
+    'hero rating state loads and renders the saved score for anime and manga',
+    () {
+      final anime = File(
+        'lib/features/details/presentation/details_screen.dart',
+      ).readAsStringSync();
+      final manga = File(
+        'lib/features/manga/presentation/manga_details_screen.dart',
+      ).readAsStringSync();
 
-    expect(anime, contains('loadAnimeUserRating'));
-    expect(anime, contains("ratingCaption: _userRating == null ? null : '\${_userRating!}/10'"));
-    expect(anime, contains('Icons.star_rounded'));
-    expect(manga, contains('loadMangaUserRating'));
-    expect(manga, contains("ratingCaption: _userRating == null ? null : '\${_userRating!}/10'"));
-    expect(manga, contains('Icons.star_rounded'));
-  });
+      expect(anime, contains('loadAnimeUserRating'));
+      expect(
+        anime,
+        contains(
+          "ratingCaption: _userRating == null ? null : '\${_userRating!}/10'",
+        ),
+      );
+      expect(anime, contains('Icons.star_rounded'));
+      expect(manga, contains('loadMangaUserRating'));
+      expect(
+        manga,
+        contains(
+          "ratingCaption: _userRating == null ? null : '\${_userRating!}/10'",
+        ),
+      );
+      expect(manga, contains('Icons.star_rounded'));
+    },
+  );
 
   test('review target points at anime_list/{id}/reviews', () {
     final target = animeWitcherAnimeReviewTarget(_item());

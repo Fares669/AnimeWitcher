@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/account/account_providers.dart';
+import '../../core/extensions/extension_manager.dart';
+import '../../core/extensions/providers/anime_rift_provider.dart';
 import '../../core/navigation/taskbar_destination.dart';
 import '../../l10n/generated/app_localizations.dart';
 import 'account_avatar_button.dart';
@@ -396,17 +398,31 @@ class AppSideMenuPanel extends ConsumerWidget {
     final colors = theme.colorScheme;
     final l10n = AppLocalizations.of(context)!;
 
-    final profile = ref
-        .watch(animeWitcherAccountControllerProvider)
-        .asData
-        ?.value
-        .profile;
-    final userName = profile?.userName?.trim() ?? '';
+    final activeProvider = ref.watch(activeProviderProvider);
+    final rift = activeProvider is AnimeRiftProvider ? activeProvider : null;
+    if (rift != null) ref.watch(accountDataRevisionProvider);
+    final profile = rift == null
+        ? ref.watch(animeWitcherAccountControllerProvider).asData?.value.profile
+        : null;
+    final userName = rift == null
+        ? (profile?.userName?.trim() ?? '')
+        : (rift.accountIdentity?.displayName?.trim() ?? '');
     final cover = profile?.coverUrl?.trim() ?? '';
-    final title = profile == null
+    final signedIn = rift?.isAccountLinked ?? (profile != null);
+    final title = signedIn
+        ? (userName.isNotEmpty
+              ? userName
+              : rift == null
+              ? 'AnimeWitcher'
+              : 'Anime Rift')
+        : rift == null
         ? 'تسجيل الدخول'
-        : (userName.isNotEmpty ? userName : 'AnimeWitcher');
-    final subtitle = profile == null ? 'مزامنة القوائم والتقدم' : '';
+        : 'تسجيل الدخول إلى Anime Rift';
+    final subtitle = signedIn
+        ? ''
+        : rift == null
+        ? 'مزامنة القوائم والتقدم'
+        : 'ربط حساب Anime Rift';
 
     return Material(
       key: const ValueKey<String>('app-side-menu'),
@@ -464,7 +480,7 @@ class AppSideMenuPanel extends ConsumerWidget {
                               Padding(
                                 padding: EdgeInsets.fromLTRB(
                                   56,
-                                  profile == null ? 10 : 56,
+                                  signedIn ? 56 : 10,
                                   12,
                                   10,
                                 ),
