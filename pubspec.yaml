@@ -68,6 +68,7 @@ dependencies:
   flutter_cache_manager: ^3.4.5
   path: ^1.9.1
   http: ^1.6.0
+  html: ^0.15.6
   html_unescape: ^2.0.0
   # Native completion hooks are validated against this exact upstream version.
   background_downloader: 9.6.5
