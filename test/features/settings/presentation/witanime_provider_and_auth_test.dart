@@ -4,8 +4,13 @@ import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
 import 'package:animewitcher/core/extensions/providers/witanime_provider.dart';
 import 'package:animewitcher/core/providers/device_info_provider.dart';
+import 'package:animewitcher/core/storage/library_category.dart';
 import 'package:animewitcher/core/storage/secure_token_storage.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
+import 'package:animewitcher/features/library/presentation/library_lists.dart';
+import 'package:animewitcher/features/library/presentation/library_media_kind.dart';
+import 'package:animewitcher/features/library/presentation/widgets/library_phone_shelves.dart';
+import 'package:animewitcher/features/library/presentation/widgets/library_side_list.dart';
 import 'package:animewitcher/features/settings/presentation/app_version_provider.dart';
 import 'package:animewitcher/features/settings/presentation/settings_screen.dart';
 import 'package:animewitcher/features/settings/presentation/widgets/witanime_account_section.dart';
@@ -248,6 +253,87 @@ void main() {
       expect(find.text('تأكيد جلسة Witanime'), findsNothing);
       expect(service.isSignedIn, isTrue);
       expect(find.text('أحمد'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'LibraryFilterPanel and LibrarySideList hide AnimeWitcher-only lists when Witanime is active for anime',
+    (tester) async {
+      final storage = MemoryStorageService();
+      await storage.setActiveProviderId(WitanimeProvider.id);
+      final prefs = LibraryShelfPrefs(storage);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [storageServiceProvider.overrideWithValue(storage)],
+          child: MaterialApp(
+            locale: const Locale('ar'),
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: Scaffold(
+              body: Column(
+                children: [
+                  Expanded(
+                    child: LibraryFilterPanel(
+                      prefs: prefs,
+                      kind: LibraryMediaKind.anime,
+                      phoneSection: LibraryPhoneSection.anime,
+                    ),
+                  ),
+                  Expanded(
+                    child: LibrarySideList(
+                      kind: LibraryMediaKind.anime,
+                      category: LibraryCategory.watching,
+                      recentSelected: false,
+                      witanimeAnime: true,
+                      counts: const {},
+                      recentCount: 0,
+                      onRecent: () {},
+                      onSelect: (_, _) {},
+                      prefs: prefs,
+                      onFilter: () {},
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('library-filter-onHold')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('library-filter-noWatching')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('library-side-anime-onHold')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('library-side-anime-noWatching')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('library-filter-watching')),
+        findsOneWidget,
+      );
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('library-side-manga-onHold')),
+        120,
+        scrollable: find.descendant(
+          of: find.byType(LibrarySideList),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      expect(
+        find.byKey(const ValueKey('library-side-manga-onHold')),
+        findsOneWidget,
+      );
     },
   );
 }

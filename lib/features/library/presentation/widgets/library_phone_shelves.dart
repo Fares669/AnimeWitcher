@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/account/account_providers.dart';
+import '../../../../core/extensions/extension_manager.dart';
+import '../../../../core/extensions/providers/witanime_provider.dart';
 import '../../../../core/storage/library_category.dart';
 import '../../../../core/storage/library_repository.dart';
 import '../../../../core/storage/storage_service.dart';
@@ -127,11 +129,14 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
   List<MultimediaItem> _entries(
     LibraryMediaKind kind,
     LibraryRepository repository,
-    List<HistoryItem> history,
-  ) {
+    List<HistoryItem> history, {
+    required bool witanimeAnime,
+  }) {
     final seen = <String>{};
     final entries = <MultimediaItem>[];
-    for (final category in LibraryCategory.values) {
+    for (final category in LibraryCategory.valuesForCatalog(
+      witanimeAnime: witanimeAnime,
+    )) {
       if (!_prefs.shows(category)) continue;
       for (final item in _list(repository, kind, category)) {
         if (seen.add(item.url)) entries.add(item);
@@ -156,8 +161,9 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
   List<_LibraryListTab> _listTabs(
     LibraryMediaKind kind,
     LibraryRepository repository,
-    List<HistoryItem> history,
-  ) {
+    List<HistoryItem> history, {
+    required bool witanimeAnime,
+  }) {
     final tabs = <_LibraryListTab>[];
     if (libraryKindHasRecent(kind) && _prefs.showsRecent()) {
       final count = libraryRecentFor(history, kind).length;
@@ -170,7 +176,9 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
         ));
       }
     }
-    for (final category in LibraryCategory.values) {
+    for (final category in LibraryCategory.valuesForCatalog(
+      witanimeAnime: witanimeAnime,
+    )) {
       if (!_prefs.shows(category)) continue;
       // The server total can exceed the number of loaded poster cards.
       final count = _tabCounts.putIfAbsent(
@@ -262,6 +270,7 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
   @override
   Widget build(BuildContext context) {
     final library = ref.watch(libraryProvider);
+    final witanimeActive = ref.watch(activeProviderProvider) is WitanimeProvider;
     final dataRevision = ref.watch(accountDataRevisionProvider);
     final history = ref.watch(watchHistoryProvider);
     final repository = ref.read(libraryRepositoryProvider);
@@ -276,6 +285,7 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
         final listsFor = (
           library.category,
           library.mediaKind,
+          witanimeActive,
           _prefs.sort,
           dataRevision,
           ref.read(libraryProvider.notifier).countRevision,
@@ -292,6 +302,8 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
 
         final searching = _query.trim().isNotEmpty;
         final kind = _sectionKind(_section);
+        final witanimeAnime =
+            witanimeActive && kind == LibraryMediaKind.anime;
         final tabs = _section == LibraryPhoneSection.characters
             ? <_LibraryListTab>[
                 (
@@ -301,7 +313,12 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
                   category: null,
                 ),
               ]
-            : _listTabs(kind!, repository, history);
+            : _listTabs(
+                kind!,
+                repository,
+                history,
+                witanimeAnime: witanimeAnime,
+              );
         final selected = _effectiveTab(tabs);
         final selectedIndex = selected == null
             ? 0
@@ -329,7 +346,14 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
                     embedded: true,
                   );
                 } else if (searching) {
-                  final shown = _matches(_entries(kind!, repository, history));
+                  final shown = _matches(
+                    _entries(
+                      kind!,
+                      repository,
+                      history,
+                      witanimeAnime: witanimeAnime,
+                    ),
+                  );
                   body = shown.isEmpty
                       ? Center(
                           child: Text(
@@ -481,7 +505,7 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
 
 /// The library filter. On phone it also chooses Anime, Manga, or favorite
 /// Characters. Desktop passes only [kind] and keeps its existing navigation.
-class LibraryFilterPanel extends StatelessWidget {
+class LibraryFilterPanel extends ConsumerWidget {
   const LibraryFilterPanel({
     super.key,
     required this.prefs,
@@ -496,7 +520,8 @@ class LibraryFilterPanel extends StatelessWidget {
   final ValueChanged<LibraryPhoneSection>? onPhoneSectionChanged;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final witanimeActive = ref.watch(activeProviderProvider) is WitanimeProvider;
     return ListenableBuilder(
       listenable: prefs,
       builder: (context, _) {
@@ -578,7 +603,10 @@ class LibraryFilterPanel extends StatelessWidget {
                       onSelected: (on) =>
                           prefs.setShown(LibraryShelfPrefs.recentKey, on),
                     ),
-                  for (final category in LibraryCategory.values)
+                  for (final category in LibraryCategory.valuesForCatalog(
+                    witanimeAnime:
+                        witanimeActive && activeKind == LibraryMediaKind.anime,
+                  ))
                     FilterChip(
                       key: ValueKey<String>(
                         'library-filter-${category.storageKey}',

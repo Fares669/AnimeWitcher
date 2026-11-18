@@ -22,6 +22,7 @@ class LibrarySideList extends StatelessWidget {
     required this.onSelect,
     required this.prefs,
     required this.onFilter,
+    this.witanimeAnime = false,
   });
 
   final LibraryMediaKind kind;
@@ -45,6 +46,9 @@ class LibrarySideList extends StatelessWidget {
 
   /// Opens the filter, from the button beside the first heading.
   final VoidCallback onFilter;
+
+  /// When true, anime shelves show only Witanime-supported lists.
+  final bool witanimeAnime;
 
   @override
   Widget build(BuildContext context) {
@@ -102,7 +106,10 @@ class LibrarySideList extends StatelessWidget {
               selected: recentSelected,
               onTap: onRecent,
             ),
-          for (final listCategory in LibraryCategory.values)
+          for (final listCategory in LibraryCategory.valuesForCatalog(
+            witanimeAnime:
+                witanimeAnime && listKind == LibraryMediaKind.anime,
+          ))
             if (shown(
               prefs.shows(listCategory),
               counts[listKind]?[listCategory],

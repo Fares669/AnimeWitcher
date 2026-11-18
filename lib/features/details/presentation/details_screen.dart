@@ -491,20 +491,11 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     MultimediaItem item,
     LibraryCategory? currentCategory,
   ) {
-    final isWitanime = item.provider == WitanimeProvider.id;
-    String labelFor(LibraryCategory category) {
-      final base = _libraryCategoryLabel(context, category);
-      if (!isWitanime) return base;
-      return isWitanimeSyncedCategory(category)
-          ? '$base · Witanime'
-          : '$base · AnimeWitcher';
-    }
-
     final items = <AppleNativeMenuItem>[
       for (final category in LibraryCategory.assignmentValuesFor(item))
         AppleNativeMenuItem(
           value: category.storageKey,
-          label: labelFor(category),
+          label: _libraryCategoryLabel(context, category),
           systemImage: _libraryCategorySystemImage(category),
           icon: _libraryCategoryIcon(category),
         ),

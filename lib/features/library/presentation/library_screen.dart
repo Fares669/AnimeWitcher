@@ -4,9 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 
+import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/providers/witanime_provider.dart';
 import '../../../core/providers/device_info_provider.dart';
 import '../../../core/storage/library_category.dart';
 import '../../../core/storage/storage_service.dart';
+import '../../../core/storage/witanime_library_service.dart';
 import '../../../core/utils/layout_constants.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
@@ -99,13 +102,21 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
 
   Widget _buildWide(BuildContext context) {
     final libraryState = ref.watch(libraryProvider);
+    final witanimeActive = ref.watch(activeProviderProvider) is WitanimeProvider;
     final history = ref.watch(watchHistoryProvider);
     final kind = libraryState.mediaKind;
-    final category = libraryState.category;
+    final category =
+        witanimeActive &&
+            kind == LibraryMediaKind.anime &&
+            !isWitanimeSyncedCategory(libraryState.category)
+        ? LibraryCategory.watching
+        : libraryState.category;
     final counts = <LibraryMediaKind, Map<LibraryCategory, int?>>{
       for (final listKind in LibraryMediaKind.values)
         listKind: <LibraryCategory, int?>{
-          for (final listCategory in LibraryCategory.values)
+          for (final listCategory in LibraryCategory.valuesForCatalog(
+            witanimeAnime: witanimeActive && listKind == LibraryMediaKind.anime,
+          ))
             listCategory: ref
                 .read(libraryProvider.notifier)
                 .categoryCount(listKind, listCategory),
@@ -138,6 +149,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                   child: LibrarySideList(
                     kind: kind,
                     category: category,
+                    witanimeAnime: witanimeActive,
                     recentSelected: _recent,
                     charactersSelected: _characters,
                     onCharacters: () => setState(() {
