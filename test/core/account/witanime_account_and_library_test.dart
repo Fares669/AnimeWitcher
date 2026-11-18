@@ -1,14 +1,18 @@
+import 'dart:convert';
+
 import 'package:animewitcher/core/account/witanime_account_models.dart';
 import 'package:animewitcher/core/account/witanime_account_service.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/extensions/providers/witanime_provider.dart';
+import 'package:animewitcher/core/extensions/providers/witanime_transport.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
 import 'package:animewitcher/core/storage/secure_token_storage.dart';
 import 'package:animewitcher/core/storage/witanime_library_service.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/library/presentation/library_media_kind.dart';
 import 'package:animewitcher/features/library/presentation/library_provider.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -300,4 +304,200 @@ void main() {
     await accountService.completeBrowserAuth(sessionCookie: 'cookie-b');
     expect(notifier.categoryCount(LibraryMediaKind.anime, LibraryCategory.planToWatch), 0);
   });
+
+  test('HttpWitanimeLibraryBackend reads and mutates Witanime Livewire lists and favorites', () async {
+    final calls = <Map<String, Object?>>[];
+    final watchSnapshot = jsonEncode({
+      'data': {
+        'mediaId': 2319,
+        'mediaType': 'anime',
+        'status': 'watching',
+        'isFavorite': true,
+        'compact': false,
+      },
+      'memo': {'id': 'comp-watch', 'name': 'watchlist-button'},
+      'checksum': 'chk-1',
+    });
+    final listsSnapshot = jsonEncode({
+      'data': {'tab': 'watching', 'page': 1},
+      'memo': {'id': 'comp-lists', 'name': 'my-anime-list'},
+      'checksum': 'chk-lists',
+    });
+
+    final transport = _StubLivewireTransport((method, uri, body, headers) async {
+      if (method == 'GET' && uri.path == '/anime/devils-crest') {
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          headers: const {
+            'set-cookie': ['witanime_session=rotated-sess; Path=/'],
+          },
+          body: '''
+            <html>
+              <head><meta name="csrf-token" content="csrf-livewire"></head>
+              <body>
+                <div wire:id="comp-watch" wire:name="watchlist-button" wire:snapshot='${const HtmlEscape(HtmlEscapeMode.attribute).convert(watchSnapshot)}'></div>
+                <script src="/livewire-747df6fe/livewire.min.js" data-update-uri="https://witanime.site/livewire-747df6fe/update"></script>
+              </body>
+            </html>
+          ''',
+        );
+      }
+      if (method == 'GET' && uri.path == '/profile/lists') {
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          body: '''
+            <html>
+              <head><meta name="csrf-token" content="csrf-lists"></head>
+              <body>
+                <div wire:id="comp-lists" wire:name="my-anime-list" wire:snapshot='${const HtmlEscape(HtmlEscapeMode.attribute).convert(listsSnapshot)}'>
+                  <button wire:click="setTab('favorites')">المفضلة <span>1</span></button>
+                  <button wire:click="setTab('watching')">أشاهده <span>1</span></button>
+                  <button wire:click="setTab('completed')">أكملته <span>0</span></button>
+                  <button wire:click="setTab('plan')">أنوي مشاهدته <span>0</span></button>
+                  <div wire:key="grid-1">
+                    <a href="https://witanime.site/anime/devils-crest">
+                      <img src="https://images.witanime.site/posters/dc.jpg" alt="Devils' Crest">
+                      <h3>Devils' Crest</h3>
+                    </a>
+                  </div>
+                </div>
+                <script src="/livewire-747df6fe/livewire.min.js" data-update-uri="https://witanime.site/livewire-747df6fe/update"></script>
+              </body>
+            </html>
+          ''',
+        );
+      }
+      if (method == 'POST' && uri.path == '/livewire-747df6fe/update') {
+        final payload = jsonDecode(body as String) as Map<String, dynamic>;
+        final comp = (payload['components'] as List).first as Map<String, dynamic>;
+        final call = (comp['calls'] as List).first as Map<String, dynamic>;
+        calls.add({
+          'token': payload['_token'],
+          'cookie': headers['Cookie'],
+          'xLivewire': headers['X-Livewire'],
+          'method': call['method'],
+          'params': call['params'],
+        });
+        if (call['method'] == 'setTab') {
+          return WitanimeHttpResponse(
+            statusCode: 200,
+            body: jsonEncode({
+              'components': [
+                {
+                  'snapshot': listsSnapshot,
+                  'effects': {
+                    'html': '''
+                      <div wire:name="my-anime-list">
+                        <a href="https://witanime.site/anime/devils-crest">
+                          <img src="https://images.witanime.site/posters/dc.jpg" alt="Devils' Crest">
+                          <h3>Devils' Crest</h3>
+                        </a>
+                      </div>
+                    ''',
+                  },
+                },
+              ],
+            }),
+          );
+        }
+        return const WitanimeHttpResponse(
+          statusCode: 200,
+          body: '{"components":[{"snapshot":"{}","effects":{}}]}',
+        );
+      }
+      return const WitanimeHttpResponse(statusCode: 404, body: '');
+    });
+
+    final backend = HttpWitanimeLibraryBackend(transport);
+
+    final membership = await backend.fetchMembership(
+      sessionCookie: 'witanime_session=initial',
+      workUrl: 'https://witanime.site/anime/devils-crest',
+    );
+    expect(membership?.category, LibraryCategory.watching);
+    expect(membership?.favorite, isTrue);
+
+    await backend.setCategory(
+      sessionCookie: 'witanime_session=initial',
+      workUrl: 'https://witanime.site/anime/devils-crest',
+      category: LibraryCategory.completed,
+    );
+    await backend.setCategory(
+      sessionCookie: 'witanime_session=initial',
+      workUrl: 'https://witanime.site/anime/devils-crest',
+      category: null,
+    );
+    // Already true -> idempotent no-op.
+    await backend.setFavorite(
+      sessionCookie: 'witanime_session=initial',
+      workUrl: 'https://witanime.site/anime/devils-crest',
+      favorite: true,
+    );
+    // Toggling off calls toggleFavorite.
+    await backend.setFavorite(
+      sessionCookie: 'witanime_session=initial',
+      workUrl: 'https://witanime.site/anime/devils-crest',
+      favorite: false,
+    );
+
+    final lists = await backend.fetchLists(
+      sessionCookie: 'witanime_session=initial',
+    );
+    expect(lists.length, 1);
+    expect(lists.single.item.title, "Devils' Crest");
+    expect(lists.single.category, LibraryCategory.watching);
+    expect(lists.single.favorite, isTrue);
+
+    expect(calls.map((c) => c['method']).toList(), [
+      'setStatus',
+      'removeFromList',
+      'toggleFavorite',
+      'setTab',
+    ]);
+    expect(calls[0]['params'], ['completed']);
+    expect(calls[0]['cookie'], 'witanime_session=rotated-sess');
+    expect(calls[0]['xLivewire'], '1');
+    expect(calls[3]['params'], ['favorites']);
+  });
+}
+
+class _StubLivewireTransport implements WitanimeTransport {
+  _StubLivewireTransport(this.handler);
+
+  final Future<WitanimeHttpResponse> Function(
+    String method,
+    Uri uri,
+    Object? body,
+    Map<String, String> headers,
+  )
+  handler;
+
+  @override
+  void close({bool force = false}) {}
+
+  @override
+  Future<String> fetchHtml(
+    Uri uri, {
+    CancelToken? cancelToken,
+    String operation = 'catalog',
+  }) async => (await get(uri, cancelToken: cancelToken, operation: operation)).body;
+
+  @override
+  Future<WitanimeHttpResponse> get(
+    Uri uri, {
+    Map<String, String> headers = const {},
+    bool followRedirects = true,
+    CancelToken? cancelToken,
+    String operation = 'get',
+  }) => handler('GET', uri, null, headers);
+
+  @override
+  Future<WitanimeHttpResponse> post(
+    Uri uri, {
+    Object? body,
+    Map<String, String> headers = const {},
+    bool followRedirects = true,
+    CancelToken? cancelToken,
+    String operation = 'post',
+  }) => handler('POST', uri, body, headers);
 }

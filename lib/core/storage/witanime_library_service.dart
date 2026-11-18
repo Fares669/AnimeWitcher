@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html;
 
 import '../account/witanime_account_service.dart';
@@ -33,6 +34,7 @@ LibraryCategory? libraryCategoryFromWitanimeSlug(String? slug) =>
     switch (slug?.trim().toLowerCase()) {
       'watching' || 'أشاهده' || 'أشاهده حاليًا' => LibraryCategory.watching,
       'completed' || 'أكملته' || 'تمت مشاهدته' => LibraryCategory.completed,
+      'plan' ||
       'plan_to_watch' ||
       'plan-to-watch' ||
       'أنوي مشاهدته' ||
@@ -219,9 +221,135 @@ class HttpWitanimeLibraryBackend implements WitanimeLibraryBackend {
   final WitanimeTransport _transport;
   final Uri _origin;
 
-  Future<String> _fetchCsrf(String sessionCookie, String url) async {
+  static const List<String> _profileListTabs = <String>[
+    'favorites',
+    'watching',
+    'completed',
+    'plan',
+  ];
+
+  String _mergeCookieHeader(
+    String baseCookie,
+    WitanimeHttpResponse response,
+  ) {
+    final cookies = <String, String>{};
+    void addCookieString(String raw) {
+      for (final part in raw.split(';')) {
+        final eq = part.indexOf('=');
+        if (eq <= 0) continue;
+        final name = part.substring(0, eq).trim();
+        final value = part.substring(eq + 1).trim();
+        if (name.isEmpty || value.isEmpty) continue;
+        cookies[name] = value;
+      }
+    }
+
+    addCookieString(baseCookie);
+    for (final entry in response.headers.entries) {
+      if (entry.key.toLowerCase() != 'set-cookie') continue;
+      for (final rawSetCookie in entry.value) {
+        final segments = rawSetCookie.split(';');
+        if (segments.isEmpty) continue;
+        final pair = segments.first.trim();
+        final eq = pair.indexOf('=');
+        if (eq <= 0) continue;
+        final name = pair.substring(0, eq).trim();
+        final value = pair.substring(eq + 1).trim();
+        if (name.isEmpty) continue;
+        final expired = segments.skip(1).any((attr) {
+          final lower = attr.trim().toLowerCase();
+          return lower == 'max-age=0' || lower.startsWith('max-age=-');
+        });
+        if (expired || value.isEmpty || value.toLowerCase() == 'deleted') {
+          cookies.remove(name);
+        } else {
+          cookies[name] = value;
+        }
+      }
+    }
+    return cookies.entries
+        .map((entry) => '${entry.key}=${entry.value}')
+        .join('; ');
+  }
+
+  String? _extractCsrfFromDoc(dom.Document doc, String body) {
+    final meta = doc.querySelector('meta[name="csrf-token"]')?.attributes['content'];
+    if (meta != null && meta.trim().isNotEmpty) return meta.trim();
+    final scriptCsrf = doc.querySelector('script[data-csrf]')?.attributes['data-csrf'];
+    if (scriptCsrf != null && scriptCsrf.trim().isNotEmpty) {
+      return scriptCsrf.trim();
+    }
+    return RegExp(
+          r'''name=["']csrf-token["'][^>]*content=["']([^"']+)["']''',
+          caseSensitive: false,
+        ).firstMatch(body)?.group(1)?.trim() ??
+        RegExp(
+          r'''data-csrf=["']([^"']+)["']''',
+          caseSensitive: false,
+        ).firstMatch(body)?.group(1)?.trim();
+  }
+
+  Uri _extractLivewireUpdateUri(dom.Document doc) {
+    final raw = doc
+        .querySelector('script[data-update-uri]')
+        ?.attributes['data-update-uri']
+        ?.trim();
+    if (raw != null && raw.isNotEmpty) {
+      final parsed = Uri.tryParse(raw);
+      if (parsed != null) {
+        final resolved = parsed.hasScheme ? parsed : _origin.resolveUri(parsed);
+        if (resolved.host == _origin.host) return resolved;
+      }
+    }
+    return _origin.replace(path: '/livewire/update');
+  }
+
+  ({
+    String csrf,
+    Uri updateUri,
+    String snapshotRaw,
+    Map<String, dynamic> snapshotJson,
+    dom.Document doc,
+  })?
+  _parseLivewireComponent(String body, String componentName) {
+    final doc = html.parse(body);
+    final component = doc.querySelector('[wire\\:name="$componentName"]');
+    final snapshotRaw = component?.attributes['wire:snapshot']?.trim();
+    final csrf = _extractCsrfFromDoc(doc, body);
+    if (snapshotRaw == null ||
+        snapshotRaw.isEmpty ||
+        csrf == null ||
+        csrf.isEmpty) {
+      return null;
+    }
+    try {
+      final decoded = jsonDecode(snapshotRaw);
+      if (decoded is! Map) return null;
+      return (
+        csrf: csrf,
+        updateUri: _extractLivewireUpdateUri(doc),
+        snapshotRaw: snapshotRaw,
+        snapshotJson: Map<String, dynamic>.from(decoded),
+        doc: doc,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<
+    ({
+      String csrf,
+      Uri updateUri,
+      String snapshotRaw,
+      Map<String, dynamic> snapshotJson,
+      String cookie,
+      dom.Document doc,
+    })
+  >
+  _loadWatchlistContext(String sessionCookie, String workUrl) async {
     final resp = await _transport.get(
-      Uri.parse(url),
+      Uri.parse(workUrl),
       headers: {'Cookie': sessionCookie},
       operation: 'library_csrf',
     );
@@ -237,22 +365,72 @@ class HttpWitanimeLibraryBackend implements WitanimeLibraryBackend {
         statusCode: resp.statusCode,
       );
     }
-    final csrf =
-        RegExp(
-          r'''name=["']csrf-token["'][^>]*content=["']([^"']+)["']''',
-          caseSensitive: false,
-        ).firstMatch(resp.body)?.group(1) ??
-        RegExp(
-          r'''data-csrf=["']([^"']+)["']''',
-          caseSensitive: false,
-        ).firstMatch(resp.body)?.group(1);
-    if (csrf == null || csrf.trim().isEmpty) {
-      throw const WitanimeTransientSyncException(
-        'تعذر قراءة رمز الجلسة من Witanime.',
+    if (!resp.isSuccess) {
+      throw WitanimeTransientSyncException(
+        'تعذر قراءة صفحة العمل من Witanime (HTTP ${resp.statusCode}).',
+        statusCode: resp.statusCode,
       );
     }
-    return csrf.trim();
+    final ctx = _parseLivewireComponent(resp.body, 'watchlist-button');
+    if (ctx == null) {
+      final doc = html.parse(resp.body);
+      if (doc.querySelector('form[action*="/login"]') != null) {
+        throw const WitanimePermanentRejectionException(
+          'انتهت جلسة Witanime أو يلزم تسجيل الدخول مجددًا.',
+          statusCode: 401,
+        );
+      }
+      throw const WitanimeTransientSyncException(
+        'تعذر قراءة حالة القائمة من Witanime.',
+      );
+    }
+    return (
+      csrf: ctx.csrf,
+      updateUri: ctx.updateUri,
+      snapshotRaw: ctx.snapshotRaw,
+      snapshotJson: ctx.snapshotJson,
+      cookie: _mergeCookieHeader(sessionCookie, resp),
+      doc: ctx.doc,
+    );
   }
+
+  Future<WitanimeHttpResponse> _postLivewireCall({
+    required Uri updateUri,
+    required String cookie,
+    required String referer,
+    required String csrf,
+    required String snapshotRaw,
+    required String method,
+    List<Object?> params = const <Object?>[],
+    required String operation,
+  }) => _transport.post(
+    updateUri,
+    body: jsonEncode({
+      '_token': csrf,
+      'components': [
+        {
+          'snapshot': snapshotRaw,
+          'updates': const <String, Object?>{},
+          'calls': [
+            {
+              'method': method,
+              'params': params,
+              'metadata': const <String, Object?>{},
+            },
+          ],
+        },
+      ],
+    }),
+    headers: {
+      'Cookie': cookie,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'X-Livewire': '1',
+      'Origin': _origin.origin,
+      'Referer': referer,
+    },
+    operation: operation,
+  );
 
   @override
   Future<LibraryMembership?> fetchMembership({
@@ -265,6 +443,16 @@ class HttpWitanimeLibraryBackend implements WitanimeLibraryBackend {
       operation: 'library_read',
     );
     if (!resp.isSuccess) return null;
+    final ctx = _parseLivewireComponent(resp.body, 'watchlist-button');
+    if (ctx != null) {
+      final data = ctx.snapshotJson['data'];
+      if (data is Map) {
+        final rawStatus = data['status']?.toString();
+        final category = libraryCategoryFromWitanimeSlug(rawStatus);
+        final favorite = data['isFavorite'] == true;
+        return (category: category, favorite: favorite);
+      }
+    }
     final doc = html.parse(resp.body);
     final rawStatus =
         doc.querySelector('[data-user-list-status]')?.attributes['data-user-list-status'] ??
@@ -277,6 +465,60 @@ class HttpWitanimeLibraryBackend implements WitanimeLibraryBackend {
     return (category: category, favorite: favorite);
   }
 
+  void _collectCardsFromRoot(
+    dom.Element? root,
+    LibraryCategory category,
+    Map<String, WitanimeStoredLibraryEntry> byUrl,
+  ) {
+    if (root == null) return;
+    for (final card in root.querySelectorAll('a[href]')) {
+      final link = WitanimeProvider.parseCatalogLink(
+        card.attributes['href'] ?? '',
+      );
+      if (link == null) continue;
+      final workUrl = link.work.toString();
+      final title =
+          card.querySelector('h3, h2')?.text.trim() ??
+          card.querySelector('img')?.attributes['alt']?.trim() ??
+          '';
+      if (title.isEmpty) continue;
+      final poster = card.querySelector('img')?.attributes['src'] ?? '';
+      final item = MultimediaItem(
+        title: title,
+        url: workUrl,
+        posterUrl: poster,
+        provider: WitanimeProvider.id,
+        contentType: link.movie
+            ? MultimediaContentType.movie
+            : MultimediaContentType.anime,
+      );
+      final existing = byUrl[workUrl];
+      if (category == LibraryCategory.favorite) {
+        byUrl[workUrl] = (existing ?? WitanimeStoredLibraryEntry(item: item))
+            .copyWith(favorite: true, confirmedFavorite: true);
+      } else {
+        byUrl[workUrl] = (existing ?? WitanimeStoredLibraryEntry(item: item))
+            .copyWith(category: category, confirmedCategory: category);
+      }
+    }
+  }
+
+  Map<String, int> _parseTabCounts(dom.Document doc) {
+    final counts = <String, int>{};
+    for (final btn in doc.querySelectorAll('button[wire\\:click]')) {
+      final click = btn.attributes['wire:click'] ?? '';
+      final match = RegExp(
+        r'''setTab\(\s*['"]([a-z_]+)['"]\s*\)''',
+      ).firstMatch(click);
+      if (match == null) continue;
+      final tab = match.group(1)!;
+      final badge = btn.querySelector('span')?.text.trim() ?? '';
+      final count = int.tryParse(badge);
+      if (count != null) counts[tab] = count;
+    }
+    return counts;
+  }
+
   @override
   Future<List<WitanimeStoredLibraryEntry>> fetchLists({
     required String sessionCookie,
@@ -285,6 +527,7 @@ class HttpWitanimeLibraryBackend implements WitanimeLibraryBackend {
     final resp = await _transport.get(
       uri,
       headers: {'Cookie': sessionCookie},
+      followRedirects: false,
       operation: 'library_lists',
     );
     if (resp.statusCode == 429 || resp.statusCode >= 500) {
@@ -299,41 +542,80 @@ class HttpWitanimeLibraryBackend implements WitanimeLibraryBackend {
         statusCode: resp.statusCode,
       );
     }
+
     final doc = html.parse(resp.body);
     final byUrl = <String, WitanimeStoredLibraryEntry>{};
-    for (final section in doc.querySelectorAll('[data-list-section]')) {
-      final sectionKey = section.attributes['data-list-section'];
-      final category = libraryCategoryFromWitanimeSlug(sectionKey);
+
+    final legacySections = doc.querySelectorAll('[data-list-section]');
+    if (legacySections.isNotEmpty) {
+      for (final section in legacySections) {
+        final sectionKey = section.attributes['data-list-section'];
+        final category = libraryCategoryFromWitanimeSlug(sectionKey);
+        if (category == null) continue;
+        _collectCardsFromRoot(section, category, byUrl);
+      }
+      return byUrl.values.toList(growable: false);
+    }
+
+    final listCtx = _parseLivewireComponent(resp.body, 'my-anime-list');
+    if (listCtx == null) {
+      return const <WitanimeStoredLibraryEntry>[];
+    }
+
+    var currentCookie = _mergeCookieHeader(sessionCookie, resp);
+    var currentSnapshot = listCtx.snapshotRaw;
+    final data = listCtx.snapshotJson['data'];
+    final initialTab = data is Map
+        ? data['tab']?.toString().trim().toLowerCase() ?? 'watching'
+        : 'watching';
+    final initialCategory = libraryCategoryFromWitanimeSlug(initialTab);
+    if (initialCategory != null) {
+      _collectCardsFromRoot(
+        doc.querySelector('[wire\\:name="my-anime-list"]') ?? doc.body,
+        initialCategory,
+        byUrl,
+      );
+    }
+
+    final tabCounts = _parseTabCounts(doc);
+    for (final tab in _profileListTabs) {
+      if (tab == initialTab) continue;
+      if (tabCounts[tab] == 0) continue;
+      final category = libraryCategoryFromWitanimeSlug(tab);
       if (category == null) continue;
-      for (final card in section.querySelectorAll('a[href]')) {
-        final link = WitanimeProvider.parseCatalogLink(
-          card.attributes['href'] ?? '',
-        );
-        if (link == null) continue;
-        final workUrl = link.work.toString();
-        final title =
-            card.querySelector('h3, h2')?.text.trim() ??
-            card.querySelector('img')?.attributes['alt']?.trim() ??
-            '';
-        if (title.isEmpty) continue;
-        final poster = card.querySelector('img')?.attributes['src'] ?? '';
-        final item = MultimediaItem(
-          title: title,
-          url: workUrl,
-          posterUrl: poster,
-          provider: WitanimeProvider.id,
-          contentType: link.movie
-              ? MultimediaContentType.movie
-              : MultimediaContentType.anime,
-        );
-        final existing = byUrl[workUrl];
-        if (category == LibraryCategory.favorite) {
-          byUrl[workUrl] = (existing ?? WitanimeStoredLibraryEntry(item: item))
-              .copyWith(favorite: true, confirmedFavorite: true);
-        } else {
-          byUrl[workUrl] = (existing ?? WitanimeStoredLibraryEntry(item: item))
-              .copyWith(category: category, confirmedCategory: category);
+      final tabResp = await _postLivewireCall(
+        updateUri: listCtx.updateUri,
+        cookie: currentCookie,
+        referer: uri.toString(),
+        csrf: listCtx.csrf,
+        snapshotRaw: currentSnapshot,
+        method: 'setTab',
+        params: [tab],
+        operation: 'library_lists_tab',
+      );
+      currentCookie = _mergeCookieHeader(currentCookie, tabResp);
+      if (!tabResp.isSuccess) continue;
+      try {
+        final decoded = jsonDecode(tabResp.body);
+        if (decoded is! Map) continue;
+        final components = decoded['components'];
+        if (components is! List || components.isEmpty) continue;
+        final first = components.first;
+        if (first is! Map) continue;
+        final nextSnap = first['snapshot'];
+        if (nextSnap is String && nextSnap.isNotEmpty) {
+          currentSnapshot = nextSnap;
+        } else if (nextSnap is Map) {
+          currentSnapshot = jsonEncode(nextSnap);
         }
+        final effects = first['effects'];
+        final effectsHtml = effects is Map ? effects['html']?.toString() : null;
+        if (effectsHtml != null && effectsHtml.isNotEmpty) {
+          final tabDoc = html.parse(effectsHtml);
+          _collectCardsFromRoot(tabDoc.body, category, byUrl);
+        }
+      } catch (_) {
+        // Ignore malformed tab payload and continue other shelves.
       }
     }
     return byUrl.values.toList(growable: false);
@@ -345,25 +627,34 @@ class HttpWitanimeLibraryBackend implements WitanimeLibraryBackend {
     required String workUrl,
     required LibraryCategory? category,
   }) async {
-    final csrf = await _fetchCsrf(sessionCookie, workUrl);
-    final endpoint = _origin.replace(path: '/profile/lists/status');
-    final resp = await _transport.post(
-      endpoint,
-      body: jsonEncode({
-        'url': workUrl,
-        'status': category == null ? null : witanimeCategorySlug(category),
-      }),
-      headers: {
-        'Cookie': sessionCookie,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'X-CSRF-TOKEN': csrf,
-        'X-Requested-With': 'XMLHttpRequest',
-        'Origin': _origin.origin,
-        'Referer': workUrl,
-      },
+    var ctx = await _loadWatchlistContext(sessionCookie, workUrl);
+    final method = category == null ? 'removeFromList' : 'setStatus';
+    final params = category == null
+        ? const <Object?>[]
+        : <Object?>[witanimeCategorySlug(category)];
+    var resp = await _postLivewireCall(
+      updateUri: ctx.updateUri,
+      cookie: ctx.cookie,
+      referer: workUrl,
+      csrf: ctx.csrf,
+      snapshotRaw: ctx.snapshotRaw,
+      method: method,
+      params: params,
       operation: 'library_write_category',
     );
+    if (resp.statusCode == 419) {
+      ctx = await _loadWatchlistContext(sessionCookie, workUrl);
+      resp = await _postLivewireCall(
+        updateUri: ctx.updateUri,
+        cookie: ctx.cookie,
+        referer: workUrl,
+        csrf: ctx.csrf,
+        snapshotRaw: ctx.snapshotRaw,
+        method: method,
+        params: params,
+        operation: 'library_write_category',
+      );
+    }
     _throwOnErrorResponse(resp);
   }
 
@@ -373,22 +664,36 @@ class HttpWitanimeLibraryBackend implements WitanimeLibraryBackend {
     required String workUrl,
     required bool favorite,
   }) async {
-    final csrf = await _fetchCsrf(sessionCookie, workUrl);
-    final endpoint = _origin.replace(path: '/profile/lists/favorite');
-    final resp = await _transport.post(
-      endpoint,
-      body: jsonEncode({'url': workUrl, 'favorite': favorite}),
-      headers: {
-        'Cookie': sessionCookie,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'X-CSRF-TOKEN': csrf,
-        'X-Requested-With': 'XMLHttpRequest',
-        'Origin': _origin.origin,
-        'Referer': workUrl,
-      },
+    var ctx = await _loadWatchlistContext(sessionCookie, workUrl);
+    final data = ctx.snapshotJson['data'];
+    final currentFavorite = data is Map && data['isFavorite'] == true;
+    if (currentFavorite == favorite) return;
+
+    var resp = await _postLivewireCall(
+      updateUri: ctx.updateUri,
+      cookie: ctx.cookie,
+      referer: workUrl,
+      csrf: ctx.csrf,
+      snapshotRaw: ctx.snapshotRaw,
+      method: 'toggleFavorite',
       operation: 'library_write_favorite',
     );
+    if (resp.statusCode == 419) {
+      ctx = await _loadWatchlistContext(sessionCookie, workUrl);
+      final refreshedData = ctx.snapshotJson['data'];
+      final refreshedFav =
+          refreshedData is Map && refreshedData['isFavorite'] == true;
+      if (refreshedFav == favorite) return;
+      resp = await _postLivewireCall(
+        updateUri: ctx.updateUri,
+        cookie: ctx.cookie,
+        referer: workUrl,
+        csrf: ctx.csrf,
+        snapshotRaw: ctx.snapshotRaw,
+        method: 'toggleFavorite',
+        operation: 'library_write_favorite',
+      );
+    }
     _throwOnErrorResponse(resp);
   }
 
@@ -835,6 +1140,32 @@ class WitanimeLibraryService extends ChangeNotifier {
             : remote.category == null,
         favorite: hasPendingFav ? (local?.favorite ?? false) : remote.favorite,
         updatedAtMillis: local?.updatedAtMillis ?? _now().millisecondsSinceEpoch,
+      );
+    }
+
+    for (final key in entries.keys.toList(growable: false)) {
+      if (fetchedByUrl.containsKey(key)) continue;
+      final mutationKey = _mutationKey(accountId, key);
+      if ((_mutationEpochs[mutationKey] ?? 0) !=
+          (epochBefore[mutationKey] ?? 0)) {
+        continue;
+      }
+      final hasPendingCat = pending.any(
+        (m) => m.workUrl == key && m.field == 'category',
+      );
+      final hasPendingFav = pending.any(
+        (m) => m.workUrl == key && m.field == 'favorite',
+      );
+      if (!hasPendingCat && !hasPendingFav) {
+        entries.remove(key);
+        continue;
+      }
+      final local = entries[key]!;
+      entries[key] = local.copyWith(
+        clearCategory: !hasPendingCat,
+        clearConfirmedCategory: true,
+        favorite: hasPendingFav ? local.favorite : false,
+        confirmedFavorite: false,
       );
     }
     await _writeEntries(accountId, entries);
