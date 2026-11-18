@@ -127,6 +127,41 @@ class WitanimePlaybackResolver {
     return clean;
   }
 
+  Map<String, String> _corsPostHeaders(String csrf, Uri watchUri) => {
+    'Accept': 'application/json',
+    'X-CSRF-TOKEN': csrf,
+    'Referer': watchUri.toString(),
+    'Origin': _origin.origin,
+    'Sec-Fetch-Site': 'same-origin',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Dest': 'empty',
+  };
+
+  String? _extractRawSourcesUrl(String body) {
+    final jsOrUnquoted = RegExp(
+      r'''sourcesUrl\s*:\s*["']([^"']+)["']''',
+    ).firstMatch(body)?.group(1);
+    if (jsOrUnquoted != null && jsOrUnquoted.trim().isNotEmpty) {
+      return jsOrUnquoted.replaceAll(r'\/', '/').trim();
+    }
+    final jsonQuoted = RegExp(
+      r'''["']sourcesUrl["']\s*:\s*["']([^"']+)["']''',
+    ).firstMatch(body)?.group(1);
+    if (jsonQuoted != null && jsonQuoted.trim().isNotEmpty) {
+      return jsonQuoted.replaceAll(r'\/', '/').trim();
+    }
+    final configMatch = RegExp(
+      r'''data-watch-config=["']([^"']+)["']''',
+      caseSensitive: false,
+    ).firstMatch(body)?.group(1);
+    if (configMatch != null && configMatch.trim().isNotEmpty) {
+      final decoded = _tryJsonMap(_unescape.convert(configMatch));
+      final raw = decoded?['sourcesUrl']?.toString().trim();
+      if (raw != null && raw.isNotEmpty) return raw;
+    }
+    return null;
+  }
+
   Future<({String csrf, Uri sourcesUri, Uri watchUri})> _fetchWatchMeta(
     Uri watchUri,
   ) async {
@@ -136,6 +171,10 @@ class WitanimePlaybackResolver {
         'Accept':
             'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Referer': '${_origin.origin}/',
+        'Sec-Fetch-Site': 'same-origin',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Dest': 'document',
+        'Upgrade-Insecure-Requests': '1',
       },
       operation: 'watch_page',
     );
@@ -175,9 +214,7 @@ class WitanimePlaybackResolver {
       );
     }
     final effectiveWatch = page.finalUri ?? watchUri;
-    final rawSources = RegExp(
-      r'''sourcesUrl\s*:\s*["']([^"']+)["']''',
-    ).firstMatch(page.body)?.group(1)?.replaceAll(r'\/', '/').trim();
+    final rawSources = _extractRawSourcesUrl(page.body);
     final sourcesUri = rawSources != null && rawSources.isNotEmpty
         ? _resolveSameOrigin(rawSources, effectiveWatch) ??
               _defaultSourcesUri(effectiveWatch)
@@ -213,15 +250,7 @@ class WitanimePlaybackResolver {
       ({String csrf, Uri sourcesUri, Uri watchUri}) m,
     ) => _transport.post(
       m.sourcesUri,
-      body: '{}',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'X-CSRF-TOKEN': m.csrf,
-        'X-Requested-With': 'XMLHttpRequest',
-        'Referer': m.watchUri.toString(),
-        'Origin': _origin.origin,
-      },
+      headers: _corsPostHeaders(m.csrf, m.watchUri),
       operation: forDownload ? 'download_sources' : 'stream_sources',
     );
     var resp = await postSources(meta);
@@ -263,16 +292,26 @@ class WitanimePlaybackResolver {
               : rawEntry['name']?.toString().trim().isNotEmpty == true
               ? rawEntry['name'].toString().trim()
               : 'Server';
-          final sourceName = displaySourceName(label, version: version);
+          final rawEntryVersion = rawEntry['version']?.toString().trim();
+          final effectiveVersion =
+              version ??
+              (rawEntryVersion != null &&
+                      rawEntryVersion.toLowerCase() == 'dub'
+                  ? 'dub'
+                  : null);
+          final sourceName = displaySourceName(
+            label,
+            version: effectiveVersion,
+          );
           final quality = qualityLabelForTier(tier);
-          if (!seen.add('$token|$version')) continue;
+          if (!seen.add('$token|$effectiveVersion')) continue;
           final encoded = WitanimeSourceToken(
             kind: forDownload ? 'download' : 'stream',
             watchUrl: meta.watchUri.toString(),
             token: token,
             label: label,
             tier: tier,
-            version: version,
+            version: effectiveVersion,
           ).encode();
           out.add(
             StreamResult(
@@ -366,15 +405,7 @@ class WitanimePlaybackResolver {
       ({String csrf, Uri sourcesUri, Uri watchUri}) m,
     ) => _transport.post(
       _origin.replace(path: sourcePath),
-      body: '{}',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'X-CSRF-TOKEN': m.csrf,
-        'X-Requested-With': 'XMLHttpRequest',
-        'Referer': m.watchUri.toString(),
-        'Origin': _origin.origin,
-      },
+      headers: _corsPostHeaders(m.csrf, m.watchUri),
       operation: forDownload ? 'download_source_unlock' : 'stream_source_unlock',
     );
     var activateResp = await postActivate(meta);
@@ -399,6 +430,9 @@ class WitanimePlaybackResolver {
               'Accept':
                   'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
               'Referer': meta.watchUri.toString(),
+              'Sec-Fetch-Site': 'same-origin',
+              'Sec-Fetch-Mode': 'navigate',
+              'Sec-Fetch-Dest': 'document',
               'Upgrade-Insecure-Requests': '1',
             }
           : const {
@@ -407,6 +441,7 @@ class WitanimePlaybackResolver {
               'Sec-Fetch-Mode': 'navigate',
               'Sec-Fetch-Dest': 'iframe',
               'Sec-Fetch-Site': 'same-origin',
+              'Upgrade-Insecure-Requests': '1',
             },
       followRedirects: false,
       operation: forDownload ? 'download_gate' : 'stream_gate',

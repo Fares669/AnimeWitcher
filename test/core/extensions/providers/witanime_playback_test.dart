@@ -534,6 +534,80 @@ void main() {
     expect(sourcesAttempts, 2);
     expect(sources.single.source, 'Mega');
   });
+
+  test('WitanimePlaybackResolver + DioWitanimeTransport omit X-Requested-With and send Sec-Fetch + Client Hints', () async {
+    final dio = Dio(BaseOptions(responseType: ResponseType.plain));
+    String? gateSecFetchDest;
+    dio.httpClientAdapter = _Adapter((options) async {
+      final hasXrw = options.headers.keys.any(
+        (k) => k.toLowerCase() == 'x-requested-with',
+      );
+      final hasCh =
+          options.headers['sec-ch-ua']?.toString().contains('131') == true &&
+          options.headers['sec-ch-ua-mobile'] == '?0' &&
+          options.headers['sec-ch-ua-platform'] == '"Windows"';
+      final isCors =
+          options.headers['Sec-Fetch-Site'] == 'same-origin' &&
+          options.headers['Sec-Fetch-Mode'] == 'cors' &&
+          options.headers['Sec-Fetch-Dest'] == 'empty';
+
+      if (options.uri.path == '/watch/custom/1') {
+        return ResponseBody.fromString(
+          '<meta name="csrf-token" content="csrf-ch">'
+          '<div data-watch-config="{&quot;sourcesUrl&quot;:&quot;\\/watch\\/alt\\/1\\/sources&quot;}"></div>',
+          200,
+        );
+      }
+      if (options.uri.path == '/watch/alt/1/sources') {
+        if (hasXrw || !hasCh || !isCors) {
+          return ResponseBody.fromString('{"message":"Not Found."}', 404);
+        }
+        return ResponseBody.fromString(
+          jsonEncode({
+            'players': {
+              'HD': [
+                {'label': 'Mega', 'token': 'tok-ch', 'version': 'dub'},
+              ],
+            },
+          }),
+          200,
+        );
+      }
+      if (options.uri.path == '/watch/stream-source/tok-ch') {
+        if (hasXrw || !hasCh || !isCors) {
+          return ResponseBody.fromString('{"message":"Not Found."}', 404);
+        }
+        return ResponseBody.fromString('{"ok":true}', 200);
+      }
+      if (options.uri.path == '/watch/stream-gate/tok-ch') {
+        if (!hasCh || options.headers['Sec-Fetch-Mode'] != 'navigate') {
+          return ResponseBody.fromString('not found', 404);
+        }
+        gateSecFetchDest = options.headers['Sec-Fetch-Dest']?.toString();
+        return ResponseBody.fromString(
+          '',
+          302,
+          headers: {
+            'location': ['https://mega.nz/file/ch'],
+          },
+        );
+      }
+      return ResponseBody.fromString('not found', 404);
+    });
+
+    final transport = DioWitanimeTransport(dio: dio);
+    final resolver = WitanimePlaybackResolver(transport);
+    final sources = await resolver.loadSources(
+      'https://witanime.site/watch/custom/1',
+      forDownload: false,
+    );
+    expect(sources.single.source, 'Mega (عربي مدبلج)');
+    await expectLater(
+      resolver.resolveStreams(sources.single.url, forDownload: false),
+      throwsA(isA<WitanimeBrowserRequiredException>()),
+    );
+    expect(gateSecFetchDest, 'iframe');
+  });
 }
 
 class _Adapter implements HttpClientAdapter {

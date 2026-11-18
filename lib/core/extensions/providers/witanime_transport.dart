@@ -133,6 +133,39 @@ class DioWitanimeTransport implements WitanimeTransport {
   static bool _isWitanimeHost(Uri uri) =>
       uri.host == 'witanime.site' || uri.host.endsWith('.witanime.site');
 
+  static bool _hasHeaderCaseInsensitive(Map<String, String> headers, String key) {
+    final target = key.toLowerCase();
+    return headers.keys.any((k) => k.toLowerCase() == target);
+  }
+
+  static void _applyClientHintsIfChrome(
+    Map<String, String> target,
+    Map<String, String> explicit,
+    String ua,
+  ) {
+    if (!ua.contains('Chrome/')) return;
+    final major = RegExp(r'Chrome/(\d+)').firstMatch(ua)?.group(1) ?? '131';
+    final platform = ua.contains('Android')
+        ? '"Android"'
+        : ua.contains('Macintosh')
+        ? '"macOS"'
+        : ua.contains('Linux')
+        ? '"Linux"'
+        : '"Windows"';
+    final hints = <String, String>{
+      'sec-ch-ua':
+          '"Google Chrome";v="$major", "Chromium";v="$major", "Not_A Brand";v="24"',
+      'sec-ch-ua-mobile': ua.contains('Mobile') ? '?1' : '?0',
+      'sec-ch-ua-platform': platform,
+    };
+    for (final entry in hints.entries) {
+      if (!_hasHeaderCaseInsensitive(explicit, entry.key) &&
+          !_hasHeaderCaseInsensitive(target, entry.key)) {
+        target[entry.key] = entry.value;
+      }
+    }
+  }
+
   static Map<String, String> _parseCookieHeader(String raw) {
     final parsed = <String, String>{};
     for (final part in raw.split(';')) {
@@ -201,6 +234,13 @@ class DioWitanimeTransport implements WitanimeTransport {
             .map((entry) => '${entry.key}=${entry.value}')
             .join('; ');
       }
+      final activeUa =
+          explicit['User-Agent'] ??
+          explicit['user-agent'] ??
+          merged['User-Agent'] ??
+          _dio.options.headers['User-Agent']?.toString() ??
+          defaultUserAgent;
+      _applyClientHintsIfChrome(merged, explicit, activeUa);
     }
     merged.addAll(explicit);
     return merged;
