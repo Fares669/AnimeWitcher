@@ -10,7 +10,7 @@ import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/utils/episode_label.dart';
 import '../../../core/account/account_providers.dart';
 import '../../../core/extensions/base_provider.dart';
-import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/item_provider_resolution.dart';
 
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
 
@@ -368,8 +368,6 @@ class DetailsController extends _$DetailsController {
           item.contentType == MultimediaContentType.livestream,
     );
 
-    final active = ref.read(activeProviderProvider);
-
     try {
       if (item.provider == 'Local' || item.provider == 'Remote') {
         var itemToUse = item;
@@ -405,7 +403,7 @@ class DetailsController extends _$DetailsController {
         return;
       }
 
-      final provider = active;
+      final provider = ref.read(itemSourceProvider(item.provider));
       if (provider == null) {
         throw Exception('لم يتم العثور على مزود التشغيل.');
       }
@@ -455,7 +453,8 @@ class DetailsController extends _$DetailsController {
     if (item == null) return;
     if (item.provider == 'Local' || item.provider == 'Remote') return;
 
-    final provider = _lastEpisodesProvider ?? ref.read(activeProviderProvider);
+    final provider =
+        _lastEpisodesProvider ?? ref.read(itemSourceProvider(item.provider));
     if (provider == null) return;
 
     provider.prepareForNetworkRetry();

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
-import '../../../../core/extensions/extension_manager.dart';
+import '../../../../core/extensions/item_provider_resolution.dart';
 import '../../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../home/presentation/view_all_screen.dart';
 
@@ -100,7 +100,7 @@ class AnimeInformationSection extends StatelessWidget {
     final provider = ProviderScope.containerOf(
       context,
       listen: false,
-    ).read(activeProviderProvider);
+    ).read(itemSourceProvider(item.provider));
     if (provider is! AnimeWitcherNativeProvider) return;
 
     Navigator.of(context).push(

@@ -20,7 +20,7 @@ import '../../../../core/providers/anime_data_source_settings_provider.dart';
 import '../../details/presentation/downloaded_file_provider.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/extensions/base_provider.dart';
-import '../../../../core/extensions/extension_manager.dart';
+import '../../../../core/extensions/item_provider_resolution.dart';
 import '../../../../core/storage/history_repository.dart';
 import '../../../../core/storage/episode_watch_repository.dart';
 import '../../library/presentation/history_provider.dart';
@@ -2577,7 +2577,8 @@ class PlayerController extends Notifier<PlayerState> {
     return _isCurrentSourceSession(sourceSessionId);
   }
 
-  AnimeWitcherProvider? _resolveProvider() => ref.read(activeProviderProvider);
+  AnimeWitcherProvider? _resolveProvider() =>
+      ref.read(itemSourceProvider(_item.provider));
 
   int _findSavedStreamIndex(List<StreamResult> streams) {
     try {

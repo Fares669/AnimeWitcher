@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
-import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/item_provider_resolution.dart';
 import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
 import 'package:animewitcher/core/services/anilist_franchise_service.dart';
 import 'package:animewitcher/core/services/anizip_service.dart';
@@ -601,7 +601,7 @@ class _DetailsSeasonsBarState extends ConsumerState<DetailsSeasonsBar> {
       };
       graphEntries = applyAniZipSeasonNumbers(graphEntries, seasonNumbers);
 
-      final provider = ref.read(activeProviderProvider);
+      final provider = ref.read(itemSourceProvider(widget.current.provider));
       if (provider is! AnimeWitcherNativeProvider) {
         if (mounted && generation == _loadGeneration) {
           setState(() => _walked = const <SeasonsBarEntry>[]);

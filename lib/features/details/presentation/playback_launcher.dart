@@ -8,7 +8,7 @@ import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/domain/stream_source_preferences.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/services/external_player_service.dart';
-import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/item_provider_resolution.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../settings/presentation/player_settings_provider.dart';
 import '../../settings/presentation/general_settings_provider.dart';
@@ -88,8 +88,6 @@ class PlaybackLauncher {
       _pendingOrigins[origin] = null;
     }
   }
-
-  AnimeWitcherProvider? _resolveProvider() => _ref.read(activeProviderProvider);
 
   Episode? _canonicalEpisode(
     MultimediaItem item,
@@ -240,7 +238,7 @@ class PlaybackLauncher {
       return;
     }
 
-    final provider = _resolveProvider();
+    final provider = _ref.read(itemSourceProvider(item.provider));
     if (provider == null) {
       _ref
           .read(notificationServiceProvider)
@@ -318,7 +316,7 @@ class PlaybackLauncher {
       );
     }
 
-    final provider = _resolveProvider();
+    final provider = _ref.read(itemSourceProvider(item.provider));
     if (provider == null) {
       _ref
           .read(notificationServiceProvider)
@@ -514,7 +512,7 @@ class PlaybackLauncher {
       return;
     }
 
-    final provider = _resolveProvider();
+    final provider = _ref.read(itemSourceProvider(playerItem.provider));
     if (provider == null) {
       _ref
           .read(notificationServiceProvider)

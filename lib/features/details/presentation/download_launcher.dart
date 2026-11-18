@@ -10,7 +10,8 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/domain/stream_source_preferences.dart';
-import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/base_provider.dart';
+import '../../../core/extensions/item_provider_resolution.dart';
 import '../../../core/network/dio_client_provider.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/services/download_parallel.dart';
@@ -127,15 +128,19 @@ class DownloadLauncher {
     try {
       final records = await _ref.read(logicalDownloadStoreV2Provider).all();
       if (!context.mounted) return;
-      final provider = _ref.read(activeProviderProvider);
+      final provider = _ref.read(itemSourceProvider(item.provider));
+      if (provider == null) {
+        _ref
+            .read(notificationServiceProvider)
+            .showError('لا يوجد مزود تشغيل نشط');
+        return;
+      }
       final mediaId = downloadMediaIdForItemV2(item);
-      final existingEpisodeKeys = provider == null
-          ? <String>{}
-          : existingBatchEpisodeKeysForProviderV2(
-              records,
-              mediaId: mediaId,
-              providerId: provider.packageName,
-            );
+      final existingEpisodeKeys = existingBatchEpisodeKeysForProviderV2(
+        records,
+        mediaId: mediaId,
+        providerId: provider.packageName,
+      );
       final ordered = List<Episode>.of(selectedEpisodes)
         ..sort((a, b) {
           final season = a.season.compareTo(b.season);
@@ -147,14 +152,14 @@ class DownloadLauncher {
         if (episodeKey.isEmpty || existingEpisodeKeys.contains(episodeKey)) {
           continue;
         }
-        final key = '${provider?.packageName ?? ''}|$mediaId|$episodeKey';
+        final key = '${provider.packageName}|$mediaId|$episodeKey';
         if (_launchingItems.add(key)) {
           keys.add(key);
           episodes.add(episode);
         }
       }
       if (episodes.isEmpty) return;
-      await _launchBatch(context, item, episodes);
+      await _launchBatch(context, item, episodes, provider);
     } finally {
       _launchingItems.removeAll(keys);
       _batchInFlight = false;
@@ -165,14 +170,10 @@ class DownloadLauncher {
     BuildContext context,
     MultimediaItem item,
     List<Episode> episodes,
+    AnimeWitcherProvider provider,
   ) async {
     final l10n = AppLocalizations.of(context)!;
     final notifications = _ref.read(notificationServiceProvider);
-    final provider = _ref.read(activeProviderProvider);
-    if (provider == null) {
-      notifications.showError('لا يوجد مزود تشغيل نشط');
-      return;
-    }
     final messenger = ScaffoldMessenger.maybeOf(context);
     final sourceProgress = ValueNotifier<int>(0);
     void showSourceProgress() {
@@ -203,7 +204,7 @@ class DownloadLauncher {
           final results = await Future.wait(
             chunk.map((index) async {
               try {
-                final sources = await provider.loadStreamSources(
+                final sources = await provider.loadDownloadStreamSources(
                   episodes[index].url,
                 );
                 if (sources.where((s) => s.url.trim().isNotEmpty).isEmpty) {
@@ -313,7 +314,7 @@ class DownloadLauncher {
           final resolved = await resolveBatchStreamSources(
             candidates,
             resolveCandidate: (candidate) =>
-                provider.loadStreams(candidate.url),
+                provider.loadDownloadStreams(candidate.url),
           );
           final prioritized = orderStreamSourcesByPreference(
             resolved
@@ -404,7 +405,7 @@ class DownloadLauncher {
     final resolvedEpisode =
         episode ?? item.episodes?.firstWhereOrNull((e) => e.url == resolveUrl);
 
-    final provider = _ref.read(activeProviderProvider);
+    final provider = _ref.read(itemSourceProvider(item.provider));
     if (provider == null) {
       _ref
           .read(notificationServiceProvider)
@@ -415,7 +416,7 @@ class DownloadLauncher {
     bool loadingDialogShown = false;
 
     try {
-      final sourceFuture = provider.loadStreamSources(resolveUrl);
+      final sourceFuture = provider.loadDownloadStreamSources(resolveUrl);
       final preferences = _ref.read(generalSettingsProvider);
       final StreamResult? selected;
       if (preferences.autoSelectStreamSource) {
@@ -425,7 +426,7 @@ class DownloadLauncher {
           qualityPriority: preferences.streamQualityPriority,
           serverPriority: preferences.streamServerPriority,
           resolveCandidate: (StreamResult candidate) =>
-              provider.loadStreams(candidate.url),
+              provider.loadDownloadStreams(candidate.url),
         );
         if (selected == null) {
           throw Exception('لم يتم العثور على مصادر تشغيل.');
@@ -454,7 +455,7 @@ class DownloadLauncher {
             },
           ),
         );
-        final resolved = await provider.loadStreams(selected.url);
+        final resolved = await provider.loadDownloadStreams(selected.url);
         if (isCanceled || !context.mounted) return;
         if (loadingDialogShown) {
           Navigator.of(context, rootNavigator: true).pop();

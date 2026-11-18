@@ -100,6 +100,7 @@ final downloadIntegrityVerifierV2Provider =
 final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
   late final DownloadManagerV2 manager;
   final diagnostics = ref.read(downloadDiagnosticsV2Provider);
+  final extensions = ref.read(extensionManagerProvider.notifier);
   final connectivity = Connectivity();
   String? lastNetworkType;
 
@@ -189,7 +190,8 @@ final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
           providerId == 'animewitcher.native' ||
           providerId == 'AnimeWitcher' ||
           providerId == 'Local' ||
-          providerId == 'Remote';
+          providerId == 'Remote' ||
+          extensions.getProvider(providerId) != null;
     },
   );
   // iOS suspends Dart shortly after backgrounding, and queue advancement is
