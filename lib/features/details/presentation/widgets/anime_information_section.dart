@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
+import '../../../../core/extensions/base_provider.dart';
 import '../../../../core/extensions/item_provider_resolution.dart';
 import '../../../../core/extensions/providers/animewitcher_native_provider.dart';
+import '../../../../core/extensions/providers/witanime_provider.dart';
 import '../../../home/presentation/view_all_screen.dart';
 
 /// Trims empty, unknown, and "?" placeholders out of details metadata.
@@ -101,7 +103,12 @@ class AnimeInformationSection extends StatelessWidget {
       context,
       listen: false,
     ).read(itemSourceProvider(item.provider));
-    if (provider is! AnimeWitcherNativeProvider) return;
+    final nativeProvider =
+        provider is AnimeWitcherNativeProvider ? provider : null;
+    final witanimeProvider = provider is WitanimeProvider ? provider : null;
+    if (nativeProvider == null && witanimeProvider == null) {
+      return;
+    }
 
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -110,11 +117,18 @@ class AnimeInformationSection extends StatelessWidget {
           initialMediaList: const <MultimediaItem>[],
           category: ViewAllCategory.providerContent,
           forcePortrait: true,
-          loadPage: (offset) => provider.getStudioPage(
-            studio,
-            offset: offset,
-            limit: provider.viewAllPageSize,
-          ),
+          loadPage: (offset) => nativeProvider != null
+              ? nativeProvider.getStudioPage(
+                  studio,
+                  offset: offset,
+                  limit: nativeProvider.viewAllPageSize,
+                )
+              : witanimeProvider!.searchPage(
+                  '',
+                  ProviderSearchFilters(studios: <String>{studio}),
+                  offset: offset,
+                  limit: witanimeProvider.viewAllPageSize,
+                ),
         ),
       ),
     );
@@ -146,10 +160,12 @@ class AnimeInformationSection extends StatelessWidget {
     );
     final startDate = _read(data, const ['awStartDate']);
     final endDate = _read(data, const ['awEndDate']);
+    final country = _read(data, const ['awCountry']);
     final studios = normalizedAnimeStudios(_read(data, const ['awStudio']));
 
     final entries = <_AnimeInfoEntry?>[
       entry('المصدر', 'Source', source),
+      entry('البلد', 'Country', country),
       entry('مدة الحلقة', 'Episode duration', _durationLabel(context, data)),
       if (startDate != null || endDate != null) ...[
         _AnimeInfoEntry(label: 'بداية العرض', value: startDate ?? '?'),

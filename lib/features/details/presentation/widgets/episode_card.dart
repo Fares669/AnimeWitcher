@@ -11,6 +11,7 @@ import 'package:background_downloader/background_downloader.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_comment_models.dart';
+import 'package:animewitcher/core/extensions/providers/witanime_provider.dart';
 import 'package:animewitcher/features/comments/presentation/animewitcher_comments_screen.dart';
 import 'package:animewitcher/core/storage/history_repository.dart';
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
@@ -34,6 +35,7 @@ import '../downloaded_file_provider.dart';
 import 'episode_action_chip.dart';
 import 'download_progress_dialog.dart';
 import 'download_management_dialog.dart';
+import 'witanime_report_dialog.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 
 /// `{series} - {episode}` for download dialogs, keeping the name of numberless
@@ -642,29 +644,53 @@ class EpisodeCard extends HookConsumerWidget {
     final commentsTarget = isAnimeWitcherCommentItem(parentItem)
         ? animeWitcherEpisodeCommentTarget(parentItem, episode)
         : null;
-    if (commentsTarget == null)
+    final showReport = parentItem.provider == WitanimeProvider.id;
+    if (commentsTarget == null && !showReport) {
       return downloadAction ?? const SizedBox.shrink();
+    }
 
-    final commentsButton = EpisodeActionChip(
-      tooltip: 'تعليقات الحلقة',
-      icon: Icons.chat_bubble_outline_rounded,
-      onPressed: () {
-        Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => AnimeWitcherCommentsScreen(target: commentsTarget),
+    final extraButtons = <Widget>[
+      if (commentsTarget != null)
+        ExcludeFocus(
+          child: EpisodeActionChip(
+            tooltip: 'تعليقات الحلقة',
+            icon: Icons.chat_bubble_outline_rounded,
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) =>
+                      AnimeWitcherCommentsScreen(target: commentsTarget),
+                ),
+              );
+            },
           ),
-        );
-      },
-    );
+        ),
+      if (showReport)
+        ExcludeFocus(
+          child: EpisodeActionChip(
+            tooltip: 'الإبلاغ عن مشكلة',
+            icon: Icons.flag_outlined,
+            onPressed: () => unawaited(
+              showWitanimeReportDialog(
+                context,
+                ref,
+                title: _downloadDialogTitle(parentItem, episode),
+                targetUrl: episode.url,
+              ),
+            ),
+          ),
+        ),
+    ];
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (downloadAction != null) ...[
-          downloadAction,
-          const SizedBox(height: _actionSpacing),
+        if (downloadAction != null) downloadAction,
+        for (var i = 0; i < extraButtons.length; i++) ...[
+          if (downloadAction != null || i > 0)
+            const SizedBox(height: _actionSpacing),
+          extraButtons[i],
         ],
-        ExcludeFocus(child: commentsButton),
       ],
     );
   }

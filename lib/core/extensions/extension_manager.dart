@@ -1,12 +1,21 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../account/account_providers.dart';
+import '../account/witanime_account_service.dart';
 import '../network/dio_client_provider.dart';
 import '../storage/settings_repository.dart';
 import 'base_provider.dart';
 import 'providers/animewitcher_native_provider.dart';
+import 'providers/witanime_provider.dart';
 
 part 'extension_manager.g.dart';
+
+final witanimeCatalogProvider = Provider<WitanimeProvider?>((ref) {
+  if (!const bool.fromEnvironment('WITANIME_CATALOG_ENABLED')) return null;
+
+  return WitanimeProvider.withTransport(ref.watch(witanimeTransportProvider));
+});
 
 /// Built-in provider registry for the standalone AnimeWitcher app.
 @Riverpod(keepAlive: true)
@@ -14,6 +23,7 @@ class ExtensionManager extends _$ExtensionManager {
   @override
   List<AnimeWitcherProvider> build() {
     return <AnimeWitcherProvider>[
+      ?ref.watch(witanimeCatalogProvider),
       AnimeWitcherNativeProvider(
         ref.watch(dioClientProvider),
         ref.watch(settingsRepositoryProvider),
@@ -55,7 +65,7 @@ class ProviderResolutionLoading extends _$ProviderResolutionLoading {
   void set(bool value) => state = value;
 }
 
-/// AnimeWitcher Native is the built-in provider and is selected automatically.
+/// An explicit Witanime pilot takes precedence over the saved anime catalog.
 @Riverpod(keepAlive: true)
 class ActiveProvider extends _$ActiveProvider {
   Future<void> _pendingSave = Future<void>.value();
@@ -73,6 +83,9 @@ class ActiveProvider extends _$ActiveProvider {
   AnimeWitcherProvider? build() {
     final providers = ref.watch(extensionManagerProvider);
     if (providers.isEmpty) return null;
+
+    final pilot = providers.whereType<WitanimeProvider>().firstOrNull;
+    if (pilot != null) return pilot;
 
     final storage = ref.read(settingsRepositoryProvider);
     final storedId = storage.getActiveProviderId();

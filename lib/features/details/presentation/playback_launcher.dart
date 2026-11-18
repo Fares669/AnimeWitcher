@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -11,6 +10,7 @@ import '../../../core/router/app_router.dart';
 import '../../../core/services/external_player_service.dart';
 import '../../../core/extensions/item_provider_resolution.dart';
 import '../../../core/extensions/base_provider.dart';
+import '../../../core/extensions/providers/witanime_playback.dart';
 import '../../../core/extensions/providers/witanime_provider.dart';
 import '../../settings/presentation/player_settings_provider.dart';
 import '../../settings/presentation/general_settings_provider.dart';
@@ -361,8 +361,9 @@ class PlaybackLauncher {
   Future<StreamResult?> _resolveSelectedSource(
     BuildContext context,
     AnimeWitcherProvider provider,
-    StreamResult source,
-  ) async {
+    StreamResult source, {
+    Future<void> Function()? onBrowserRequired,
+  }) async {
     if (!source.requiresResolution) return source;
 
     bool isCanceled = false;
@@ -385,12 +386,24 @@ class PlaybackLauncher {
         dialogDismissed = true;
       }
       if (streams.isEmpty) {
+        if (onBrowserRequired != null) {
+          await onBrowserRequired();
+          return null;
+        }
         _ref
             .read(notificationServiceProvider)
             .showError('تعذر استخراج رابط صالح من هذا المصدر.');
         return null;
       }
       return streams.first;
+    } on WitanimeBrowserRequiredException {
+      if (context.mounted && !isCanceled && !dialogDismissed) {
+        Navigator.of(context).pop();
+      }
+      if (context.mounted && !isCanceled && onBrowserRequired != null) {
+        await onBrowserRequired();
+      }
+      return null;
     } catch (e) {
       if (context.mounted && !isCanceled && !dialogDismissed) {
         Navigator.of(context).pop();
@@ -544,15 +557,27 @@ class PlaybackLauncher {
     }
 
     final provider = _ref.read(itemSourceProvider(playerItem.provider));
-    if (playerItem.provider == WitanimeProvider.id &&
-        (provider == null || provider is WitanimeProvider)) {
-      await _openWitanimeWatchPage(
-        context,
-        playerItem,
-        canonicalProgressUrl,
-        launch,
-      );
-      return;
+    final isWitanimeItem =
+        playerItem.provider == WitanimeProvider.id &&
+        (provider == null || provider is WitanimeProvider);
+    if (isWitanimeItem) {
+      final work = WitanimeProvider.parseCatalogLink(playerItem.url)?.work;
+      final entry = WitanimeProvider.parseCatalogLink(canonicalProgressUrl);
+      if (entry?.watch == null || work != entry?.work) {
+        _ref
+            .read(notificationServiceProvider)
+            .showError('تعذر تحديد صفحة المشاهدة على Witanime.');
+        return;
+      }
+      if (provider == null) {
+        await _openWitanimeWatchPage(
+          context,
+          playerItem,
+          canonicalProgressUrl,
+          launch,
+        );
+        return;
+      }
     }
     if (provider == null) {
       _ref
@@ -565,17 +590,74 @@ class PlaybackLauncher {
     // The selected source is carried into the player so it is not silently
     // replaced by saved-source or automatic quality preferences.
     // Continue-watching on home may already have shown that picker.
-    final selected =
-        preselectedSource ??
-        await _chooseSource(
+    StreamResult? selected = preselectedSource;
+    if (selected == null && isWitanimeItem) {
+      try {
+        final witanimeSources = await launch.wait(
+          () => provider.loadStreamSources(localOrEpisodeUrl),
+        );
+        if (!context.mounted || !launch.isCurrent) return;
+        if (witanimeSources.isEmpty) {
+          await _openWitanimeWatchPage(
+            context,
+            playerItem,
+            canonicalProgressUrl,
+            launch,
+          );
+          return;
+        }
+        selected = await _chooseSource(
           context,
           provider,
           localOrEpisodeUrl,
           episode: resolvedEpisode,
+          loadSources: () async => witanimeSources,
         );
+      } on UnsupportedError {
+        if (!context.mounted || !launch.isCurrent) return;
+        await _openWitanimeWatchPage(
+          context,
+          playerItem,
+          canonicalProgressUrl,
+          launch,
+        );
+        return;
+      } on WitanimeBrowserRequiredException {
+        if (!context.mounted || !launch.isCurrent) return;
+        await _openWitanimeWatchPage(
+          context,
+          playerItem,
+          canonicalProgressUrl,
+          launch,
+        );
+        return;
+      }
+    } else {
+      selected ??= await _chooseSource(
+        context,
+        provider,
+        localOrEpisodeUrl,
+        episode: resolvedEpisode,
+      );
+    }
     if (selected == null || !context.mounted || !launch.isCurrent) return;
 
     if (settings.preferredPlayer == null) {
+      if (isWitanimeItem && selected.requiresResolution) {
+        final resolved = await _resolveSelectedSource(
+          context,
+          provider,
+          selected,
+          onBrowserRequired: () => _openWitanimeWatchPage(
+            context,
+            playerItem,
+            canonicalProgressUrl,
+            launch,
+          ),
+        );
+        if (resolved == null || !context.mounted || !launch.isCurrent) return;
+        selected = resolved;
+      }
       _recordEpisodeOpened(playerItem, playerEpisode);
       if (!context.mounted || !launch.isCurrent) return;
       await launch.push(
@@ -603,6 +685,14 @@ class PlaybackLauncher {
         context,
         provider,
         selected,
+        onBrowserRequired: isWitanimeItem
+            ? () => _openWitanimeWatchPage(
+                context,
+                playerItem,
+                canonicalProgressUrl,
+                launch,
+              )
+            : null,
       );
       if (resolved == null || !context.mounted || !launch.isCurrent) return;
       _recordEpisodeOpened(playerItem, playerEpisode);

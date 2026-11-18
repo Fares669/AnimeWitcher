@@ -3,6 +3,9 @@ import 'dart:async';
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_account_service.dart';
 import 'package:animewitcher/core/account/animewitcher_sync_ids.dart';
+import 'package:animewitcher/core/account/witanime_account_service.dart';
+import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/witanime_provider.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
@@ -10,6 +13,7 @@ import '../../../../core/services/app_diagnostics.dart';
 import '../../../../core/storage/library_category.dart';
 import '../../../../core/storage/library_repository.dart';
 import '../../../../core/storage/storage_service.dart';
+import '../../../../core/storage/witanime_library_service.dart';
 import './library_auth.dart';
 import './library_media_kind.dart';
 import './library_state.dart';
@@ -63,6 +67,42 @@ class Library extends _$Library {
 
   String? get _accountUid =>
       ref.read(animeWitcherAccountServiceProvider).accountUid;
+
+  bool get _witanimeAccountSignedIn {
+    try {
+      return ref.read(witanimeAccountServiceProvider).isSignedIn;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool get _isWitanimeActiveCatalog {
+    try {
+      return ref.read(activeProviderProvider) is WitanimeProvider;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool _useWitanimeShelf(LibraryMediaKind kind) =>
+      kind == LibraryMediaKind.anime &&
+      _isWitanimeActiveCatalog &&
+      _witanimeAccountSignedIn;
+
+  bool _usesWitanimeSync({String? providerId, bool manga = false}) {
+    if (manga || !_witanimeAccountSignedIn) return false;
+    return providerId == WitanimeProvider.id || _isWitanimeActiveCatalog;
+  }
+
+  LibraryCategory? localOnlyAnimeWitcherCategory(String url) {
+    try {
+      final category = _localItemCategory(url);
+      if (category == null || isWitanimeSyncedCategory(category)) return null;
+      return category;
+    } catch (_) {
+      return null;
+    }
+  }
 
   String _pageKey(LibraryMediaKind kind, LibraryCategory category) =>
       'native:${_accountUid ?? 'guest'}:${kind.storageKey}:${category.storageKey}';
@@ -166,6 +206,14 @@ class Library extends _$Library {
     LibraryMediaKind kind,
     LibraryCategory category,
   ) {
+    if (_useWitanimeShelf(kind) && isWitanimeSyncedCategory(category)) {
+      final page = _page(kind, category);
+      final items = ref.read(witanimeLibraryServiceProvider).itemsForCategory(
+        category,
+      );
+      page.cachedLocalCount = items.length;
+      return items.take(page.visibleLimit).toList(growable: false);
+    }
     final page = _page(kind, category);
     final local = _localItems(kind, category);
     page.cachedLocalCount = local.length;
@@ -206,6 +254,9 @@ class Library extends _$Library {
   }
 
   int? categoryCount(LibraryMediaKind kind, LibraryCategory category) {
+    if (_useWitanimeShelf(kind) && isWitanimeSyncedCategory(category)) {
+      return ref.read(witanimeLibraryServiceProvider).countForCategory(category);
+    }
     final confirmed = _knownTotal(kind, category);
     if (confirmed != null) return confirmed;
     final localCount = _localItems(kind, category).length;
@@ -224,6 +275,17 @@ class Library extends _$Library {
   @override
   LibraryState build() {
     ref.watch(accountDataRevisionProvider);
+    final wtService = ref.watch(witanimeLibraryServiceProvider);
+    void onWitanimeChanged() {
+      if (ref.mounted) {
+        _countRevision++;
+        refresh();
+      }
+    }
+
+    wtService.addListener(onWitanimeChanged);
+    ref.onDispose(() => wtService.removeListener(onWitanimeChanged));
+
     final kind = LibraryMediaKind.fromStorageKey(
       ref.read(storageServiceProvider).getString('library_media_kind'),
     );
@@ -266,6 +328,29 @@ class Library extends _$Library {
     final shelf = category ?? state.category;
     final page = _page(kind, shelf);
     if (page.loading) return;
+    if (_useWitanimeShelf(kind) && isWitanimeSyncedCategory(shelf)) {
+      page.loading = true;
+      page.loadFailed = false;
+      refresh();
+      try {
+        final wtLibrary = ref.read(witanimeLibraryServiceProvider);
+        await wtLibrary.retryPendingSync(
+          onLocalChanged: () {
+            _countRevision++;
+            if (ref.mounted) refresh();
+          },
+        );
+        await wtLibrary.refreshListsFromServer();
+        unawaited(ref.read(witanimeAccountServiceProvider).refreshProfile());
+      } catch (_) {
+        page.loadFailed = true;
+      } finally {
+        page.loading = false;
+        _countRevision++;
+        if (ref.mounted) refresh();
+      }
+      return;
+    }
     final service = ref.read(animeWitcherAccountServiceProvider);
     final account = service.accountUid;
     if (account == null) return;
@@ -645,10 +730,46 @@ class Library extends _$Library {
       await setFavorite(item, true, membership: membership);
       return;
     }
-    _requireSignedIn();
-    final kind = item.contentType == MultimediaContentType.manga
-        ? LibraryMediaKind.manga
-        : LibraryMediaKind.anime;
+    final manga = item.contentType == MultimediaContentType.manga;
+    if (_usesWitanimeSync(providerId: item.provider, manga: manga)) {
+      final wtLibrary = ref.read(witanimeLibraryServiceProvider);
+      if (isWitanimeSyncedCategory(selected)) {
+        if (localOnlyAnimeWitcherCategory(item.url) != null) {
+          await ref.read(storageServiceProvider).setLibraryItemCategory(
+            item.url,
+            null,
+          );
+        }
+        await wtLibrary.setCategory(
+          item,
+          selected,
+          previousMembership: membership,
+          onLocalChanged: () {
+            _countRevision++;
+            refresh();
+          },
+        );
+        _countRevision++;
+        refresh();
+        return;
+      }
+      final existingWt = wtLibrary.cachedMembership(item.url);
+      if (existingWt?.category != null ||
+          (membership?.category != null &&
+              isWitanimeSyncedCategory(membership!.category!))) {
+        await wtLibrary.setCategory(
+          item,
+          null,
+          previousMembership: membership,
+          onLocalChanged: () {
+            _countRevision++;
+            refresh();
+          },
+        );
+      }
+    }
+    _requireSignedIn(allowWitanimeOnly: _usesWitanimeSync(providerId: item.provider, manga: manga) && !isWitanimeSyncedCategory(selected));
+    final kind = manga ? LibraryMediaKind.manga : LibraryMediaKind.anime;
     var tracked =
         _trackedCategoryForMutation(item.url, kind) ?? membership?.category;
     void syncLocal() {
@@ -695,6 +816,39 @@ class Library extends _$Library {
     String? providerId,
     LibraryCategory? previousCategory,
   }) async {
+    if (_usesWitanimeSync(providerId: providerId, manga: manga)) {
+      final wtLibrary = ref.read(witanimeLibraryServiceProvider);
+      final wtExisting = wtLibrary.cachedMembership(url);
+      final hadWtCategory =
+          wtExisting?.category != null ||
+          (previousCategory != null &&
+              isWitanimeSyncedCategory(previousCategory));
+      if (hadWtCategory) {
+        await wtLibrary.setCategory(
+          MultimediaItem(
+            title: '',
+            url: url,
+            posterUrl: '',
+            provider: WitanimeProvider.id,
+          ),
+          null,
+          previousMembership: (
+            category: previousCategory ?? wtExisting?.category,
+            favorite: wtExisting?.favorite ?? false,
+          ),
+          onLocalChanged: () {
+            _countRevision++;
+            refresh();
+          },
+        );
+      }
+      if (localOnlyAnimeWitcherCategory(url) != null) {
+        await ref.read(storageServiceProvider).setLibraryItemCategory(url, null);
+      }
+      _countRevision++;
+      refresh();
+      return;
+    }
     _requireSignedIn();
     final kind = manga ? LibraryMediaKind.manga : LibraryMediaKind.anime;
     var tracked = _trackedCategoryForMutation(url, kind) ?? previousCategory;
@@ -738,10 +892,23 @@ class Library extends _$Library {
     bool favorite, {
     LibraryMembership? membership,
   }) async {
+    final manga = item.contentType == MultimediaContentType.manga;
+    if (_usesWitanimeSync(providerId: item.provider, manga: manga)) {
+      await ref.read(witanimeLibraryServiceProvider).setFavorite(
+        item,
+        favorite,
+        previousMembership: membership,
+        onLocalChanged: () {
+          _countRevision++;
+          refresh();
+        },
+      );
+      _countRevision++;
+      refresh();
+      return;
+    }
     _requireSignedIn();
-    final kind = item.contentType == MultimediaContentType.manga
-        ? LibraryMediaKind.manga
-        : LibraryMediaKind.anime;
+    final kind = manga ? LibraryMediaKind.manga : LibraryMediaKind.anime;
     var trackedFavorite = membership?.favorite ?? isFavorite(item.url);
     void syncLocal() {
       final current = isFavorite(item.url);
@@ -773,23 +940,36 @@ class Library extends _$Library {
     refresh();
   }
 
-  void _requireSignedIn() {
+  void _requireSignedIn({bool allowWitanimeOnly = false}) {
+    if (allowWitanimeOnly && _witanimeAccountSignedIn) return;
     requireLibrarySignIn(
       ref.read(animeWitcherAccountServiceProvider).isSignedIn,
     );
   }
 
-  bool isFavorite(String url, {String? providerId}) =>
-      ref.read(libraryRepositoryProvider).isFavorite(url);
+  bool isFavorite(String url, {String? providerId}) {
+    if (_usesWitanimeSync(providerId: providerId)) {
+      final wt = ref.read(witanimeLibraryServiceProvider).cachedMembership(url);
+      if (wt != null) return wt.favorite;
+    }
+    return ref.read(libraryRepositoryProvider).isFavorite(url);
+  }
 
   LibraryCategory? itemCategory(
     String url, {
     String? providerId,
     bool manga = false,
-  }) => _trackedCategoryForMutation(
-    url,
-    manga ? LibraryMediaKind.manga : LibraryMediaKind.anime,
-  );
+  }) {
+    if (_usesWitanimeSync(providerId: providerId, manga: manga)) {
+      final wt = ref.read(witanimeLibraryServiceProvider).cachedMembership(url);
+      if (wt?.category != null) return wt!.category;
+      return localOnlyAnimeWitcherCategory(url);
+    }
+    return _trackedCategoryForMutation(
+      url,
+      manga ? LibraryMediaKind.manga : LibraryMediaKind.anime,
+    );
+  }
 
   LibraryCategory? _localItemCategory(String url) =>
       ref.read(libraryRepositoryProvider).getItemCategory(url);

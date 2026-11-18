@@ -13,6 +13,9 @@ import '../../home/presentation/view_all_screen.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/account/animewitcher_comment_models.dart';
 import '../../../core/account/animewitcher_account_service.dart';
+import '../../../core/account/witanime_account_service.dart';
+import '../../../core/extensions/providers/witanime_provider.dart';
+import '../../../core/storage/witanime_library_service.dart';
 import '../../characters/presentation/anime_characters_screen.dart';
 import '../../characters/presentation/character_details_screen.dart';
 import 'related_anime_screen.dart';
@@ -43,6 +46,7 @@ import "widgets/episode_browse.dart";
 import "widgets/details_desktop_hero.dart";
 import "widgets/details_extra_tabs.dart";
 import "widgets/anime_information_section.dart";
+import "widgets/witanime_report_dialog.dart";
 import "adult_content_warning.dart";
 import "../../../shared/widgets/expandable_text.dart";
 import "../../../shared/widgets/loading_indicator.dart";
@@ -239,15 +243,33 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
           if (!await _ensureSignedInForLibrary(context)) return;
           if (!mounted) return;
           final current = libraryMembership;
-          await editLibrary(
-            (category: current.category, favorite: !current.favorite),
-            () => ref
-                .read(libraryProvider.notifier)
-                .setFavorite(item, !current.favorite, membership: current),
-            favorite: true,
-          );
+          try {
+            await editLibrary(
+              (category: current.category, favorite: !current.favorite),
+              () => ref
+                  .read(libraryProvider.notifier)
+                  .setFavorite(item, !current.favorite, membership: current),
+              favorite: true,
+            );
+          } on WitanimePermanentRejectionException catch (error) {
+            ref.read(notificationServiceProvider).showError(error.message);
+          }
         },
       ),
+      if (item.provider == WitanimeProvider.id)
+        AppleLiquidGlassToolbarButton(
+          tooltip: 'الإبلاغ عن مشكلة',
+          icon: Icons.flag_outlined,
+          color: foregroundColor,
+          onPressed: () => unawaited(
+            showWitanimeReportDialog(
+              context,
+              ref,
+              title: item.title,
+              targetUrl: item.url,
+            ),
+          ),
+        ),
       if (includeLibraryMenu)
         AppleLiquidGlassToolbarButton(
           tooltip: appText(
@@ -286,6 +308,11 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     Color? fallbackColor,
   }) {
     final category = libraryMembership.category;
+    final pending = item.provider == WitanimeProvider.id &&
+        ref.read(witanimeLibraryServiceProvider).isItemPending(item.url);
+    final categoryPillLabel = category == null
+        ? appText(context, english: 'Add to list', arabic: 'أضف لقائمة')
+        : '${_libraryCategoryLabel(context, category)}${pending ? ' · معلّق' : ''}';
     return Wrap(
       spacing: 12,
       runSpacing: 12,
@@ -323,9 +350,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
           ],
           child: DetailsHeroPill(
             fallbackColor: fallbackColor,
-            label: category == null
-                ? appText(context, english: 'Add to list', arabic: 'أضف لقائمة')
-                : _libraryCategoryLabel(context, category),
+            label: categoryPillLabel,
             icon: category == null
                 ? Icons.bookmark_border_rounded
                 : _libraryCategoryIcon(category),
@@ -466,11 +491,20 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     MultimediaItem item,
     LibraryCategory? currentCategory,
   ) {
+    final isWitanime = item.provider == WitanimeProvider.id;
+    String labelFor(LibraryCategory category) {
+      final base = _libraryCategoryLabel(context, category);
+      if (!isWitanime) return base;
+      return isWitanimeSyncedCategory(category)
+          ? '$base · Witanime'
+          : '$base · AnimeWitcher';
+    }
+
     final items = <AppleNativeMenuItem>[
       for (final category in LibraryCategory.assignmentValuesFor(item))
         AppleNativeMenuItem(
           value: category.storageKey,
-          label: _libraryCategoryLabel(context, category),
+          label: labelFor(category),
           systemImage: _libraryCategorySystemImage(category),
           icon: _libraryCategoryIcon(category),
         ),
@@ -498,15 +532,19 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     final notifier = ref.read(libraryProvider.notifier);
     final current = libraryMembership;
     if (value == _removeLibraryAction) {
-      await editLibrary(
-        (category: null, favorite: current.favorite),
-        () => notifier.clearItemCategory(
-          item.url,
-          providerId: item.provider,
-          previousCategory: current.category,
-        ),
-        favorite: false,
-      );
+      try {
+        await editLibrary(
+          (category: null, favorite: current.favorite),
+          () => notifier.clearItemCategory(
+            item.url,
+            providerId: item.provider,
+            previousCategory: current.category,
+          ),
+          favorite: false,
+        );
+      } on WitanimePermanentRejectionException catch (error) {
+        ref.read(notificationServiceProvider).showError(error.message);
+      }
       return;
     }
     LibraryCategory? category;
@@ -517,16 +555,22 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       }
     }
     if (category != null) {
-      await editLibrary(
-        (category: category, favorite: current.favorite),
-        () => notifier.addItem(item, category: category, membership: current),
-        favorite: false,
-      );
+      try {
+        await editLibrary(
+          (category: category, favorite: current.favorite),
+          () => notifier.addItem(item, category: category, membership: current),
+          favorite: false,
+        );
+      } on WitanimePermanentRejectionException catch (error) {
+        ref.read(notificationServiceProvider).showError(error.message);
+      }
     }
   }
 
   Future<bool> _ensureSignedInForLibrary(BuildContext context) async {
-    if (ref.read(animeWitcherAccountServiceProvider).isSignedIn) {
+    if (ref.read(animeWitcherAccountServiceProvider).isSignedIn ||
+        (widget.item.provider == WitanimeProvider.id &&
+            ref.read(witanimeAccountServiceProvider).isSignedIn)) {
       return true;
     }
 
@@ -543,7 +587,9 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         builder: (_) => const AnimeWitcherAccountScreen(),
       ),
     );
-    return ref.read(animeWitcherAccountServiceProvider).isSignedIn;
+    return ref.read(animeWitcherAccountServiceProvider).isSignedIn ||
+        (widget.item.provider == WitanimeProvider.id &&
+            ref.read(witanimeAccountServiceProvider).isSignedIn);
   }
 
   Future<void> _showPosterViewer(

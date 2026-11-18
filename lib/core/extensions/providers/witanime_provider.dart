@@ -8,12 +8,27 @@ import '../../domain/entity/multimedia_item.dart';
 import '../../utils/digit_normalization.dart';
 import '../base_provider.dart';
 import 'witanime_filter_values.dart';
+import 'witanime_playback.dart';
+import 'witanime_transport.dart';
 
 /// The caller supplies the catalog transport once access is configured.
 class WitanimeProvider extends AnimeWitcherProvider {
-  WitanimeProvider(this._fetchHtml);
+  WitanimeProvider(this._fetchHtml, {WitanimeTransport? transport})
+    : _transport = transport,
+      _playback = transport == null
+          ? null
+          : WitanimePlaybackResolver(transport, origin: _origin);
+
+  factory WitanimeProvider.withTransport(WitanimeTransport transport) =>
+      WitanimeProvider(
+        (uri, {cancelToken}) =>
+            transport.fetchHtml(uri, cancelToken: cancelToken),
+        transport: transport,
+      );
 
   final Future<String> Function(Uri, {CancelToken? cancelToken}) _fetchHtml;
+  final WitanimeTransport? _transport;
+  final WitanimePlaybackResolver? _playback;
 
   static const id = 'witanime';
   static const watchUrlKey = 'witanimeWatchUrl';
@@ -124,7 +139,7 @@ class WitanimeProvider extends AnimeWitcherProvider {
         if (filters.genres.isNotEmpty)
           'genres[]': [
             for (final genre in filters.genres)
-              if (value({genre}, witanimeGenreValues) case final slug?) slug,
+              ?value({genre}, witanimeGenreValues),
           ],
         'sort': ?sort,
       },
@@ -151,6 +166,58 @@ class WitanimeProvider extends AnimeWitcherProvider {
 
   Future<ProviderMediaPage> getMoviesPage({int offset = 0, int limit = 30}) =>
       _catalogPage(_origin.replace(path: '/movies'), offset, limit);
+
+  @override
+  Future<ProviderMediaPage> getHomeSectionPage(
+    String sectionName, {
+    int offset = 0,
+    int limit = 30,
+  }) async {
+    switch (sectionName.trim()) {
+      case 'أحدث الأفلام':
+        return getMoviesPage(offset: offset, limit: limit);
+      case 'أكثر الأنميات مشاهدة':
+        return searchPage(
+          '',
+          const ProviderSearchFilters(sort: 'Most Viewed'),
+          offset: offset,
+          limit: limit,
+        );
+      case 'أكثر الأفلام مشاهدة':
+        return _catalogPage(
+          _origin.replace(
+            path: '/movies',
+            queryParameters: const {'sort': 'Most Viewed'},
+          ),
+          offset,
+          limit,
+        );
+      case 'أشهر أنميات الموسم':
+        return _catalogPage(_origin.replace(path: '/seasonal'), offset, limit);
+      case 'أحدث الحلقات':
+        try {
+          final page = await _catalogPage(
+            _origin.replace(path: '/new-episodes'),
+            offset,
+            limit,
+          );
+          if (page.items.isNotEmpty) return page;
+        } catch (_) {
+          // Fall back to the home shelf when the standalone route is absent.
+        }
+        return super.getHomeSectionPage(
+          sectionName,
+          offset: offset,
+          limit: limit,
+        );
+      default:
+        return super.getHomeSectionPage(
+          sectionName,
+          offset: offset,
+          limit: limit,
+        );
+    }
+  }
 
   @override
   bool get supportsUpcoming => true;
@@ -387,24 +454,73 @@ class WitanimeProvider extends AnimeWitcherProvider {
       contentRating: fields['التصنيف العمري'],
       source: fields['المصدر'],
       syncData: {
-        'awStudio': ?fields['الاستوديو'],
+        'awStudio': ?fields['الاستديو'] ?? fields['الاستوديو'],
+        'awCountry': ?fields['البلد'],
         'awEnglishTitle': ?_string(json['alternateName']),
       },
+      trailers: _trailers(main, uri),
       score: _rating(json['aggregateRating']),
       tags: genres
           .map((value) => value.trim())
           .where((value) => value.isNotEmpty)
           .toSet()
           .toList(),
-      episodes: _episodes(main, uri, title),
+      episodes: _episodes(main, uri, title, isMovie: link.movie),
       related: _namedCards(main, 'ذات صلة', uri),
       recommendations: _namedCards(main, 'قد يعجبك أيضًا', uri),
     );
   }
 
   @override
-  Future<List<StreamResult>> loadStreams(String url) async =>
+  bool isExplicitStreamSelection(String url) =>
+      url.trim().startsWith(witanimeSourceUrlPrefix);
+
+  @override
+  Future<List<StreamResult>> loadStreamSources(String url) {
+    final resolver = _playback;
+    if (resolver == null) {
+      return Future<List<StreamResult>>.error(
+        UnsupportedError('Witanime playback transport is not configured'),
+      );
+    }
+    return resolver.loadSources(url, forDownload: false);
+  }
+
+  @override
+  Future<List<StreamResult>> loadDownloadStreamSources(String url) {
+    final resolver = _playback;
+    if (resolver == null) {
+      return Future<List<StreamResult>>.error(
+        UnsupportedError('Witanime playback transport is not configured'),
+      );
+    }
+    return resolver.loadSources(url, forDownload: true);
+  }
+
+  @override
+  Future<List<StreamResult>> loadDownloadStreams(String url) {
+    final resolver = _playback;
+    if (resolver == null) {
+      return Future<List<StreamResult>>.error(
+        UnsupportedError('Witanime playback transport is not configured'),
+      );
+    }
+    return resolver.resolveStreams(url, forDownload: true);
+  }
+
+  @override
+  Future<List<StreamResult>> loadStreams(String url) async {
+    final resolver = _playback;
+    if (resolver == null) {
       throw UnsupportedError('Witanime playback transport is not configured');
+    }
+    return resolver.resolveStreams(url, forDownload: false);
+  }
+
+  @override
+  void prepareForNetworkRetry() {
+    _transport;
+  }
 
   Future<Document> _document(Uri uri, {CancelToken? cancelToken}) async =>
       html.parse(await _fetchHtml(uri, cancelToken: cancelToken));
@@ -494,34 +610,76 @@ class WitanimeProvider extends AnimeWitcherProvider {
     return false;
   }
 
-  static List<Episode> _episodes(Element main, Uri work, String title) {
+  static List<Trailer> _trailers(Element main, Uri base) {
+    final trailers = <Trailer>[];
+    final seen = <String>{};
+    for (final el in main.querySelectorAll(
+      'a[href*="youtube.com"], a[href*="youtu.be"], '
+      'iframe[src*="youtube.com"], iframe[src*="youtube-nocookie.com"]',
+    )) {
+      final raw = el.attributes['href'] ?? el.attributes['src'];
+      final url = _httpsUri(raw, base)?.toString();
+      if (url == null || !seen.add(url)) continue;
+      trailers.add(Trailer(url: url));
+    }
+    return trailers;
+  }
+
+  static List<Episode> _episodes(
+    Element main,
+    Uri work,
+    String title, {
+    bool isMovie = false,
+  }) {
     final list = main.querySelector('[data-episode-list]');
-    final anchors = (list ?? main).querySelectorAll('a[href]');
+    final scopedAnchors = (list ?? main).querySelectorAll('a[href]');
     final episodes = <String, Episode>{};
-    for (final anchor in anchors) {
-      final ref = _reference(anchor.attributes['href'], work);
-      final watch = ref?.watch;
-      if (watch == null || ref!.work != work) continue;
-      final key = watch.toString();
-      if (episodes.containsKey(key)) continue;
-      final number = normalizeLocalizedDigits(watch.pathSegments.last);
-      final value = ref.movie ? null : double.tryParse(number);
-      final raw = _text(anchor);
-      final name = ref.movie
-          ? title
-          : (raw != null && raw != 'شاهد الآن' && raw != number
-                ? raw
-                : 'الحلقة $number');
-      episodes[key] = Episode(
-        name: name,
-        url: key,
-        episode: ref.movie
-            ? 1
-            : (value?.isFinite == true ? value!.truncate() : 0),
-        serverNumber: value?.isFinite == true ? number : null,
-        serverName: name,
-        posterUrl: _image(anchor.querySelector('img'), work),
-        isFinal: name.contains('الأخيرة'),
+    void collect(List<Element> anchors) {
+      for (final anchor in anchors) {
+        final ref = _reference(anchor.attributes['href'], work);
+        final watch = ref?.watch;
+        if (watch == null || ref!.work != work) continue;
+        final key = watch.toString();
+        if (episodes.containsKey(key)) continue;
+        final number = normalizeLocalizedDigits(watch.pathSegments.last);
+        final value = ref.movie ? null : double.tryParse(number);
+        final raw = _text(anchor);
+        final name = ref.movie
+            ? title
+            : (raw != null && raw != 'شاهد الآن' && raw != number
+                  ? raw
+                  : 'الحلقة $number');
+        final dub =
+            raw?.contains('مدبلج') == true ||
+            anchor.attributes['data-version'] == 'dub';
+        episodes[key] = Episode(
+          name: name,
+          url: key,
+          episode: ref.movie
+              ? 1
+              : (value?.isFinite == true ? value!.truncate() : 0),
+          serverNumber: value?.isFinite == true ? number : null,
+          serverName: name,
+          posterUrl: _image(anchor.querySelector('img'), work),
+          isFinal: name.contains('الأخيرة'),
+          dubStatus: dub ? DubStatus.dubbed : DubStatus.none,
+        );
+      }
+    }
+
+    collect(scopedAnchors);
+    if (episodes.isEmpty && list != null) {
+      collect(main.querySelectorAll('a[href]'));
+    }
+    if (episodes.isEmpty && isMovie) {
+      final movieWatch = work.replace(
+        pathSegments: ['watch', 'movie', work.pathSegments.last],
+      );
+      episodes[movieWatch.toString()] = Episode(
+        name: title,
+        url: movieWatch.toString(),
+        episode: 1,
+        serverName: title,
       );
     }
     return episodes.values.toList();

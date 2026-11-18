@@ -11,6 +11,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/providers/witanime_provider.dart';
 import '../../../core/utils/layout_constants.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../core/providers/device_info_provider.dart';
@@ -120,6 +122,8 @@ class SettingsScreen extends ConsumerWidget {
     final versionAsync = ref.watch(appVersionProvider);
     final generalSettings = ref.watch(generalSettingsProvider);
     final animeDataSettings = ref.watch(animeDataSourceSettingsProvider);
+    final activeCatalog = ref.watch(activeProviderProvider);
+    final installedProviders = ref.watch(extensionManagerProvider);
 
     final playerSettings =
         ref.watch(playerSettingsProvider).asData?.value ??
@@ -152,6 +156,24 @@ class SettingsScreen extends ConsumerWidget {
             icon: Icons.account_circle_outlined,
             title: 'حساب AnimeWitcher',
             onTap: () => openAccountScreen(context),
+          ),
+          SettingsTile(
+            key: const ValueKey('settings-active-anime-provider'),
+            icon: Icons.video_library_outlined,
+            title: 'مصدر الأنمي النشط',
+            subtitle: activeCatalog is WitanimeProvider
+                ? 'Witanime (تجريبي) · المانجا على AnimeWitcher'
+                : '${activeCatalog?.name ?? 'AnimeWitcher'} (${installedProviders.length} مزوّد)',
+            onTap: installedProviders.length <= 1 ||
+                    installedProviders.any((p) => p is WitanimeProvider)
+                ? null
+                : () async {
+                    final next = installedProviders.firstWhere(
+                      (p) => p.packageName != activeCatalog?.packageName,
+                      orElse: () => installedProviders.first,
+                    );
+                    await ref.read(activeProviderProvider.notifier).set(next);
+                  },
           ),
           SettingsTile(
             icon: Icons.view_carousel_rounded,

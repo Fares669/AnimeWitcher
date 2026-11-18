@@ -5,6 +5,8 @@ import 'package:animewitcher/shared/widgets/app_side_menu.dart';
 import 'package:animewitcher/shared/widgets/app_page_header.dart';
 
 import '../../../core/account/account_providers.dart';
+import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/providers/witanime_provider.dart';
 import '../../../core/navigation/app_layout_style.dart';
 import '../../../core/theme/theme_provider.dart';
 import '../../../shared/widgets/live_previews.dart';
@@ -64,6 +66,10 @@ class MoreScreen extends ConsumerWidget {
     final theme = Theme.of(context);
     final bottomPadding = MediaQuery.viewPaddingOf(context).bottom + 88;
     final accountState = ref.watch(animeWitcherAccountControllerProvider);
+    final activeCatalog = ref.watch(activeProviderProvider);
+    final catalogLabel = activeCatalog is WitanimeProvider
+        ? 'Witanime'
+        : 'AnimeWitcher';
     final accountProfile = accountState.asData?.value.profile;
     final accountPhotoUrl = accountProfile?.photoUrl?.trim() ?? '';
 
@@ -229,7 +235,7 @@ class MoreScreen extends ConsumerWidget {
               _MoreTile(
                 icon: Icons.upcoming_rounded,
                 title: 'القادم قريبًا',
-                subtitle: 'أنميات لم يتم بثها بعد حسب بيانات AnimeWitcher',
+                subtitle: 'أنميات لم يتم بثها بعد حسب بيانات $catalogLabel',
                 onTap: () => Navigator.of(context, rootNavigator: true).push(
                   MaterialPageRoute<void>(
                     builder: (_) => const ComingSoonScreen(),

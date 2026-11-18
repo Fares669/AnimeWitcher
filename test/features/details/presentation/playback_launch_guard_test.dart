@@ -5,6 +5,7 @@ import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/extensions/providers/witanime_provider.dart';
+import 'package:animewitcher/core/extensions/providers/witanime_transport.dart';
 import 'package:animewitcher/core/router/app_router.dart';
 import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 
@@ -302,6 +303,66 @@ class _Harness {
   }
 }
 
+class _WitanimeTestTransport implements WitanimeTransport {
+  @override
+  void close({bool force = false}) {}
+
+  @override
+  Future<String> fetchHtml(
+    Uri uri, {
+    CancelToken? cancelToken,
+    String operation = 'catalog',
+  }) async => '<main></main>';
+
+  @override
+  Future<WitanimeHttpResponse> get(
+    Uri uri, {
+    Map<String, String> headers = const {},
+    bool followRedirects = true,
+    CancelToken? cancelToken,
+    String operation = 'get',
+  }) async {
+    if (uri.path == '/watch/sample/2') {
+      return const WitanimeHttpResponse(
+        statusCode: 200,
+        body: '<meta name="csrf-token" content="csrf-1">',
+      );
+    }
+    if (uri.path == '/watch/stream-gate/tok-direct') {
+      return const WitanimeHttpResponse(
+        statusCode: 302,
+        body: '',
+        headers: {
+          'location': ['https://cdn.example.com/video/ep2.mp4'],
+        },
+      );
+    }
+    return const WitanimeHttpResponse(statusCode: 404, body: '');
+  }
+
+  @override
+  Future<WitanimeHttpResponse> post(
+    Uri uri, {
+    Object? body,
+    Map<String, String> headers = const {},
+    bool followRedirects = true,
+    CancelToken? cancelToken,
+    String operation = 'post',
+  }) async {
+    if (uri.path == '/watch/sample/2/sources') {
+      return const WitanimeHttpResponse(
+        statusCode: 200,
+        body:
+            '{"players":{"FHD":[{"label":"DirectStream","token":"tok-direct"}]}}',
+      );
+    }
+    if (uri.path == '/watch/stream-source/tok-direct') {
+      return const WitanimeHttpResponse(statusCode: 200, body: '{"ok":true}');
+    }
+    return const WitanimeHttpResponse(statusCode: 404, body: '');
+  }
+}
+
 void main() {
   testWidgets('Witanime opens the official episode page after confirmation', (
     tester,
@@ -346,6 +407,48 @@ void main() {
     expect(opened, [Uri.parse('https://witanime.site/watch/sample/2')]);
     expect(app.pushes.count, 0);
     expect(app.watchHistory.calls, 0);
+    await app.dispose(tester);
+  });
+
+  testWidgets('Witanime resolves stream sources and opens internal player', (
+    tester,
+  ) async {
+    final transport = _WitanimeTestTransport();
+    final app = _Harness(
+      provider: WitanimeProvider.withTransport(transport),
+      file: Future.value(null),
+      auto: false,
+      launchWebsite: (_) async => false,
+    );
+    await app.mount(tester);
+    final item = MultimediaItem(
+      title: 'Sample',
+      url: 'https://witanime.site/anime/sample',
+      posterUrl: '',
+      provider: WitanimeProvider.id,
+      episodes: [
+        Episode(
+          name: 'الحلقة 2',
+          url: 'https://witanime.site/watch/sample/2',
+          episode: 2,
+        ),
+      ],
+    );
+    final launcher = app.container.read(playbackLauncherProvider);
+    final play = launcher.play(
+      app.origin,
+      'https://witanime.site/watch/sample/2',
+      baseItem: item,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('DirectStream'));
+    await tester.pumpAndSettle();
+    expect(app.pushes.count, 1);
+    expect(app.opened?.selectedSource?.url, 'https://cdn.example.com/video/ep2.mp4');
+    expect(app.watchHistory.calls, 1);
+    app.router.pop();
+    await tester.pumpAndSettle();
+    await play;
     await app.dispose(tester);
   });
 

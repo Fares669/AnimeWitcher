@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
+import '../../../core/account/witanime_account_service.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
+import '../../../core/extensions/providers/witanime_provider.dart';
 import '../../../core/storage/library_category.dart';
+import '../../../core/storage/witanime_library_service.dart';
 import '../../library/presentation/library_provider.dart';
 
 mixin DetailsLibraryMembership<T extends ConsumerStatefulWidget>
@@ -18,11 +21,16 @@ mixin DetailsLibraryMembership<T extends ConsumerStatefulWidget>
   String? _libraryOwner;
 
   String? get _activeLibraryOwner {
+    String? aw;
+    String? wt;
     try {
-      return ref.read(animeWitcherAccountServiceProvider).accountUid;
-    } catch (_) {
-      return null;
-    }
+      aw = ref.read(animeWitcherAccountServiceProvider).accountUid;
+    } catch (_) {}
+    try {
+      wt = ref.read(witanimeAccountServiceProvider).accountId;
+    } catch (_) {}
+    if (aw == null && wt == null) return null;
+    return '${aw ?? ''}|${wt ?? ''}';
   }
 
   LibraryMembership get libraryMembership {
@@ -60,10 +68,31 @@ mixin DetailsLibraryMembership<T extends ConsumerStatefulWidget>
       if (!mounted || request != _libraryRequest) return;
       try {
         final item = libraryItem;
-        final account = ref.read(animeWitcherAccountServiceProvider);
-        final remote = item.contentType == MultimediaContentType.manga
-            ? await account.fetchMangaLibraryMembership(item)
-            : await account.fetchAnimeLibraryMembership(item.url);
+        LibraryMembership? remote;
+        if (item.provider == WitanimeProvider.id) {
+          final wtAccount = ref.read(witanimeAccountServiceProvider);
+          if (wtAccount.isSignedIn) {
+            final wtRemote = await ref
+                .read(witanimeLibraryServiceProvider)
+                .fetchMembership(item);
+            if (!mounted || request != _libraryRequest) return;
+            final awCategory = ref
+                .read(libraryProvider.notifier)
+                .localOnlyAnimeWitcherCategory(item.url);
+            if (wtRemote != null) {
+              remote = (
+                category: wtRemote.category ?? awCategory,
+                favorite: wtRemote.favorite,
+              );
+            }
+          }
+        }
+        if (remote == null) {
+          final account = ref.read(animeWitcherAccountServiceProvider);
+          remote = item.contentType == MultimediaContentType.manga
+              ? await account.fetchMangaLibraryMembership(item)
+              : await account.fetchAnimeLibraryMembership(item.url);
+        }
         if (!mounted || request != _libraryRequest || remote == null) return;
         setState(() {
           _libraryOwner = _activeLibraryOwner;
@@ -109,6 +138,11 @@ mixin DetailsLibraryMembership<T extends ConsumerStatefulWidget>
 
   void listenToLibraryAccount() {
     ref.listen(accountDataRevisionProvider, (_, _) {
+      if (_libraryOwner != _activeLibraryOwner) {
+        setState(scheduleLibraryRead);
+      }
+    });
+    ref.listen(witanimeAccountRevisionProvider, (_, _) {
       if (_libraryOwner != _activeLibraryOwner) {
         setState(scheduleLibraryRead);
       }

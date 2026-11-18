@@ -237,4 +237,55 @@ void main() {
       expect(requests.last.queryParameters, {'status': 'upcoming'});
     },
   );
+
+  test(
+    'home sections paginate, and details extract country, trailers, and 1000+ episodes',
+    () async {
+      final requestedPaths = <String>[];
+      final provider = WitanimeProvider((uri, {cancelToken}) async {
+        requestedPaths.add('${uri.path}?${uri.query}');
+        if (uri.path == '/movies') {
+          return '<main>${_card('/movie/m1', 'Movie 1')}</main>';
+        }
+        if (uri.path == '/browse') {
+          return '<main>${_card('/anime/top1', 'Top 1')}</main>';
+        }
+        if (uri.path == '/seasonal') {
+          return '<main>${_card('/anime/seas1', 'Season 1')}</main>';
+        }
+        if (uri.path == '/anime/long-series') {
+          final eps = [
+            for (var i = 1; i <= 1050; i++)
+              '<a href="/watch/long-series/$i">الحلقة $i</a>',
+          ].join();
+          return '''
+            <main>
+              <h1>Long Series</h1>
+              <div><span>البلد</span><p>اليابان</p></div>
+              <iframe src="https://www.youtube.com/embed/abc123"></iframe>
+              <div data-episode-list>$eps</div>
+            </main>
+          ''';
+        }
+        return '<main></main>';
+      });
+
+      final moviesPage = await provider.getHomeSectionPage('أحدث الأفلام');
+      expect(moviesPage.items.single.title, 'Movie 1');
+      final mostViewed = await provider.getHomeSectionPage('أكثر الأنميات مشاهدة');
+      expect(mostViewed.items.single.title, 'Top 1');
+      expect(requestedPaths.last, contains('Most+Viewed'));
+      final seasonal = await provider.getHomeSectionPage('أشهر أنميات الموسم');
+      expect(seasonal.items.single.title, 'Season 1');
+
+      final details = await provider.getDetails('/anime/long-series');
+      expect(details.syncData?['awCountry'], 'اليابان');
+      expect(
+        details.trailers?.single.url,
+        'https://www.youtube.com/embed/abc123',
+      );
+      expect(details.episodes?.length, 1050);
+      expect(details.episodes?.last.episode, 1050);
+    },
+  );
 }

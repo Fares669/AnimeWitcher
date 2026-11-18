@@ -16,8 +16,8 @@ import '../../comments/presentation/animewitcher_my_comments_screen.dart';
 import 'account_management_screens.dart';
 import 'account_privacy_settings_screen.dart';
 import 'account_ui_helpers.dart';
-import '../../more/presentation/witanime_website_screen.dart';
 import 'widgets/settings_widgets.dart';
+import 'widgets/witanime_account_section.dart';
 
 enum _AccountFormMode { signIn, createAccount }
 
@@ -105,21 +105,7 @@ class _AnimeWitcherAccountScreenState
     );
   }
 
-  Widget _witanimeAccountTile() => SettingsGroup(
-    title: 'Witanime',
-    children: [
-      SettingsTile(
-        icon: Icons.person_outline_rounded,
-        title: 'حساب Witanime على الموقع',
-        onTap: () => Navigator.of(context, rootNavigator: true).push(
-          MaterialPageRoute<void>(
-            builder: (_) => const WitanimeWebsiteScreen(),
-          ),
-        ),
-        isLast: true,
-      ),
-    ],
-  );
+  Widget _witanimeAccountTile() => const WitanimeAccountSection();
 
   Widget _buildSignedOut(bool busy, Object? asyncError) {
     final colors = Theme.of(context).colorScheme;
