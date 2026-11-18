@@ -41,6 +41,9 @@ class WatchHistory extends _$WatchHistory {
     refresh();
   }
 
+  Future<void> removeForItem(MultimediaItem item) =>
+      removeFromHistory(item.url);
+
   Future<void> updateHistoryItemTimestampAndPosition(
     HistoryItem item,
     int timestamp,
@@ -102,8 +105,17 @@ class ContinueWatchingNotifier extends Notifier<List<HistoryItem>> {
     refresh();
   }
 
+  Future<void> clearAllFor(String? providerId) => clearAll();
+
   Future<void> remove(String url) async {
     await ref.read(historyRepositoryProvider).removeContinueWatching(url);
+    refresh();
+  }
+
+  Future<void> removeForItem(MultimediaItem item) => remove(item.url);
+
+  Future<void> completeForItem(MultimediaItem item) async {
+    await ref.read(historyRepositoryProvider).completeItemFor(item);
     refresh();
   }
 

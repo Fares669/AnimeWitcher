@@ -1,5 +1,7 @@
 import '../domain/entity/multimedia_item.dart';
 
+typedef LibraryMembership = ({LibraryCategory? category, bool favorite});
+
 enum LibraryCategory {
   favorite('favorite'),
   watching('watching'),

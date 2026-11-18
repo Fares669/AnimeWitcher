@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 
@@ -72,6 +73,7 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
   Object? _providerLoadError;
   int _providerOffset = 0;
   int _emptyProviderPages = 0;
+  int _sourceGeneration = 0;
 
   bool get _isProvider => widget.category == ViewAllCategory.providerContent;
 
@@ -82,30 +84,64 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
       _scrollController.addListener(_onScroll);
     }
 
+    _resetSource();
+    _scheduleInitialPage();
+  }
+
+  @override
+  void didUpdateWidget(ViewAllScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.category == widget.category &&
+        oldWidget.loadPage == widget.loadPage &&
+        oldWidget.initialOffset == widget.initialOffset &&
+        oldWidget.initialHasMore == widget.initialHasMore &&
+        oldWidget.forcePortrait == widget.forcePortrait &&
+        listEquals(oldWidget.initialMediaList, widget.initialMediaList)) {
+      return;
+    }
+    if (oldWidget.category == ViewAllCategory.providerContent) {
+      _scrollController.removeListener(_onScroll);
+    }
+    if (_isProvider) _scrollController.addListener(_onScroll);
+    ++_sourceGeneration;
+    _resetSource();
+    _scheduleInitialPage();
+  }
+
+  void _resetSource() {
+    _providerItems.clear();
+    _providerSeen.clear();
+    _providerLoading = false;
+    _providerLoadError = null;
+    _emptyProviderPages = 0;
+    _providerOffset = widget.initialOffset ?? 0;
+    _providerHasMore = widget.loadPage != null && widget.initialHasMore;
+
     for (final item in widget.initialMediaList) {
       final key = _itemKey(item);
       if (_providerSeen.add(key)) _providerItems.add(item);
     }
 
-    if (widget.forcePortrait) {
-      _isPortrait = true;
-    } else if (widget.initialMediaList.isNotEmpty) {
+    _isPortrait = true;
+    if (!widget.forcePortrait && widget.initialMediaList.isNotEmpty) {
       _checkAspectRatio();
     }
+  }
 
-    if (_isProvider) {
-      _providerOffset = widget.initialOffset ?? 0;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        _providerHasMore = widget.loadPage != null && widget.initialHasMore;
-        if (!_providerHasMore) return;
-        if (widget.initialOffset == null || _providerItems.isEmpty) {
-          _loadNextProviderPage();
-        } else {
-          _ensureProviderFill(onlyIfNotScrollable: true);
-        }
-      });
-    }
+  void _scheduleInitialPage() {
+    final generation = _sourceGeneration;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || generation != _sourceGeneration) return;
+      if (_scrollController.hasClients) {
+        _scrollController.jumpTo(_scrollController.position.minScrollExtent);
+      }
+      if (!_isProvider || !_providerHasMore) return;
+      if (widget.initialOffset == null || _providerItems.isEmpty) {
+        _loadNextProviderPage();
+      } else {
+        _ensureProviderFill(onlyIfNotScrollable: true);
+      }
+    });
   }
 
   String _itemKey(MultimediaItem item) {
@@ -134,6 +170,7 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
     }
 
     final requestedOffset = _providerOffset;
+    final generation = _sourceGeneration;
     setState(() {
       _providerLoading = true;
       _providerLoadError = null;
@@ -142,7 +179,7 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
     try {
       final page = await loader(requestedOffset)
           .timeout(const Duration(seconds: 30));
-      if (!mounted) return;
+      if (!mounted || generation != _sourceGeneration) return;
       if (page.hasMore && page.nextOffset <= requestedOffset) {
         throw StateError('The provider page cursor did not advance.');
       }
@@ -171,11 +208,11 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
         }
       });
 
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => _ensureProviderFill(),
-      );
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (generation == _sourceGeneration) _ensureProviderFill();
+      });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _sourceGeneration) return;
       setState(() {
         _providerLoading = false;
         _providerLoadError = error;
@@ -207,8 +244,11 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
     if (widget.forcePortrait || widget.initialMediaList.isEmpty) return;
     final url = widget.initialMediaList.first.posterImageUrl;
     if (url.isEmpty) return;
+    final generation = _sourceGeneration;
     final isPortrait = await ImageUtils.isImagePortrait(url);
-    if (mounted && _isPortrait != isPortrait) {
+    if (mounted &&
+        generation == _sourceGeneration &&
+        _isPortrait != isPortrait) {
       setState(() => _isPortrait = isPortrait);
     }
   }

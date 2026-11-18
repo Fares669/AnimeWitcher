@@ -506,7 +506,9 @@ class _ApplePersistentGlassHeaderOverlayState
   }
 
   void _syncNativeNow() {
-    if (!mounted) return;
+    // The retired native glass overlay has no platform channel handler on
+    // Linux/Windows/Android, and is currently disabled on iOS as well.
+    if (!_usesNativeAppleLiquidGlass || !mounted) return;
     final state = _nativeState();
     final signature = jsonEncode(state);
     if (signature == _lastNativeSignature) return;
@@ -1907,15 +1909,19 @@ class _MenuRow extends StatelessWidget {
                   : (leadingBuilder?.call(item, color) ??
                         Icon(fallbackIcon, size: 18, color: color)),
             ),
-            Text(
-              item.label,
-              style: TextStyle(
-                color: item.destructive
-                    ? scheme.error
-                    : (selected ? scheme.primary : null),
-                fontWeight: selected || item.destructive
-                    ? FontWeight.w600
-                    : null,
+            Flexible(
+              child: Text(
+                item.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: item.destructive
+                      ? scheme.error
+                      : (selected ? scheme.primary : null),
+                  fontWeight: selected || item.destructive
+                      ? FontWeight.w600
+                      : null,
+                ),
               ),
             ),
           ],

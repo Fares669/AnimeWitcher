@@ -89,10 +89,14 @@ class _EmptyLibrary extends Library {
       const LibraryEmpty(LibraryCategory.favorite, LibraryMediaKind.anime);
 
   @override
-  bool isFavorite(String url) => false;
+  bool isFavorite(String url, {String? providerId}) => false;
 
   @override
-  LibraryCategory? itemCategory(String url) => null;
+  LibraryCategory? itemCategory(
+    String url, {
+    String? providerId,
+    bool manga = false,
+  }) => null;
 }
 
 class _EmptyDownloads extends DownloadsNotifier {

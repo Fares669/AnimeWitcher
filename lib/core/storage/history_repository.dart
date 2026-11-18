@@ -84,6 +84,45 @@ class HistoryItem {
   }
 }
 
+List<HistoryItem> historyForItem(
+  HistoryRepository repository,
+  MultimediaItem item,
+) => repository.getWatchHistory();
+
+int historyPositionForItem(
+  HistoryRepository repository,
+  MultimediaItem item, {
+  String? episodeUrl,
+  int? season,
+  int? episode,
+}) {
+  return episodeUrl == null
+      ? repository.getPosition(item.url)
+      : repository.getEpisodePosition(
+          episodeUrl,
+          mainUrl: item.url,
+          season: season,
+          episode: episode,
+        );
+}
+
+int historyDurationForItem(
+  HistoryRepository repository,
+  MultimediaItem item, {
+  String? episodeUrl,
+  int? season,
+  int? episode,
+}) {
+  return episodeUrl == null
+      ? repository.getDuration(item.url)
+      : repository.getEpisodeDuration(
+          episodeUrl,
+          mainUrl: item.url,
+          season: season,
+          episode: episode,
+        );
+}
+
 @Riverpod(keepAlive: true)
 HistoryRepository historyRepository(Ref ref) {
   return HistoryRepository(
@@ -97,6 +136,51 @@ class HistoryRepository {
   final AnimeWitcherAccountService _accountService;
 
   HistoryRepository(this._storageService, this._accountService);
+
+  List<HistoryItem> getWatchHistoryFor(String? providerId) => getWatchHistory();
+  List<HistoryItem> getContinueWatchingFor(String? providerId) =>
+      getContinueWatching();
+  Future<void> clearContinueWatchingFor(String? providerId) =>
+      clearContinueWatching();
+  Future<void> removeContinueWatchingFor(String url, String? providerId) =>
+      removeContinueWatching(url);
+  Future<void> completeItemFor(MultimediaItem item) =>
+      removeContinueWatching(item.url);
+  Future<void> clearHistoryFor(String? providerId) => clearAllHistory();
+  Future<void> removeHistoryFor(String url, String? providerId) =>
+      removeFromHistory(url);
+
+  int positionForItem(
+    MultimediaItem item, {
+    String? episodeUrl,
+    int? season,
+    int? episode,
+  }) {
+    return episodeUrl == null
+        ? getPosition(item.url)
+        : getEpisodePosition(
+            episodeUrl,
+            mainUrl: item.url,
+            season: season,
+            episode: episode,
+          );
+  }
+
+  int durationForItem(
+    MultimediaItem item, {
+    String? episodeUrl,
+    int? season,
+    int? episode,
+  }) {
+    return episodeUrl == null
+        ? getDuration(item.url)
+        : getEpisodeDuration(
+            episodeUrl,
+            mainUrl: item.url,
+            season: season,
+            episode: episode,
+          );
+  }
 
   Future<void> removeFromHistory(String url) async {
     await _storageService.removeFromHistory(url);

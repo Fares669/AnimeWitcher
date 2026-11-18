@@ -11,7 +11,6 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/domain/stream_source_preferences.dart';
 import '../../../core/extensions/extension_manager.dart';
-import '../../../core/extensions/base_provider.dart';
 import '../../../core/network/dio_client_provider.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/services/download_parallel.dart';
@@ -73,6 +72,43 @@ String downloadFilenameV2({
   return '${sanitizedTitle.isEmpty ? 'video' : sanitizedTitle}$extension';
 }
 
+@visibleForTesting
+Set<String> existingBatchEpisodeKeysForProviderV2(
+  Iterable<LogicalDownloadRecordV2> records, {
+  required String mediaId,
+  required String providerId,
+}) {
+  final providerScope = downloadProviderScopeV2(providerId);
+  return <String>{
+    for (final record in records)
+      if (record.mediaKind == DownloadMediaKind.videoEpisode &&
+          record.mediaId.trim() == mediaId.trim() &&
+          _batchRecordBelongsToProvider(record, providerScope) &&
+          (record.completedAtMillis != null ||
+              record.intent == DownloadUserIntent.active ||
+              record.intent == DownloadUserIntent.paused))
+        record.unitKey.trim(),
+  };
+}
+
+@visibleForTesting
+String downloadMediaIdForItemV2(MultimediaItem item) {
+  final imdbId = item.imdbId?.trim();
+  return item.tmdbId?.toString() ??
+      (imdbId?.isNotEmpty == true ? imdbId! : item.url.trim());
+}
+
+bool _batchRecordBelongsToProvider(
+  LogicalDownloadRecordV2 record,
+  String? providerScope,
+) {
+  final recordedId = record.sourceDescriptor['providerId']?.toString().trim();
+  if (recordedId == null || recordedId.isEmpty) {
+    return true;
+  }
+  return downloadProviderScopeV2(recordedId) == providerScope;
+}
+
 class DownloadLauncher {
   final Ref _ref;
   final Set<String> _launchingItems = <String>{};
@@ -91,19 +127,15 @@ class DownloadLauncher {
     try {
       final records = await _ref.read(logicalDownloadStoreV2Provider).all();
       if (!context.mounted) return;
-      final imdbId = item.imdbId?.trim();
-      final mediaId =
-          item.tmdbId?.toString() ??
-          (imdbId?.isNotEmpty == true ? imdbId! : item.url.trim());
-      final existingEpisodeKeys = <String>{
-        for (final record in records)
-          if (record.mediaKind == DownloadMediaKind.videoEpisode &&
-              record.mediaId == mediaId &&
-              (record.completedAtMillis != null ||
-                  record.intent == DownloadUserIntent.active ||
-                  record.intent == DownloadUserIntent.paused))
-            record.unitKey.trim(),
-      };
+      final provider = _ref.read(activeProviderProvider);
+      final mediaId = downloadMediaIdForItemV2(item);
+      final existingEpisodeKeys = provider == null
+          ? <String>{}
+          : existingBatchEpisodeKeysForProviderV2(
+              records,
+              mediaId: mediaId,
+              providerId: provider.packageName,
+            );
       final ordered = List<Episode>.of(selectedEpisodes)
         ..sort((a, b) {
           final season = a.season.compareTo(b.season);
@@ -115,7 +147,7 @@ class DownloadLauncher {
         if (episodeKey.isEmpty || existingEpisodeKeys.contains(episodeKey)) {
           continue;
         }
-        final key = '${item.provider ?? ''}|${item.url}|${episode.url}';
+        final key = '${provider?.packageName ?? ''}|$mediaId|$episodeKey';
         if (_launchingItems.add(key)) {
           keys.add(key);
           episodes.add(episode);
@@ -136,19 +168,11 @@ class DownloadLauncher {
   ) async {
     final l10n = AppLocalizations.of(context)!;
     final notifications = _ref.read(notificationServiceProvider);
-    final manager = _ref.read(extensionManagerProvider.notifier);
-    AnimeWitcherProvider? provider;
-    if (item.provider != null) {
-      provider = manager.getAllProviders().firstWhereOrNull(
-        (p) => p.packageName == item.provider || p.name == item.provider,
-      );
-    }
-    provider ??= _ref.read(activeProviderProvider);
+    final provider = _ref.read(activeProviderProvider);
     if (provider == null) {
       notifications.showError('لا يوجد مزود تشغيل نشط');
       return;
     }
-
     final messenger = ScaffoldMessenger.maybeOf(context);
     final sourceProgress = ValueNotifier<int>(0);
     void showSourceProgress() {
@@ -179,7 +203,7 @@ class DownloadLauncher {
           final results = await Future.wait(
             chunk.map((index) async {
               try {
-                final sources = await provider!.loadStreamSources(
+                final sources = await provider.loadStreamSources(
                   episodes[index].url,
                 );
                 if (sources.where((s) => s.url.trim().isNotEmpty).isEmpty) {
@@ -289,7 +313,7 @@ class DownloadLauncher {
           final resolved = await resolveBatchStreamSources(
             candidates,
             resolveCandidate: (candidate) =>
-                provider!.loadStreams(candidate.url),
+                provider.loadStreams(candidate.url),
           );
           final prioritized = orderStreamSourcesByPreference(
             resolved
@@ -358,7 +382,8 @@ class DownloadLauncher {
   }) async {
     final resolveUrl = episodeUrl ?? episode?.url ?? item.url;
     if (resolveUrl.isEmpty) return;
-    final key = '${item.provider ?? ''}|${item.url}|$resolveUrl';
+    final key =
+        '${item.provider ?? ''}|${downloadMediaIdForItemV2(item)}|${resolveUrl.trim()}';
     if (!_launchingItems.add(key)) return;
     try {
       await _launch(context, item, episodeUrl: episodeUrl, episode: episode);
@@ -379,26 +404,13 @@ class DownloadLauncher {
     final resolvedEpisode =
         episode ?? item.episodes?.firstWhereOrNull((e) => e.url == resolveUrl);
 
-    final manager = _ref.read(extensionManagerProvider.notifier);
-    AnimeWitcherProvider? provider;
-    if (item.provider != null) {
-      try {
-        final val = item.provider!;
-        provider = manager.getAllProviders().firstWhere(
-          (p) => p.packageName == val || p.name == val,
-        );
-      } catch (e) {
-        if (kDebugMode) debugPrint('DownloadLauncher.launch: $e');
-      }
-    }
-    provider ??= _ref.read(activeProviderProvider);
+    final provider = _ref.read(activeProviderProvider);
     if (provider == null) {
       _ref
           .read(notificationServiceProvider)
           .showError(l10n.errorPrefix('لا يوجد مزود تشغيل نشط'));
       return;
     }
-
     bool isCanceled = false;
     bool loadingDialogShown = false;
 
@@ -413,7 +425,7 @@ class DownloadLauncher {
           qualityPriority: preferences.streamQualityPriority,
           serverPriority: preferences.streamServerPriority,
           resolveCandidate: (StreamResult candidate) =>
-              provider!.loadStreams(candidate.url),
+              provider.loadStreams(candidate.url),
         );
         if (selected == null) {
           throw Exception('لم يتم العثور على مصادر تشغيل.');
@@ -693,15 +705,7 @@ class DownloadLauncher {
       forceEpisodeFilename: forceEpisodeFilename,
     );
 
-    final destinationPath = await downloadDestinationPathV2(
-      item,
-      episode: episodeData,
-      filename: filename,
-    );
-    final imdbId = item.imdbId?.trim();
-    final animeId =
-        item.tmdbId?.toString() ??
-        (imdbId?.isNotEmpty == true ? imdbId! : item.url.trim());
+    final animeId = downloadMediaIdForItemV2(item);
     final episodeKey = resolveUrl.trim();
     final audioVariant = switch (episodeData?.dubStatus) {
       DubStatus.dubbed => 'dub',
@@ -716,9 +720,17 @@ class DownloadLauncher {
       animeId: animeId,
       episodeKey: episodeKey,
       variantKey: variantKey,
+      providerId: providerId,
+    );
+    final destinationPath = await downloadDestinationPathV2(
+      item,
+      episode: episodeData,
+      filename: filename,
+      providerId: providerId,
+      logicalId: logicalId,
     );
     final descriptor = DownloadUrlRefreshDescriptor(
-      trackingUrl: resolveUrl,
+      trackingUrl: episodeKey,
       providerId: providerId,
       source: stream.source,
       quality: stream.quality,
@@ -748,9 +760,9 @@ class DownloadLauncher {
     if (!hasExistingMetadata) {
       await storage.saveDownloadMetadata(
         logicalId.value,
-        item,
+        item.copyWith(provider: providerId),
         episode: episodeData,
-        trackingUrl: resolveUrl,
+        trackingUrl: episodeKey,
         filePath: absolutePath,
         logicalId: logicalId.value,
       );
@@ -775,9 +787,9 @@ class DownloadLauncher {
       if (hasExistingMetadata) {
         await storage.saveDownloadMetadata(
           logicalId.value,
-          item,
+          item.copyWith(provider: providerId),
           episode: episodeData,
-          trackingUrl: resolveUrl,
+          trackingUrl: episodeKey,
           filePath: absolutePath,
           logicalId: logicalId.value,
         );

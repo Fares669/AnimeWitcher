@@ -239,9 +239,23 @@ class AnimeWitcherComment {
   }
 }
 
+/// Untagged (and historical Local/Remote) items keep the legacy routing.
+/// An explicitly different provider must never resolve to Witcher account
+/// documents, even if its URL or server-side ID happens to match.
+bool isAnimeWitcherAccountItem(MultimediaItem item) {
+  final provider = item.provider?.trim() ?? '';
+  return provider.isEmpty ||
+      provider == 'Local' ||
+      provider == 'Remote' ||
+      provider == 'AnimeWitcher' ||
+      provider == animeWitcherNativeProviderId;
+}
+
 bool isAnimeWitcherCommentItem(MultimediaItem item) {
-  return item.provider == animeWitcherNativeProviderId ||
-      item.url.toLowerCase().contains('animewitcher.com/watch/');
+  return isAnimeWitcherAccountItem(item) &&
+      (item.provider?.trim() == animeWitcherNativeProviderId ||
+          item.provider?.trim() == 'AnimeWitcher' ||
+          item.url.toLowerCase().contains('animewitcher.com/watch/'));
 }
 
 AnimeWitcherCommentTarget? animeWitcherAnimeCommentTarget(MultimediaItem item) {
@@ -273,6 +287,8 @@ AnimeWitcherCommentTarget? animeWitcherEpisodeCommentTarget(
   MultimediaItem parent,
   Episode episode,
 ) {
+  // Episode URLs can embed a Witcher-looking ID even for another provider.
+  if (!isAnimeWitcherAccountItem(parent)) return null;
   var animeId = animeWitcherAnimeIdFromItem(parent);
   var episodeId = '';
   final parts = episode.url.split('|');
@@ -313,6 +329,7 @@ AnimeWitcherCommentTarget animeWitcherNewsCommentTarget(NewsItem item) {
 }
 
 String animeWitcherAnimeIdFromItem(MultimediaItem item) {
+  if (!isAnimeWitcherAccountItem(item)) return '';
   final uri = safeTryParseUri(item.url);
   if (uri != null && uri.pathSegments.isNotEmpty) {
     final value = uri.pathSegments.last.trim();

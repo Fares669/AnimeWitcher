@@ -86,7 +86,10 @@ final class _FailingMangaAccountService extends AnimeWitcherAccountService {
   }
 
   @override
-  Future<void> removeMangaLibraryItem(String url) async {
+  Future<void> removeMangaLibraryItem(
+    String url, {
+    bool keepFavorite = false,
+  }) async {
     throw StateError('server delete failed');
   }
 }
@@ -165,22 +168,23 @@ void main() {
     await operation;
   });
 
-  test('failed manga cloud add rolls local state back and surfaces error', () async {
+  test('failed manga cloud add retains the optimistic local row', () async {
     final storage = _LibraryStorage();
     final repository = LibraryRepository(
       storage,
       _FailingMangaAccountService(storage),
     );
 
-    await expectLater(
-      repository.addToLibrary(manga, category: LibraryCategory.watching),
-      throwsA(isA<StateError>()),
-    );
+    await repository.addToLibrary(manga, category: LibraryCategory.watching);
 
-    expect(storage.isInLibrary(manga.url), isFalse);
+    expect(storage.isInLibrary(manga.url), isTrue);
+    expect(
+      storage.getLibraryItemCategory(manga.url),
+      LibraryCategory.watching.storageKey,
+    );
   });
 
-  test('failed manga cloud delete restores the previous local row', () async {
+  test('failed manga cloud delete retains the optimistic removal', () async {
     final storage = _LibraryStorage();
     await storage.addToLibrary(
       manga,
@@ -192,16 +196,10 @@ void main() {
       _FailingMangaAccountService(storage),
     );
 
-    await expectLater(
-      repository.removeFromLibrary(manga.url),
-      throwsA(isA<StateError>()),
-    );
+    await repository.removeFromLibrary(manga.url);
 
-    expect(storage.isInLibrary(manga.url), isTrue);
-    expect(
-      storage.getLibraryItemCategory(manga.url),
-      LibraryCategory.watching.storageKey,
-    );
-    expect(storage.isLibraryItemFavorite(manga.url), isTrue);
+    expect(storage.isInLibrary(manga.url), isFalse);
+    expect(storage.getLibraryItemCategory(manga.url), isNull);
+    expect(storage.isLibraryItemFavorite(manga.url), isFalse);
   });
 }

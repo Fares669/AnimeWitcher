@@ -189,7 +189,7 @@ class _ContinueWatchingCardState extends ConsumerState<ContinueWatchingCard> {
             if (!context.mounted || canceled) return;
 
             unawaited(
-              ref.read(continueWatchingProvider.notifier).remove(item.url),
+              ref.read(continueWatchingProvider.notifier).removeForItem(item),
             );
             await PlayerRoute(
               $extra: PlayerRouteExtra(item: liveItem, videoUrl: liveItem.url),
@@ -245,7 +245,7 @@ class _ContinueWatchingCardState extends ConsumerState<ContinueWatchingCard> {
                     onTap: () {
                       ref
                           .read(continueWatchingProvider.notifier)
-                          .remove(item.url);
+                          .removeForItem(item);
                       Navigator.pop(sheetContext);
                       if (!origin.mounted) return;
                       ref

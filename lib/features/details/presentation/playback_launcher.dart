@@ -89,21 +89,7 @@ class PlaybackLauncher {
     }
   }
 
-  AnimeWitcherProvider? _resolveProvider(MultimediaItem item) {
-    final manager = _ref.read(extensionManagerProvider.notifier);
-    AnimeWitcherProvider? provider;
-    if (item.provider != null) {
-      try {
-        final val = item.provider!;
-        provider = manager.getAllProviders().firstWhere(
-          (p) => p.packageName == val || p.name == val,
-        );
-      } catch (e) {
-        if (kDebugMode) debugPrint('PlaybackLauncher._resolveProvider: $e');
-      }
-    }
-    return provider ?? _ref.read(activeProviderProvider);
-  }
+  AnimeWitcherProvider? _resolveProvider() => _ref.read(activeProviderProvider);
 
   Episode? _canonicalEpisode(
     MultimediaItem item,
@@ -254,7 +240,7 @@ class PlaybackLauncher {
       return;
     }
 
-    final provider = _resolveProvider(item);
+    final provider = _resolveProvider();
     if (provider == null) {
       _ref
           .read(notificationServiceProvider)
@@ -332,7 +318,7 @@ class PlaybackLauncher {
       );
     }
 
-    final provider = _resolveProvider(item);
+    final provider = _resolveProvider();
     if (provider == null) {
       _ref
           .read(notificationServiceProvider)
@@ -528,7 +514,7 @@ class PlaybackLauncher {
       return;
     }
 
-    final provider = _resolveProvider(item);
+    final provider = _resolveProvider();
     if (provider == null) {
       _ref
           .read(notificationServiceProvider)

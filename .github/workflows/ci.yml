@@ -41,6 +41,9 @@ jobs:
         # build/test regressions behind a large baseline migration.
         run: flutter analyze --no-fatal-warnings --no-fatal-infos
 
+      - name: Validate build configuration serialization
+        run: python3 -m unittest discover -s test/tools -p 'test_*.py'
+
       - name: Focused V2 tests
         # Keep the V2 architecture/reliability gate visible independently from
         # the repository-wide baseline so a known unrelated suite failure can
@@ -110,7 +113,7 @@ jobs:
     if: >-
       github.event.head_commit.message != 'chore: purge obsolete workflow history'
     name: Build iOS V2 and retain log
-    runs-on: macos-latest
+    runs-on: macos-26-intel
     steps:
       - uses: actions/checkout@v5
 
@@ -147,7 +150,7 @@ jobs:
     if: >-
       github.event.head_commit.message != 'chore: purge obsolete workflow history'
     name: Typecheck native download logger
-    runs-on: macos-latest
+    runs-on: macos-26-intel
     steps:
       - uses: actions/checkout@v5
       - name: Typecheck the production Foundation logger

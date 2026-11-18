@@ -108,26 +108,25 @@ class _CompletedDownloadEpisodeCardState
 
     if (historyRepo == null) return const _EpisodeWatchPresentation();
 
-    final epPos = historyRepo.getEpisodePosition(
-      episode.url,
-      mainUrl: widget.item.item.url,
+    final epPos = historyPositionForItem(historyRepo,
+      widget.item.item,
+      episodeUrl: episode.url,
       season: episode.season,
       episode: episode.episode,
     );
-    final epDur = historyRepo.getEpisodeDuration(
-      episode.url,
-      mainUrl: widget.item.item.url,
+    final epDur = historyDurationForItem(historyRepo,
+      widget.item.item,
+      episodeUrl: episode.url,
       season: episode.season,
       episode: episode.episode,
     );
     final progress = epDur > 0 ? (epPos / epDur).clamp(0.0, 1.0) : 0.0;
 
-    final explicitWatchState = episodeWatchRepo?.getExplicitState(
-      widget.item.item.url,
-      episode,
+    final explicitWatchState = episodeWatchRepo == null ? null : episodeExplicitStateFor(
+      episodeWatchRepo, widget.item.item, episode,
     );
     final isWatched =
-        episodeWatchRepo?.isWatched(widget.item.item.url, episode) ??
+        (episodeWatchRepo == null ? null : episodeIsWatchedFor(episodeWatchRepo, widget.item.item, episode)) ??
         (epDur > 0 && progress >= 0.90);
     final displayedProgress = isWatched ? 1.0 : progress;
 
@@ -159,12 +158,14 @@ class _CompletedDownloadEpisodeCardState
   HistoryItem? _historyItemForSeries() {
     List<HistoryItem> history = const <HistoryItem>[];
     try {
-      history = ref.watch(watchHistoryProvider);
+      ref.watch(watchHistoryProvider);
+      history = historyForItem(ref.watch(historyRepositoryProvider), widget.item.item);
     } catch (_) {
       return null;
     }
     for (final item in history) {
-      if (item.item.url == widget.item.item.url) return item;
+      if (item.item.url == widget.item.item.url &&
+          sameDownloadProvider(item.item, widget.item.item)) return item;
     }
     return null;
   }

@@ -22,6 +22,7 @@ import '../../../core/utils/image_fallbacks.dart';
 import '../../../core/utils/resume_episode.dart';
 import '../../../core/theme/app_theme.dart';
 import 'details_item_merge.dart';
+import 'details_library_membership.dart';
 
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:animewitcher/core/utils/responsive_breakpoints.dart';
@@ -175,7 +176,7 @@ class DetailsScreen extends ConsumerStatefulWidget {
 }
 
 class _DetailsScreenState extends ConsumerState<DetailsScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, DetailsLibraryMembership<DetailsScreen> {
   bool _didTriggerAutoPlay = false;
   bool _episodesExpanded = false;
   bool _episodesVisible = false;
@@ -188,12 +189,13 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   String? _loadedUserRatingAnimeId;
 
   static const String _removeLibraryAction = '__remove_from_library__';
+  @override
+  MultimediaItem get libraryItem => widget.item;
 
   List<AppleLiquidGlassToolbarButton> _buildDetailsHeaderButtons(
     BuildContext context,
     MultimediaItem item, {
     required bool isFavorite,
-    required dynamic libraryNotifier,
     required Color foregroundColor,
 
     /// The desktop page reads the comments themselves at its foot, so an
@@ -207,8 +209,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     const favoriteRed = Color(0xFFFF3B30);
     final colors = Theme.of(context).colorScheme;
     final commentTarget = animeWitcherAnimeCommentTarget(item);
-    final LibraryCategory? currentCategory =
-        libraryNotifier.itemCategory(item.url) as LibraryCategory?;
+    final currentCategory = libraryMembership.category;
 
     return <AppleLiquidGlassToolbarButton>[
       if (includeComments && commentTarget != null)
@@ -236,7 +237,15 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         color: isFavorite ? favoriteRed : foregroundColor,
         onPressed: () async {
           if (!await _ensureSignedInForLibrary(context)) return;
-          await libraryNotifier.setFavorite(item, !isFavorite);
+          if (!mounted) return;
+          final current = libraryMembership;
+          await editLibrary(
+            (category: current.category, favorite: !current.favorite),
+            () => ref
+                .read(libraryProvider.notifier)
+                .setFavorite(item, !current.favorite, membership: current),
+            favorite: true,
+          );
         },
       ),
       if (includeLibraryMenu)
@@ -273,12 +282,10 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     BuildContext context,
     MultimediaItem item, {
     required bool isFavorite,
-    required dynamic libraryNotifier,
     required Color foregroundColor,
     Color? fallbackColor,
   }) {
-    final LibraryCategory? category =
-        libraryNotifier.itemCategory(item.url) as LibraryCategory?;
+    final category = libraryMembership.category;
     return Wrap(
       spacing: 12,
       runSpacing: 12,
@@ -336,7 +343,6 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
           context,
           item,
           isFavorite: isFavorite,
-          libraryNotifier: libraryNotifier,
           foregroundColor: foregroundColor,
           includeLibraryMenu: false,
           includeComments: false,
@@ -388,7 +394,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   String? _firstTrailerUrl(MultimediaItem item) {
     final trailers =
         ref
-            .watch(detailsControllerProvider(widget.item.url))
+            .watch(detailsControllerProvider(detailsControllerKey(widget.item)))
             .trailers
             .asData
             ?.value ??
@@ -488,9 +494,19 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     String value,
   ) async {
     if (!await _ensureSignedInForLibrary(context)) return;
+    if (!mounted) return;
     final notifier = ref.read(libraryProvider.notifier);
+    final current = libraryMembership;
     if (value == _removeLibraryAction) {
-      await notifier.clearItemCategory(item.url);
+      await editLibrary(
+        (category: null, favorite: current.favorite),
+        () => notifier.clearItemCategory(
+          item.url,
+          providerId: item.provider,
+          previousCategory: current.category,
+        ),
+        favorite: false,
+      );
       return;
     }
     LibraryCategory? category;
@@ -501,7 +517,11 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       }
     }
     if (category != null) {
-      await notifier.addItem(item, category: category);
+      await editLibrary(
+        (category: category, favorite: current.favorite),
+        () => notifier.addItem(item, category: category, membership: current),
+        favorite: false,
+      );
     }
   }
 
@@ -606,6 +626,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   @override
   void initState() {
     super.initState();
+    scheduleLibraryRead();
     _episodesRevealController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 240),
@@ -623,7 +644,10 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     resetEpisodeBrowse();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref
-          .read(detailsControllerProvider(widget.item.url).notifier)
+          .read(
+            detailsControllerProvider(detailsControllerKey(widget.item))
+                .notifier,
+          )
           .loadDetails(widget.item, autoPlay: widget.autoPlay);
     });
   }
@@ -735,7 +759,6 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     required BuildContext context,
     required MultimediaItem item,
     required bool isFavorite,
-    required dynamic libraryNotifier,
     required Color foregroundColor,
     required Color fallbackColor,
   }) {
@@ -744,7 +767,6 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       context,
       item,
       isFavorite: isFavorite,
-      libraryNotifier: libraryNotifier,
       foregroundColor: foregroundColor,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -765,7 +787,10 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
 
   @override
   Widget build(BuildContext context) {
-    ref.listen(detailsControllerProvider(widget.item.url), (prev, next) {
+    ref.listen(detailsControllerProvider(detailsControllerKey(widget.item)), (
+      prev,
+      next,
+    ) {
       if (!widget.autoPlay || _didTriggerAutoPlay) return;
       final prevState = prev ?? const DetailsState();
       final nextState = next;
@@ -792,7 +817,10 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!context.mounted) return;
         ref
-            .read(detailsControllerProvider(widget.item.url).notifier)
+            .read(
+              detailsControllerProvider(detailsControllerKey(widget.item))
+                  .notifier,
+            )
             .handlePlayPress(
               context,
               item,
@@ -804,42 +832,50 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     // Watch library state so the icon refreshes after add/remove, but check
     // membership globally instead of only inside the currently selected list.
     ref.watch(libraryProvider);
-    final libraryNotifier = ref.read(libraryProvider.notifier);
-    final isFavorite = libraryNotifier.isFavorite(widget.item.url);
+    listenToLibraryAccount();
+    final isFavorite = libraryMembership.favorite;
     final isLarge = context.isTabletOrLarger;
 
     final detailsAsync = ref.watch(
-      detailsControllerProvider(widget.item.url).select((s) => s.details),
+      detailsControllerProvider(detailsControllerKey(widget.item))
+          .select((s) => s.details),
     );
     final details = detailsAsync.value;
     final episodesAsync = ref.watch(
-      detailsControllerProvider(widget.item.url).select((s) => s.episodes),
+      detailsControllerProvider(detailsControllerKey(widget.item))
+          .select((s) => s.episodes),
     );
     final castAsync = ref.watch(
-      detailsControllerProvider(widget.item.url).select((s) => s.cast),
+      detailsControllerProvider(detailsControllerKey(widget.item))
+          .select((s) => s.cast),
     );
     final trailersAsync = ref.watch(
-      detailsControllerProvider(widget.item.url).select((s) => s.trailers),
+      detailsControllerProvider(detailsControllerKey(widget.item))
+          .select((s) => s.trailers),
     );
     final relatedAsync = ref.watch(
-      detailsControllerProvider(widget.item.url).select((s) => s.related),
+      detailsControllerProvider(detailsControllerKey(widget.item))
+          .select((s) => s.related),
     );
     final recommendationsAsync = ref.watch(
-      detailsControllerProvider(widget.item.url)
+      detailsControllerProvider(detailsControllerKey(widget.item))
           .select((s) => s.recommendations),
     );
     final currentItem = ref.watch(
-      detailsControllerProvider(widget.item.url).select((s) => s.item),
+      detailsControllerProvider(detailsControllerKey(widget.item))
+          .select((s) => s.item),
     );
     final initialPageReady = ref.watch(
-      detailsControllerProvider(widget.item.url).select((s) => s.isShellReady),
+      detailsControllerProvider(detailsControllerKey(widget.item))
+          .select((s) => s.isShellReady),
     );
     // Movies and one-episode anime share the exact same mobile layout, so
     // iPhone/iPad-small pages must not rebuild just because isMovie resolves.
     // Desktop still uses the flag for hero-specific playback presentation.
     final isMovie = isLarge
         ? ref.watch(
-            detailsControllerProvider(widget.item.url).select((s) => s.isMovie),
+            detailsControllerProvider(detailsControllerKey(widget.item))
+                .select((s) => s.isMovie),
           )
         : false;
     final item = mergeDetailsItem(
@@ -849,7 +885,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     );
     _ensureUserRatingLoaded(item);
     final selectedEpisodeCount = ref.watch(
-      detailsControllerProvider(widget.item.url)
+      detailsControllerProvider(detailsControllerKey(widget.item))
           .select((state) => state.selectedEpisodeKeys.length),
     );
 
@@ -860,7 +896,6 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         context: context,
         item: item,
         isFavorite: isFavorite,
-        libraryNotifier: libraryNotifier,
         foregroundColor: Theme.of(context).colorScheme.onSurface,
         fallbackColor: Theme.of(context).colorScheme.surfaceContainerHigh,
       );
@@ -892,7 +927,6 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         recommendationsAsync,
         isMovie,
         isFavorite,
-        libraryNotifier,
         l10n,
         selectedEpisodeCount,
       );
@@ -902,7 +936,6 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       context: context,
       item: item,
       isFavorite: isFavorite,
-      libraryNotifier: libraryNotifier,
       foregroundColor: Theme.of(context).colorScheme.onSurface,
       fallbackColor: Theme.of(context).colorScheme.surfaceContainerHigh,
     );
@@ -927,14 +960,13 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         details: item,
         detailsState: detailsAsync,
         isMovie: false,
-        itemUrl: widget.item.url,
+        itemUrl: detailsControllerKey(widget.item),
         onRefresh: _refreshDetails,
         onPosterTap: () => _showPosterViewer(context, item),
         heroActions: _buildDesktopHeroActionRow(
           context,
           item,
           isFavorite: isFavorite,
-          libraryNotifier: libraryNotifier,
           foregroundColor: theme.colorScheme.onSurface,
           fallbackColor: isDark ? Colors.black45 : Colors.white54,
         ),
@@ -984,7 +1016,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
 
   void _toggleEpisodes() {
     final controller = ref.read(
-      detailsControllerProvider(widget.item.url).notifier,
+      detailsControllerProvider(detailsControllerKey(widget.item)).notifier,
     );
     if (!_episodesExpanded) {
       setState(() {
@@ -1066,7 +1098,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           DetailsSeasonsBar(
-            itemUrl: widget.item.url,
+            itemUrl: detailsControllerKey(widget.item),
             current: item,
             onOpen: (child) => _openExtraAnime(item, child),
           ),
@@ -1101,7 +1133,9 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              DetailsSeasonListWrapper(itemUrl: widget.item.url),
+              DetailsSeasonListWrapper(
+                itemUrl: detailsControllerKey(widget.item),
+              ),
               const SizedBox(height: 12),
             ],
           ),
@@ -1109,7 +1143,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       ),
       SliverDetailsEpisodeList(
         parentItem: item,
-        itemUrl: widget.item.url,
+        itemUrl: detailsControllerKey(widget.item),
         isMovie: false,
         transition: _episodesReveal,
         transitionOffset: const Offset(0, -0.045),
@@ -1123,11 +1157,13 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
 
     final selectedLabel = 'تم تحديد $selectedCount';
     final controller = ref.read(
-      detailsControllerProvider(widget.item.url).notifier,
+      detailsControllerProvider(detailsControllerKey(widget.item)).notifier,
     );
 
     Future<void> downloadSelected() async {
-      final state = ref.read(detailsControllerProvider(widget.item.url));
+      final state = ref.read(
+        detailsControllerProvider(detailsControllerKey(widget.item)),
+      );
       final episodes = state.seasonMap.values
           .expand((season) => season)
           .where(
@@ -1376,7 +1412,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
 
   void _onExtraTabBecameVisible(int index) {
     final controller = ref.read(
-      detailsControllerProvider(widget.item.url).notifier,
+      detailsControllerProvider(detailsControllerKey(widget.item)).notifier,
     );
     switch (index) {
       case detailsExtraCharactersTabIndex:
@@ -1405,15 +1441,15 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       (value) => _recommendationsWithoutRelatedLists(value, related),
     );
     final relatedHasMore = ref.watch(
-      detailsControllerProvider(widget.item.url)
+      detailsControllerProvider(detailsControllerKey(widget.item))
           .select((state) => state.relatedHasMore),
     );
     final similarHasMore = ref.watch(
-      detailsControllerProvider(widget.item.url)
+      detailsControllerProvider(detailsControllerKey(widget.item))
           .select((state) => state.similarHasMore),
     );
     final controller = ref.read(
-      detailsControllerProvider(widget.item.url).notifier,
+      detailsControllerProvider(detailsControllerKey(widget.item)).notifier,
     );
     return DetailsExtraTabs(
       key: _extraTabsKey,
@@ -1497,7 +1533,6 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     AsyncValue<List<MultimediaItem>> recommendationsState,
     bool isMovie,
     bool isFavorite,
-    dynamic libraryNotifier,
     AppLocalizations l10n,
     int selectedEpisodeCount,
   ) {
@@ -1508,7 +1543,6 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       context: context,
       item: item,
       isFavorite: isFavorite,
-      libraryNotifier: libraryNotifier,
       foregroundColor: textColor,
       fallbackColor: isDark
           ? Colors.black45
@@ -1534,14 +1568,13 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         details: item,
         detailsState: detailsState,
         isMovie: isMovie,
-        itemUrl: widget.item.url,
+        itemUrl: detailsControllerKey(widget.item),
         onRefresh: _refreshDetails,
         onPosterTap: () => _showPosterViewer(context, item),
         heroActions: _buildDesktopHeroActionRow(
           context,
           item,
           isFavorite: isFavorite,
-          libraryNotifier: libraryNotifier,
           foregroundColor: textColor,
           fallbackColor: isDark ? Colors.black45 : Colors.white54,
         ),
@@ -1602,7 +1635,10 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     if (episodesState.hasError) {
       return _DetailsLoadFailure(
         onRetry: () => ref
-            .read(detailsControllerProvider(widget.item.url).notifier)
+            .read(
+              detailsControllerProvider(detailsControllerKey(widget.item))
+                  .notifier,
+            )
             .retryEpisodes(),
         title: appText(
           context,
@@ -1806,7 +1842,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         DetailsSeasonsBar(
-          itemUrl: widget.item.url,
+          itemUrl: detailsControllerKey(widget.item),
           current: item,
           onOpen: (child) => _openExtraAnime(item, child),
         ),
@@ -1826,11 +1862,13 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
                 : Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      DetailsSeasonListWrapper(itemUrl: widget.item.url),
+                      DetailsSeasonListWrapper(
+                        itemUrl: detailsControllerKey(widget.item),
+                      ),
                       const SizedBox(height: 16),
                       DetailsDesktopEpisodeColumn(
                         parentItem: item,
-                        itemUrl: widget.item.url,
+                        itemUrl: detailsControllerKey(widget.item),
                         isMovie: false,
                       ),
                     ],

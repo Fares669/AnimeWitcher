@@ -5,10 +5,11 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 
 import '../../domain/entity/manga.dart';
+import '../../account/animewitcher_comment_models.dart'
+    show animeWitcherNativeProviderId;
+import '../application_log_directory.dart';
 import '../../extensions/base_provider.dart';
 import '../../extensions/extension_manager.dart';
 import '../../storage/settings_repository.dart';
@@ -80,10 +81,7 @@ final downloadDiagnosticsFileV2Provider = Provider<FileDownloadDiagnosticsV2>((
       final info = await PackageInfo.fromPlatform();
       return (version: info.version, buildNumber: info.buildNumber);
     },
-    directoryProvider: () async {
-      final documents = await getApplicationDocumentsDirectory();
-      return Directory(p.join(documents.path, 'log'));
-    },
+    directoryProvider: applicationLogDirectory,
   );
 });
 
@@ -184,6 +182,15 @@ final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
     parallelPauseReadiness: pauseReadiness,
     maxConcurrentDownloads: () =>
         ref.read(settingsRepositoryProvider).getDownloadConcurrency(),
+    sourceAllowed: (descriptor) {
+      final providerId = descriptor['providerId']?.toString().trim() ?? '';
+      return providerId.isEmpty ||
+          providerId == animeWitcherNativeProviderId ||
+          providerId == 'animewitcher.native' ||
+          providerId == 'AnimeWitcher' ||
+          providerId == 'Local' ||
+          providerId == 'Remote';
+    },
   );
   // iOS suspends Dart shortly after backgrounding, and queue advancement is
   // Dart-only: run a final admission pass (within the configured

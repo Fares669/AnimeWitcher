@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 
 import 'widgets/download_log_dialog.dart';
+import '../../../shared/widgets/account_avatar_button.dart';
 
 import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:flutter/foundation.dart';
@@ -145,6 +146,12 @@ class SettingsScreen extends ConsumerWidget {
               onSelected: (style) =>
                   ref.read(appThemeStyleProvider.notifier).select(style),
             ),
+          ),
+          SettingsTile(
+            key: const ValueKey('settings-witcher-account'),
+            icon: Icons.account_circle_outlined,
+            title: 'حساب AnimeWitcher',
+            onTap: () => openAccountScreen(context),
           ),
           SettingsTile(
             icon: Icons.view_carousel_rounded,

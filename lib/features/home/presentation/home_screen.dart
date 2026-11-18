@@ -31,6 +31,7 @@ import '../../../l10n/generated/app_localizations.dart';
 
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
+import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
 import 'package:animewitcher/core/router/app_router.dart';
 
 import '../../../shared/widgets/shimmer_placeholder.dart';
@@ -374,6 +375,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   /// rails with their "view all" pages. Only the catalogue's own shows are
   /// in them; a ranking not fetched yet is left out until it is.
   List<Widget> _malRankingRails(BuildContext context) {
+    if (ref.watch(activeProviderProvider) is! AnimeWitcherNativeProvider) {
+      return const <Widget>[];
+    }
     final load = ref.watch(malRankingLoaderProvider);
     final rails = <Widget>[];
     for (final (ranking, english, arabic)

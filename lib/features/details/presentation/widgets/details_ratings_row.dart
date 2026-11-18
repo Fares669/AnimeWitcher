@@ -627,9 +627,8 @@ Future<int?> showAnimeRatingDialog(
                 children: [
                   Text(
                     '$rating /10',
-                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.w800,
-                    ),
+                    style: Theme.of(context).textTheme.headlineSmall
+                        ?.copyWith(fontWeight: FontWeight.w800),
                   ),
                   const SizedBox(height: 12),
                   FittedBox(

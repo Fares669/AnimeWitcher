@@ -27,7 +27,7 @@ class LibrarySideList extends StatelessWidget {
   final LibraryMediaKind kind;
   final LibraryCategory category;
   final bool recentSelected;
-  final Map<LibraryMediaKind, Map<LibraryCategory, int>> counts;
+  final Map<LibraryMediaKind, Map<LibraryCategory, int?>> counts;
   final int recentCount;
   final VoidCallback onRecent;
 
@@ -73,8 +73,8 @@ class LibrarySideList extends StatelessWidget {
       ),
     );
     final special = recentSelected || charactersSelected;
-    bool shown(bool listShown, int count, bool selected) =>
-        selected || (listShown && (count > 0 || !prefs.hideEmpty));
+    bool shown(bool listShown, int? count, bool selected) =>
+        selected || (listShown && (count != 0 || !prefs.hideEmpty));
 
     return ListView(
       key: const ValueKey<String>('library-side-list'),
@@ -105,7 +105,7 @@ class LibrarySideList extends StatelessWidget {
           for (final listCategory in LibraryCategory.values)
             if (shown(
               prefs.shows(listCategory),
-              counts[listKind]?[listCategory] ?? 0,
+              counts[listKind]?[listCategory],
               !special && listKind == kind && listCategory == category,
             ))
               LibrarySideRow(
@@ -114,7 +114,7 @@ class LibrarySideList extends StatelessWidget {
                 ),
                 icon: libraryCategoryIcon(listCategory),
                 label: libraryCategoryLabel(context, listCategory, listKind),
-                count: counts[listKind]?[listCategory] ?? 0,
+                count: counts[listKind]?[listCategory],
                 selected:
                     !special && listKind == kind && listCategory == category,
                 onTap: () => onSelect(listKind, listCategory),

@@ -167,7 +167,11 @@ class _BroadcastScheduleScreenState
         );
       });
     } on DioException catch (error) {
-      if (CancelToken.isCancel(error) || !mounted) return;
+      if (CancelToken.isCancel(error) ||
+          !mounted ||
+          !identical(_requestTokens[day], token)) {
+        return;
+      }
       setState(() {
         _dayStates[day] = _BroadcastScheduleDayState(
           items: previous.items,
@@ -178,7 +182,7 @@ class _BroadcastScheduleScreenState
         );
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || !identical(_requestTokens[day], token)) return;
       setState(() {
         _dayStates[day] = _BroadcastScheduleDayState(
           items: previous.items,

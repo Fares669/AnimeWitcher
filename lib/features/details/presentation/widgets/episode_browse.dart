@@ -105,7 +105,7 @@ List<Episode> browseEpisodesFor({
     ordered: ordered,
     rangeIndex: rangeIndex,
     filter: filter,
-    isWatched: (episode) => watchRepository.isWatched(parentItem.url, episode),
+    isWatched: (episode) => episodeIsWatchedFor(watchRepository, parentItem, episode),
     isDownloaded: (episode) =>
         completedEpisodeDownload(downloads, parentItem, episode) != null,
   );

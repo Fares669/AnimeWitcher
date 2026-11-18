@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../../core/account/account_providers.dart';
+import '../../../../core/account/animewitcher_comment_models.dart'
+    show animeWitcherNativeProviderId;
 import '../../../../core/extensions/extension_manager.dart';
 import '../../../../core/storage/storage_service.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
@@ -30,6 +32,7 @@ class HomeData extends _$HomeData {
     ref.listen<AnimeWitcherProvider?>(activeProviderProvider, (previous, next) {
       if (previous?.packageName == next?.packageName) return;
       if (next == null) {
+        ++_fetchGeneration;
         state = const HomeNoProvider();
         return;
       }
@@ -111,14 +114,17 @@ class HomeData extends _$HomeData {
   /// its loading shimmer.
   Future<void> fetch({bool keepCurrent = false}) async {
     final generation = ++_fetchGeneration;
-    final preserveCurrent = keepCurrent && state is HomeSuccess;
+    final previous = keepCurrent && state is HomeSuccess
+        ? state as HomeSuccess
+        : null;
+    final preserveCurrent = previous != null;
     if (!preserveCurrent) {
       state = const HomeLoading();
     }
 
     final activeProvider = ref.read(activeProviderProvider);
     if (activeProvider == null) {
-      if (generation != _fetchGeneration) return;
+      if (!ref.mounted || generation != _fetchGeneration) return;
       state = const HomeNoProvider();
       return;
     }
@@ -128,20 +134,55 @@ class HomeData extends _$HomeData {
     // rows are in, and the other two join it when they land. Held back, the
     // page opened only when the slowest of the three answered.
     final news = _orNull(() => activeProvider.getHomeNewsPage(limit: 10));
-    final manga = _orNull(() => activeProvider.getLatestMangaPage(limit: 20));
-    final previous = state is HomeSuccess ? state as HomeSuccess : null;
+    final mangaProviders = ref
+        .read(extensionManagerProvider)
+        .where(
+          (provider) => provider.supportedTypes.contains(ProviderType.manga),
+        );
+    final mangaProvider =
+        mangaProviders
+            .where(
+              (provider) =>
+                  provider.packageName == animeWitcherNativeProviderId,
+            )
+            .firstOrNull ??
+        mangaProviders.firstOrNull;
+    final manga = mangaProvider == null
+        ? Future<MangaLatestChapterPage?>.value(null)
+        : _orNull(() => mangaProvider.getLatestMangaPage(limit: 20));
+    MangaLatestChapterPage? mangaPage;
+    // Manga may arrive before or after the anime home request.
+    unawaited(
+      manga.then((page) {
+        if (!ref.mounted || page == null || generation != _fetchGeneration) {
+          return;
+        }
+        mangaPage = page;
+        final current = state;
+        if (current is HomeSuccess) {
+          state = HomeSuccess(
+            current.data,
+            news: current.news,
+            latestManga: page.items,
+          );
+        }
+      }),
+    );
 
     try {
       final items = await activeProvider.getHome();
-      if (generation != _fetchGeneration) return;
+      if (!ref.mounted || generation != _fetchGeneration) return;
       _saveSnapshot(activeProvider.packageName, items);
       state = HomeSuccess(
         items,
         news: previous?.news ?? const <NewsItem>[],
-        latestManga: previous?.latestManga ?? const <MangaLatestChapter>[],
+        latestManga:
+            mangaPage?.items ??
+            previous?.latestManga ??
+            const <MangaLatestChapter>[],
       );
     } catch (e) {
-      if (generation != _fetchGeneration) return;
+      if (!ref.mounted || generation != _fetchGeneration) return;
       if (preserveCurrent) return;
       state = HomeError(e.toString());
       return;
@@ -150,31 +191,15 @@ class HomeData extends _$HomeData {
     // A failed side request keeps what the page already shows.
     unawaited(
       news.then((page) {
-        final current = state;
-        if (page == null ||
-            generation != _fetchGeneration ||
-            current is! HomeSuccess) {
+        if (!ref.mounted || generation != _fetchGeneration || page == null) {
           return;
         }
+        final current = state;
+        if (current is! HomeSuccess) return;
         state = HomeSuccess(
           current.data,
           news: page.items,
           latestManga: current.latestManga,
-        );
-      }),
-    );
-    unawaited(
-      manga.then((page) {
-        final current = state;
-        if (page == null ||
-            generation != _fetchGeneration ||
-            current is! HomeSuccess) {
-          return;
-        }
-        state = HomeSuccess(
-          current.data,
-          news: current.news,
-          latestManga: page.items,
         );
       }),
     );

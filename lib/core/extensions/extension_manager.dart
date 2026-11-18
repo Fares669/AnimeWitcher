@@ -58,6 +58,17 @@ class ProviderResolutionLoading extends _$ProviderResolutionLoading {
 /// AnimeWitcher Native is the built-in provider and is selected automatically.
 @Riverpod(keepAlive: true)
 class ActiveProvider extends _$ActiveProvider {
+  Future<void> _pendingSave = Future<void>.value();
+
+  Future<void> _saveSelection(String? id) {
+    final storage = ref.read(settingsRepositoryProvider);
+    final next = _pendingSave
+        .catchError((Object _) {})
+        .then((_) => storage.setActiveProviderId(id));
+    _pendingSave = next;
+    return next;
+  }
+
   @override
   AnimeWitcherProvider? build() {
     final providers = ref.watch(extensionManagerProvider);
@@ -68,10 +79,17 @@ class ActiveProvider extends _$ActiveProvider {
     final selected = storedId == null
         ? providers.first
         : (ref.read(extensionManagerProvider.notifier).getProvider(storedId) ??
-            providers.first);
+              providers.first);
 
-    if (storedId != selected.packageName) {
-      Future.microtask(() => storage.setActiveProviderId(selected.packageName));
+    // A missing preference can safely initialize to the built-in default.
+    // An unknown persisted ID may belong to a temporarily unavailable or
+    // future provider, so fall back for this session without destroying it.
+    if (storedId == null) {
+      Future.microtask(() {
+        if (ref.mounted && state?.packageName == selected.packageName) {
+          _saveSelection(selected.packageName);
+        }
+      });
     }
     return selected;
   }
@@ -81,8 +99,6 @@ class ActiveProvider extends _$ActiveProvider {
     final next = provider ?? (providers.isEmpty ? null : providers.first);
     state = next;
     ref.read(providerResolutionLoadingProvider.notifier).set(false);
-    await ref
-        .read(settingsRepositoryProvider)
-        .setActiveProviderId(next?.packageName);
+    await _saveSelection(next?.packageName);
   }
 }

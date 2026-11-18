@@ -44,7 +44,7 @@ class _AnimeWitcherMyCommentsScreenState
   late final ScrollController _scrollController;
   final Set<String> _busyComments = <String>{};
 
-  final CommentPager _pager = CommentPager();
+  CommentPager _pager = CommentPager();
   AnimeWitcherCommentSort _sort = AnimeWitcherCommentSort.newest;
 
   String get _editDialogTitle =>
@@ -86,23 +86,31 @@ class _AnimeWitcherMyCommentsScreenState
 
   Future<void> _loadInitial() async {
     if (!mounted) return;
-    final future = _pager.loadInitial(_fetchPage);
+    final pager = _pager;
+    final future = pager.loadInitial(_fetchPage);
     setState(() {});
-    if (await future && mounted) setState(() {});
+    if (await future && _currentPager(pager)) {
+      setState(() {});
+    }
   }
 
   Future<void> _loadMore() async {
     if (_pager.loadingInitial || _pager.loadingMore || !_pager.hasMore) {
       return;
     }
-    final future = _pager.loadMore(
+    final pager = _pager;
+    final future = pager.loadMore(
       _fetchPage,
       onError: (error) {
-        if (mounted) _showMessage(_errorText(error), isError: true);
+        if (_currentPager(pager)) {
+          _showMessage(_errorText(error), isError: true);
+        }
       },
     );
     setState(() {});
-    if (await future && mounted) setState(() {});
+    if (await future && _currentPager(pager)) {
+      setState(() {});
+    }
   }
 
   Future<void> _changeSort(AnimeWitcherCommentSort sort) async {
@@ -129,7 +137,10 @@ class _AnimeWitcherMyCommentsScreenState
     }
   }
 
+  bool _currentPager(CommentPager pager) => mounted && identical(pager, _pager);
+
   Future<void> _editComment(AnimeWitcherComment comment) async {
+    final pager = _pager;
     final draft = await showCommentEditDialog(
       context,
       title: _editDialogTitle,
@@ -138,49 +149,51 @@ class _AnimeWitcherMyCommentsScreenState
       initialSpoiler: comment.spoiler,
       isReview: _isReviews,
     );
-    if (draft == null || !mounted) return;
+    if (draft == null || !_currentPager(pager)) return;
     _setBusy(comment.path, true);
     try {
       final updated = await ref
           .read(animeWitcherAccountServiceProvider)
           .updateOwnComment(comment, draft.text, spoiler: draft.spoiler);
-      if (!mounted) return;
+      if (!_currentPager(pager)) return;
       _replaceComment(updated);
       _showMessage(_editedMessage);
     } catch (error) {
-      if (mounted) _showMessage(_errorText(error), isError: true);
+      if (_currentPager(pager)) _showMessage(_errorText(error), isError: true);
     } finally {
-      if (mounted) _setBusy(comment.path, false);
+      if (_currentPager(pager)) _setBusy(comment.path, false);
     }
   }
 
   Future<void> _deleteComment(AnimeWitcherComment comment) async {
+    final pager = _pager;
     final confirmed = await showConfirmDialog(
       context,
       title: 'حذف التعليق؟',
       message: 'هل أنت متأكد من حذف هذا التعليق؟',
       confirmLabel: 'حذف',
     );
-    if (!confirmed || !mounted) return;
+    if (!confirmed || !_currentPager(pager)) return;
 
     _setBusy(comment.path, true);
     try {
       await ref
           .read(animeWitcherAccountServiceProvider)
           .deleteOwnComment(comment);
-      if (!mounted) return;
+      if (!_currentPager(pager)) return;
       setState(() {
         _pager.items.removeWhere((item) => item.path == comment.path);
       });
       _showMessage('تم حذف التعليق.');
     } catch (error) {
-      if (mounted) _showMessage(_errorText(error), isError: true);
+      if (_currentPager(pager)) _showMessage(_errorText(error), isError: true);
     } finally {
-      if (mounted) _setBusy(comment.path, false);
+      if (_currentPager(pager)) _setBusy(comment.path, false);
     }
   }
 
   Future<void> _closeReplies(AnimeWitcherComment comment) async {
+    final pager = _pager;
     if (comment.repliesClosed) return;
     final confirmed = await showConfirmDialog(
       context,
@@ -189,20 +202,20 @@ class _AnimeWitcherMyCommentsScreenState
       confirmLabel: 'منع',
       destructive: false,
     );
-    if (!confirmed || !mounted) return;
+    if (!confirmed || !_currentPager(pager)) return;
 
     _setBusy(comment.path, true);
     try {
       final updated = await ref
           .read(animeWitcherAccountServiceProvider)
           .closeOwnCommentReplies(comment);
-      if (!mounted) return;
+      if (!_currentPager(pager)) return;
       _replaceComment(updated);
       _showMessage('تم منع الردود.');
     } catch (error) {
-      if (mounted) _showMessage(_errorText(error), isError: true);
+      if (_currentPager(pager)) _showMessage(_errorText(error), isError: true);
     } finally {
-      if (mounted) _setBusy(comment.path, false);
+      if (_currentPager(pager)) _setBusy(comment.path, false);
     }
   }
 
@@ -276,6 +289,19 @@ class _AnimeWitcherMyCommentsScreenState
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(
+      animeWitcherAccountControllerProvider.select(
+        (account) => account.asData?.value.profile?.documentId,
+      ),
+      (previous, next) {
+        if (previous == next) return;
+        _pager = CommentPager();
+        _busyComments.clear();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _loadInitial();
+        });
+      },
+    );
     ref.watch(animeWitcherAccountControllerProvider);
 
     final usePersistentGlass = appleUsesPersistentLiquidGlassHeader;
