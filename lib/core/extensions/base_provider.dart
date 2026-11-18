@@ -216,6 +216,9 @@ abstract class AnimeWitcherProvider {
     int offset = 0,
     int limit = 30,
   }) async => throw UnsupportedError('المواسم غير مدعومة.');
+  bool get supportsUpcoming => false;
+  Future<ProviderMediaPage> getUpcomingPage({int offset = 0}) async =>
+      throw UnsupportedError('الأعمال القادمة غير مدعومة.');
   bool get supportsBroadcastSchedule => false;
   Future<ProviderMediaPage> getBroadcastSchedulePage(
     String day, {

@@ -170,4 +170,34 @@ void main() {
       await expectLater(provider.search('أنمي'), throwsFormatException);
     },
   );
+
+  test(
+    'seasons and upcoming use the documented browse filter values',
+    () async {
+      final requests = <Uri>[];
+      final provider = WitanimeProvider((uri, {cancelToken}) async {
+        requests.add(uri);
+        if (uri.path == '/seasonal') {
+          return '<main><h1>أنميات خريف ٢٠٢٦</h1></main>';
+        }
+        return '<main><select name="year"><option value="2026">2026</option>'
+            '</select>${_card('/anime/sample', 'Sample')}</main>';
+      });
+      final seasons = await provider.getSeasonConfig();
+      expect(seasons.past, 'صيف عام 2026');
+      expect(seasons.current, 'خريف عام 2026');
+      expect(seasons.next, 'شتاء عام 2027');
+      expect(await provider.getAllSeasons(), hasLength(4));
+      expect(
+        (await provider.getSeasonPage(seasons.current)).items,
+        hasLength(1),
+      );
+      expect(requests.last.queryParameters, {'season': 'fall', 'year': '2026'});
+      expect(
+        (await provider.getUpcomingPage()).items.single.status,
+        ShowStatus.upcoming,
+      );
+      expect(requests.last.queryParameters, {'status': 'upcoming'});
+    },
+  );
 }

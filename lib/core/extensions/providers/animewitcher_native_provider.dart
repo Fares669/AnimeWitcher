@@ -3769,10 +3769,14 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     );
   }
 
+  @override
+  bool get supportsUpcoming => true;
+
   /// Coming soon lists titles whose AnimeWitcher status is "not yet aired",
   /// matching the official Android drawer item "قادم قريبا":
   /// `Index.browse` on `series` with `details.state:"لم يتم بثه بعد"`.
   /// There is no Firestore fallback when browse fails.
+  @override
   Future<ProviderMediaPage> getUpcomingPage({int offset = 0}) async {
     const unairedStatus = 'لم يتم بثه بعد';
     final safeOffset = offset < 0 ? 0 : offset;

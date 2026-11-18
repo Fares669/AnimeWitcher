@@ -16,6 +16,16 @@ class WitanimeProvider extends AnimeWitcherProvider {
 
   static const id = 'witanime';
   static final _origin = Uri.https('witanime.site');
+  // Filter values documented by NoveLA's Witanime browse adapter.
+  static const _seasonSlugs = {
+    'شتاء': 'winter',
+    'ربيع': 'spring',
+    'صيف': 'summer',
+    'خريف': 'fall',
+  };
+  static final _seasonLabel = RegExp(
+    r'(شتاء|ربيع|صيف|خريف)\s+(?:عام\s+)?([0-9]{4})',
+  );
   static const _homeShelves = [
     'الأكثر مشاهدة',
     'أحدث الحلقات',
@@ -106,6 +116,98 @@ class WitanimeProvider extends AnimeWitcherProvider {
 
   Future<ProviderMediaPage> getMoviesPage({int offset = 0, int limit = 30}) =>
       _catalogPage(_origin.replace(path: '/movies'), offset, limit);
+
+  @override
+  bool get supportsUpcoming => true;
+
+  @override
+  Future<ProviderMediaPage> getUpcomingPage({int offset = 0}) async {
+    final page = await searchPage(
+      '',
+      const ProviderSearchFilters(statuses: {'upcoming'}),
+      offset: offset,
+    );
+    return ProviderMediaPage(
+      items: [
+        for (final item in page.items)
+          item.copyWith(status: ShowStatus.upcoming),
+      ],
+      nextOffset: page.nextOffset,
+      hasMore: page.hasMore,
+    );
+  }
+
+  @override
+  bool get supportsSeasons => true;
+
+  @override
+  Future<ProviderSeasonConfig> getSeasonConfig() async {
+    final main = await _main(_origin.replace(path: '/seasonal'));
+    final heading = normalizeLocalizedDigits(
+      _text(main.querySelector('h1')) ?? '',
+    );
+    final match = _seasonLabel.firstMatch(heading);
+    if (match == null)
+      throw const FormatException('Witanime season label missing');
+    final year = int.parse(match.group(2)!);
+    final names = _seasonSlugs.keys.toList(growable: false);
+    final index = year * names.length + names.indexOf(match.group(1)!);
+    String title(int number) =>
+        '${names[number % names.length]} عام ${number ~/ names.length}';
+    return ProviderSeasonConfig(
+      past: title(index - 1),
+      current: title(index),
+      next: title(index + 1),
+    );
+  }
+
+  @override
+  Future<List<String>> getAllSeasons({bool refresh = false}) async {
+    final main = await _main(_origin.replace(path: '/browse'));
+    final years = <int>{
+      for (final option in main.querySelectorAll(
+        'select[name="year"] option[value]',
+      ))
+        if (int.tryParse(option.attributes['value'] ?? '') case final int year)
+          if (year >= 1900 && year <= 2100) year,
+    };
+    // The browse filter can render custom controls instead of a select.
+    if (years.isEmpty) {
+      years.addAll([
+        for (var year = 2002; year <= 2026; year++) year,
+        for (var year = 1992; year <= 2000; year++) year,
+        1989,
+        1986,
+        1985,
+        1978,
+      ]);
+    }
+    return [
+      for (final year in years)
+        for (final name in _seasonSlugs.keys) '$name عام $year',
+    ];
+  }
+
+  @override
+  Future<ProviderMediaPage> getSeasonPage(
+    String season, {
+    int offset = 0,
+    int limit = 30,
+  }) {
+    final match = _seasonLabel.firstMatch(
+      normalizeLocalizedDigits(season.trim()),
+    );
+    if (match == null) throw const FormatException('Invalid Witanime season');
+    return searchPage(
+      '',
+      ProviderSearchFilters(
+        seasons: {_seasonSlugs[match.group(1)]!},
+        years: {match.group(2)!},
+      ),
+      offset: offset,
+      limit: limit,
+    );
+  }
 
   @override
   bool get supportsBroadcastSchedule => true;
