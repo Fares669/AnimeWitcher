@@ -7,6 +7,7 @@ import 'package:html/parser.dart' as html;
 import '../../domain/entity/multimedia_item.dart';
 import '../../utils/digit_normalization.dart';
 import '../base_provider.dart';
+import 'witanime_filter_values.dart';
 
 /// The caller supplies the catalog transport once access is configured.
 class WitanimeProvider extends AnimeWitcherProvider {
@@ -70,6 +71,21 @@ class WitanimeProvider extends AnimeWitcherProvider {
       (await searchPage(query, filters, cancelToken: cancelToken)).items;
 
   @override
+  Future<ProviderSearchFilterOptions> getSearchFilterOptions() async =>
+      ProviderSearchFilterOptions(
+        statuses: witanimeStatusValues.keys.toList(),
+        types: witanimeTypeValues.keys.toList(),
+        years: witanimeYearValues.keys.toList(),
+        countries: witanimeCountryValues.keys.toList(),
+        seasons: _seasonSlugs.keys.toList(),
+        studios: witanimeStudioValues.keys.toList(),
+        sources: witanimeSourceValues.keys.toList(),
+        versions: witanimeVersionValues.keys.toList(),
+        genres: witanimeGenreValues.keys.toList(),
+        singleSelection: true,
+      );
+
+  @override
   Future<ProviderMediaPage> searchPage(
     String query,
     ProviderSearchFilters filters, {
@@ -78,20 +94,37 @@ class WitanimeProvider extends AnimeWitcherProvider {
     CancelToken? cancelToken,
   }) {
     final text = query.trim();
-    final plainSearch =
-        text.isNotEmpty && filters.isEmpty && filters.sort.isEmpty;
+    final sort = switch (filters.sort) {
+      'name_asc' || 'A-Z' => 'A-Z',
+      'name_desc' || 'Z-A' => 'Z-A',
+      'Top Rated' || 'Most Viewed' => filters.sort,
+      _ => null,
+    };
+    String? value(Set<String> selected, Map<String, String> known) {
+      final label = selected.firstOrNull;
+      return known[label] ?? (known.containsValue(label) ? label : null);
+    }
+
+    final plainSearch = text.isNotEmpty && filters.isEmpty && sort == null;
     final path = plainSearch ? '/search' : '/browse';
     final uri = _origin.replace(
       path: path,
       queryParameters: <String, dynamic>{
         if (plainSearch) 'q': text else if (text.isNotEmpty) 'search': text,
-        if (filters.statuses.isNotEmpty) 'status': filters.statuses.first,
-        if (filters.types.isNotEmpty) 'type': filters.types.first,
-        if (filters.years.isNotEmpty) 'year': filters.years.first,
-        if (filters.seasons.isNotEmpty) 'season': filters.seasons.first,
-        if (filters.countries.isNotEmpty) 'country': filters.countries.first,
-        if (filters.genres.isNotEmpty) 'genres[]': filters.genres.toList(),
-        if (filters.sort.isNotEmpty) 'sort': filters.sort,
+        'status': ?value(filters.statuses, witanimeStatusValues),
+        'type': ?value(filters.types, witanimeTypeValues),
+        'year': ?filters.years.firstOrNull,
+        'season': ?value(filters.seasons, _seasonSlugs),
+        'country': ?value(filters.countries, witanimeCountryValues),
+        'studio': ?value(filters.studios, witanimeStudioValues),
+        'source': ?value(filters.sources, witanimeSourceValues),
+        'version': ?value(filters.versions, witanimeVersionValues),
+        if (filters.genres.isNotEmpty)
+          'genres[]': [
+            for (final genre in filters.genres)
+              if (value({genre}, witanimeGenreValues) case final slug?) slug,
+          ],
+        'sort': ?sort,
       },
     );
     return _catalogPage(uri, offset, limit, cancelToken: cancelToken);
@@ -173,14 +206,7 @@ class WitanimeProvider extends AnimeWitcherProvider {
     };
     // The browse filter can render custom controls instead of a select.
     if (years.isEmpty) {
-      years.addAll([
-        for (var year = 2002; year <= 2026; year++) year,
-        for (var year = 1992; year <= 2000; year++) year,
-        1989,
-        1986,
-        1985,
-        1978,
-      ]);
+      years.addAll(witanimeYearValues.values.map(int.parse));
     }
     return [
       for (final year in years)

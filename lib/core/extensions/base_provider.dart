@@ -23,6 +23,10 @@ class ProviderSearchFilterOptions {
   final List<String> seasons;
   final List<String> genres;
   final List<String> tags;
+  final List<String> studios;
+  final List<String> sources;
+  final List<String> versions;
+  final bool singleSelection;
 
   const ProviderSearchFilterOptions({
     this.statuses = const <String>[],
@@ -33,6 +37,10 @@ class ProviderSearchFilterOptions {
     this.seasons = const <String>[],
     this.genres = const <String>[],
     this.tags = const <String>[],
+    this.studios = const <String>[],
+    this.sources = const <String>[],
+    this.versions = const <String>[],
+    this.singleSelection = false,
   });
 
   bool get isEmpty =>
@@ -43,7 +51,10 @@ class ProviderSearchFilterOptions {
       years.isEmpty &&
       seasons.isEmpty &&
       genres.isEmpty &&
-      tags.isEmpty;
+      tags.isEmpty &&
+      studios.isEmpty &&
+      sources.isEmpty &&
+      versions.isEmpty;
 
   factory ProviderSearchFilterOptions.fromJson(Map<String, dynamic> json) {
     List<String> read(String key) {
@@ -65,6 +76,10 @@ class ProviderSearchFilterOptions {
       seasons: read('seasons'),
       genres: read('genres'),
       tags: read('tags'),
+      studios: read('studios'),
+      sources: read('sources'),
+      versions: read('versions'),
+      singleSelection: json['singleSelection'] == true,
     );
   }
 }
@@ -78,6 +93,9 @@ class ProviderSearchFilters {
   final Set<String> seasons;
   final Set<String> genres;
   final Set<String> tags;
+  final Set<String> studios;
+  final Set<String> sources;
+  final Set<String> versions;
   final String sort;
 
   const ProviderSearchFilters({
@@ -89,6 +107,9 @@ class ProviderSearchFilters {
     this.seasons = const <String>{},
     this.genres = const <String>{},
     this.tags = const <String>{},
+    this.studios = const <String>{},
+    this.sources = const <String>{},
+    this.versions = const <String>{},
     this.sort = '',
   });
 
@@ -103,7 +124,10 @@ class ProviderSearchFilters {
       years.length +
       seasons.length +
       genres.length +
-      tags.length;
+      tags.length +
+      studios.length +
+      sources.length +
+      versions.length;
 
   Map<String, dynamic> toJson() {
     return <String, dynamic>{
@@ -115,6 +139,9 @@ class ProviderSearchFilters {
       'seasons': seasons.toList(growable: false),
       'genres': genres.toList(growable: false),
       if (tags.isNotEmpty) 'tags': tags.toList(growable: false),
+      if (studios.isNotEmpty) 'studios': studios.toList(growable: false),
+      if (sources.isNotEmpty) 'sources': sources.toList(growable: false),
+      if (versions.isNotEmpty) 'versions': versions.toList(growable: false),
       'sort': sort,
     };
   }
@@ -128,6 +155,9 @@ class ProviderSearchFilters {
     Set<String>? seasons,
     Set<String>? genres,
     Set<String>? tags,
+    Set<String>? studios,
+    Set<String>? sources,
+    Set<String>? versions,
     String? sort,
   }) {
     return ProviderSearchFilters(
@@ -139,6 +169,9 @@ class ProviderSearchFilters {
       seasons: seasons ?? this.seasons,
       genres: genres ?? this.genres,
       tags: tags ?? this.tags,
+      studios: studios ?? this.studios,
+      sources: sources ?? this.sources,
+      versions: versions ?? this.versions,
       sort: sort ?? this.sort,
     );
   }

@@ -8,6 +8,39 @@ String _card(String href, String title) =>
     '<a href="$href"><img src="/posters/test.jpg" alt="$title"><h3>$title</h3></a>';
 
 void main() {
+  test('displayed filter labels map to the Witanime query values', () async {
+    late Uri request;
+    final provider = WitanimeProvider((uri, {cancelToken}) async {
+      request = uri;
+      return '<main></main>';
+    });
+    final options = await provider.getSearchFilterOptions();
+    expect(options.studios, contains('A-1 Pictures'));
+    expect(options.versions, contains('مدبلج'));
+    expect(options.singleSelection, isTrue);
+    await provider.searchPage(
+      '',
+      const ProviderSearchFilters(
+        statuses: {'مستمر'},
+        countries: {'اليابان'},
+        studios: {'A-1 Pictures'},
+        sources: {'رواية خفيفة'},
+        versions: {'مدبلج'},
+        genres: {'أكشن'},
+        sort: 'name_asc',
+      ),
+    );
+    expect(request.queryParameters, {
+      'status': 'ongoing',
+      'country': 'JP',
+      'studio': 'a-1-pictures',
+      'source': 'Light Novel',
+      'version': 'dub',
+      'genres[]': 'action',
+      'sort': 'A-Z',
+    });
+  });
+
   test('search follows same-site pages and only returns unique results', () async {
     final requests = <Uri>[];
     final token = CancelToken();

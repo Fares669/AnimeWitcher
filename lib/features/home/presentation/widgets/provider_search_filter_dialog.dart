@@ -71,6 +71,9 @@ class _ProviderSearchFilterDialogState
   late Set<String> _years;
   late Set<String> _seasons;
   late Set<String> _genres;
+  late Set<String> _studios;
+  late Set<String> _sources;
+  late Set<String> _versions;
   late Set<String> _tags;
   String? _category;
   bool _allYears = false;
@@ -92,6 +95,9 @@ class _ProviderSearchFilterDialogState
     _years = {...widget.initialValue.years};
     _seasons = {...widget.initialValue.seasons};
     _genres = {...widget.initialValue.genres};
+    _studios = {...widget.initialValue.studios};
+    _sources = {...widget.initialValue.sources};
+    _versions = {...widget.initialValue.versions};
     _tags = {...widget.initialValue.tags};
     _category = widget.category;
     if (_category != null) {
@@ -118,9 +124,11 @@ class _ProviderSearchFilterDialogState
     Navigator.of(context).pop(_value);
   }
 
-  void _toggle(Set<String> target, String value) {
+  void _toggle(Set<String> target, String value, {bool single = false}) {
     setState(() {
-      if (!target.add(value)) target.remove(value);
+      if (target.remove(value)) return;
+      if (single) target.clear();
+      target.add(value);
     });
   }
 
@@ -157,6 +165,9 @@ class _ProviderSearchFilterDialogState
       _years.clear();
       _seasons.clear();
       _genres.clear();
+      _studios.clear();
+      _sources.clear();
+      _versions.clear();
       _tags.clear();
     });
   }
@@ -180,6 +191,9 @@ class _ProviderSearchFilterDialogState
       seasons: keep(_seasons, options?.seasons),
       genres: keep(_genres, options?.genres),
       tags: keep(_tags, options?.tags),
+      studios: keep(_studios, options?.studios),
+      sources: keep(_sources, options?.sources),
+      versions: keep(_versions, options?.versions),
       sort: widget.initialValue.sort,
     );
   }
@@ -343,7 +357,8 @@ class _ProviderSearchFilterDialogState
           child: _ChipWrap(
             values: options.statuses,
             selected: _statuses,
-            onToggle: (value) => _toggle(_statuses, value),
+            onToggle: (value) =>
+                _toggle(_statuses, value, single: options.singleSelection),
           ),
         ),
       if (options.types.isNotEmpty)
@@ -353,7 +368,8 @@ class _ProviderSearchFilterDialogState
           child: _ChipWrap(
             values: options.types,
             selected: _types,
-            onToggle: (value) => _toggle(_types, value),
+            onToggle: (value) =>
+                _toggle(_types, value, single: options.singleSelection),
           ),
         ),
       if (options.seasons.isNotEmpty)
@@ -468,7 +484,11 @@ class _ProviderSearchFilterDialogState
                         values: shownYears,
                         selected: _years,
                         columns: yearsPerRow,
-                        onToggle: (value) => _toggle(_years, value),
+                        onToggle: (value) => _toggle(
+                          _years,
+                          value,
+                          single: options.singleSelection,
+                        ),
                       ),
                     ),
                     if (options.years.length > yearsPerRow)
@@ -493,6 +513,32 @@ class _ProviderSearchFilterDialogState
                 ),
               ),
             ],
+            for (final (key, title, values, selected) in [
+              ('studio', 'الاستوديو', options.studios, _studios),
+              ('source', 'المصدر', options.sources, _sources),
+              ('version', 'النسخة', options.versions, _versions),
+            ])
+              if (values.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                _FilterCard(
+                  key: ValueKey<String>('filterCard-$key'),
+                  title: title,
+                  child: DropdownButton<String>(
+                    isExpanded: true,
+                    value: selected.where(values.contains).firstOrNull ?? '',
+                    items: [
+                      const DropdownMenuItem(value: '', child: Text('الكل')),
+                      for (final value in values)
+                        DropdownMenuItem(value: value, child: Text(value)),
+                    ],
+                    onChanged: (value) => setState(() {
+                      selected.clear();
+                      if (value != null && value.isNotEmpty)
+                        selected.add(value);
+                    }),
+                  ),
+                ),
+              ],
             if (options.genres.isNotEmpty) ...[
               const SizedBox(height: 8),
               _FilterCard(
