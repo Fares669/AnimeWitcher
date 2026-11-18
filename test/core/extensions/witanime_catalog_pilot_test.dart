@@ -10,19 +10,25 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../support/memory_storage_service.dart';
 
 void main() {
-  test('the build setting controls production Witanime registration', () {
+  test('the build setting controls Witanime registration with default enabled', () {
     final container = ProviderContainer(
       overrides: [
         storageServiceProvider.overrideWithValue(MemoryStorageService()),
       ],
     );
     addTearDown(container.dispose);
-    const enabled = bool.fromEnvironment('WITANIME_CATALOG_ENABLED');
+    const enabled = bool.fromEnvironment(
+      'WITANIME_CATALOG_ENABLED',
+      defaultValue: true,
+    );
     expect(container.read(witanimeCatalogProvider) != null, enabled);
-    expect(container.read(activeProviderProvider) is WitanimeProvider, enabled);
+    expect(
+      container.read(extensionManagerProvider).any((p) => p is WitanimeProvider),
+      enabled,
+    );
   });
 
-  test('the normal build selects the native anime catalog', () {
+  test('the native-only override selects the native anime catalog', () {
     final container = ProviderContainer(
       overrides: [
         witanimeCatalogProvider.overrideWithValue(null),
@@ -36,10 +42,9 @@ void main() {
   });
 
   test(
-    'the pilot selects Witanime anime without changing the manga source',
+    'users can switch freely between AnimeWitcher and Witanime without changing manga',
     () async {
       final storage = MemoryStorageService();
-      await storage.setActiveProviderId('previous-preference');
       final witanime = WitanimeProvider((uri, {cancelToken}) async {
         expect(uri.path, '/search');
         return '<main><a href="/movie/pilot"><h3>Pilot film</h3></a></main>';
@@ -53,13 +58,32 @@ void main() {
       );
       addTearDown(container.dispose);
 
+      expect(
+        container.read(extensionManagerProvider).length,
+        2,
+      );
+      expect(
+        container.read(activeProviderProvider),
+        isA<AnimeWitcherNativeProvider>(),
+      );
+
+      await container.read(activeProviderProvider.notifier).set(witanime);
       final active = container.read(activeProviderProvider);
       expect(active, same(witanime));
+      expect(storage.getActiveProviderId(), WitanimeProvider.id);
+
       final movie = (await active!.search('Pilot')).single;
       expect(movie.contentType, MultimediaContentType.movie);
       expect(movie.provider, WitanimeProvider.id);
       expect(container.read(nativeCatalog), isA<AnimeWitcherNativeProvider>());
-      expect(storage.getActiveProviderId(), 'previous-preference');
+
+      final nativeProvider = container
+          .read(extensionManagerProvider)
+          .whereType<AnimeWitcherNativeProvider>()
+          .single;
+      await container.read(activeProviderProvider.notifier).set(nativeProvider);
+      expect(container.read(activeProviderProvider), same(nativeProvider));
+      expect(storage.getActiveProviderId(), nativeProvider.packageName);
     },
   );
 }

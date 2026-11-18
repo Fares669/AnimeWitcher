@@ -215,6 +215,7 @@ void main() {
 
   test('Witanime library keeps favorite independent of list removal, guards stale reads, and retries offline mutations', () async {
     final storage = _LibraryMemoryStorage();
+    await storage.setActiveProviderId(WitanimeProvider.id);
     final tokens = _MemoryTokenStorage(storage);
     final accountBackend = _FakeAccountBackend()
       ..profilesByCookie['cookie-a'] = const WitanimeProfile(

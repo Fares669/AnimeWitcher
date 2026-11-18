@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/providers/witanime_provider.dart';
 import '../../../core/utils/layout_constants.dart';
@@ -162,10 +163,21 @@ class SettingsScreen extends ConsumerWidget {
             icon: Icons.video_library_outlined,
             title: 'مصدر الأنمي النشط',
             subtitle: activeCatalog is WitanimeProvider
-                ? 'Witanime (تجريبي) · المانجا على AnimeWitcher'
+                ? 'Witanime · المانجا على AnimeWitcher'
                 : '${activeCatalog?.name ?? 'AnimeWitcher'} (${installedProviders.length} مزوّد)',
-            onTap: installedProviders.length <= 1 ||
-                    installedProviders.any((p) => p is WitanimeProvider)
+            trailing: installedProviders.length > 1
+                ? const SizedBox.shrink()
+                : null,
+            below: installedProviders.length > 1
+                ? SettingsChoices<AnimeWitcherProvider>(
+                    values: installedProviders,
+                    selected: activeCatalog ?? installedProviders.first,
+                    label: (p) => p.name,
+                    onSelected: (p) =>
+                        ref.read(activeProviderProvider.notifier).set(p),
+                  )
+                : null,
+            onTap: installedProviders.length <= 1
                 ? null
                 : () async {
                     final next = installedProviders.firstWhere(

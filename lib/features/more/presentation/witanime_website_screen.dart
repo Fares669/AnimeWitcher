@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../core/account/witanime_account_models.dart';
 import '../../../core/extensions/providers/witanime_provider.dart';
 import '../../../core/extensions/providers/witanime_support_service.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../shared/widgets/app_page_header.dart';
 import '../../settings/presentation/widgets/settings_widgets.dart';
+import '../../settings/presentation/widgets/witanime_auth_webview_screen.dart';
 import 'more_sidebar_shell.dart';
 
 class WitanimeWebsiteScreen extends StatelessWidget {
@@ -29,7 +31,37 @@ class WitanimeWebsiteScreen extends StatelessWidget {
     (Icons.copyright_rounded, 'حقوق الملكية', '/dmca'),
   ];
 
+  static WitanimeAuthAction? _authActionForPath(String path) => switch (path) {
+    '/login' => WitanimeAuthAction.signIn,
+    '/register' => WitanimeAuthAction.register,
+    '/forgot-password' => WitanimeAuthAction.forgotPassword,
+    _ => null,
+  };
+
   Future<void> _open(BuildContext context, String path) async {
+    final authAction = _authActionForPath(path);
+    if (openLink == null &&
+        authAction != null &&
+        WitanimeAuthWebViewScreen.isSupported) {
+      final result = await WitanimeAuthWebViewScreen.open(
+        context,
+        action: authAction,
+      );
+      if (!context.mounted || result == null) return;
+      try {
+        ProviderScope.containerOf(context, listen: false)
+            .read(notificationServiceProvider)
+            .showSuccess('تم ربط حساب Witanime: ${result.profile.displayName}');
+      } catch (_) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('تم ربط حساب Witanime: ${result.profile.displayName}'),
+          ),
+        );
+      }
+      return;
+    }
+
     final uri = WitanimeProvider.websiteUri(path);
     try {
       final opened =

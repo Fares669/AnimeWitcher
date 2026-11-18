@@ -12,7 +12,12 @@ import 'providers/witanime_provider.dart';
 part 'extension_manager.g.dart';
 
 final witanimeCatalogProvider = Provider<WitanimeProvider?>((ref) {
-  if (!const bool.fromEnvironment('WITANIME_CATALOG_ENABLED')) return null;
+  if (!const bool.fromEnvironment(
+    'WITANIME_CATALOG_ENABLED',
+    defaultValue: true,
+  )) {
+    return null;
+  }
 
   return WitanimeProvider.withTransport(ref.watch(witanimeTransportProvider));
 });
@@ -23,7 +28,6 @@ class ExtensionManager extends _$ExtensionManager {
   @override
   List<AnimeWitcherProvider> build() {
     return <AnimeWitcherProvider>[
-      ?ref.watch(witanimeCatalogProvider),
       AnimeWitcherNativeProvider(
         ref.watch(dioClientProvider),
         ref.watch(settingsRepositoryProvider),
@@ -39,6 +43,7 @@ class ExtensionManager extends _$ExtensionManager {
                 .hideEcchiAnime ??
             false,
       ),
+      ?ref.watch(witanimeCatalogProvider),
     ];
   }
 
@@ -65,7 +70,7 @@ class ProviderResolutionLoading extends _$ProviderResolutionLoading {
   void set(bool value) => state = value;
 }
 
-/// An explicit Witanime pilot takes precedence over the saved anime catalog.
+/// Active anime catalog provider, persisted across app launches.
 @Riverpod(keepAlive: true)
 class ActiveProvider extends _$ActiveProvider {
   Future<void> _pendingSave = Future<void>.value();
@@ -83,9 +88,6 @@ class ActiveProvider extends _$ActiveProvider {
   AnimeWitcherProvider? build() {
     final providers = ref.watch(extensionManagerProvider);
     if (providers.isEmpty) return null;
-
-    final pilot = providers.whereType<WitanimeProvider>().firstOrNull;
-    if (pilot != null) return pilot;
 
     final storage = ref.read(settingsRepositoryProvider);
     final storedId = storage.getActiveProviderId();

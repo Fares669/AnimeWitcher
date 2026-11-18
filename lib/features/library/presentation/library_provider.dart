@@ -275,6 +275,12 @@ class Library extends _$Library {
   @override
   LibraryState build() {
     ref.watch(accountDataRevisionProvider);
+    ref.listen(activeProviderProvider, (previous, next) {
+      if (previous?.packageName != next?.packageName && ref.mounted) {
+        _countRevision++;
+        refresh();
+      }
+    });
     final wtService = ref.watch(witanimeLibraryServiceProvider);
     void onWitanimeChanged() {
       if (ref.mounted) {

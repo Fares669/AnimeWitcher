@@ -7,11 +7,21 @@ import '../../../../core/extensions/providers/witanime_provider.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../../more/presentation/witanime_website_screen.dart';
 import 'settings_widgets.dart';
+import 'witanime_auth_webview_screen.dart';
 
 class WitanimeAccountSection extends ConsumerWidget {
-  const WitanimeAccountSection({super.key, this.returnRoute});
+  const WitanimeAccountSection({
+    super.key,
+    this.returnRoute,
+    this.inAppAuthLauncher,
+  });
 
   final String? returnRoute;
+  final Future<WitanimeBrowserAuthResult?> Function(
+    BuildContext context,
+    WitanimeAuthAction action,
+  )?
+  inAppAuthLauncher;
 
   Future<void> _startOfficialAuth(
     BuildContext context,
@@ -19,6 +29,19 @@ class WitanimeAccountSection extends ConsumerWidget {
     WitanimeAuthAction action,
   ) async {
     final service = ref.read(witanimeAccountServiceProvider);
+    if (inAppAuthLauncher != null || WitanimeAuthWebViewScreen.isSupported) {
+      service.recordPendingAuthReturnRoute(returnRoute);
+      final launcher =
+          inAppAuthLauncher ??
+          (ctx, act) => WitanimeAuthWebViewScreen.open(ctx, action: act);
+      final result = await launcher(context, action);
+      if (!context.mounted || result == null) return;
+      ref
+          .read(notificationServiceProvider)
+          .showSuccess('تم ربط حساب Witanime: ${result.profile.displayName}');
+      return;
+    }
+
     final opened = await service.beginOfficialAuth(
       action,
       returnRoute: returnRoute,
@@ -303,7 +326,7 @@ class WitanimeAccountSection extends ConsumerWidget {
               SettingsTile(
                 icon: Icons.login_rounded,
                 title: 'تسجيل الدخول إلى Witanime',
-                subtitle: 'يفتح صفحة الدخول الرسمية ثم يثبّت الجلسة في التطبيق',
+                subtitle: 'متصفح داخل التطبيق مع التقاط الجلسة وإغلاقه تلقائيًا',
                 onTap: () => _startOfficialAuth(
                   context,
                   ref,

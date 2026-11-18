@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -232,7 +234,7 @@ class WitanimeAccountService extends ChangeNotifier {
     try {
       final raw = await _tokenStorage.read(kWitanimeSessionStorageKey);
       final restored = WitanimeAccountSession.tryDecode(raw);
-      if (restored != null) {
+      if (restored != null && _session == null) {
         _session = restored;
         notifyListeners();
       }
@@ -266,6 +268,10 @@ class WitanimeAccountService extends ChangeNotifier {
     notifyListeners();
   }
 
+  void recordPendingAuthReturnRoute(String? returnRoute) {
+    _pendingReturnRoute = returnRoute;
+  }
+
   Future<bool> beginOfficialAuth(
     WitanimeAuthAction action, {
     String? returnRoute,
@@ -277,25 +283,18 @@ class WitanimeAccountService extends ChangeNotifier {
   Future<bool> openDeleteAccountChannel() =>
       _openWebsite(WitanimeProvider.websiteUri('/privacy'));
 
-  /// Verifies [sessionCookie] against Witanime's `/profile` before activating
-  /// the account or opening its library. Returns any recorded return route.
-  Future<({WitanimeProfile profile, String? returnRoute})> completeBrowserAuth({
+  Future<({WitanimeProfile profile, String? returnRoute})?>
+  _verifyAndPersistSession({
     required String sessionCookie,
     String? csrfToken,
   }) async {
-    final trimmed = sessionCookie.trim();
-    if (trimmed.isEmpty) {
-      throw ArgumentError('يرجى إدخال رمز أو كوكي جلسة Witanime.');
-    }
     _busy = true;
     notifyListeners();
     try {
-      final verified = await _backend.fetchProfile(trimmed);
-      if (verified == null) {
-        throw StateError('تعذر تأكيد هوية حساب Witanime بهذه الجلسة.');
-      }
+      final verified = await _backend.fetchProfile(sessionCookie);
+      if (verified == null) return null;
       final next = WitanimeAccountSession(
-        sessionCookie: trimmed,
+        sessionCookie: sessionCookie,
         csrfToken: csrfToken?.trim(),
         profile: verified,
         updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
@@ -308,6 +307,45 @@ class WitanimeAccountService extends ChangeNotifier {
       _busy = false;
       notifyListeners();
     }
+  }
+
+  /// Checks whether [sessionCookie] represents an authenticated session and
+  /// activates it when verified. Returns `null` if not yet authenticated.
+  Future<({WitanimeProfile profile, String? returnRoute})?>
+  tryCompleteBrowserAuth({
+    required String sessionCookie,
+    String? csrfToken,
+  }) async {
+    final trimmed = sessionCookie.trim();
+    if (trimmed.isEmpty) return null;
+    try {
+      return await _verifyAndPersistSession(
+        sessionCookie: trimmed,
+        csrfToken: csrfToken,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Verifies [sessionCookie] against Witanime's `/profile` before activating
+  /// the account or opening its library. Returns any recorded return route.
+  Future<({WitanimeProfile profile, String? returnRoute})> completeBrowserAuth({
+    required String sessionCookie,
+    String? csrfToken,
+  }) async {
+    final trimmed = sessionCookie.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError('يرجى إدخال رمز أو كوكي جلسة Witanime.');
+    }
+    final result = await _verifyAndPersistSession(
+      sessionCookie: trimmed,
+      csrfToken: csrfToken,
+    );
+    if (result == null) {
+      throw StateError('تعذر تأكيد هوية حساب Witanime بهذه الجلسة.');
+    }
+    return result;
   }
 
   Future<WitanimeProfile?> refreshProfile() async {
@@ -429,6 +467,7 @@ final witanimeAccountServiceProvider = Provider<WitanimeAccountService>((ref) {
     tokenStorage: tokenStorage,
     backend: HttpWitanimeAccountBackend(transport),
   );
+  unawaited(service.restoreSession());
   ref.onDispose(() {
     transport.close(force: true);
     service.dispose();
