@@ -49,6 +49,7 @@ class _StubTransport implements WitanimeTransport {
     Uri uri, {
     Map<String, String> headers = const {},
     bool followRedirects = true,
+    bool inspectMedia = false,
     CancelToken? cancelToken,
     String operation = 'get',
   }) => onRequest('GET', uri, null);

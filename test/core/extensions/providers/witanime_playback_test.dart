@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -40,6 +41,7 @@ class _FakeWitanimeTransport implements WitanimeTransport {
     Uri uri, {
     Map<String, String> headers = const {},
     bool followRedirects = true,
+    bool inspectMedia = false,
     CancelToken? cancelToken,
     String operation = 'get',
   }) => handler('GET', uri, null, headers, followRedirects);
@@ -217,9 +219,9 @@ void main() {
   test('stream and download tokens resolve Yonaplay, Drive, Hgcloud, and refresh URL', () async {
     var gateRefererPresent = false;
     var downloadTokenVersion = 1;
-    final encryptedDrive = _encryptYonaplayForTest(
+    final encryptedHost = _encryptYonaplayForTest(
       'k1',
-      'https://drive.google.com/file/d/FILE_ID_1/view',
+      'https://dotplay.net/embed/FILE_ID_1',
     );
 
     final transport = _FakeWitanimeTransport((
@@ -235,13 +237,17 @@ void main() {
           body: '<meta name="csrf-token" content="csrf-123">',
         );
       }
-      if (uri.host == 'witanime.site' && uri.path == '/watch/sample/1/sources') {
+      if (uri.host == 'witanime.site' &&
+          uri.path == '/watch/sample/1/sources') {
         return WitanimeHttpResponse(
           statusCode: 200,
           body: jsonEncode({
             'players': {
               'FHD': [
-                {'label': 'Yonaplay', 'token': 'tok-yona-$downloadTokenVersion'},
+                {
+                  'label': 'Yonaplay',
+                  'token': 'tok-yona-$downloadTokenVersion',
+                },
                 {'label': 'Hgcloud', 'token': 'tok-hg'},
                 {'label': 'Mega', 'token': 'tok-mega'},
               ],
@@ -250,7 +256,10 @@ void main() {
               'dub': {
                 'downloads': {
                   'HD': [
-                    {'label': 'Google Drive', 'token': 'tok-dl-$downloadTokenVersion'},
+                    {
+                      'label': 'Google Drive',
+                      'token': 'tok-dl-$downloadTokenVersion',
+                    },
                   ],
                 },
               },
@@ -328,13 +337,26 @@ void main() {
       if (uri.host == 'yonaplay.org' && uri.path == '/api/sources.php') {
         return const WitanimeHttpResponse(
           statusCode: 200,
-          body: '{"qualities":[{"name":"FHD","servers":[{"token":"srv1"}]}]}',
+          body:
+              '{"qualities":{"HD":{"servers":[{"token":"other"}]},'
+              '"FHD":{"servers":[{},{"token":"srv1"}]}}}',
         );
       }
       if (uri.host == 'yonaplay.org' && uri.path == '/api/api.php') {
+        expect(jsonDecode(body as String)['token'], 'srv1');
         return WitanimeHttpResponse(
           statusCode: 200,
-          body: jsonEncode({'d': encryptedDrive}),
+          body: jsonEncode({'d': encryptedHost}),
+        );
+      }
+      if (uri.host == 'dotplay.net' && uri.path == '/api.php') {
+        expect(uri.queryParameters['code'], 'FILE_ID_1');
+        final encoded = base64Encode(
+          utf8.encode('https://cdn.test/video|expires'),
+        );
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          body: jsonEncode({'video_url': encoded}),
         );
       }
       if (uri.host == 'hgcloud.to' && uri.path == '/e/xyz') {
@@ -346,8 +368,7 @@ void main() {
       if (uri.host == 'hanerix.com' && uri.path == '/e/xyz') {
         return const WitanimeHttpResponse(
           statusCode: 200,
-          body:
-              '<script>var url="https://edge.hanerix.com/stream/master.txt?t=1";</script>',
+          body: '<script>var url="https://edge.hanerix.com/stream/master.txt?t=1";</script>',
         );
       }
       return WitanimeHttpResponse(statusCode: 404, body: 'Not found: $uri');
@@ -364,9 +385,10 @@ void main() {
 
     final yonaResolved = await provider.loadStreams(streamSources.first.url);
     expect(gateRefererPresent, isFalse);
+    expect(yonaResolved.single.url, 'https://cdn.test/video');
     expect(
-      yonaResolved.single.url,
-      'https://drive.usercontent.google.com/download?id=FILE_ID_1&export=download&confirm=t',
+      yonaResolved.single.headers?['Referer'],
+      'https://dotplay.net/embed/FILE_ID_1',
     );
     expect(yonaResolved.single.refreshUrl, streamSources.first.url);
 
@@ -607,6 +629,149 @@ void main() {
       throwsA(isA<WitanimeBrowserRequiredException>()),
     );
     expect(gateSecFetchDest, 'iframe');
+  });
+
+  test('download fallback preserves the source kind and refreshes a stale token', () async {
+    const watch = 'https://witanime.site/watch/sample/1';
+    const old = WitanimeSourceToken(
+      kind: 'download',
+      watchUrl: watch,
+      token: 'old',
+      label: 'MediaFire',
+      tier: 'HD',
+    );
+    final calls = <String>[];
+    final resolver = WitanimePlaybackResolver(
+      _FakeWitanimeTransport((method, uri, _, headers, followRedirects) async {
+        calls.add('$method ${uri.path}');
+        return switch (uri.path) {
+          '/watch/sample/1' => const WitanimeHttpResponse(
+            statusCode: 200,
+            body: '<meta name="csrf-token" content="csrf">',
+          ),
+          '/watch/download-source/old' => const WitanimeHttpResponse(
+            statusCode: 410,
+            body: '',
+          ),
+          '/watch/sample/1/sources' => const WitanimeHttpResponse(
+            statusCode: 200,
+            body: '{"players":{"hD":[{"label":"MediaFire","token":"a+b/c="}]}}',
+          ),
+          '/watch/stream-source/a+b%2Fc=' => WitanimeHttpResponse(
+            statusCode: uri.pathSegments.last == 'a+b/c=' ? 200 : 404,
+            body: '{"gateUrl":"/watch/custom-gate?x=1","referrerPolicy":"origin"}',
+          ),
+          '/watch/custom-gate' => WitanimeHttpResponse(
+            statusCode:
+                !followRedirects &&
+                    uri.queryParameters['x'] == '1' &&
+                    headers['Referer'] == 'https://witanime.site/'
+                ? 200
+                : 404,
+            body:
+                '<iframe src="//www.mediafire.com/file/id/clip.mp4"></iframe>',
+          ),
+          '/file/id/clip.mp4' => const WitanimeHttpResponse(
+            statusCode: 200,
+            body: '<a href="//cdn.test/file?x=1&amp;y=2" id="downloadButton">Download</a>',
+          ),
+          '/file' => const WitanimeHttpResponse(
+            statusCode: 200,
+            body: '',
+            headers: {
+              'Content-Type': ['application/octet-stream'],
+              'Content-Disposition': ['attachment; filename="episode.mkv"'],
+            },
+          ),
+          _ => const WitanimeHttpResponse(statusCode: 404, body: ''),
+        };
+      }),
+    );
+    final result = await resolver.resolveStreams(
+      old.encode(),
+      forDownload: true,
+    );
+    expect(result.single.url, 'https://cdn.test/file?x=1&y=2');
+    expect(
+      result.single.headers?['Referer'],
+      'https://www.mediafire.com/file/id/clip.mp4',
+    );
+    expect(
+      WitanimeSourceToken.tryDecode(result.single.refreshUrl!)?.kind,
+      'stream',
+    );
+    expect(
+      calls.where((call) => call.startsWith('POST /watch/download-source')),
+      hasLength(1),
+    );
+  });
+
+  test(
+    'Witanime respects Retry-After from a source unlock',
+    () async {
+      var requests = 0;
+      const watch = 'https://witanime.site/watch/sample/1';
+      const source = WitanimeSourceToken(
+        kind: 'stream',
+        watchUrl: watch,
+        token: 'token',
+        label: 'Server',
+        tier: 'HD',
+      );
+      final resolver = WitanimePlaybackResolver(
+        _FakeWitanimeTransport((method, uri, _, _, _) async {
+          requests++;
+          if (uri.path == '/watch/sample/1') {
+            return const WitanimeHttpResponse(
+              statusCode: 200,
+              body: '<meta name="csrf-token" content="csrf">',
+            );
+          }
+          return const WitanimeHttpResponse(
+            statusCode: 429,
+            body: '',
+            headers: {
+              'Retry-After': ['60'],
+            },
+          );
+        }),
+      );
+      await expectLater(
+        resolver.resolveStreams(source.encode(), forDownload: false),
+        throwsA(isA<WitanimeRateLimitException>()),
+      );
+      await expectLater(
+        resolver.loadSources(watch, forDownload: true),
+        throwsA(isA<WitanimeRateLimitException>()),
+      );
+      expect(requests, 2);
+    },
+  );
+
+  test('host inspection recognizes media without buffering the file', () async {
+    final dio = Dio();
+    addTearDown(dio.close);
+    final canceled = Completer<void>();
+    final body = StreamController<Uint8List>(onCancel: canceled.complete);
+    dio.httpClientAdapter = _Adapter((options) async {
+      expect(options.responseType, ResponseType.stream);
+      return ResponseBody(
+        body.stream,
+        200,
+        headers: {
+          'content-type': ['video/mp4'],
+        },
+      );
+    });
+    final transport = DioWitanimeTransport(dio: dio);
+    final response = await transport.get(
+      Uri.https('cdn.test', '/file'),
+      inspectMedia: true,
+    );
+    expect(response.hasMediaContent, isTrue);
+    expect(response.body, isEmpty);
+    await canceled.future.timeout(const Duration(seconds: 2));
+    await body.close();
   });
 }
 

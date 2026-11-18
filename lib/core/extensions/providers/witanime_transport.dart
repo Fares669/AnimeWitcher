@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 
 import '../../services/app_diagnostics.dart';
@@ -63,6 +67,18 @@ class WitanimeHttpResponse {
   }
 
   bool get isSuccess => statusCode >= 200 && statusCode < 300;
+
+  bool get hasMediaContent {
+    final type = header('content-type')?.split(';').first.trim().toLowerCase();
+    final disposition = header('content-disposition')?.toLowerCase() ?? '';
+    return type?.startsWith('video/') == true ||
+        type == 'application/vnd.apple.mpegurl' ||
+        type == 'application/x-mpegurl' ||
+        type == 'application/dash+xml' ||
+        (type == 'application/octet-stream' &&
+            RegExp(r'\.(?:mp4|mkv|webm|m4v|mov|avi|ts)(?:["; ]|$)')
+                .hasMatch(disposition));
+  }
 }
 
 /// Abstract HTTP transport for Witanime catalog, playback, account, and sync.
@@ -71,6 +87,7 @@ abstract interface class WitanimeTransport {
     Uri uri, {
     Map<String, String> headers = const {},
     bool followRedirects = true,
+    bool inspectMedia = false,
     CancelToken? cancelToken,
     String operation = 'get',
   });
@@ -100,25 +117,22 @@ typedef WitanimeSessionHeaderProvider = Future<Map<String, String>> Function(
 /// [Dio]-backed transport preserving browser-like defaults and duration/error
 /// telemetry without logging credentials, cookies, or full URLs.
 class DioWitanimeTransport implements WitanimeTransport {
-  DioWitanimeTransport({
-    Dio? dio,
-    WitanimeSessionHeaderProvider? sessionHeaders,
-  }) : _dio =
-           dio ??
-           Dio(
-             BaseOptions(
-               connectTimeout: const Duration(seconds: 15),
-               receiveTimeout: const Duration(seconds: 15),
-               responseType: ResponseType.plain,
-               validateStatus: (status) => status != null && status < 600,
-               headers: const {
-                 'User-Agent': defaultUserAgent,
-                 'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8',
-               },
-             ),
-           ),
-       _ownsDio = dio == null,
-       _sessionHeaders = sessionHeaders;
+  DioWitanimeTransport({Dio? dio, this._sessionHeaders})
+    : _dio =
+          dio ??
+          Dio(
+            BaseOptions(
+              connectTimeout: const Duration(seconds: 15),
+              receiveTimeout: const Duration(seconds: 15),
+              responseType: ResponseType.plain,
+              validateStatus: (status) => status != null && status < 600,
+              headers: const {
+                'User-Agent': defaultUserAgent,
+                'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8',
+              },
+            ),
+          ),
+      _ownsDio = dio == null;
 
   static const String defaultUserAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -133,7 +147,10 @@ class DioWitanimeTransport implements WitanimeTransport {
   static bool _isWitanimeHost(Uri uri) =>
       uri.host == 'witanime.site' || uri.host.endsWith('.witanime.site');
 
-  static bool _hasHeaderCaseInsensitive(Map<String, String> headers, String key) {
+  static bool _hasHeaderCaseInsensitive(
+    Map<String, String> headers,
+    String key,
+  ) {
     final target = key.toLowerCase();
     return headers.keys.any((k) => k.toLowerCase() == target);
   }
@@ -251,24 +268,58 @@ class DioWitanimeTransport implements WitanimeTransport {
     Uri uri, {
     Map<String, String> headers = const {},
     bool followRedirects = true,
+    bool inspectMedia = false,
     CancelToken? cancelToken,
     String operation = 'get',
   }) async {
     final elapsed = Stopwatch()..start();
     try {
       final merged = await _mergedHeaders(uri, headers);
-      final response = await _dio.getUri<String>(
+      final requestCancel = inspectMedia ? CancelToken() : cancelToken;
+      if (inspectMedia && cancelToken != null) {
+        unawaited(cancelToken.whenCancel.then(requestCancel!.cancel));
+      }
+      final response = await _dio.getUri<Object>(
         uri,
-        cancelToken: cancelToken,
+        cancelToken: requestCancel,
         options: Options(
           headers: merged,
           followRedirects: followRedirects,
-          responseType: ResponseType.plain,
+          responseType: inspectMedia ? ResponseType.stream : ResponseType.plain,
           validateStatus: (status) => status != null && status < 600,
         ),
       );
       _absorbSetCookies(uri, response.headers.map);
       final statusCode = response.statusCode ?? 0;
+      final data = response.data;
+      var body = data is String ? data : '';
+      if (data is ResponseBody) {
+        final metadata = WitanimeHttpResponse(
+          statusCode: statusCode,
+          body: '',
+          headers: response.headers.map,
+        );
+        if (metadata.hasMediaContent) {
+          await data.stream.listen(null).cancel();
+          requestCancel?.cancel();
+        } else {
+          const maxPageBytes = 2 * 1024 * 1024;
+          final bytes = BytesBuilder(copy: false);
+          await for (final chunk in data.stream) {
+            final remaining = maxPageBytes - bytes.length;
+            bytes.add(
+              chunk.length <= remaining
+                  ? chunk
+                  : Uint8List.sublistView(chunk, 0, remaining),
+            );
+            if (bytes.length >= maxPageBytes) {
+              requestCancel?.cancel();
+              break;
+            }
+          }
+          body = utf8.decode(bytes.takeBytes(), allowMalformed: true);
+        }
+      }
       recordWitanimeDiagnostic(
         operation,
         status: statusCode >= 400 ? 'http_error' : 'ok',
@@ -277,7 +328,7 @@ class DioWitanimeTransport implements WitanimeTransport {
       );
       return WitanimeHttpResponse(
         statusCode: statusCode,
-        body: response.data ?? '',
+        body: body,
         headers: response.headers.map,
         finalUri: response.realUri,
       );

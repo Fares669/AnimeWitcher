@@ -12,6 +12,8 @@ import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/domain/stream_source_preferences.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/item_provider_resolution.dart';
+import '../../../core/extensions/providers/witanime_playback.dart';
+import '../../../core/extensions/providers/witanime_provider.dart';
 import '../../../core/network/dio_client_provider.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/services/download_parallel.dart';
@@ -338,7 +340,7 @@ class DownloadLauncher {
               option.url,
               headers: option.headers,
             ).timeout(const Duration(seconds: 15), onTimeout: () => null);
-            if (probe?.size != null) {
+            if (_isDownloadable(probe, provider.packageName)) {
               stream = option;
               metadata = probe;
               break;
@@ -418,6 +420,7 @@ class DownloadLauncher {
     try {
       final sourceFuture = provider.loadDownloadStreamSources(resolveUrl);
       final preferences = _ref.read(generalSettingsProvider);
+      var alternatives = const <StreamResult>[];
       final StreamResult? selected;
       if (preferences.autoSelectStreamSource) {
         final sources = await sourceFuture;
@@ -425,8 +428,15 @@ class DownloadLauncher {
           sources,
           qualityPriority: preferences.streamQualityPriority,
           serverPriority: preferences.streamServerPriority,
-          resolveCandidate: (StreamResult candidate) =>
-              provider.loadDownloadStreams(candidate.url),
+          resolveCandidate: (candidate) async {
+            final resolved = await provider.loadDownloadStreams(candidate.url);
+            if (provider.packageName == WitanimeProvider.id &&
+                resolved.length > 1) {
+              alternatives = resolved.sublist(1);
+            }
+            return resolved;
+          },
+          tryNextOnError: (error) => error is! WitanimeRateLimitException,
         );
         if (selected == null) {
           throw Exception('لم يتم العثور على مصادر تشغيل.');
@@ -441,7 +451,7 @@ class DownloadLauncher {
         );
       }
       if (selected == null || !context.mounted) return;
-      StreamResult stream = selected;
+      var streams = [selected, ...alternatives];
       if (selected.requiresResolution) {
         isCanceled = false;
         loadingDialogShown = true;
@@ -464,22 +474,26 @@ class DownloadLauncher {
         if (resolved.isEmpty) {
           throw Exception('تعذر استخراج رابط صالح من هذا المصدر.');
         }
-        stream = resolved.first.refreshUrl?.trim().isNotEmpty == true
-            ? resolved.first
-            : resolved.first.copyWith(refreshUrl: selected.url);
+        streams = [
+          for (final stream in resolved)
+            stream.refreshUrl?.trim().isNotEmpty == true
+                ? stream
+                : stream.copyWith(refreshUrl: selected.url),
+        ];
       }
+      if (!context.mounted) return;
 
       await _verifyAndDownload(
         context,
-        stream,
+        streams,
         item,
         resolveUrl,
         providerId: provider.packageName,
         episode: resolvedEpisode,
       );
     } catch (e) {
-      if (!context.mounted) return;
-      if (!isCanceled && loadingDialogShown) {
+      if (!context.mounted || isCanceled) return;
+      if (loadingDialogShown) {
         Navigator.of(context, rootNavigator: true).pop();
         loadingDialogShown = false;
       }
@@ -500,9 +514,20 @@ class DownloadLauncher {
     return text.isEmpty ? l10n.errorPrefix(error.toString()) : text;
   }
 
+  bool _isDownloadable(DownloadSourceMetadataV2? metadata, String providerId) {
+    if (metadata?.size == null) return false;
+    if (providerId != WitanimeProvider.id) return true;
+    final type = metadata?.mimeType?.split(';').first.trim().toLowerCase();
+    return type != 'text/html' &&
+        type != 'application/xhtml+xml' &&
+        type != 'application/json' &&
+        type != 'application/dash+xml' &&
+        type?.contains('mpegurl') != true;
+  }
+
   Future<void> _verifyAndDownload(
     BuildContext context,
-    StreamResult stream,
+    List<StreamResult> streams,
     MultimediaItem item,
     String resolveUrl, {
     required String providerId,
@@ -550,11 +575,22 @@ class DownloadLauncher {
       ),
     );
 
-    final metadata = await probeDownloadSourceV2(
-      _ref.read(dioClientProvider),
-      stream.url,
-      headers: stream.headers,
-    ).timeout(const Duration(seconds: 15), onTimeout: () => null);
+    var stream = streams.first;
+    DownloadSourceMetadataV2? metadata;
+    final candidates = providerId == WitanimeProvider.id ? streams : [stream];
+    for (final candidate in candidates) {
+      final probe = await probeDownloadSourceV2(
+        _ref.read(dioClientProvider),
+        candidate.url,
+        headers: candidate.headers,
+      ).timeout(const Duration(seconds: 15), onTimeout: () => null);
+      if (isCanceled || !navContext.mounted) return;
+      if (_isDownloadable(probe, providerId)) {
+        stream = candidate;
+        metadata = probe;
+        break;
+      }
+    }
 
     if (!navContext.mounted) return;
     if (!isCanceled) {
@@ -578,6 +614,7 @@ class DownloadLauncher {
       }
       return;
     }
+    final verifiedMetadata = metadata;
 
     if (finalContext.mounted) {
       Future<void>? confirmationStart;
@@ -593,7 +630,7 @@ class DownloadLauncher {
               const SizedBox(height: 8),
               Text(l10n.sourceWithParam(stream.source)),
               const SizedBox(height: 8),
-              Text(l10n.sizeWithParam(metadata.sizeString)),
+              Text(l10n.sizeWithParam(verifiedMetadata.sizeString)),
               const SizedBox(height: 12),
               Row(
                 textDirection: TextDirection.rtl,
@@ -654,7 +691,7 @@ class DownloadLauncher {
                       stream,
                       item,
                       resolveUrl,
-                      metadata: metadata,
+                      metadata: verifiedMetadata,
                       providerId: providerId,
                       episode: episode,
                     );

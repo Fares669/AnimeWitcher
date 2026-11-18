@@ -487,6 +487,7 @@ class _StubLivewireTransport implements WitanimeTransport {
     Uri uri, {
     Map<String, String> headers = const {},
     bool followRedirects = true,
+    bool inspectMedia = false,
     CancelToken? cancelToken,
     String operation = 'get',
   }) => handler('GET', uri, null, headers);

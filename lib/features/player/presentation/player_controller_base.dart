@@ -21,6 +21,7 @@ import '../../details/presentation/downloaded_file_provider.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/extensions/base_provider.dart';
 import '../../../../core/extensions/item_provider_resolution.dart';
+import '../../../../core/extensions/providers/witanime_playback.dart';
 import '../../../../core/storage/history_repository.dart';
 import '../../../../core/storage/episode_watch_repository.dart';
 import '../../library/presentation/history_provider.dart';
@@ -2508,6 +2509,13 @@ class PlayerController extends Notifier<PlayerState> {
         }
       }
     } catch (e) {
+      if (e is WitanimeRateLimitException ||
+          e is WitanimeBrowserRequiredException) {
+        if (_isCurrentSourceSession(sourceSessionId)) {
+          state = state.copyWith(errorMessage: e.toString());
+        }
+        return;
+      }
       if (kDebugMode) _debugPrint("Error loading streams: $e");
     }
 
@@ -2563,7 +2571,13 @@ class PlayerController extends Notifier<PlayerState> {
     if (source.requiresResolution) {
       final provider = _resolveProvider();
       if (provider == null) return false;
-      final streams = await provider.loadStreams(source.url);
+      final List<StreamResult> streams;
+      try {
+        streams = await provider.loadStreams(source.url);
+      } catch (error) {
+        if (kDebugMode) _debugPrint('Error switching streams: $error');
+        return false;
+      }
       if (!_isCurrentSourceSession(sourceSessionId) || streams.isEmpty) {
         return false;
       }

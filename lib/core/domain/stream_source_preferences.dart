@@ -183,6 +183,7 @@ Future<StreamResult?> resolvePreferredStreamSource(
   required List<String> serverPriority,
   required Future<List<StreamResult>> Function(StreamResult candidate)
   resolveCandidate,
+  bool Function(Object error)? tryNextOnError,
 }) async {
   final ordered = orderStreamSourcesByPreference(
     sources,
@@ -199,7 +200,8 @@ Future<StreamResult?> resolvePreferredStreamSource(
       return refreshUrl.isNotEmpty
           ? first
           : first.copyWith(refreshUrl: candidate.url);
-    } catch (_) {
+    } catch (error) {
+      if (tryNextOnError?.call(error) == false) rethrow;
       // One dead server must not skip the rest of the same quality tier.
     }
   }

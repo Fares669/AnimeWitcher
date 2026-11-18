@@ -203,7 +203,6 @@ class _Harness {
     List<DownloadItem>? rows,
     bool requireEpisode = false,
     AnimeWitcherProvider? provider,
-    Future<bool> Function(Uri)? launchWebsite,
     bool auto = true,
   }) {
     files = _Files(
@@ -213,10 +212,6 @@ class _Harness {
     watchHistory = _History(history ?? Future.value());
     container = ProviderContainer(
       overrides: [
-        if (launchWebsite != null)
-          playbackLauncherProvider.overrideWith(
-            (ref) => PlaybackLauncher(ref, launchWebsite: launchWebsite),
-          ),
         playerSettingsProvider.overrideWith(
           () => _Settings(settings ?? Future.value(const PlayerSettings())),
         ),
@@ -319,6 +314,7 @@ class _WitanimeTestTransport implements WitanimeTransport {
     Uri uri, {
     Map<String, String> headers = const {},
     bool followRedirects = true,
+    bool inspectMedia = false,
     CancelToken? cancelToken,
     String operation = 'get',
   }) async {
@@ -352,8 +348,7 @@ class _WitanimeTestTransport implements WitanimeTransport {
     if (uri.path == '/watch/sample/2/sources') {
       return const WitanimeHttpResponse(
         statusCode: 200,
-        body:
-            '{"players":{"FHD":[{"label":"DirectStream","token":"tok-direct"}]}}',
+        body: '{"players":{"FHD":[{"label":"DirectStream","token":"tok-direct"}]}}',
       );
     }
     if (uri.path == '/watch/stream-source/tok-direct') {
@@ -364,61 +359,56 @@ class _WitanimeTestTransport implements WitanimeTransport {
 }
 
 void main() {
-  testWidgets('Witanime opens the official episode page after confirmation', (
-    tester,
-  ) async {
-    final opened = <Uri>[];
-    final app = _Harness(
-      provider: WitanimeProvider((_, {cancelToken}) async => '<main></main>'),
-      file: Future.value(null),
-      launchWebsite: (uri) async {
-        opened.add(uri);
-        return true;
-      },
-    );
-    await app.mount(tester);
-    final item = MultimediaItem(
-      title: 'Sample',
-      url: 'https://witanime.site/anime/sample',
-      posterUrl: '',
-      provider: WitanimeProvider.id,
-    );
-    final launcher = app.container.read(playbackLauncherProvider);
-    final refused = launcher.play(
-      app.origin,
-      'https://witanime.site/watch/different/2',
-      baseItem: item,
-    );
-    await tester.pumpAndSettle();
-    await refused;
-    expect(find.text('فتح الموقع'), findsNothing);
-    expect(opened, isEmpty);
+  testWidgets(
+    'Witanime reports unavailable playback without opening the site',
+    (tester) async {
+      final app = _Harness(
+        provider: WitanimeProvider((_, {cancelToken}) async => '<main></main>'),
+        file: Future.value(null),
+      );
+      await app.mount(tester);
+      final item = MultimediaItem(
+        title: 'Sample',
+        url: 'https://witanime.site/anime/sample',
+        posterUrl: '',
+        provider: WitanimeProvider.id,
+      );
+      final launcher = app.container.read(playbackLauncherProvider);
+      final refused = launcher.play(
+        app.origin,
+        'https://witanime.site/watch/different/2',
+        baseItem: item,
+      );
+      await tester.pumpAndSettle();
+      await refused;
+      expect(find.text('فتح الموقع'), findsNothing);
+      expect(app.notifications.errors, 1);
 
-    final play = launcher.play(
-      app.origin,
-      'https://witanime.site/watch/sample/2/?ref=app#top',
-      baseItem: item,
-    );
-    await tester.pumpAndSettle();
-    expect(opened, isEmpty);
-    await tester.tap(find.text('فتح الموقع'));
-    await tester.pumpAndSettle();
-    await play;
-    expect(opened, [Uri.parse('https://witanime.site/watch/sample/2')]);
-    expect(app.pushes.count, 0);
-    expect(app.watchHistory.calls, 0);
-    await app.dispose(tester);
-  });
+      final play = launcher.play(
+        app.origin,
+        'https://witanime.site/watch/sample/2/?ref=app#top',
+        baseItem: item,
+      );
+      await tester.pumpAndSettle();
+      await play;
+      expect(find.text('فتح الموقع'), findsNothing);
+      expect(app.notifications.errors, 2);
+      expect(app.pushes.count, 0);
+      expect(app.watchHistory.calls, 0);
+      await app.dispose(tester);
+    },
+  );
 
-  testWidgets('Witanime resolves stream sources and opens internal player', (
+  testWidgets('Witanime sends the selected source to the internal player', (
     tester,
   ) async {
     final transport = _WitanimeTestTransport();
+    final provider = WitanimeProvider.withTransport(transport);
     final app = _Harness(
-      provider: WitanimeProvider.withTransport(transport),
+      provider: provider,
       file: Future.value(null),
       auto: false,
-      launchWebsite: (_) async => false,
+      settings: Future.value(const PlayerSettings(preferredPlayer: 'vlc')),
     );
     await app.mount(tester);
     final item = MultimediaItem(
@@ -444,7 +434,10 @@ void main() {
     await tester.tap(find.text('DirectStream'));
     await tester.pumpAndSettle();
     expect(app.pushes.count, 1);
-    expect(app.opened?.selectedSource?.url, 'https://cdn.example.com/video/ep2.mp4');
+    final selected = app.opened!.selectedSource!;
+    expect(selected.requiresResolution, isTrue);
+    final streams = await provider.loadStreams(selected.url);
+    expect(streams.single.url, 'https://cdn.example.com/video/ep2.mp4');
     expect(app.watchHistory.calls, 1);
     app.router.pop();
     await tester.pumpAndSettle();
