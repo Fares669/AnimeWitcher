@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       branch:
-        description: 'Branch to build'
-        required: true
-        default: 'main'
+        description: 'Branch to build (defaults to the workflow branch)'
+        required: false
+        default: ''
         type: string
       build_android:
         description: 'Build Android'
@@ -50,7 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.inputs.branch }}
+          ref: ${{ github.event.inputs.branch || github.ref_name }}
       - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
@@ -111,7 +111,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event_name == 'push' && github.sha || github.event.inputs.branch }}
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.inputs.branch || github.ref_name }}
       - name: Select Latest Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -167,7 +167,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.inputs.branch }}
+          ref: ${{ github.event.inputs.branch || github.ref_name }}
       - name: Select Latest Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -260,7 +260,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.inputs.branch }}
+          ref: ${{ github.event.inputs.branch || github.ref_name }}
 
       - uses: subosito/flutter-action@v2
         with:
@@ -379,7 +379,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.inputs.branch }}
+          ref: ${{ github.event.inputs.branch || github.ref_name }}
       - uses: subosito/flutter-action@v2
         if: ${{ matrix.arch != 'arm64' }}
         with:
