@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/witanime_provider.dart';
 import 'package:animewitcher/core/router/app_router.dart';
 import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 
@@ -200,7 +201,8 @@ class _Harness {
     Widget? home,
     List<DownloadItem>? rows,
     bool requireEpisode = false,
-    _Provider? provider,
+    AnimeWitcherProvider? provider,
+    Future<bool> Function(Uri)? launchWebsite,
     bool auto = true,
   }) {
     files = _Files(
@@ -210,6 +212,10 @@ class _Harness {
     watchHistory = _History(history ?? Future.value());
     container = ProviderContainer(
       overrides: [
+        if (launchWebsite != null)
+          playbackLauncherProvider.overrideWith(
+            (ref) => PlaybackLauncher(ref, launchWebsite: launchWebsite),
+          ),
         playerSettingsProvider.overrideWith(
           () => _Settings(settings ?? Future.value(const PlayerSettings())),
         ),
@@ -297,6 +303,52 @@ class _Harness {
 }
 
 void main() {
+  testWidgets('Witanime opens the official episode page after confirmation', (
+    tester,
+  ) async {
+    final opened = <Uri>[];
+    final app = _Harness(
+      provider: WitanimeProvider((_, {cancelToken}) async => '<main></main>'),
+      file: Future.value(null),
+      launchWebsite: (uri) async {
+        opened.add(uri);
+        return true;
+      },
+    );
+    await app.mount(tester);
+    final item = MultimediaItem(
+      title: 'Sample',
+      url: 'https://witanime.site/anime/sample',
+      posterUrl: '',
+      provider: WitanimeProvider.id,
+    );
+    final launcher = app.container.read(playbackLauncherProvider);
+    final refused = launcher.play(
+      app.origin,
+      'https://witanime.site/watch/different/2',
+      baseItem: item,
+    );
+    await tester.pumpAndSettle();
+    await refused;
+    expect(find.text('فتح الموقع'), findsNothing);
+    expect(opened, isEmpty);
+
+    final play = launcher.play(
+      app.origin,
+      'https://witanime.site/watch/sample/2/?ref=app#top',
+      baseItem: item,
+    );
+    await tester.pumpAndSettle();
+    expect(opened, isEmpty);
+    await tester.tap(find.text('فتح الموقع'));
+    await tester.pumpAndSettle();
+    await play;
+    expect(opened, [Uri.parse('https://witanime.site/watch/sample/2')]);
+    expect(app.pushes.count, 0);
+    expect(app.watchHistory.calls, 0);
+    await app.dispose(tester);
+  });
+
   testWidgets(
     'repeated episode launches while settings wait open one player and unlock on pop',
     (tester) async {

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/domain/stream_source_preferences.dart';
@@ -10,6 +11,7 @@ import '../../../core/router/app_router.dart';
 import '../../../core/services/external_player_service.dart';
 import '../../../core/extensions/item_provider_resolution.dart';
 import '../../../core/extensions/base_provider.dart';
+import '../../../core/extensions/providers/witanime_provider.dart';
 import '../../settings/presentation/player_settings_provider.dart';
 import '../../settings/presentation/general_settings_provider.dart';
 
@@ -58,9 +60,14 @@ class _PlaybackLaunch {
 
 class PlaybackLauncher {
   final Ref _ref;
+  final Future<bool> Function(Uri) _launchWebsite;
   static final _pendingOrigins = Expando<bool>();
 
-  PlaybackLauncher(this._ref);
+  PlaybackLauncher(this._ref, {Future<bool> Function(Uri)? launchWebsite})
+    : _launchWebsite = launchWebsite ?? _openWebsite;
+
+  static Future<bool> _openWebsite(Uri uri) =>
+      launchUrl(uri, mode: LaunchMode.externalApplication);
 
   Future<void> _guardLaunch(
     BuildContext context,
@@ -250,6 +257,30 @@ class PlaybackLauncher {
         hintEpisode.episode > 0 || (hintEpisode.serverName.trim().isNotEmpty)
         ? hintEpisode
         : null;
+    if (provider is WitanimeProvider) {
+      final episodes = await launch.wait(() => provider.getEpisodes(item.url));
+      if (!context.mounted || !launch.isCurrent) return;
+      final episode = matchResumeEpisode(
+            episodes,
+            resumeEpisodeNumber: history.episode,
+            resumeSeason: history.season,
+          ) ??
+          ((history.episode ?? 0) <= 0 ? episodes.firstOrNull : null);
+      if (episode == null) {
+        _ref
+            .read(notificationServiceProvider)
+            .showError('لم يتم العثور على الحلقة المحفوظة.');
+        return;
+      }
+      await _play(
+        context,
+        episode.url,
+        baseItem: item,
+        episode: episode,
+        launch: launch,
+      );
+      return;
+    }
     var resolvedUrl = '';
     var resolvedEpisodes = const <Episode>[];
     final selected = await _chooseSource(
@@ -513,6 +544,16 @@ class PlaybackLauncher {
     }
 
     final provider = _ref.read(itemSourceProvider(playerItem.provider));
+    if (playerItem.provider == WitanimeProvider.id &&
+        (provider == null || provider is WitanimeProvider)) {
+      await _openWitanimeWatchPage(
+        context,
+        playerItem,
+        canonicalProgressUrl,
+        launch,
+      );
+      return;
+    }
     if (provider == null) {
       _ref
           .read(notificationServiceProvider)
@@ -583,6 +624,47 @@ class PlaybackLauncher {
             .setLaunching(false);
       }
     }
+  }
+
+  Future<void> _openWitanimeWatchPage(
+    BuildContext context,
+    MultimediaItem item,
+    String episodeUrl,
+    _PlaybackLaunch launch,
+  ) async {
+    final work = WitanimeProvider.parseCatalogLink(item.url)?.work;
+    final entry = WitanimeProvider.parseCatalogLink(episodeUrl);
+    final watchUrl = entry?.watch;
+    final notifications = _ref.read(notificationServiceProvider);
+    if (watchUrl == null || work != entry?.work) {
+      notifications.showError('تعذر تحديد صفحة المشاهدة على Witanime.');
+      return;
+    }
+
+    final open = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('المشاهدة على Witanime'),
+        content: const Text('تُفتح صفحة المشاهدة في مشغّل الموقع الرسمي.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('فتح الموقع'),
+          ),
+        ],
+      ),
+    );
+    if (open != true || !launch.isCurrent) return;
+    try {
+      if (await _launchWebsite(watchUrl)) return;
+    } on Exception {
+      // A browser can be unavailable on a device without a registered handler.
+    }
+    if (launch.isCurrent) notifications.showError('تعذر فتح موقع Witanime.');
   }
 
   Future<void> _launchStream(
