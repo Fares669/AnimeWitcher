@@ -642,13 +642,20 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     episodeSearchQuery.value = '';
     // Likewise a block or filter picked on the last series.
     resetEpisodeBrowse();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref
-          .read(
-            detailsControllerProvider(detailsControllerKey(widget.item))
-                .notifier,
-          )
-          .loadDetails(widget.item, autoPlay: widget.autoPlay);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final controller = ref.read(
+        detailsControllerProvider(detailsControllerKey(widget.item)).notifier,
+      );
+      await controller.loadDetails(widget.item, autoPlay: widget.autoPlay);
+      final target = widget.resumeEpisodeUrl;
+      if (!mounted || widget.autoPlay || target == null) return;
+      setState(() {
+        _episodesExpanded = true;
+        _episodesVisible = true;
+      });
+      unawaited(_episodesRevealController.forward());
+      await controller.loadLinkedEpisode(target);
     });
   }
 

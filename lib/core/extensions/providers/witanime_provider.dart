@@ -16,6 +16,7 @@ class WitanimeProvider extends AnimeWitcherProvider {
   final Future<String> Function(Uri, {CancelToken? cancelToken}) _fetchHtml;
 
   static const id = 'witanime';
+  static const watchUrlKey = 'witanimeWatchUrl';
   static final _origin = Uri.https('witanime.site');
   // Filter values documented by NoveLA's Witanime browse adapter.
   static const _seasonSlugs = {
@@ -463,6 +464,9 @@ class WitanimeProvider extends AnimeWitcherProvider {
         contentType: link.movie
             ? MultimediaContentType.movie
             : MultimediaContentType.anime,
+        syncData: link.watch == null
+            ? null
+            : {watchUrlKey: link.watch.toString()},
         episodeBadge: link.watch != null && !link.movie
             ? 'الحلقة ${link.watch!.pathSegments.last}'
             : null,
@@ -521,6 +525,9 @@ class WitanimeProvider extends AnimeWitcherProvider {
     }
     return episodes.values.toList();
   }
+
+  static ({Uri work, Uri? watch, bool movie})? parseCatalogLink(String url) =>
+      _reference(url, _origin);
 
   static ({Uri work, Uri? watch, bool movie})? _reference(
     String? raw,

@@ -19,6 +19,7 @@ import '../domain/entity/multimedia_item.dart';
 import '../../shared/widgets/app_scaffold.dart';
 import '../storage/settings_repository.dart';
 import '../extensions/base_provider.dart';
+import '../extensions/providers/witanime_provider.dart';
 import '../navigation/taskbar_destination.dart';
 import '../account/animewitcher_comment_models.dart'
     show animeWitcherNativeProviderId;
@@ -201,8 +202,20 @@ class MangaDetailsRouteExtra {
 /// Opening a title's details page — the one way every card, rail and
 /// list does it, so the route's construction lives in a single place.
 extension OpenDetailsRoute on MultimediaItem {
-  Future<void> openDetails(BuildContext context) =>
-      DetailsRoute($extra: DetailsRouteExtra(item: this)).push<void>(context);
+  Future<void> openDetails(BuildContext context) {
+    final rawWatch = syncData?[WitanimeProvider.watchUrlKey];
+    final watch = provider == WitanimeProvider.id && rawWatch != null
+        ? WitanimeProvider.parseCatalogLink(rawWatch)
+        : null;
+    return DetailsRoute(
+      $extra: DetailsRouteExtra(
+        item: this,
+        resumeEpisodeUrl: watch?.work.toString() == url
+            ? watch?.watch?.toString()
+            : null,
+      ),
+    ).push<void>(context);
+  }
 }
 
 class MangaReaderRouteExtra {
@@ -335,10 +348,12 @@ class DetailsRoute extends _AppGoRouteData with $DetailsRoute {
     final resolvedProvider = providerId.isEmpty
         ? animeWitcherNativeProviderId
         : providerId;
-    if (resolvedProvider != animeWitcherNativeProviderId) {
-      return null;
-    }
-    final resolvedUrl = _canonicalNativeCatalogUrl(itemUrl);
+    final witanime = resolvedProvider == WitanimeProvider.id
+        ? WitanimeProvider.parseCatalogLink(itemUrl)
+        : null;
+    final resolvedUrl = resolvedProvider == animeWitcherNativeProviderId
+        ? _canonicalNativeCatalogUrl(itemUrl)
+        : witanime?.work.toString();
     if (resolvedUrl == null) return null;
     final itemTitle = title?.trim() ?? '';
     return DetailsRouteExtra(
@@ -349,8 +364,11 @@ class DetailsRoute extends _AppGoRouteData with $DetailsRoute {
         // authoritative artwork. In-app navigation uses $extra instead.
         posterUrl: '',
         provider: resolvedProvider,
-        contentType: MultimediaContentType.anime,
+        contentType: witanime?.movie == true
+            ? MultimediaContentType.movie
+            : MultimediaContentType.anime,
       ),
+      resumeEpisodeUrl: witanime?.watch?.toString(),
     );
   }
 

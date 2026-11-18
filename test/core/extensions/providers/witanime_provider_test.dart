@@ -187,6 +187,10 @@ void main() {
     final home = await provider.getHome();
     expect(home['Trending']?.single.title, 'Hero');
     expect(home['أحدث الحلقات']?.single.episodeBadge, 'الحلقة 7');
+    expect(
+      home['أحدث الحلقات']?.single.syncData?[WitanimeProvider.watchUrlKey],
+      'https://witanime.site/watch/new/7',
+    );
     expect(home['أحدث الأفلام']?.single.title, 'Movie');
     expect(
       (await provider.getBroadcastSchedulePage('السبت')).items.single.title,

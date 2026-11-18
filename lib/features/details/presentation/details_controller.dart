@@ -164,6 +164,7 @@ class DetailsController extends _$DetailsController {
   Future<void>? _episodesLoadFuture;
   AnimeWitcherProvider? _lastEpisodesProvider;
   String? _lastEpisodesUrl;
+  String? _linkedEpisodeUrl;
   bool _episodesRequested = false;
   bool _episodesFetched = false;
   bool _loadStarted = false;
@@ -1030,6 +1031,15 @@ class DetailsController extends _$DetailsController {
     }
   }
 
+  Future<void> loadLinkedEpisode(String url) async {
+    _linkedEpisodeUrl = url;
+    await loadEpisodesOnDemand();
+    if (!ref.mounted) return;
+    final episodes = state.episodes.value;
+    final target = episodes?.firstWhereOrNull((episode) => episode.url == url);
+    if (target != null) state = state.copyWith(targetEpisode: target);
+  }
+
   Future<void> loadEpisodesOnDemand({bool forceReload = false}) async {
     _episodesRequested = true;
     if (_episodesLoadFuture != null) {
@@ -1136,6 +1146,9 @@ class DetailsController extends _$DetailsController {
     // Prefer the smallest unwatched episode. If everything is watched, keep
     // the play button on the highest watched episode instead of jumping back.
     targetEpisode = orderedEpisodes.firstWhereOrNull(
+      (episode) => episode.url == _linkedEpisodeUrl,
+    );
+    targetEpisode ??= orderedEpisodes.firstWhereOrNull(
       (episode) => !episodeIsWatchedFor(episodeWatchRepo, contextItem, episode),
     );
     targetEpisode ??= orderedEpisodes.lastWhereOrNull(
