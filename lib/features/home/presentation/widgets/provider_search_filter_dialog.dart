@@ -78,6 +78,7 @@ class _ProviderSearchFilterDialogState
   String? _category;
   bool _allYears = false;
   bool _allTags = false;
+  final Map<String, bool> _expandedChipGroups = <String, bool>{};
   final Map<String, Future<ProviderSearchFilterOptions>> _optionsByCategory =
       {};
 
@@ -520,23 +521,14 @@ class _ProviderSearchFilterDialogState
             ])
               if (values.isNotEmpty) ...[
                 const SizedBox(height: 8),
-                _FilterCard(
-                  key: ValueKey<String>('filterCard-$key'),
+                _buildExpandableChipCard(
+                  cardKey: key,
                   title: title,
-                  child: DropdownButton<String>(
-                    isExpanded: true,
-                    value: selected.where(values.contains).firstOrNull ?? '',
-                    items: [
-                      const DropdownMenuItem(value: '', child: Text('الكل')),
-                      for (final value in values)
-                        DropdownMenuItem(value: value, child: Text(value)),
-                    ],
-                    onChanged: (value) => setState(() {
-                      selected.clear();
-                      if (value != null && value.isNotEmpty)
-                        selected.add(value);
-                    }),
-                  ),
+                  values: values,
+                  selected: selected,
+                  previewCount: 8,
+                  single: true,
+                  moreLabel: _t('Show all', 'عرض الكل'),
                 ),
               ],
             if (options.genres.isNotEmpty) ...[
@@ -583,6 +575,63 @@ class _ProviderSearchFilterDialogState
           ],
         );
       },
+    );
+  }
+
+  Widget _buildExpandableChipCard({
+    required String cardKey,
+    required String title,
+    required List<String> values,
+    required Set<String> selected,
+    required int previewCount,
+    bool single = false,
+    String? moreLabel,
+  }) {
+    final expanded = _expandedChipGroups[cardKey] ?? false;
+    final shown = <String>{
+      ...(expanded ? values : values.take(previewCount)),
+      ...selected.where(values.contains),
+    }.toList(growable: false);
+    return _FilterCard(
+      key: ValueKey<String>('filterCard-$cardKey'),
+      title: title,
+      multiple: !single,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AnimatedSize(
+            duration: const Duration(milliseconds: 240),
+            reverseDuration: const Duration(milliseconds: 190),
+            curve: Curves.easeOutCubic,
+            alignment: AlignmentDirectional.topStart,
+            clipBehavior: Clip.hardEdge,
+            child: _ChipWrap(
+              values: shown,
+              selected: selected,
+              onToggle: (value) => _toggle(selected, value, single: single),
+            ),
+          ),
+          if (values.length > previewCount)
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton(
+                key: ValueKey<String>('filter-$cardKey-more'),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  minimumSize: const Size(0, 34),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                onPressed: () =>
+                    setState(() => _expandedChipGroups[cardKey] = !expanded),
+                child: Text(
+                  expanded
+                      ? _t('Show less', 'عرض أقل')
+                      : (moreLabel ?? _t('Show more', 'عرض المزيد')),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 

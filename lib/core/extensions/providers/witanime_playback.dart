@@ -208,20 +208,27 @@ class WitanimePlaybackResolver {
     if (parsedWatch == null || parsedWatch.host != _origin.host) {
       throw const FormatException('Invalid Witanime watch URL');
     }
-    final meta = await _fetchWatchMeta(parsedWatch);
-    final resp = await _transport.post(
-      meta.sourcesUri,
+    var meta = await _fetchWatchMeta(parsedWatch);
+    Future<WitanimeHttpResponse> postSources(
+      ({String csrf, Uri sourcesUri, Uri watchUri}) m,
+    ) => _transport.post(
+      m.sourcesUri,
       body: '{}',
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'X-CSRF-TOKEN': meta.csrf,
+        'X-CSRF-TOKEN': m.csrf,
         'X-Requested-With': 'XMLHttpRequest',
-        'Referer': meta.watchUri.toString(),
+        'Referer': m.watchUri.toString(),
         'Origin': _origin.origin,
       },
       operation: forDownload ? 'download_sources' : 'stream_sources',
     );
+    var resp = await postSources(meta);
+    if (resp.statusCode == 419) {
+      meta = await _fetchWatchMeta(parsedWatch);
+      resp = await postSources(meta);
+    }
     if (resp.statusCode == 429) {
       throw const FormatException(
         'تجاوزت حد الطلبات على Witanime، انتظر قليلًا وأعد المحاولة.',
@@ -346,7 +353,7 @@ class WitanimePlaybackResolver {
     required bool forDownload,
   }) async {
     final watchUri = Uri.parse(entry.watchUrl);
-    final meta = await _fetchWatchMeta(watchUri);
+    var meta = await _fetchWatchMeta(watchUri);
     final encodedToken = Uri.encodeComponent(entry.token);
     final sourcePath = (forDownload || entry.isDownload)
         ? '/watch/download-source/$encodedToken'
@@ -355,19 +362,26 @@ class WitanimePlaybackResolver {
         ? '/watch/download-gate/$encodedToken'
         : '/watch/stream-gate/$encodedToken';
 
-    final activateResp = await _transport.post(
+    Future<WitanimeHttpResponse> postActivate(
+      ({String csrf, Uri sourcesUri, Uri watchUri}) m,
+    ) => _transport.post(
       _origin.replace(path: sourcePath),
       body: '{}',
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'X-CSRF-TOKEN': meta.csrf,
+        'X-CSRF-TOKEN': m.csrf,
         'X-Requested-With': 'XMLHttpRequest',
-        'Referer': meta.watchUri.toString(),
+        'Referer': m.watchUri.toString(),
         'Origin': _origin.origin,
       },
       operation: forDownload ? 'download_source_unlock' : 'stream_source_unlock',
     );
+    var activateResp = await postActivate(meta);
+    if (activateResp.statusCode == 419) {
+      meta = await _fetchWatchMeta(watchUri);
+      activateResp = await postActivate(meta);
+    }
     if (activateResp.statusCode == 429) {
       throw const FormatException(
         'تجاوزت حد الطلبات على Witanime، انتظر قليلًا وأعد المحاولة.',

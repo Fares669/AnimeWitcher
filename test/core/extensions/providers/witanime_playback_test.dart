@@ -410,4 +410,144 @@ void main() {
     expect(refreshed, isNotNull);
     expect(refreshed!.url, contains('id=FRESH_ID'));
   });
+
+  test('DioWitanimeTransport retains Witanime Set-Cookie across watch and sources POST', () async {
+    final dio = Dio(BaseOptions(responseType: ResponseType.plain));
+    String? authSessionCookie;
+    final sentCookies = <String, String?>{};
+    dio.httpClientAdapter = _Adapter((options) async {
+      sentCookies['${options.method} ${options.uri.path}'] =
+          options.headers['Cookie']?.toString();
+      if (options.uri.path == '/watch/sample/1') {
+        return ResponseBody.fromString(
+          '<meta name="csrf-token" content="csrf-cookie-1">',
+          200,
+          headers: {
+            Headers.contentTypeHeader: ['text/html'],
+            'set-cookie': [
+              'witanime_session=sess-guest-1; Path=/; HttpOnly',
+              'XSRF-TOKEN=xsrf-1; Path=/',
+            ],
+          },
+        );
+      }
+      if (options.uri.path == '/watch/sample/1/sources') {
+        final cookie = options.headers['Cookie']?.toString() ?? '';
+        if (!cookie.contains('witanime_session=sess-guest-1') ||
+            options.headers['X-CSRF-TOKEN'] != 'csrf-cookie-1') {
+          return ResponseBody.fromString('{"message":"CSRF token mismatch"}', 419);
+        }
+        return ResponseBody.fromString(
+          jsonEncode({
+            'players': {
+              'HD': [
+                {'label': 'Mega', 'token': 'tok-ok'},
+              ],
+            },
+          }),
+          200,
+        );
+      }
+      if (options.uri.path == '/watch/stream-source/tok-ok') {
+        final cookie = options.headers['Cookie']?.toString() ?? '';
+        if (!cookie.contains('witanime_session=sess-guest-1')) {
+          return ResponseBody.fromString('CSRF mismatch', 419);
+        }
+        return ResponseBody.fromString('{"ok":true}', 200);
+      }
+      if (options.uri.path == '/watch/stream-gate/tok-ok') {
+        return ResponseBody.fromString(
+          '',
+          302,
+          headers: {
+            'location': ['https://mega.nz/file/ok'],
+          },
+        );
+      }
+      return ResponseBody.fromString('not found', 404);
+    });
+
+    final transport = DioWitanimeTransport(
+      dio: dio,
+      sessionHeaders: (_) async => authSessionCookie == null
+          ? const <String, String>{}
+          : <String, String>{'Cookie': authSessionCookie},
+    );
+    final resolver = WitanimePlaybackResolver(transport);
+
+    final sources = await resolver.loadSources(
+      'https://witanime.site/watch/sample/1',
+      forDownload: false,
+    );
+    expect(sources.single.source, 'Mega');
+    expect(
+      sentCookies['POST /watch/sample/1/sources'],
+      contains('witanime_session=sess-guest-1'),
+    );
+
+    // Switching auth session resets the guest cookie jar cleanly.
+    authSessionCookie = 'witanime_session=user-logged-in';
+    await transport.get(Uri.parse('https://witanime.site/profile'));
+    expect(
+      sentCookies['GET /profile'],
+      'witanime_session=user-logged-in',
+    );
+  });
+
+  test('WitanimePlaybackResolver retries once when sources POST returns HTTP 419', () async {
+    var sourcesAttempts = 0;
+    var watchFetches = 0;
+    final transport = _FakeWitanimeTransport((method, uri, body, headers, _) async {
+      if (uri.path == '/watch/sample/1') {
+        watchFetches++;
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          body: '<meta name="csrf-token" content="csrf-$watchFetches">',
+        );
+      }
+      if (uri.path == '/watch/sample/1/sources') {
+        sourcesAttempts++;
+        if (sourcesAttempts == 1) {
+          return const WitanimeHttpResponse(statusCode: 419, body: 'Page Expired');
+        }
+        expect(headers['X-CSRF-TOKEN'], 'csrf-2');
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          body: jsonEncode({
+            'players': {
+              'HD': [
+                {'label': 'Mega', 'token': 'tok-retry'},
+              ],
+            },
+          }),
+        );
+      }
+      return const WitanimeHttpResponse(statusCode: 404, body: '');
+    });
+
+    final resolver = WitanimePlaybackResolver(transport);
+    final sources = await resolver.loadSources(
+      'https://witanime.site/watch/sample/1',
+      forDownload: false,
+    );
+    expect(watchFetches, 2);
+    expect(sourcesAttempts, 2);
+    expect(sources.single.source, 'Mega');
+  });
+}
+
+class _Adapter implements HttpClientAdapter {
+  _Adapter(this.handler);
+
+  final Future<ResponseBody> Function(RequestOptions options) handler;
+
+  @override
+  void close({bool force = false}) {}
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) => handler(options);
 }

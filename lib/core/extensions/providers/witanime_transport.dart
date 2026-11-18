@@ -127,17 +127,80 @@ class DioWitanimeTransport implements WitanimeTransport {
   final Dio _dio;
   final bool _ownsDio;
   final WitanimeSessionHeaderProvider? _sessionHeaders;
+  final Map<String, String> _witanimeCookies = <String, String>{};
+  String? _lastAuthCookie;
 
   static bool _isWitanimeHost(Uri uri) =>
       uri.host == 'witanime.site' || uri.host.endsWith('.witanime.site');
+
+  static Map<String, String> _parseCookieHeader(String raw) {
+    final parsed = <String, String>{};
+    for (final part in raw.split(';')) {
+      final eq = part.indexOf('=');
+      if (eq <= 0) continue;
+      final name = part.substring(0, eq).trim();
+      final value = part.substring(eq + 1).trim();
+      if (name.isEmpty || value.isEmpty) continue;
+      parsed[name] = value;
+    }
+    return parsed;
+  }
+
+  void _absorbSetCookies(Uri uri, Map<String, List<String>> headers) {
+    if (!_isWitanimeHost(uri)) return;
+    for (final entry in headers.entries) {
+      if (entry.key.toLowerCase() != 'set-cookie') continue;
+      for (final rawSetCookie in entry.value) {
+        final segments = rawSetCookie.split(';');
+        if (segments.isEmpty) continue;
+        final pair = segments.first.trim();
+        final eq = pair.indexOf('=');
+        if (eq <= 0) continue;
+        final name = pair.substring(0, eq).trim();
+        final value = pair.substring(eq + 1).trim();
+        if (name.isEmpty) continue;
+        final expired = segments.skip(1).any((attr) {
+          final lower = attr.trim().toLowerCase();
+          return lower == 'max-age=0' || lower.startsWith('max-age=-');
+        });
+        if (expired || value.isEmpty || value.toLowerCase() == 'deleted') {
+          _witanimeCookies.remove(name);
+        } else {
+          _witanimeCookies[name] = value;
+        }
+      }
+    }
+  }
 
   Future<Map<String, String>> _mergedHeaders(
     Uri uri,
     Map<String, String> explicit,
   ) async {
     final merged = <String, String>{};
-    if (_sessionHeaders != null && _isWitanimeHost(uri)) {
-      merged.addAll(await _sessionHeaders(uri));
+    if (_isWitanimeHost(uri)) {
+      String? authCookie;
+      if (_sessionHeaders != null) {
+        final authHeaders = await _sessionHeaders(uri);
+        for (final entry in authHeaders.entries) {
+          if (entry.key.toLowerCase() == 'cookie') {
+            authCookie = entry.value.trim();
+          } else {
+            merged[entry.key] = entry.value;
+          }
+        }
+      }
+      if (authCookie != _lastAuthCookie) {
+        _lastAuthCookie = authCookie;
+        _witanimeCookies.clear();
+        if (authCookie != null && authCookie.isNotEmpty) {
+          _witanimeCookies.addAll(_parseCookieHeader(authCookie));
+        }
+      }
+      if (_witanimeCookies.isNotEmpty) {
+        merged['Cookie'] = _witanimeCookies.entries
+            .map((entry) => '${entry.key}=${entry.value}')
+            .join('; ');
+      }
     }
     merged.addAll(explicit);
     return merged;
@@ -164,6 +227,7 @@ class DioWitanimeTransport implements WitanimeTransport {
           validateStatus: (status) => status != null && status < 600,
         ),
       );
+      _absorbSetCookies(uri, response.headers.map);
       final statusCode = response.statusCode ?? 0;
       recordWitanimeDiagnostic(
         operation,
@@ -211,6 +275,7 @@ class DioWitanimeTransport implements WitanimeTransport {
           validateStatus: (status) => status != null && status < 600,
         ),
       );
+      _absorbSetCookies(uri, response.headers.map);
       final statusCode = response.statusCode ?? 0;
       recordWitanimeDiagnostic(
         operation,

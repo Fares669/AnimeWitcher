@@ -166,4 +166,61 @@ void main() {
     expect(button.onPressed, isNull);
     expect(find.text('اختر سنة مع الموسم'), findsOneWidget);
   });
+  testWidgets(
+    'studio, source, and version render as expandable chip cards with Show all',
+    (tester) async {
+      ProviderSearchFilters? result;
+      await openTags(
+        tester,
+        options: ProviderSearchFilterOptions(
+          studios: [for (var i = 0; i < 20; i++) 'Studio $i'],
+          sources: [for (var i = 0; i < 12; i++) 'Source $i'],
+          versions: const ['مترجم', 'مدبلج', 'مترجم ومدبلج'],
+        ),
+        initial: const ProviderSearchFilters(studios: {'Studio 19'}),
+        onResult: (value) => result = value,
+      );
+
+      expect(find.byType(DropdownButton<String>), findsNothing);
+      expect(find.byKey(const ValueKey('filterCard-studio')), findsOneWidget);
+      expect(find.byKey(const ValueKey('filterCard-source')), findsOneWidget);
+      expect(find.byKey(const ValueKey('filterCard-version')), findsOneWidget);
+
+      // Selected value stays visible while the rest stay behind "عرض الكل".
+      expect(find.byKey(const ValueKey('filterChip-Studio 19')), findsOneWidget);
+      expect(find.byKey(const ValueKey('filterChip-Studio 12')), findsNothing);
+      expect(find.byKey(const ValueKey('filterChip-Source 11')), findsNothing);
+
+      final moreStudios = find.byKey(const ValueKey('filter-studio-more'));
+      await tester.ensureVisible(moreStudios);
+      expect(
+        find.descendant(of: moreStudios, matching: find.text('عرض الكل')),
+        findsOneWidget,
+      );
+      await tester.tap(moreStudios);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('filterChip-Studio 12')), findsOneWidget);
+
+      final moreSources = find.byKey(const ValueKey('filter-source-more'));
+      await tester.ensureVisible(moreSources);
+      await tester.tap(moreSources);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('filterChip-Source 11')), findsOneWidget);
+
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('filterChip-Source 11')),
+      );
+      await tester.tap(find.byKey(const ValueKey('filterChip-Source 11')));
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('filterChip-مدبلج')),
+      );
+      await tester.tap(find.byKey(const ValueKey('filterChip-مدبلج')));
+      await tester.tap(find.byKey(const ValueKey('filterApply')));
+      await tester.pumpAndSettle();
+
+      expect(result?.studios, {'Studio 19'});
+      expect(result?.sources, {'Source 11'});
+      expect(result?.versions, {'مدبلج'});
+    },
+  );
 }
