@@ -18,6 +18,7 @@ class WitanimeProvider extends AnimeWitcherProvider {
   static const id = 'witanime';
   static const watchUrlKey = 'witanimeWatchUrl';
   static final _origin = Uri.https('witanime.site');
+  static Uri websiteUri(String path) => _origin.replace(path: path);
   // Filter values documented by NoveLA's Witanime browse adapter.
   static const _seasonSlugs = {
     'شتاء': 'winter',
