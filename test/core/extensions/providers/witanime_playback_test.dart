@@ -743,13 +743,88 @@ void main() {
         resolver.resolveStreams(source.encode(), forDownload: false),
         throwsA(isA<WitanimeRateLimitException>()),
       );
+      // Retrying the same rate-limited token respects Retry-After without hitting the network.
       await expectLater(
-        resolver.loadSources(watch, forDownload: true),
+        resolver.resolveStreams(source.encode(), forDownload: false),
         throwsA(isA<WitanimeRateLimitException>()),
       );
       expect(requests, 2);
     },
   );
+
+  test('rate-limiting one server unlock does not block loadSources or other servers, and server errors stay distinct', () async {
+    const watch = 'https://witanime.site/watch/sample/7';
+    final transport = _FakeWitanimeTransport((method, uri, _, _, _) async {
+      if (uri.path == '/watch/sample/7') {
+        return const WitanimeHttpResponse(
+          statusCode: 200,
+          body: '<meta name="csrf-token" content="csrf-7">',
+        );
+      }
+      if (uri.path == '/watch/sample/7/sources') {
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          body: jsonEncode({
+            'players': {
+              'FHD': [
+                {'label': 'ServerA', 'token': 'tok-rate'},
+                {'label': 'ServerB', 'token': 'tok-broken'},
+                {'label': 'Google Drive', 'token': 'tok-ok'},
+              ],
+            },
+          }),
+        );
+      }
+      if (uri.path == '/watch/stream-source/tok-rate') {
+        return const WitanimeHttpResponse(
+          statusCode: 429,
+          body: '',
+          headers: {'Retry-After': ['60']},
+        );
+      }
+      if (uri.path == '/watch/stream-source/tok-broken') {
+        return const WitanimeHttpResponse(statusCode: 502, body: 'Bad Gateway');
+      }
+      if (uri.path == '/watch/stream-source/tok-ok') {
+        return const WitanimeHttpResponse(statusCode: 200, body: '{"ok":true}');
+      }
+      if (uri.path == '/watch/stream-gate/tok-ok') {
+        return const WitanimeHttpResponse(
+          statusCode: 302,
+          body: '',
+          headers: {'location': ['https://drive.google.com/file/d/OK_ID/view']},
+        );
+      }
+      return const WitanimeHttpResponse(statusCode: 404, body: '');
+    });
+
+    final resolver = WitanimePlaybackResolver(transport);
+    final sources = await resolver.loadSources(watch, forDownload: false);
+    expect(sources, hasLength(3));
+
+    // 1. ServerA hits 429 -> WitanimeRateLimitException.
+    await expectLater(
+      resolver.resolveStreams(sources[0].url, forDownload: false),
+      throwsA(isA<WitanimeRateLimitException>()),
+    );
+
+    // 2. loadSources is still accessible (cached & not locked out by ServerA's 429).
+    final reloaded = await resolver.loadSources(watch, forDownload: false);
+    expect(reloaded, hasLength(3));
+
+    // 3. ServerB returns 502 -> WitanimeSourceUnavailableException (NOT rate limit).
+    await expectLater(
+      resolver.resolveStreams(sources[1].url, forDownload: false),
+      throwsA(isA<WitanimeSourceUnavailableException>()),
+    );
+
+    // 4. ServerC (Google Drive) still resolves cleanly!
+    final okStreams = await resolver.resolveStreams(
+      sources[2].url,
+      forDownload: false,
+    );
+    expect(okStreams.single.url, contains('id=OK_ID'));
+  });
 
   test('host inspection recognizes media without buffering the file', () async {
     final dio = Dio();
@@ -1278,6 +1353,62 @@ void main() {
         token,
       ),
       throwsA(isA<FormatException>()),
+    );
+
+    // Trailing filename after /d/<id>/... still extracts RootFolder cleanly.
+    final withFilename = await resolver.resolveHostedLink(
+      token.watchUrl,
+      'https://gofile.io/d/RootFolder/0649_07_FHD.mp4',
+      token,
+    );
+    expect(
+      withFilename.single.url,
+      'https://store2.gofile.io/download/web/f1/Black%20Clover%2007%20HD.mp4',
+    );
+
+    // Direct store CDN URL passes through without extra API calls.
+    final directStore = await resolver.resolveHostedLink(
+      token.watchUrl,
+      'https://store4.gofile.io/download/web/abc/0649_07_FHD.mp4',
+      token,
+    );
+    expect(
+      directStore.single.url,
+      'https://store4.gofile.io/download/web/abc/0649_07_FHD.mp4',
+    );
+  });
+
+  test('WorkUpload reports anti-bot human verification clearly', () async {
+    final transport = _FakeWitanimeTransport((method, uri, _, _, _) async {
+      if (uri.host == 'workupload.com') {
+        return const WitanimeHttpResponse(
+          statusCode: 200,
+          body: '<html><head><title>workupload - Are you a human?</title></head></html>',
+        );
+      }
+      return const WitanimeHttpResponse(statusCode: 404, body: '');
+    });
+    final resolver = WitanimePlaybackResolver(transport);
+    const token = WitanimeSourceToken(
+      watchUrl: 'https://witanime.site/watch/sample/7',
+      kind: 'download',
+      token: 'tok-wu',
+      tier: 'HD',
+      label: 'WorkUpload',
+    );
+    await expectLater(
+      resolver.resolveHostedLink(
+        token.watchUrl,
+        'https://workupload.com/file/abc123',
+        token,
+      ),
+      throwsA(
+        isA<FormatException>().having(
+          (e) => e.message,
+          'message',
+          contains('CAPTCHA'),
+        ),
+      ),
     );
   });
 }

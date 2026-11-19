@@ -520,6 +520,7 @@ class WitanimeProvider extends AnimeWitcherProvider {
   @override
   void prepareForNetworkRetry() {
     _transport;
+    _playback?.clearSourcesCache();
   }
 
   Future<Document> _document(Uri uri, {CancelToken? cancelToken}) async =>

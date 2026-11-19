@@ -31,7 +31,18 @@ class WitanimeRateLimitException implements Exception {
 
   @override
   String toString() =>
-      'تجاوزت حد الطلبات على Witanime، انتظر قليلًا وأعد المحاولة.';
+      'تجاوزت حد الطلبات على Witanime، انتظر قليلًا أو جرّب سيرفرًا آخر.';
+}
+
+class WitanimeSourceUnavailableException implements Exception {
+  const WitanimeSourceUnavailableException([
+    this.message = 'تعذّر تحميل هذا السيرفر، يُرجى اختيار سيرفر آخر.',
+  ]);
+
+  final String message;
+
+  @override
+  String toString() => message;
 }
 
 class _ExpiredSourceException implements Exception {
@@ -117,16 +128,24 @@ class WitanimePlaybackResolver {
   final WitanimeMegaProxy _megaProxy;
   final HtmlUnescape _unescape = HtmlUnescape();
   final Random _random = Random();
-  DateTime? _retryAt;
+  DateTime? _sourcesRetryAt;
+  final Map<String, DateTime> _tokenRetryAt = {};
   DateTime? _lastUnlockAt;
   final Map<
     String,
     ({String csrf, Uri sourcesUri, Uri watchUri, DateTime expiresAt})
   >
   _metaCache = {};
+  final Map<String, ({List<StreamResult> sources, DateTime expiresAt})>
+  _sourcesCache = {};
 
   static const _metaCacheTtl = Duration(minutes: 3);
+  static const _sourcesCacheTtl = Duration(minutes: 2);
   static const _unlockMinSpacing = Duration(milliseconds: 350);
+
+  void clearSourcesCache() {
+    _sourcesCache.clear();
+  }
   static final _mediaPath = RegExp(
     r'\.(?:m3u8|mp4|mkv|webm|m4v|mov|avi|ts|mpd)$',
     caseSensitive: false,
@@ -199,29 +218,55 @@ class WitanimePlaybackResolver {
     'Sec-Fetch-Dest': 'empty',
   };
 
-  void _checkCooldown([WitanimeHttpResponse? response]) {
-    if (response?.statusCode == 429) {
-      final now = DateTime.now();
-      final header = response?.header('retry-after');
-      DateTime? retryAt;
-      if (header != null) {
-        final seconds = int.tryParse(header);
-        if (seconds != null && seconds >= 0) {
-          retryAt = now.add(Duration(seconds: seconds));
-        } else {
-          try {
-            retryAt = HttpDate.parse(header);
-          } on FormatException {
-            // A missing or malformed header uses a short cooldown.
-          }
-        }
+  DateTime _parseRetryAfter(
+    WitanimeHttpResponse response, {
+    Duration fallback = const Duration(seconds: 15),
+  }) {
+    final now = DateTime.now();
+    final header = response.header('retry-after');
+    if (header != null) {
+      final seconds = int.tryParse(header);
+      if (seconds != null && seconds >= 0) {
+        return now.add(Duration(seconds: seconds));
       }
-      retryAt ??= now.add(const Duration(seconds: 15));
-      if (_retryAt?.isAfter(retryAt) != true) _retryAt = retryAt;
+      try {
+        return HttpDate.parse(header);
+      } on FormatException {
+        // A missing or malformed header uses a short cooldown.
+      }
+    }
+    return now.add(fallback);
+  }
+
+  void _checkSourcesCooldown([WitanimeHttpResponse? response]) {
+    if (response?.statusCode == 429) {
+      final retryAt = _parseRetryAfter(response!);
+      if (_sourcesRetryAt?.isAfter(retryAt) != true) {
+        _sourcesRetryAt = retryAt;
+      }
       throw const WitanimeRateLimitException();
     }
-    if (response == null && _retryAt?.isAfter(DateTime.now()) == true) {
+    if (response == null && _sourcesRetryAt?.isAfter(DateTime.now()) == true) {
       throw const WitanimeRateLimitException();
+    }
+  }
+
+  void _checkTokenCooldown(String token, [WitanimeHttpResponse? response]) {
+    final now = DateTime.now();
+    if (response?.statusCode == 429) {
+      final retryAt = _parseRetryAfter(response!);
+      final existing = _tokenRetryAt[token];
+      if (existing == null || retryAt.isAfter(existing)) {
+        _tokenRetryAt[token] = retryAt;
+      }
+      throw const WitanimeRateLimitException();
+    }
+    if (response == null) {
+      final until = _tokenRetryAt[token];
+      if (until != null && until.isAfter(now)) {
+        throw const WitanimeRateLimitException();
+      }
+      if (until != null) _tokenRetryAt.remove(token);
     }
   }
 
@@ -254,7 +299,6 @@ class WitanimePlaybackResolver {
     Uri watchUri, {
     bool forceRefresh = false,
   }) async {
-    _checkCooldown();
     final canonical = _resolveSameOrigin(watchUri.toString(), _origin);
     if (!watchUri.hasScheme || canonical == null) {
       throw const FormatException('Invalid Witanime watch URL');
@@ -270,6 +314,7 @@ class WitanimePlaybackResolver {
         );
       }
     }
+    _checkSourcesCooldown();
     final page = await _transport.get(
       watchUri,
       headers: {
@@ -282,7 +327,7 @@ class WitanimePlaybackResolver {
       },
       operation: 'watch_page',
     );
-    _checkCooldown(page);
+    _checkSourcesCooldown(page);
     if (page.statusCode == 403 ||
         page.body.contains('cf-challenge') ||
         page.body.contains('challenges.cloudflare.com')) {
@@ -361,12 +406,24 @@ class WitanimePlaybackResolver {
   Future<List<StreamResult>> loadSources(
     String watchUrl, {
     required bool forDownload,
+    bool forceRefresh = false,
   }) async {
     final parsedWatch = Uri.tryParse(watchUrl.trim());
     if (parsedWatch == null || !looksLikeStreamUrl(parsedWatch.toString())) {
       throw const FormatException('Invalid Witanime watch URL');
     }
-    var meta = await _fetchWatchMeta(parsedWatch);
+    final canonical = _resolveSameOrigin(parsedWatch.toString(), _origin);
+    final sourcesCacheKey = canonical == null
+        ? null
+        : '${canonical.toString()}|${forDownload ? "dl" : "st"}';
+    if (!forceRefresh && sourcesCacheKey != null) {
+      final cached = _sourcesCache[sourcesCacheKey];
+      if (cached != null && cached.expiresAt.isAfter(DateTime.now())) {
+        return cached.sources;
+      }
+    }
+    _checkSourcesCooldown();
+    var meta = await _fetchWatchMeta(parsedWatch, forceRefresh: forceRefresh);
     Future<WitanimeHttpResponse> postSources(
       ({String csrf, Uri sourcesUri, Uri watchUri}) m,
     ) => _transport.post(
@@ -379,7 +436,7 @@ class WitanimePlaybackResolver {
       meta = await _fetchWatchMeta(parsedWatch, forceRefresh: true);
       resp = await postSources(meta);
     }
-    _checkCooldown(resp);
+    _checkSourcesCooldown(resp);
     if (!resp.isSuccess) {
       throw FormatException('Witanime sources HTTP ${resp.statusCode}');
     }
@@ -545,7 +602,14 @@ class WitanimePlaybackResolver {
       if (out.isEmpty) collectBucket('downloads', 'download');
     }
 
-    return List<StreamResult>.unmodifiable(out);
+    final result = List<StreamResult>.unmodifiable(out);
+    if (sourcesCacheKey != null && result.isNotEmpty) {
+      _sourcesCache[sourcesCacheKey] = (
+        sources: result,
+        expiresAt: DateTime.now().add(_sourcesCacheTtl),
+      );
+    }
+    return result;
   }
 
   Future<List<StreamResult>> resolveStreams(
@@ -587,7 +651,11 @@ class WitanimePlaybackResolver {
     try {
       streams = await _resolveToken(entry);
     } on _ExpiredSourceException {
-      final fresh = await loadSources(entry.watchUrl, forDownload: forDownload);
+      final fresh = await loadSources(
+        entry.watchUrl,
+        forDownload: forDownload,
+        forceRefresh: true,
+      );
       for (final candidate in fresh) {
         final token = WitanimeSourceToken.tryDecode(candidate.url)!;
         if (token.label == entry.label &&
@@ -598,11 +666,13 @@ class WitanimePlaybackResolver {
           break;
         }
       }
-      if (identical(current, entry)) return const [];
+      if (identical(current, entry)) {
+        throw const WitanimeSourceUnavailableException();
+      }
       try {
         streams = await _resolveToken(current);
       } on _ExpiredSourceException {
-        return const [];
+        throw const WitanimeSourceUnavailableException();
       }
     }
     return [
@@ -623,6 +693,7 @@ class WitanimePlaybackResolver {
   }
 
   Future<List<StreamResult>> _resolveToken(WitanimeSourceToken entry) async {
+    _checkTokenCooldown(entry.token);
     final watchUri = Uri.parse(entry.watchUrl);
     var meta = await _fetchWatchMeta(watchUri);
     final kind = entry.isDownload ? 'download' : 'stream';
@@ -655,15 +726,13 @@ class WitanimePlaybackResolver {
       meta = await _fetchWatchMeta(watchUri, forceRefresh: true);
       activateResp = await postActivate(meta);
     }
-    _checkCooldown(activateResp);
+    _checkTokenCooldown(entry.token, activateResp);
     if (activateResp.statusCode == 404 || activateResp.statusCode == 410) {
       _metaCache.remove(watchUri.removeFragment().toString());
       throw const _ExpiredSourceException();
     }
     if (!activateResp.isSuccess) {
-      throw FormatException(
-        'Witanime source unlock HTTP ${activateResp.statusCode}',
-      );
+      throw const WitanimeSourceUnavailableException();
     }
 
     final activation = _tryJsonMap(activateResp.body);
@@ -698,19 +767,19 @@ class WitanimePlaybackResolver {
       followRedirects: false,
       operation: '${kind}_gate',
     );
-    _checkCooldown(gateResp);
+    _checkTokenCooldown(entry.token, gateResp);
     if (gateResp.statusCode == 404 || gateResp.statusCode == 410) {
       throw const _ExpiredSourceException();
     }
     if (gateResp.statusCode >= 400) {
-      throw FormatException('Witanime gate HTTP ${gateResp.statusCode}');
+      throw const WitanimeSourceUnavailableException();
     }
 
     final rawLoc =
         gateResp.header('location') ??
         _navigationTarget(gateResp.body, includeGateLinks: true);
     if (rawLoc == null || rawLoc.trim().isEmpty) {
-      throw const FormatException('Witanime gate returned no host URL');
+      throw const WitanimeSourceUnavailableException();
     }
     return resolveHostedLink(
       meta.watchUri.toString(),
@@ -940,11 +1009,12 @@ class WitanimePlaybackResolver {
     return crypto.sha256.convert(utf8.encode(payload)).toString();
   }
 
-  Future<Map<String, dynamic>?> _fetchGoFileFolderData(
+  Future<({String? status, Map<String, dynamic>? data})> _fetchGoFileFolderData(
     String contentId,
-    String token,
-  ) async {
-    final wt = _generateGoFileWebsiteToken(token);
+    String token, {
+    String lang = 'ar',
+  }) async {
+    final wt = _generateGoFileWebsiteToken(token, lang: lang);
     final contentResp = await _transport.get(
       Uri.https('api.gofile.io', '/contents/$contentId', {
         'page': '1',
@@ -956,20 +1026,42 @@ class WitanimePlaybackResolver {
         'Accept': 'application/json',
         'Authorization': 'Bearer $token',
         'X-Website-Token': wt,
-        'X-BL': 'ar',
+        'X-BL': lang,
         'Origin': 'https://gofile.io',
         'Referer': 'https://gofile.io/',
+        'User-Agent': DioWitanimeTransport.defaultUserAgent,
       },
       operation: 'host_gofile_content',
     );
-    if (!contentResp.isSuccess) return null;
     final root = _tryJsonMap(contentResp.body);
+    final status = root?['status']?.toString().trim();
+    if (!contentResp.isSuccess && (status == null || status.isEmpty)) {
+      return (status: 'http_${contentResp.statusCode}', data: null);
+    }
     final dataObj = root?['data'];
-    return dataObj is Map<String, dynamic>
+    final mapped = dataObj is Map<String, dynamic>
         ? dataObj
         : dataObj is Map
         ? Map<String, dynamic>.from(dataObj)
         : null;
+    return (status: status, data: mapped);
+  }
+
+  String _extractGoFileDirectUrl(Map<Object?, Object?> item) {
+    final linkCandidate = item['link']?.toString().trim() ?? '';
+    if (linkCandidate.isNotEmpty) return linkCandidate;
+    final directLinkCandidate = item['directLink']?.toString().trim() ?? '';
+    if (directLinkCandidate.isNotEmpty) return directLinkCandidate;
+    final directLinks = item['directLinks'];
+    if (directLinks is Map) {
+      for (final value in directLinks.values) {
+        if (value is Map) {
+          final nested = value['link']?.toString().trim() ?? '';
+          if (nested.isNotEmpty) return nested;
+        }
+      }
+    }
+    return '';
   }
 
   Future<List<StreamResult>> _resolveGoFile(
@@ -977,9 +1069,19 @@ class WitanimePlaybackResolver {
     WitanimeSourceToken entry,
   ) async {
     final uri = Uri.parse(link);
+    // Already a direct GoFile store CDN link (e.g. store1.gofile.io/download/...).
+    if (uri.host.toLowerCase().contains('store') &&
+        uri.path.toLowerCase().contains('/download/')) {
+      return [_hostedStream(entry, link, 'https://gofile.io/')];
+    }
     final segments = uri.pathSegments.where((s) => s.isNotEmpty).toList();
     if (segments.isEmpty) return const [];
-    final contentId = segments.last;
+    final markerIdx = segments.indexWhere(
+      (s) => s == 'd' || s == 'c' || s == 'f',
+    );
+    final contentId = (markerIdx >= 0 && markerIdx + 1 < segments.length)
+        ? segments[markerIdx + 1]
+        : segments.last;
 
     final accResp = await _transport.post(
       Uri.https('api.gofile.io', '/accounts'),
@@ -989,6 +1091,7 @@ class WitanimePlaybackResolver {
         'Accept': 'application/json',
         'Origin': 'https://gofile.io',
         'Referer': 'https://gofile.io/',
+        'User-Agent': DioWitanimeTransport.defaultUserAgent,
       },
       operation: 'host_gofile_account',
     );
@@ -997,16 +1100,62 @@ class WitanimePlaybackResolver {
     final token = accData is Map ? accData['token']?.toString().trim() : null;
     if (token == null || token.isEmpty) return const [];
 
-    final dataObj = await _fetchGoFileFolderData(contentId, token);
-    if (dataObj == null) return const [];
+    var fetched = await _fetchGoFileFolderData(contentId, token, lang: 'ar');
+    if (fetched.status == 'error-notPremium' ||
+        fetched.status == 'error-wt' ||
+        fetched.status == 'http_401') {
+      fetched = await _fetchGoFileFolderData(contentId, token, lang: 'en-US');
+    }
+    final apiStatus = fetched.status ?? '';
+    if (apiStatus == 'error-notFound') {
+      throw const FormatException(
+        'ملف GoFile غير موجود أو تم حذفه، اختر سيرفرًا آخر.',
+      );
+    }
+    if (apiStatus == 'error-rateLimit') {
+      throw const FormatException(
+        'GoFile يقيّد الطلبات مؤقتًا، انتظر قليلًا أو اختر سيرفرًا آخر.',
+      );
+    }
+    if (apiStatus == 'error-notPremium' ||
+        apiStatus == 'error-wt' ||
+        apiStatus == 'http_401') {
+      recordWitanimeDiagnostic(
+        'host_gofile_parse',
+        status: 'error',
+        durationMs: 0,
+        reason: apiStatus,
+      );
+      throw const FormatException(
+        'رفض GoFile التحقق من الجلسة، اختر سيرفرًا آخر.',
+      );
+    }
+    final dataObj = fetched.data;
+    if (dataObj == null) {
+      recordWitanimeDiagnostic(
+        'host_gofile_parse',
+        status: 'error',
+        durationMs: 0,
+        reason: apiStatus.isEmpty ? 'no_data' : apiStatus,
+      );
+      return const [];
+    }
     if (dataObj['canAccess'] == false) {
       throw const FormatException(
         'مجلد GoFile غير متاح أو محمي بكلمة مرور، اختر سيرفرًا آخر.',
       );
     }
+    if (dataObj['isFrozen'] == true || dataObj['overloaded'] == true) {
+      throw const FormatException(
+        'ملف GoFile مجمّد أو عليه ضغط عالٍ حاليًا، اختر سيرفرًا آخر.',
+      );
+    }
 
     List<Map<Object?, Object?>> extractChildren(Map<String, dynamic> container) {
-      if (container['type']?.toString() == 'file') return [container];
+      if (container['type']?.toString() == 'file' ||
+          _extractGoFileDirectUrl(container).isNotEmpty) {
+        return [container];
+      }
       final children = container['children'];
       if (children is Map) {
         return children.values.whereType<Map<Object?, Object?>>().toList();
@@ -1024,25 +1173,34 @@ class WitanimePlaybackResolver {
         final idCandidate = child['id']?.toString().trim() ?? '';
         final subId = codeCandidate.isNotEmpty ? codeCandidate : idCandidate;
         if (subId.isNotEmpty) {
-          final subData = await _fetchGoFileFolderData(subId, token);
-          if (subData != null) fileEntries.addAll(extractChildren(subData));
+          final subFetched = await _fetchGoFileFolderData(subId, token);
+          if (subFetched.data != null) {
+            fileEntries.addAll(extractChildren(subFetched.data!));
+          }
         }
       } else {
         fileEntries.add(child);
       }
     }
-    if (fileEntries.isEmpty) return const [];
+    if (fileEntries.isEmpty) {
+      recordWitanimeDiagnostic(
+        'host_gofile_parse',
+        status: 'error',
+        durationMs: 0,
+        reason:
+            'empty_${apiStatus.isEmpty ? "ok" : apiStatus}_${dataObj['type'] ?? "none"}',
+      );
+      return const [];
+    }
 
     final out = <StreamResult>[];
     var sawArchive = false;
     final cookieHeader = 'accountToken=$token';
     final source = displaySourceName(entry.label, version: entry.version);
     for (final child in fileEntries) {
+      if (child['isFrozen'] == true || child['overloaded'] == true) continue;
       final name = child['name']?.toString().trim().toLowerCase() ?? '';
-      final linkCandidate = child['link']?.toString().trim() ?? '';
-      final directLinkCandidate = child['directLink']?.toString().trim() ?? '';
-      final rawDirect =
-          linkCandidate.isNotEmpty ? linkCandidate : directLinkCandidate;
+      final rawDirect = _extractGoFileDirectUrl(child);
       final direct = _encodeUrlIfNeeded(rawDirect);
       final mime = child['mimetype']?.toString().trim().toLowerCase() ?? '';
       if (direct.isEmpty || !looksLikeStreamUrl(direct)) continue;
@@ -1072,6 +1230,14 @@ class WitanimePlaybackResolver {
         'رابط GoFile هذا ملف مضغوط (ZIP) وليس فيديو مباشرًا، اختر سيرفرًا آخر.',
       );
     }
+    if (out.isEmpty) {
+      recordWitanimeDiagnostic(
+        'host_gofile_parse',
+        status: 'error',
+        durationMs: 0,
+        reason: 'no_playable_link_${fileEntries.length}',
+      );
+    }
     return out;
   }
 
@@ -1093,9 +1259,13 @@ class WitanimePlaybackResolver {
     );
     if (!pageResp.isSuccess) return const [];
     // Never attempt to solve or bypass WorkUpload's proof-of-work/captcha gate.
+    final bodyLower = pageResp.body.toLowerCase();
     if (pageResp.body.contains('solvePuzzle') ||
-        pageResp.body.contains('/puzzle')) {
-      return const [];
+        pageResp.body.contains('/puzzle') ||
+        bodyLower.contains('are you a human')) {
+      throw const FormatException(
+        'يتطلب WorkUpload التحقق من أنك إنسان (CAPTCHA)، اختر سيرفرًا آخر.',
+      );
     }
     final doc = html.parse(pageResp.body);
     final metaText =
