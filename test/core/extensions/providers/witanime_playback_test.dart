@@ -1180,6 +1180,106 @@ void main() {
     expect(resolved.single.url, contains('id=CACHE_ID'));
     expect(watchGets, 1);
   });
+
+  test('GoFile resolves nested folders, directLink fallback, percent-encodes spaces, and rejects inaccessible folders', () async {
+    final transport = _FakeWitanimeTransport((method, uri, headers, _, _) async {
+      if (uri.host == 'api.gofile.io' && uri.path == '/accounts') {
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          body: jsonEncode({
+            'status': 'ok',
+            'data': {'token': 'gf-nested-tok'},
+          }),
+        );
+      }
+      if (uri.host == 'api.gofile.io' && uri.path == '/contents/RootFolder') {
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          body: jsonEncode({
+            'status': 'ok',
+            'data': {
+              'type': 'folder',
+              'canAccess': true,
+              'children': {
+                'sub1': {
+                  'type': 'folder',
+                  'code': 'SubFolder1',
+                  'id': 'sub-id-1',
+                },
+              },
+            },
+          }),
+        );
+      }
+      if (uri.host == 'api.gofile.io' && uri.path == '/contents/SubFolder1') {
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          body: jsonEncode({
+            'status': 'ok',
+            'data': {
+              'type': 'folder',
+              'canAccess': true,
+              'children': {
+                'f1': {
+                  'type': 'file',
+                  'name': 'Black Clover 07 HD.mp4',
+                  'mimetype': 'video/mp4',
+                  'link': '',
+                  'directLink':
+                      'https://store2.gofile.io/download/web/f1/Black Clover 07 HD.mp4',
+                },
+              },
+            },
+          }),
+        );
+      }
+      if (uri.host == 'api.gofile.io' && uri.path == '/contents/LockedFolder') {
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          body: jsonEncode({
+            'status': 'ok',
+            'data': {
+              'type': 'folder',
+              'canAccess': false,
+              'children': <String, Object?>{},
+            },
+          }),
+        );
+      }
+      return const WitanimeHttpResponse(statusCode: 404, body: '');
+    });
+
+    final resolver = WitanimePlaybackResolver(transport);
+    const token = WitanimeSourceToken(
+      watchUrl: 'https://witanime.site/watch/sample/7',
+      kind: 'download',
+      token: 'tok-gf',
+      tier: 'HD',
+      label: 'GoFile',
+    );
+
+    final streams = await resolver.resolveHostedLink(
+      token.watchUrl,
+      'https://gofile.io/d/RootFolder',
+      token,
+    );
+    expect(
+      streams.single.url,
+      'https://store2.gofile.io/download/web/f1/Black%20Clover%2007%20HD.mp4',
+    );
+    expect(streams.single.headers?['Cookie'], 'accountToken=gf-nested-tok');
+    expect(streams.single.headers?['Origin'], 'https://gofile.io');
+    expect(streams.single.headers?['Referer'], 'https://gofile.io/');
+
+    await expectLater(
+      resolver.resolveHostedLink(
+        token.watchUrl,
+        'https://gofile.io/d/LockedFolder',
+        token,
+      ),
+      throwsA(isA<FormatException>()),
+    );
+  });
 }
 
 class _Adapter implements HttpClientAdapter {

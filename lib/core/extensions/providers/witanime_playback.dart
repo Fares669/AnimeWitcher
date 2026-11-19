@@ -118,6 +118,7 @@ class WitanimePlaybackResolver {
   final HtmlUnescape _unescape = HtmlUnescape();
   final Random _random = Random();
   DateTime? _retryAt;
+  DateTime? _lastUnlockAt;
   final Map<
     String,
     ({String csrf, Uri sourcesUri, Uri watchUri, DateTime expiresAt})
@@ -125,6 +126,7 @@ class WitanimePlaybackResolver {
   _metaCache = {};
 
   static const _metaCacheTtl = Duration(minutes: 3);
+  static const _unlockMinSpacing = Duration(milliseconds: 350);
   static final _mediaPath = RegExp(
     r'\.(?:m3u8|mp4|mkv|webm|m4v|mov|avi|ts|mpd)$',
     caseSensitive: false,
@@ -606,7 +608,10 @@ class WitanimePlaybackResolver {
     return [
       for (final stream in streams)
         if (!forDownload || !_isPlaylist(stream.url))
-          stream.copyWith(refreshUrl: current.encode()),
+          stream.copyWith(
+            url: _encodeUrlIfNeeded(stream.url),
+            refreshUrl: current.encode(),
+          ),
     ];
   }
 
@@ -630,11 +635,21 @@ class WitanimePlaybackResolver {
 
     Future<WitanimeHttpResponse> postActivate(
       ({String csrf, Uri sourcesUri, Uri watchUri}) m,
-    ) => _transport.post(
-      sourceUri,
-      headers: _corsPostHeaders(m.csrf, m.watchUri),
-      operation: '${kind}_source_unlock',
-    );
+    ) async {
+      final last = _lastUnlockAt;
+      if (last != null) {
+        final elapsed = DateTime.now().difference(last);
+        if (elapsed < _unlockMinSpacing) {
+          await Future<void>.delayed(_unlockMinSpacing - elapsed);
+        }
+      }
+      _lastUnlockAt = DateTime.now();
+      return _transport.post(
+        sourceUri,
+        headers: _corsPostHeaders(m.csrf, m.watchUri),
+        operation: '${kind}_source_unlock',
+      );
+    }
     var activateResp = await postActivate(meta);
     if (activateResp.statusCode == 419) {
       meta = await _fetchWatchMeta(watchUri, forceRefresh: true);
@@ -910,11 +925,51 @@ class WitanimePlaybackResolver {
     return [_hostedStream(entry, normalized, pageUrl)];
   }
 
+  String _encodeUrlIfNeeded(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return trimmed;
+    final parsed = Uri.tryParse(trimmed);
+    if (parsed != null && !trimmed.contains(' ')) return trimmed;
+    return Uri.encodeFull(trimmed);
+  }
+
   String _generateGoFileWebsiteToken(String accountToken, {String lang = 'ar'}) {
     final bucket = (DateTime.now().millisecondsSinceEpoch ~/ 1000) ~/ 14400;
     final payload =
         '${DioWitanimeTransport.defaultUserAgent}::$lang::$accountToken::$bucket::12af056dacea0b';
     return crypto.sha256.convert(utf8.encode(payload)).toString();
+  }
+
+  Future<Map<String, dynamic>?> _fetchGoFileFolderData(
+    String contentId,
+    String token,
+  ) async {
+    final wt = _generateGoFileWebsiteToken(token);
+    final contentResp = await _transport.get(
+      Uri.https('api.gofile.io', '/contents/$contentId', {
+        'page': '1',
+        'pageSize': '100',
+        'sortField': 'name',
+        'sortDirection': '1',
+      }),
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': 'Bearer $token',
+        'X-Website-Token': wt,
+        'X-BL': 'ar',
+        'Origin': 'https://gofile.io',
+        'Referer': 'https://gofile.io/',
+      },
+      operation: 'host_gofile_content',
+    );
+    if (!contentResp.isSuccess) return null;
+    final root = _tryJsonMap(contentResp.body);
+    final dataObj = root?['data'];
+    return dataObj is Map<String, dynamic>
+        ? dataObj
+        : dataObj is Map
+        ? Map<String, dynamic>.from(dataObj)
+        : null;
   }
 
   Future<List<StreamResult>> _resolveGoFile(
@@ -942,37 +997,38 @@ class WitanimePlaybackResolver {
     final token = accData is Map ? accData['token']?.toString().trim() : null;
     if (token == null || token.isEmpty) return const [];
 
-    final wt = _generateGoFileWebsiteToken(token);
-    final contentResp = await _transport.get(
-      Uri.https('api.gofile.io', '/contents/$contentId', {
-        'page': '1',
-        'pageSize': '100',
-        'sortField': 'name',
-        'sortDirection': '1',
-      }),
-      headers: {
-        'Accept': 'application/json',
-        'Authorization': 'Bearer $token',
-        'X-Website-Token': wt,
-        'X-BL': 'ar',
-        'Origin': 'https://gofile.io',
-        'Referer': 'https://gofile.io/',
-      },
-      operation: 'host_gofile_content',
-    );
-    if (!contentResp.isSuccess) return const [];
-    final dataObj = _tryJsonMap(contentResp.body)?['data'];
-    if (dataObj is! Map) return const [];
+    final dataObj = await _fetchGoFileFolderData(contentId, token);
+    if (dataObj == null) return const [];
+    if (dataObj['canAccess'] == false) {
+      throw const FormatException(
+        'مجلد GoFile غير متاح أو محمي بكلمة مرور، اختر سيرفرًا آخر.',
+      );
+    }
+
+    List<Map<Object?, Object?>> extractChildren(Map<String, dynamic> container) {
+      if (container['type']?.toString() == 'file') return [container];
+      final children = container['children'];
+      if (children is Map) {
+        return children.values.whereType<Map<Object?, Object?>>().toList();
+      }
+      if (children is List) {
+        return children.whereType<Map<Object?, Object?>>().toList();
+      }
+      return const [];
+    }
 
     final fileEntries = <Map<Object?, Object?>>[];
-    if (dataObj['type']?.toString() == 'file') {
-      fileEntries.add(dataObj);
-    } else {
-      final children = dataObj['children'];
-      if (children is Map) {
-        fileEntries.addAll(children.values.whereType<Map<Object?, Object?>>());
-      } else if (children is List) {
-        fileEntries.addAll(children.whereType<Map<Object?, Object?>>());
+    for (final child in extractChildren(dataObj)) {
+      if (child['type']?.toString() == 'folder') {
+        final codeCandidate = child['code']?.toString().trim() ?? '';
+        final idCandidate = child['id']?.toString().trim() ?? '';
+        final subId = codeCandidate.isNotEmpty ? codeCandidate : idCandidate;
+        if (subId.isNotEmpty) {
+          final subData = await _fetchGoFileFolderData(subId, token);
+          if (subData != null) fileEntries.addAll(extractChildren(subData));
+        }
+      } else {
+        fileEntries.add(child);
       }
     }
     if (fileEntries.isEmpty) return const [];
@@ -983,7 +1039,11 @@ class WitanimePlaybackResolver {
     final source = displaySourceName(entry.label, version: entry.version);
     for (final child in fileEntries) {
       final name = child['name']?.toString().trim().toLowerCase() ?? '';
-      final direct = child['link']?.toString().trim() ?? '';
+      final linkCandidate = child['link']?.toString().trim() ?? '';
+      final directLinkCandidate = child['directLink']?.toString().trim() ?? '';
+      final rawDirect =
+          linkCandidate.isNotEmpty ? linkCandidate : directLinkCandidate;
+      final direct = _encodeUrlIfNeeded(rawDirect);
       final mime = child['mimetype']?.toString().trim().toLowerCase() ?? '';
       if (direct.isEmpty || !looksLikeStreamUrl(direct)) continue;
       if (_archivePath.hasMatch(name) ||
@@ -1000,6 +1060,7 @@ class WitanimePlaybackResolver {
           quality: qualityLabelForTier(entry.tier),
           headers: {
             'Referer': 'https://gofile.io/',
+            'Origin': 'https://gofile.io',
             'Cookie': cookieHeader,
             'User-Agent': DioWitanimeTransport.defaultUserAgent,
           },
@@ -2328,7 +2389,7 @@ class WitanimePlaybackResolver {
     String url,
     String referer,
   ) => StreamResult(
-    url: url,
+    url: _encodeUrlIfNeeded(url),
     source: displaySourceName(entry.label, version: entry.version),
     quality: qualityLabelForTier(entry.tier),
     headers: {
