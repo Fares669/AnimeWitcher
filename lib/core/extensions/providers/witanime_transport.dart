@@ -279,20 +279,35 @@ class DioWitanimeTransport implements WitanimeTransport {
       if (inspectMedia && cancelToken != null) {
         unawaited(cancelToken.whenCancel.then(requestCancel!.cancel));
       }
-      final response = await _dio.getUri<Object>(
-        uri,
-        cancelToken: requestCancel,
-        options: Options(
-          headers: merged,
-          followRedirects: followRedirects,
-          responseType: inspectMedia ? ResponseType.stream : ResponseType.plain,
-          validateStatus: (status) => status != null && status < 600,
-        ),
-      );
+      final response = inspectMedia
+          ? await _dio.getUri<ResponseBody>(
+              uri,
+              cancelToken: requestCancel,
+              options: Options(
+                headers: merged,
+                followRedirects: followRedirects,
+                responseType: ResponseType.stream,
+                validateStatus: (status) => status != null && status < 600,
+              ),
+            )
+          : await _dio.getUri<String>(
+              uri,
+              cancelToken: requestCancel,
+              options: Options(
+                headers: merged,
+                followRedirects: followRedirects,
+                responseType: ResponseType.plain,
+                validateStatus: (status) => status != null && status < 600,
+              ),
+            );
       _absorbSetCookies(uri, response.headers.map);
       final statusCode = response.statusCode ?? 0;
       final data = response.data;
-      var body = data is String ? data : '';
+      var body = switch (data) {
+        final String text => text,
+        Map<Object?, Object?> _ || List<Object?> _ => jsonEncode(data),
+        _ => '',
+      };
       if (data is ResponseBody) {
         final metadata = WitanimeHttpResponse(
           statusCode: statusCode,

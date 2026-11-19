@@ -1411,6 +1411,69 @@ void main() {
       ),
     );
   });
+
+  test('DioWitanimeTransport preserves application/json GET responses for GoFile and other JSON APIs', () async {
+    final dio = Dio(BaseOptions(responseType: ResponseType.plain));
+    addTearDown(() => dio.close(force: true));
+    dio.httpClientAdapter = _Adapter((options) async {
+      if (options.uri.host == 'api.gofile.io' &&
+          options.uri.path == '/accounts') {
+        return ResponseBody.fromString(
+          jsonEncode({
+            'status': 'ok',
+            'data': {'token': 'real-dio-tok'},
+          }),
+          200,
+          headers: {
+            Headers.contentTypeHeader: ['application/json; charset=utf-8'],
+          },
+        );
+      }
+      if (options.uri.host == 'api.gofile.io' &&
+          options.uri.path == '/contents/YptWOpSB') {
+        return ResponseBody.fromString(
+          jsonEncode({
+            'status': 'ok',
+            'data': {
+              'canAccess': true,
+              'type': 'file',
+              'name': '0649_07_FHD.mp4',
+              'mimetype': 'video/mp4',
+              'link':
+                  'https://file-eu-par-2.gofile.io/download/web/adeb48a1/0649_07_FHD.mp4',
+            },
+          }),
+          200,
+          headers: {
+            Headers.contentTypeHeader: ['application/json; charset=utf-8'],
+          },
+        );
+      }
+      return ResponseBody.fromString('', 404);
+    });
+
+    final transport = DioWitanimeTransport(dio: dio);
+    final resolver = WitanimePlaybackResolver(transport);
+    const token = WitanimeSourceToken(
+      watchUrl: 'https://witanime.site/watch/black-clover-2nd-season/7',
+      kind: 'download',
+      token: 'tok-gf-real',
+      tier: 'FHD',
+      label: 'gofile',
+    );
+    final streams = await resolver.resolveHostedLink(
+      token.watchUrl,
+      'https://gofile.io/d/YptWOpSB',
+      token,
+    );
+    expect(streams, hasLength(1));
+    expect(
+      streams.single.url,
+      'https://file-eu-par-2.gofile.io/download/web/adeb48a1/0649_07_FHD.mp4',
+    );
+    expect(streams.single.headers?['Cookie'], 'accountToken=real-dio-tok');
+    expect(streams.single.headers?['Origin'], 'https://gofile.io');
+  });
 }
 
 class _Adapter implements HttpClientAdapter {
