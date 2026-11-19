@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:html/parser.dart' as html;
 import 'package:html_unescape/html_unescape.dart';
 
@@ -9,6 +11,7 @@ import '../../domain/entity/multimedia_item.dart';
 import 'mediafire_utils.dart';
 import 'server_extraction_utils.dart';
 import 'witanime_crypto.dart';
+import 'witanime_mega_proxy.dart';
 import 'witanime_transport.dart';
 
 const String witanimeSourceUrlPrefix = 'witanime-source://';
@@ -102,17 +105,32 @@ class WitanimeSourceToken {
 }
 
 class WitanimePlaybackResolver {
-  WitanimePlaybackResolver(this._transport, {Uri? origin})
-    : _origin = origin ?? Uri.https('witanime.site');
+  WitanimePlaybackResolver(
+    this._transport, {
+    Uri? origin,
+    WitanimeMegaProxy? megaProxy,
+  }) : _origin = origin ?? Uri.https('witanime.site'),
+       _megaProxy = megaProxy ?? WitanimeMegaProxy.shared;
 
   final WitanimeTransport _transport;
   final Uri _origin;
+  final WitanimeMegaProxy _megaProxy;
   final HtmlUnescape _unescape = HtmlUnescape();
   final Random _random = Random();
   DateTime? _retryAt;
+  final Map<
+    String,
+    ({String csrf, Uri sourcesUri, Uri watchUri, DateTime expiresAt})
+  >
+  _metaCache = {};
 
+  static const _metaCacheTtl = Duration(minutes: 3);
   static final _mediaPath = RegExp(
     r'\.(?:m3u8|mp4|mkv|webm|m4v|mov|avi|ts|mpd)$',
+    caseSensitive: false,
+  );
+  static final _archivePath = RegExp(
+    r'\.(?:zip|rar|7z)(?:/file)?$',
     caseSensitive: false,
   );
   static const _navigationAccept =
@@ -120,8 +138,10 @@ class WitanimePlaybackResolver {
 
   static const _tierOrder = <String>['4K', 'FHD', 'HD', 'SD'];
   static const _hgcloudMirrors = <String>[
-    'hanerix.com',
     'vibuxer.com',
+    'hanerix.com',
+    'dintezuvio.com',
+    'cavanhabg.com',
     'audinifer.com',
   ];
 
@@ -129,9 +149,15 @@ class WitanimePlaybackResolver {
     switch (tier.trim().toUpperCase()) {
       case '4K':
       case '2160P':
+      case 'ULTRA':
         return '2160p';
+      case '2K':
+      case '1440P':
+      case 'QUAD':
+        return '1440p';
       case 'FHD':
       case '1080P':
+      case 'FULL':
         return '1080p';
       case 'HD':
       case '720P':
@@ -140,7 +166,14 @@ class WitanimePlaybackResolver {
       case '480P':
         return '480p';
       case '360P':
+      case 'LOW':
         return '360p';
+      case '240P':
+      case 'LOWEST':
+        return '240p';
+      case '144P':
+      case 'MOBILE':
+        return '144p';
       default:
         return tier.trim().isEmpty ? '720p' : tier.trim();
     }
@@ -216,12 +249,24 @@ class WitanimePlaybackResolver {
   }
 
   Future<({String csrf, Uri sourcesUri, Uri watchUri})> _fetchWatchMeta(
-    Uri watchUri,
-  ) async {
+    Uri watchUri, {
+    bool forceRefresh = false,
+  }) async {
     _checkCooldown();
-    if (!watchUri.hasScheme ||
-        _resolveSameOrigin(watchUri.toString(), _origin) == null) {
+    final canonical = _resolveSameOrigin(watchUri.toString(), _origin);
+    if (!watchUri.hasScheme || canonical == null) {
       throw const FormatException('Invalid Witanime watch URL');
+    }
+    final cacheKey = canonical.toString();
+    if (!forceRefresh) {
+      final cached = _metaCache[cacheKey];
+      if (cached != null && cached.expiresAt.isAfter(DateTime.now())) {
+        return (
+          csrf: cached.csrf,
+          sourcesUri: cached.sourcesUri,
+          watchUri: cached.watchUri,
+        );
+      }
     }
     final page = await _transport.get(
       watchUri,
@@ -276,11 +321,20 @@ class WitanimePlaybackResolver {
               _defaultSourcesUri(effectiveWatch)
         : _defaultSourcesUri(effectiveWatch);
 
-    return (
+    final result = (
       csrf: csrf.trim(),
       sourcesUri: sourcesUri,
       watchUri: effectiveWatch,
     );
+    final entry = (
+      csrf: result.csrf,
+      sourcesUri: result.sourcesUri,
+      watchUri: result.watchUri,
+      expiresAt: DateTime.now().add(_metaCacheTtl),
+    );
+    _metaCache[cacheKey] = entry;
+    _metaCache[effectiveWatch.removeFragment().toString()] = entry;
+    return result;
   }
 
   Uri _defaultSourcesUri(Uri watchUri) {
@@ -320,7 +374,7 @@ class WitanimePlaybackResolver {
     );
     var resp = await postSources(meta);
     if (resp.statusCode == 419) {
-      meta = await _fetchWatchMeta(parsedWatch);
+      meta = await _fetchWatchMeta(parsedWatch, forceRefresh: true);
       resp = await postSources(meta);
     }
     _checkCooldown(resp);
@@ -332,8 +386,45 @@ class WitanimePlaybackResolver {
 
     final out = <StreamResult>[];
     final seen = <String>{};
+    final seenDownloadSlots = <String>{};
 
-    void collectGroup(Object? groupObj, String kind, {String? version}) {
+    bool isDownloadFriendlyPlayer(String label) {
+      final lower = label.trim().toLowerCase();
+      return lower.contains('mp4upload') ||
+          lower == 'ok' ||
+          lower.contains('okru') ||
+          lower == 'videa' ||
+          lower.contains('4shared') ||
+          lower.contains('drive') ||
+          lower.contains('dropbox') ||
+          lower.contains('pixeldrain') ||
+          lower.contains('mail') ||
+          lower.contains('yonaplay') ||
+          lower.contains('dotplay');
+    }
+
+    int downloadLabelPriority(String label) {
+      final lower = label.trim().toLowerCase();
+      if (lower.contains('drive')) return 0;
+      if (lower.contains('mp4upload')) return 1;
+      if (lower.contains('pixeldrain')) return 2;
+      if (lower.contains('4shared')) return 3;
+      if (lower.contains('dropbox')) return 4;
+      if (lower == 'videa') return 5;
+      if (lower == 'ok' || lower.contains('okru')) return 6;
+      if (lower.contains('gofile')) return 7;
+      if (lower.contains('mediafire')) return 8;
+      if (lower.contains('workupload')) return 10;
+      return 9;
+    }
+
+    void collectGroup(
+      Object? groupObj,
+      String kind, {
+      String? version,
+      bool Function(String label)? labelFilter,
+      bool sortForDownload = false,
+    }) {
       if (groupObj is! Map) return;
       final groups = {
         for (final entry in groupObj.entries)
@@ -347,8 +438,19 @@ class WitanimePlaybackResolver {
       for (final tier in orderedTiers) {
         final entries = groups[tier];
         if (entries is! List) continue;
-        for (final rawEntry in entries) {
-          if (rawEntry is! Map) continue;
+        final rawMaps = entries
+            .whereType<Map<Object?, Object?>>()
+            .toList(growable: false);
+        final orderedMaps = sortForDownload
+            ? ([...rawMaps]
+                ..sort((a, b) {
+                  final la = a['label']?.toString() ?? a['name']?.toString() ?? '';
+                  final lb = b['label']?.toString() ?? b['name']?.toString() ?? '';
+                  return downloadLabelPriority(la)
+                      .compareTo(downloadLabelPriority(lb));
+                }))
+            : rawMaps;
+        for (final rawEntry in orderedMaps) {
           final token = rawEntry['token']?.toString().trim() ?? '';
           if (token.isEmpty) continue;
           final label = rawEntry['label']?.toString().trim().isNotEmpty == true
@@ -356,6 +458,7 @@ class WitanimePlaybackResolver {
               : rawEntry['name']?.toString().trim().isNotEmpty == true
               ? rawEntry['name'].toString().trim()
               : 'Server';
+          if (labelFilter != null && !labelFilter(label)) continue;
           final rawEntryVersion = rawEntry['version']?.toString().trim();
           final effectiveVersion =
               version ??
@@ -368,6 +471,12 @@ class WitanimePlaybackResolver {
           );
           final quality = qualityLabelForTier(tier);
           if (!seen.add('$kind|$token|$effectiveVersion|$tier')) continue;
+          if (forDownload &&
+              !seenDownloadSlots.add(
+                '${label.toLowerCase()}|$effectiveVersion|$tier',
+              )) {
+            continue;
+          }
           final encoded = WitanimeSourceToken(
             kind: kind,
             watchUrl: meta.watchUri.toString(),
@@ -389,21 +498,45 @@ class WitanimePlaybackResolver {
       }
     }
 
-    void collectBucket(String key, String kind) {
-      collectGroup(root[key], kind);
+    void collectBucket(
+      String key,
+      String kind, {
+      bool Function(String label)? labelFilter,
+      bool sortForDownload = false,
+    }) {
+      collectGroup(
+        root[key],
+        kind,
+        labelFilter: labelFilter,
+        sortForDownload: sortForDownload,
+      );
       final versions = root['versions'];
       if (versions is Map) {
         for (final entry in versions.entries) {
           final subGroup = entry.value;
           if (subGroup is Map) {
-            collectGroup(subGroup[key], kind, version: entry.key.toString());
+            collectGroup(
+              subGroup[key],
+              kind,
+              version: entry.key.toString(),
+              labelFilter: labelFilter,
+              sortForDownload: sortForDownload,
+            );
           }
         }
       }
     }
 
     if (forDownload) {
-      collectBucket('downloads', 'download');
+      collectBucket('downloads', 'download', sortForDownload: true);
+      // Many Witanime download mirrors package episodes as .zip archives; also
+      // expose direct-MP4 player mirrors so users always have playable downloads.
+      collectBucket(
+        'players',
+        'stream',
+        labelFilter: isDownloadFriendlyPlayer,
+        sortForDownload: true,
+      );
       if (out.isEmpty) collectBucket('players', 'stream');
     } else {
       collectBucket('players', 'stream');
@@ -504,11 +637,12 @@ class WitanimePlaybackResolver {
     );
     var activateResp = await postActivate(meta);
     if (activateResp.statusCode == 419) {
-      meta = await _fetchWatchMeta(watchUri);
+      meta = await _fetchWatchMeta(watchUri, forceRefresh: true);
       activateResp = await postActivate(meta);
     }
     _checkCooldown(activateResp);
     if (activateResp.statusCode == 404 || activateResp.statusCode == 410) {
+      _metaCache.remove(watchUri.removeFragment().toString());
       throw const _ExpiredSourceException();
     }
     if (!activateResp.isSuccess) {
@@ -588,18 +722,20 @@ class WitanimePlaybackResolver {
     final quality = qualityLabelForTier(entry.tier);
 
     if (host == 'mega.nz' || host == 'mega.co.nz' || host == 'www.mega.nz') {
-      throw const WitanimeBrowserRequiredException(
-        'روابط MEGA مشفّرة ولا يدعمها التطبيق. اختر سيرفرًا آخر.',
-      );
+      return _resolveMega(cleanLink, entry);
     }
 
     if (host == 'mediafire.com' || host == 'www.mediafire.com') {
-      return _resolveGeneric(
-        episodeUrl,
-        mediaFirePageRequestUrl(cleanLink),
-        entry,
-        depth: depth,
-      );
+      return _resolveMediaFire(cleanLink, entry);
+    }
+    if (host == 'gofile.io' || host.endsWith('.gofile.io')) {
+      return _resolveGoFile(cleanLink, entry);
+    }
+    if (host == 'workupload.com' || host.endsWith('.workupload.com')) {
+      return _resolveWorkUpload(cleanLink, entry);
+    }
+    if (host == '4shared.com' || host.endsWith('.4shared.com')) {
+      return _resolveFourShared(cleanLink, entry);
     }
     if (host == 'dropbox.com' || host == 'www.dropbox.com') {
       final download = uri.replace(
@@ -624,15 +760,13 @@ class WitanimePlaybackResolver {
         ];
       }
     }
+    if (_archivePath.hasMatch(uri.path)) {
+      throw const FormatException(
+        'هذا الرابط يحتوي على ملف مضغوط (ZIP) غير قابل للتشغيل، اختر سيرفرًا آخر.',
+      );
+    }
     if (_mediaPath.hasMatch(uri.path)) {
-      return [
-        StreamResult(
-          url: cleanLink,
-          source: displaySource,
-          quality: quality,
-          headers: {'Referer': episodeUrl},
-        ),
-      ];
+      return [_hostedStream(entry, cleanLink, episodeUrl)];
     }
 
     if (host.contains('yonaplay') || host.contains('soraplay')) {
@@ -641,13 +775,13 @@ class WitanimePlaybackResolver {
     if (host == 'dotplay.net' || host.endsWith('.dotplay.net')) {
       return _resolveDotplay(episodeUrl, uri, entry, depth: depth);
     }
-    if (low.contains('videa.hu')) {
+    if (low.contains('videa.hu') || low.contains('videakid.hu')) {
       return _resolveVidea(cleanLink, entry);
     }
-    if (low.contains('videas.fr')) {
+    if (low.contains('videas.com') || low.contains('videas.fr')) {
       return _resolveVideas(episodeUrl, cleanLink, entry);
     }
-    if (low.contains('ok.ru')) {
+    if (low.contains('ok.ru') || low.contains('odnoklassniki.ru')) {
       return _resolveOkRu(cleanLink, entry);
     }
     if (low.contains('dailymotion')) {
@@ -661,14 +795,24 @@ class WitanimePlaybackResolver {
           url: direct,
           source: displaySource,
           quality: quality,
-          headers: const {'Referer': 'https://drive.google.com/'},
+          headers: const {
+            'Referer': 'https://drive.google.com/',
+            'User-Agent': DioWitanimeTransport.defaultUserAgent,
+          },
         ),
       ];
     }
     if (low.contains('mail.ru')) {
       return _resolveMailRu(cleanLink, entry);
     }
-    if (low.contains('hgcloud')) {
+    if (low.contains('hgcloud.') ||
+        low.contains('vibuxer.') ||
+        low.contains('hanerix.') ||
+        low.contains('dintezuvio.') ||
+        low.contains('cavanhabg.') ||
+        low.contains('audinifer.') ||
+        low.contains('streamhg') ||
+        low.contains('earnvids')) {
       return _resolveHgcloud(episodeUrl, cleanLink, entry);
     }
     if (low.contains('dood') ||
@@ -686,33 +830,375 @@ class WitanimePlaybackResolver {
     return _resolveGeneric(episodeUrl, cleanLink, entry, depth: depth);
   }
 
+  Future<List<StreamResult>> _resolveMega(
+    String link,
+    WitanimeSourceToken entry,
+  ) async {
+    final localUrl = await _megaProxy.registerStream(link, _transport);
+    if (localUrl == null) {
+      throw const WitanimeBrowserRequiredException(
+        'تعذر فك تشفير رابط MEGA هذا. اختر سيرفرًا آخر.',
+      );
+    }
+    return [
+      StreamResult(
+        url: localUrl,
+        source: displaySourceName(entry.label, version: entry.version),
+        quality: qualityLabelForTier(entry.tier),
+        headers: const {'User-Agent': DioWitanimeTransport.defaultUserAgent},
+      ),
+    ];
+  }
+
+  Future<List<StreamResult>> _resolveMediaFire(
+    String link,
+    WitanimeSourceToken entry,
+  ) async {
+    final cleanUri = Uri.tryParse(link);
+    if (cleanUri != null && _archivePath.hasMatch(cleanUri.path)) {
+      throw const FormatException(
+        'رابط MediaFire هذا ملف مضغوط (ZIP) وليس فيديو مباشرًا، اختر سيرفرًا آخر.',
+      );
+    }
+    final pageUrl = mediaFirePageRequestUrl(link);
+    final resp = await _transport.get(
+      Uri.parse(pageUrl),
+      headers: const {
+        'Referer': 'https://www.mediafire.com/',
+        'Accept': _navigationAccept,
+      },
+      operation: 'host_mediafire',
+    );
+    if (!resp.isSuccess) return const [];
+    final doc = html.parse(resp.body);
+    final dlBtn = doc.querySelector(
+      '#downloadButton, a[aria-label="Download file"], a.popsok',
+    );
+    final scrambled = dlBtn?.attributes['data-scrambled-url']?.trim();
+    String? directUrl;
+    if (scrambled != null && scrambled.isNotEmpty) {
+      try {
+        directUrl = utf8.decode(decodeBase64Loose(scrambled)).trim();
+      } on FormatException {
+        directUrl = null;
+      }
+    }
+    directUrl ??= dlBtn?.attributes['href']?.trim();
+    if (directUrl != null && directUrl.isNotEmpty) {
+      directUrl = _absUrl(prepareExtractedMediaUrl(directUrl), Uri.parse(pageUrl));
+    }
+    if (directUrl == null ||
+        !looksLikeStreamUrl(directUrl) ||
+        directUrl == pageUrl) {
+      directUrl = RegExp(
+        r'''https?://download[^/\s"'<>\\]*\.mediafire\.com/[^\s"'<>\\]+''',
+        caseSensitive: false,
+      ).firstMatch(resp.body)?.group(0);
+    }
+    if (directUrl == null || directUrl.trim().isEmpty) return const [];
+    final normalized = _absUrl(
+      prepareExtractedMediaUrl(directUrl),
+      Uri.parse(pageUrl),
+    );
+    final directUri = Uri.tryParse(normalized);
+    if (directUri != null && _archivePath.hasMatch(directUri.path)) {
+      throw const FormatException(
+        'رابط MediaFire هذا ملف مضغوط (ZIP) وليس فيديو مباشرًا، اختر سيرفرًا آخر.',
+      );
+    }
+    if (!looksLikeStreamUrl(normalized)) return const [];
+    return [_hostedStream(entry, normalized, pageUrl)];
+  }
+
+  String _generateGoFileWebsiteToken(String accountToken, {String lang = 'ar'}) {
+    final bucket = (DateTime.now().millisecondsSinceEpoch ~/ 1000) ~/ 14400;
+    final payload =
+        '${DioWitanimeTransport.defaultUserAgent}::$lang::$accountToken::$bucket::12af056dacea0b';
+    return crypto.sha256.convert(utf8.encode(payload)).toString();
+  }
+
+  Future<List<StreamResult>> _resolveGoFile(
+    String link,
+    WitanimeSourceToken entry,
+  ) async {
+    final uri = Uri.parse(link);
+    final segments = uri.pathSegments.where((s) => s.isNotEmpty).toList();
+    if (segments.isEmpty) return const [];
+    final contentId = segments.last;
+
+    final accResp = await _transport.post(
+      Uri.https('api.gofile.io', '/accounts'),
+      body: '{}',
+      headers: const {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Origin': 'https://gofile.io',
+        'Referer': 'https://gofile.io/',
+      },
+      operation: 'host_gofile_account',
+    );
+    if (!accResp.isSuccess) return const [];
+    final accData = _tryJsonMap(accResp.body)?['data'];
+    final token = accData is Map ? accData['token']?.toString().trim() : null;
+    if (token == null || token.isEmpty) return const [];
+
+    final wt = _generateGoFileWebsiteToken(token);
+    final contentResp = await _transport.get(
+      Uri.https('api.gofile.io', '/contents/$contentId', {
+        'page': '1',
+        'pageSize': '100',
+        'sortField': 'name',
+        'sortDirection': '1',
+      }),
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': 'Bearer $token',
+        'X-Website-Token': wt,
+        'X-BL': 'ar',
+        'Origin': 'https://gofile.io',
+        'Referer': 'https://gofile.io/',
+      },
+      operation: 'host_gofile_content',
+    );
+    if (!contentResp.isSuccess) return const [];
+    final dataObj = _tryJsonMap(contentResp.body)?['data'];
+    if (dataObj is! Map) return const [];
+
+    final fileEntries = <Map<Object?, Object?>>[];
+    if (dataObj['type']?.toString() == 'file') {
+      fileEntries.add(dataObj);
+    } else {
+      final children = dataObj['children'];
+      if (children is Map) {
+        fileEntries.addAll(children.values.whereType<Map<Object?, Object?>>());
+      } else if (children is List) {
+        fileEntries.addAll(children.whereType<Map<Object?, Object?>>());
+      }
+    }
+    if (fileEntries.isEmpty) return const [];
+
+    final out = <StreamResult>[];
+    var sawArchive = false;
+    final cookieHeader = 'accountToken=$token';
+    final source = displaySourceName(entry.label, version: entry.version);
+    for (final child in fileEntries) {
+      final name = child['name']?.toString().trim().toLowerCase() ?? '';
+      final direct = child['link']?.toString().trim() ?? '';
+      final mime = child['mimetype']?.toString().trim().toLowerCase() ?? '';
+      if (direct.isEmpty || !looksLikeStreamUrl(direct)) continue;
+      if (_archivePath.hasMatch(name) ||
+          mime.contains('zip') ||
+          mime.contains('rar') ||
+          mime.contains('7z')) {
+        sawArchive = true;
+        continue;
+      }
+      out.add(
+        StreamResult(
+          url: direct,
+          source: source,
+          quality: qualityLabelForTier(entry.tier),
+          headers: {
+            'Referer': 'https://gofile.io/',
+            'Cookie': cookieHeader,
+            'User-Agent': DioWitanimeTransport.defaultUserAgent,
+          },
+        ),
+      );
+    }
+    if (out.isEmpty && sawArchive) {
+      throw const FormatException(
+        'رابط GoFile هذا ملف مضغوط (ZIP) وليس فيديو مباشرًا، اختر سيرفرًا آخر.',
+      );
+    }
+    return out;
+  }
+
+  Future<List<StreamResult>> _resolveWorkUpload(
+    String link,
+    WitanimeSourceToken entry,
+  ) async {
+    final fileId = RegExp(
+      r'workupload\.com/(?:file|start)/([A-Za-z0-9]+)',
+      caseSensitive: false,
+    ).firstMatch(link)?.group(1);
+    if (fileId == null || fileId.isEmpty) return const [];
+
+    final pageUrl = 'https://workupload.com/file/$fileId';
+    final pageResp = await _transport.get(
+      Uri.parse(pageUrl),
+      headers: const {'Accept': _navigationAccept},
+      operation: 'host_workupload',
+    );
+    if (!pageResp.isSuccess) return const [];
+    // Never attempt to solve or bypass WorkUpload's proof-of-work/captcha gate.
+    if (pageResp.body.contains('solvePuzzle') ||
+        pageResp.body.contains('/puzzle')) {
+      return const [];
+    }
+    final doc = html.parse(pageResp.body);
+    final metaText =
+        '${doc.querySelector('title')?.text ?? ''} '
+                '${doc.querySelectorAll('th, td, h1, span.filename').map((e) => e.text).join(' ')}'
+            .toLowerCase();
+    if (metaText.contains('.zip') ||
+        metaText.contains('.rar') ||
+        metaText.contains('.7z')) {
+      throw const FormatException(
+        'رابط WorkUpload هذا ملف مضغوط (ZIP) وليس فيديو مباشرًا، اختر سيرفرًا آخر.',
+      );
+    }
+    final cookies = <String, String>{};
+    void absorb(WitanimeHttpResponse r) {
+      final raw = _extractCookieHeader(r);
+      if (raw.isEmpty) return;
+      for (final pair in raw.split(';')) {
+        final eq = pair.indexOf('=');
+        if (eq > 0) {
+          cookies[pair.substring(0, eq).trim()] = pair.substring(eq + 1).trim();
+        }
+      }
+    }
+
+    absorb(pageResp);
+    String cookieString() =>
+        cookies.entries.map((e) => '${e.key}=${e.value}').join('; ');
+
+    final startUrl = 'https://workupload.com/start/$fileId';
+    final startResp = await _transport.get(
+      Uri.parse(startUrl),
+      headers: {
+        'Referer': pageUrl,
+        'Accept': _navigationAccept,
+        if (cookies.isNotEmpty) 'Cookie': cookieString(),
+      },
+      operation: 'host_workupload_start',
+    );
+    absorb(startResp);
+
+    final srvResp = await _transport.get(
+      Uri.parse('https://workupload.com/api/file/getDownloadServer/$fileId'),
+      headers: {
+        'Referer': startUrl,
+        'Accept': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+        if (cookies.isNotEmpty) 'Cookie': cookieString(),
+      },
+      operation: 'host_workupload_server',
+    );
+    absorb(srvResp);
+    if (!srvResp.isSuccess) return const [];
+    final data = _tryJsonMap(srvResp.body)?['data'];
+    final dlUrl = data is Map ? data['url']?.toString().trim() : null;
+    if (dlUrl == null || !looksLikeStreamUrl(dlUrl)) return const [];
+    final dlUri = Uri.tryParse(dlUrl);
+    if (dlUri != null && _archivePath.hasMatch(dlUri.path)) {
+      throw const FormatException(
+        'رابط WorkUpload هذا ملف مضغوط (ZIP) وليس فيديو مباشرًا، اختر سيرفرًا آخر.',
+      );
+    }
+    return [
+      StreamResult(
+        url: dlUrl,
+        source: displaySourceName(entry.label, version: entry.version),
+        quality: qualityLabelForTier(entry.tier),
+        headers: {
+          'Referer': 'https://workupload.com/',
+          'User-Agent': DioWitanimeTransport.defaultUserAgent,
+          if (cookies.isNotEmpty) 'Cookie': cookieString(),
+        },
+      ),
+    ];
+  }
+
+  Future<List<StreamResult>> _resolveFourShared(
+    String link,
+    WitanimeSourceToken entry,
+  ) async {
+    final fileId = RegExp(
+      r'4shared\.com/(?:web/embed/file|embed|video|file|s)/([A-Za-z0-9_-]+)',
+      caseSensitive: false,
+    ).firstMatch(link)?.group(1);
+    if (fileId == null || fileId.isEmpty) return const [];
+    final normalizedEmbed = 'https://www.4shared.com/web/embed/file/$fileId';
+    final resp = await _transport.get(
+      Uri.parse(normalizedEmbed),
+      headers: const {'Referer': 'https://www.4shared.com/'},
+      operation: 'host_4shared',
+    );
+    if (!resp.isSuccess) return const [];
+    final doc = html.parse(resp.body);
+    final mp4Url =
+        doc.querySelector('video source[src], video[src]')?.attributes['src']?.trim() ??
+        RegExp(
+          r'''https?://dc\d+\.4shared\.com/[^\s"'<>]+\.mp4[^\s"'<>]*''',
+          caseSensitive: false,
+        ).firstMatch(resp.body)?.group(0);
+    if (mp4Url == null || !looksLikeStreamUrl(mp4Url)) return const [];
+    return [_hostedStream(entry, mp4Url, 'https://www.4shared.com/')];
+  }
+
   Future<List<StreamResult>> _resolveDotplay(
     String referer,
     Uri uri,
     WitanimeSourceToken entry, {
     required int depth,
   }) async {
-    final code = RegExp(r'^/embed/([^/]+)').firstMatch(uri.path)?.group(1);
-    if (code != null) {
+    final page = await _transport.get(
+      uri,
+      headers: {
+        'Accept': _navigationAccept,
+        'Referer': referer,
+        'Upgrade-Insecure-Requests': '1',
+      },
+      operation: 'host_dotplay_page',
+    );
+    final pageUri = page.finalUri ?? uri;
+    final embedCode =
+        RegExp(
+          r'''window\.embedCode\s*=\s*["']([^"']+)["']''',
+        ).firstMatch(page.body)?.group(1) ??
+        RegExp(r'^/embed/([^/]+)').firstMatch(pageUri.path)?.group(1) ??
+        (pageUri.pathSegments.isNotEmpty ? pageUri.pathSegments.last : null);
+    final embedToken = RegExp(
+      r'''window\.embedToken\s*=\s*["']([^"']+)["']''',
+    ).firstMatch(page.body)?.group(1)?.trim();
+    final cookies = _extractCookieHeader(page);
+    if (embedCode != null && embedCode.isNotEmpty) {
       final response = await _transport.get(
-        uri.replace(path: '/api.php', queryParameters: {'code': code}),
-        headers: {'Accept': 'application/json', 'Referer': uri.toString()},
+        pageUri.replace(path: '/api.php', queryParameters: {'code': embedCode}),
+        headers: {
+          'Accept': 'application/json',
+          'Referer': pageUri.toString(),
+          if (embedToken != null && embedToken.isNotEmpty)
+            'X-Embed-Token': embedToken,
+          if (cookies.isNotEmpty) 'Cookie': cookies,
+        },
         operation: 'host_dotplay',
       );
       final encoded = _tryJsonMap(response.body)?['video_url'];
-      if (response.isSuccess && encoded is String) {
+      if (response.isSuccess && encoded is String && encoded.trim().isNotEmpty) {
         try {
-          final decoded = utf8.decode(base64Decode(encoded)).split('|').first;
+          final decoded = utf8
+              .decode(decodeBase64Loose(encoded))
+              .split('|')
+              .first;
           final url = prepareExtractedMediaUrl(decoded);
           if (looksLikeStreamUrl(url)) {
-            return [_hostedStream(entry, url, uri.toString())];
+            return [_hostedStream(entry, url, pageUri.toString())];
           }
         } on FormatException {
           // Some older embed pages contain a plain player configuration.
         }
       }
     }
-    return _resolveGeneric(referer, uri.toString(), entry, depth: depth);
+    return _resolveGeneric(
+      referer,
+      pageUri.toString(),
+      entry,
+      preloadedBody: page.isSuccess ? page.body : null,
+      depth: depth,
+    );
   }
 
   Future<List<StreamResult>> _resolveYonaOrSora(
@@ -748,70 +1234,86 @@ class WitanimePlaybackResolver {
       if (out.isNotEmpty) return out;
     }
 
-    // Encrypted Yonaplay API flow (window._E={a:"/api"})
+    // Encrypted Yonaplay API flow (`window._E={a:"/api", c:..., t:..., k:...}`)
     if (isYona) {
+      final rawConfig = RegExp(
+        r'window\._E\s*=\s*(\{[^;]+\})',
+      ).firstMatch(page.body)?.group(1);
+      final inlineConfig = rawConfig == null ? null : _tryJsonMap(rawConfig);
       final apiPath =
-          RegExp(r'''window\._E\s*=\s*\{\s*a\s*:\s*["']([^"']+)["']''')
-              .firstMatch(page.body)
-              ?.group(1) ??
+          inlineConfig?['a']?.toString().trim() ??
+          RegExp(
+            r'''window\._E\s*=\s*\{[^}]*\ba\s*:\s*["']([^"']+)["']''',
+          ).firstMatch(page.body)?.group(1) ??
           '/api';
       final apiUri = pageUri.resolve(apiPath.replaceAll(r'\/', '/'));
       final apiBase = apiUri.origin == pageUri.origin
           ? '${apiUri.origin}${apiUri.path.replaceFirst(RegExp(r'/+$'), '')}'
           : '${pageUri.origin}/api';
       final cookie = _extractCookieHeader(page);
+      var code = inlineConfig?['c']?.toString().trim() ?? '';
+      var embedToken = inlineConfig?['t']?.toString().trim() ?? '';
+      var key = inlineConfig?['k']?.toString().trim() ?? '';
+
       Map<String, String> apiHeaders() => {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
         'Referer': pageUrl,
         'Origin': pageUri.origin,
         'X-Requested-With': 'XMLHttpRequest',
+        if (embedToken.isNotEmpty) 'X-Embed-Token': embedToken,
         if (cookie.isNotEmpty) 'Cookie': cookie,
       };
 
-      final initResp = await _transport.post(
-        Uri.parse('$apiBase/init-session.php'),
-        body: '{}',
-        headers: apiHeaders(),
-        operation: 'yonaplay_init',
-      );
-      if (initResp.isSuccess) {
-        final initJson = _tryJsonMap(initResp.body);
-        final code = initJson?['c']?.toString();
-        final key = initJson?['k']?.toString();
-        if (code != null && key != null) {
-          final srcResp = await _transport.post(
-            Uri.parse('$apiBase/sources.php'),
-            body: jsonEncode({'code': code}),
+      if (code.isEmpty || key.isEmpty) {
+        final initResp = await _transport.post(
+          Uri.parse('$apiBase/init-session.php'),
+          body: '{}',
+          headers: apiHeaders(),
+          operation: 'yonaplay_init',
+        );
+        if (initResp.isSuccess) {
+          final initJson = _tryJsonMap(initResp.body);
+          code = initJson?['c']?.toString().trim() ?? '';
+          embedToken = initJson?['t']?.toString().trim() ?? embedToken;
+          key = initJson?['k']?.toString().trim() ?? '';
+        }
+      }
+      if (code.isNotEmpty && key.isNotEmpty) {
+        final srcResp = await _transport.post(
+          Uri.parse('$apiBase/sources.php'),
+          body: jsonEncode({'code': code}),
+          headers: apiHeaders(),
+          operation: 'yonaplay_sources',
+        );
+        final srcJson = _tryJsonMap(srcResp.body);
+        final tokens = _rankedYonaplayServerTokens(
+          srcJson?['qualities'],
+          entry.tier,
+        );
+        for (final token in tokens) {
+          final apiResp = await _transport.post(
+            Uri.parse('$apiBase/api.php'),
+            body: jsonEncode({'code': code, 'token': token, 'key': key}),
             headers: apiHeaders(),
-            operation: 'yonaplay_sources',
+            operation: 'yonaplay_api',
           );
-          final srcJson = _tryJsonMap(srcResp.body);
-          final token = _pickYonaplayServerToken(
-            srcJson?['qualities'],
-            entry.tier,
-          );
-          if (token != null) {
-            final apiResp = await _transport.post(
-              Uri.parse('$apiBase/api.php'),
-              body: jsonEncode({'code': code, 'token': token, 'key': key}),
-              headers: apiHeaders(),
-              operation: 'yonaplay_api',
+          final dataJson = _tryJsonMap(apiResp.body);
+          final encrypted = dataJson?['d']?.toString();
+          if (encrypted == null || encrypted.isEmpty) continue;
+          final plain = decryptYonaplayPayload(key, encrypted);
+          if (plain == null || plain.trim().isEmpty) continue;
+          final sendRef = dataJson?['r'] != 0;
+          try {
+            final resolved = await resolveHostedLink(
+              sendRef ? '${pageUri.origin}/' : pageUrl,
+              _absUrl(plain.trim(), pageUri),
+              entry,
+              depth: depth + 1,
             );
-            final dataJson = _tryJsonMap(apiResp.body);
-            final encrypted = dataJson?['d']?.toString();
-            if (encrypted != null && encrypted.isNotEmpty) {
-              final plain = decryptYonaplayPayload(key, encrypted);
-              if (plain != null && plain.trim().isNotEmpty) {
-                final resolved = await resolveHostedLink(
-                  pageUrl,
-                  _absUrl(plain.trim(), pageUri),
-                  entry,
-                  depth: depth + 1,
-                );
-                if (resolved.isNotEmpty) return resolved;
-              }
-            }
+            if (resolved.isNotEmpty) return resolved;
+          } catch (_) {
+            // Try next Yonaplay server candidate.
           }
         }
       }
@@ -837,7 +1339,10 @@ class WitanimePlaybackResolver {
               quality: (label != null && label.isNotEmpty)
                   ? label
                   : qualityLabelForTier(entry.tier),
-              headers: {'Referer': pageUrl},
+              headers: {
+                'Referer': pageUrl,
+                'User-Agent': DioWitanimeTransport.defaultUserAgent,
+              },
             ),
           );
         }
@@ -854,7 +1359,10 @@ class WitanimePlaybackResolver {
     );
   }
 
-  String? _pickYonaplayServerToken(Object? qualities, String preferredTier) {
+  List<String> _rankedYonaplayServerTokens(
+    Object? qualities,
+    String preferredTier,
+  ) {
     final tiers = switch (qualities) {
       final Map<Object?, Object?> map => map.entries.map(
         (tier) => (tier.key.toString(), tier.value),
@@ -866,8 +1374,8 @@ class WitanimePlaybackResolver {
     };
     const rankMap = <String, int>{'4k': 1, 'fhd': 2, 'hd': 3, 'sd': 4};
     final prefer = preferredTier.trim().toLowerCase();
-    String? bestToken;
-    var bestRank = 99;
+    final ranked = <(int, String)>[];
+    final seen = <String>{};
     for (final (tierName, tier) in tiers) {
       if (tier is! Map) continue;
       final name = tierName.trim().toLowerCase();
@@ -875,16 +1383,14 @@ class WitanimePlaybackResolver {
       if (name == prefer) rank = 0;
       final servers = tier['servers'];
       if (servers is! List || servers.isEmpty) continue;
-      if (rank >= bestRank) continue;
       for (final server in servers.whereType<Map<Object?, Object?>>()) {
         final token = server['token']?.toString().trim();
-        if (token == null || token.isEmpty) continue;
-        bestToken = token;
-        bestRank = rank;
-        break;
+        if (token == null || token.isEmpty || !seen.add(token)) continue;
+        ranked.add((rank, token));
       }
     }
-    return bestToken;
+    ranked.sort((a, b) => a.$1.compareTo(b.$1));
+    return [for (final item in ranked) item.$2];
   }
 
   Future<List<StreamResult>> _resolveVidea(
@@ -892,11 +1398,18 @@ class WitanimePlaybackResolver {
     WitanimeSourceToken entry,
   ) async {
     final uri = Uri.parse(link);
-    final vcode = uri.queryParameters['v'];
+    final trailingId = uri.pathSegments.isNotEmpty
+        ? uri.pathSegments.last.split('-').last
+        : '';
+    final vcode =
+        uri.queryParameters['v'] ??
+        RegExp(r'[?&]v=([A-Za-z0-9_-]+)').firstMatch(link)?.group(1) ??
+        (trailingId.length >= 8 && trailingId.length <= 24 ? trailingId : null);
     if (vcode == null || vcode.isEmpty) return const <StreamResult>[];
+    final playerUrl = 'https://videa.hu/player?v=$vcode';
     final page = await _transport.get(
-      uri,
-      headers: {'Referer': _origin.origin},
+      Uri.parse(playerUrl),
+      headers: {'Referer': 'https://videa.hu/'},
       operation: 'host_videa',
     );
     if (!page.isSuccess) return const <StreamResult>[];
@@ -922,54 +1435,82 @@ class WitanimePlaybackResolver {
     });
     final xmlResp = await _transport.get(
       xmlUri,
-      headers: {'Referer': link},
+      headers: {'Referer': playerUrl, 'Origin': 'https://videa.hu'},
       operation: 'host_videa_xml',
     );
-    if (!xmlResp.isSuccess) return const <StreamResult>[];
-    final contentType = xmlResp.header('content-type') ?? '';
+    if (!xmlResp.isSuccess || xmlResp.body.trim().isEmpty) {
+      return const <StreamResult>[];
+    }
+    final contentType = (xmlResp.header('content-type') ?? '').toLowerCase();
     final String xml;
-    if (contentType.startsWith('text/xml') || xmlResp.body.trimLeft().startsWith('<')) {
+    if (contentType.startsWith('text/xml') ||
+        xmlResp.body.trimLeft().startsWith('<')) {
       xml = xmlResp.body;
     } else {
       final xs = xmlResp.header('x-videa-xs') ?? '';
-      final decrypted = rc4Crypt(
-        utf8.encode('${parts.k}$rnd$xs'),
-        base64Decode(xmlResp.body.trim()),
-      );
-      xml = latin1.decode(decrypted);
+      final Uint8List rawBytes;
+      try {
+        rawBytes = decodeBase64Loose(xmlResp.body);
+      } on FormatException {
+        return const <StreamResult>[];
+      }
+      final decrypted = rc4Crypt(utf8.encode('${parts.k}$rnd$xs'), rawBytes);
+      xml = utf8.decode(decrypted, allowMalformed: true);
     }
+    if (xml.contains('<error')) return const <StreamResult>[];
 
-    final exp = RegExp(r'''<video_sources?[^>]*exp=["'](\d+)["']''')
-        .firstMatch(xml)
-        ?.group(1);
-    if (exp == null) return const <StreamResult>[];
+    final doc = html.parse(xml);
+    final globalExp =
+        doc.querySelector('video_sources')?.attributes['exp']?.trim() ??
+        RegExp(
+          r'''<video_sources?[^>]*exp=["'](\d+)["']''',
+        ).firstMatch(xml)?.group(1);
     final hashes = <String, String>{};
     for (final m in RegExp(
       r'<hash_value_([^>]+)>([^<]+)</hash_value_',
     ).allMatches(xml)) {
-      hashes[m.group(1)!] = m.group(2)!;
+      hashes[m.group(1)!.trim()] = m.group(2)!.trim();
     }
-    final out = <StreamResult>[];
-    for (final m in RegExp(
-      r'''<video_source\s+name=["']([^"']+)["'][^>]*>([^<]+)</video_source>''',
-    ).allMatches(xml)) {
-      final q = m.group(1)!;
-      final path = m.group(2)!;
+
+    final candidates =
+        <({int rank, bool isMp4, String quality, String url})>[];
+    for (final el in doc.querySelectorAll('video_source')) {
+      final q = el.attributes['name']?.trim() ?? '';
+      final rawPath = el.text.trim();
+      if (q.isEmpty || rawPath.isEmpty) continue;
+      final exp = el.attributes['exp']?.trim() ?? globalExp;
       final md5Hash = hashes[q];
-      if (md5Hash == null) continue;
-      final mediaUrl = path.startsWith('http')
-          ? '$path?md5=$md5Hash&expires=$exp'
-          : 'https:$path?md5=$md5Hash&expires=$exp';
-      out.add(
-        StreamResult(
-          url: mediaUrl,
-          source: displaySourceName(entry.label, version: entry.version),
-          quality: q,
-          headers: const {'Referer': 'https://videa.hu/'},
-        ),
-      );
+      final baseUrl = rawPath.startsWith('http')
+          ? rawPath
+          : rawPath.startsWith('//')
+          ? 'https:$rawPath'
+          : 'https://$rawPath';
+      final mediaUrl = (md5Hash != null && exp != null && exp.isNotEmpty)
+          ? '$baseUrl?md5=$md5Hash&expires=$exp'
+          : baseUrl;
+      final mime = (el.attributes['mimetype'] ?? '').toLowerCase();
+      final isMp4 = mime.contains('mp4') || !mime.contains('webm');
+      final height = int.tryParse(RegExp(r'(\d+)').firstMatch(q)?.group(1) ?? '') ?? 0;
+      candidates.add((rank: height, isMp4: isMp4, quality: q, url: mediaUrl));
     }
-    return out;
+    candidates.sort((a, b) {
+      if (a.isMp4 != b.isMp4) return a.isMp4 ? -1 : 1;
+      return b.rank.compareTo(a.rank);
+    });
+
+    final source = displaySourceName(entry.label, version: entry.version);
+    return [
+      for (final c in candidates)
+        StreamResult(
+          url: c.url,
+          source: source,
+          quality: c.quality,
+          headers: {
+            'Referer': playerUrl,
+            'User-Agent': DioWitanimeTransport.defaultUserAgent,
+          },
+        ),
+    ];
   }
 
   ({String t, String k})? _videaToken(String xt) {
@@ -1011,17 +1552,157 @@ class WitanimePlaybackResolver {
     );
   }
 
+  String _randomUuidV4() {
+    final bytes = List<int>.generate(16, (_) => _random.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    String hex(int start, int end) => bytes
+        .sublist(start, end)
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
+    return '${hex(0, 4)}-${hex(4, 6)}-${hex(6, 8)}-${hex(8, 10)}-${hex(10, 16)}';
+  }
+
   Future<List<StreamResult>> _resolveVideas(
     String episodeUrl,
     String link,
     WitanimeSourceToken entry,
   ) async {
+    final normalizedUrl = link.replaceFirst('/embed/media/', '/embed/');
+    final uri = Uri.parse(normalizedUrl);
+    final origin = uri.origin.isNotEmpty ? uri.origin : 'https://app.videas.com';
     final resp = await _transport.get(
-      Uri.parse(link),
-      headers: {'Referer': episodeUrl},
+      uri,
+      headers: {'Referer': '${_origin.origin}/'},
       operation: 'host_videas',
     );
     if (!resp.isSuccess) return const <StreamResult>[];
+
+    final doc = html.parse(resp.body);
+    var embedId = '';
+    var opening = '';
+    final cfgRaw = doc.querySelector('script#videas-embed-config')?.text ?? '';
+    if (cfgRaw.trim().isNotEmpty) {
+      final cfg = _tryJsonMap(cfgRaw);
+      embedId = cfg?['embedId']?.toString().trim() ?? '';
+      opening = cfg?['opening']?.toString().trim() ?? '';
+    }
+    if (embedId.isEmpty) {
+      embedId =
+          RegExp(r'/embed/(?:media/)?([0-9a-fA-F-]{20,})')
+              .firstMatch(link)
+              ?.group(1) ??
+          '';
+    }
+
+    final source = displaySourceName(entry.label, version: entry.version);
+    final quality = qualityLabelForTier(entry.tier);
+    final streamHeaders = <String, String>{
+      'Referer': '$origin/',
+      'Origin': origin,
+      'User-Agent': DioWitanimeTransport.defaultUserAgent,
+    };
+
+    if (embedId.isNotEmpty) {
+      final viewerId = _randomUuidV4();
+      final visResp = await _transport.get(
+        Uri.parse('$origin/api/visitor/embed/$embedId/?viewer_id=$viewerId'),
+        headers: {
+          'Accept': 'application/json',
+          'Origin': origin,
+          'Referer': link,
+          if (opening.isNotEmpty) 'X-Embed-Opening': opening,
+        },
+        operation: 'host_videas_visitor',
+      );
+      if (visResp.isSuccess && visResp.body.trim().isNotEmpty) {
+        final visObj = _tryJsonMap(visResp.body);
+        final playbackToken =
+            visObj?['playback_token']?.toString().trim() ?? '';
+        final sessionId = visObj?['session_id']?.toString().trim() ?? '';
+        final items = visObj?['items'];
+        if (items is List) {
+          final out = <StreamResult>[];
+          for (final item in items.whereType<Map<Object?, Object?>>()) {
+            final asset = item['asset'];
+            if (asset is! Map) continue;
+            final assetUid = asset['uid']?.toString().trim() ?? '';
+            if (assetUid.isEmpty) continue;
+            final subs = <SubtitleFile>[];
+            final rawSubs = asset['subtitles'];
+            if (rawSubs is List) {
+              for (final s in rawSubs.whereType<Map<Object?, Object?>>()) {
+                final subUrl = s['url']?.toString().trim() ?? '';
+                if (subUrl.isEmpty) continue;
+                final subLabel =
+                    s['label']?.toString().trim() ??
+                    s['language']?.toString().trim() ??
+                    'Arabic';
+                subs.add(
+                  SubtitleFile(
+                    url: _absUrl(subUrl, Uri.parse(origin)),
+                    label: subLabel,
+                    lang: subLabel,
+                  ),
+                );
+              }
+            }
+            final pbResp = await _transport.post(
+              Uri.parse('$origin/api/visitor/playback/info/'),
+              body: jsonEncode({
+                'asset_id': assetUid,
+                'playback_token': playbackToken,
+                'session_id': sessionId,
+              }),
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'Origin': origin,
+                'Referer': link,
+              },
+              operation: 'host_videas_playback',
+            );
+            if (!pbResp.isSuccess) continue;
+            final pbObj = _tryJsonMap(pbResp.body);
+            String? extractField(Object? value) {
+              if (value is Map) return value['url']?.toString().trim();
+              if (value is String &&
+                  (value.startsWith('/') || value.startsWith('http'))) {
+                return value.trim();
+              }
+              return null;
+            }
+
+            final mp4Raw = extractField(pbObj?['source_url']);
+            final hlsRaw = extractField(pbObj?['hls_url']);
+            if (hlsRaw != null && hlsRaw.isNotEmpty) {
+              out.add(
+                StreamResult(
+                  url: _absUrl(hlsRaw, Uri.parse(origin)),
+                  source: source,
+                  quality: quality,
+                  headers: streamHeaders,
+                  subtitles: subs.isEmpty ? null : subs,
+                ),
+              );
+            }
+            if (mp4Raw != null && mp4Raw.isNotEmpty) {
+              out.add(
+                StreamResult(
+                  url: _absUrl(mp4Raw, Uri.parse(origin)),
+                  source: source,
+                  quality: quality,
+                  headers: streamHeaders,
+                  subtitles: subs.isEmpty ? null : subs,
+                ),
+              );
+            }
+          }
+          if (out.isNotEmpty) return out;
+        }
+      }
+    }
+
     final preload =
         RegExp(
           r'''<link[^>]+rel=["']preload["'][^>]+href=["']([^"']+)["']''',
@@ -1029,15 +1710,13 @@ class WitanimePlaybackResolver {
         RegExp(
           r'''"src"\s*:\s*"(https?://[^"]+\.m3u8[^"]*)"''',
         ).firstMatch(resp.body)?.group(1);
-    final source = displaySourceName(entry.label, version: entry.version);
-    final quality = qualityLabelForTier(entry.tier);
     if (preload != null && looksLikeStreamUrl(preload)) {
       return [
         StreamResult(
           url: preload,
           source: source,
           quality: quality,
-          headers: {'Referer': link},
+          headers: streamHeaders,
         ),
       ];
     }
@@ -1048,8 +1727,9 @@ class WitanimePlaybackResolver {
     String link,
     WitanimeSourceToken entry,
   ) async {
+    final embedLink = link.replaceFirst('/video/', '/videoembed/');
     final resp = await _transport.get(
-      Uri.parse(link),
+      Uri.parse(embedLink),
       headers: const {'Referer': 'https://ok.ru/'},
       operation: 'host_okru',
     );
@@ -1070,34 +1750,63 @@ class WitanimePlaybackResolver {
         : null;
     if (meta == null) return const <StreamResult>[];
     final source = displaySourceName(entry.label, version: entry.version);
-    final out = <StreamResult>[];
-    final hls = meta['hlsManifestUrl']?.toString().trim() ?? '';
+    const okHeaders = <String, String>{
+      'Referer': 'https://ok.ru/',
+      'User-Agent': DioWitanimeTransport.defaultUserAgent,
+    };
+    const okQualityRank = <String, int>{
+      'ultra': 2160,
+      'quad': 1440,
+      'full': 1080,
+      'hd': 720,
+      'sd': 480,
+      'low': 360,
+      'lowest': 240,
+      'mobile': 144,
+    };
+
+    final mp4Items = <({int rank, StreamResult stream})>[];
+    final videos = meta['videos'];
+    if (videos is List) {
+      for (final video in videos) {
+        if (video is! Map) continue;
+        if (video['disallowed'] == true) continue;
+        final url = video['url']?.toString().trim() ?? '';
+        if (url.isEmpty) continue;
+        final name = video['name']?.toString().trim() ?? '';
+        final rank =
+            okQualityRank[name.toLowerCase()] ??
+            int.tryParse(RegExp(r'(\d+)').firstMatch(name)?.group(1) ?? '') ??
+            0;
+        mp4Items.add((
+          rank: rank,
+          stream: StreamResult(
+            url: url,
+            source: source,
+            quality: name.isNotEmpty
+                ? qualityLabelForTier(name)
+                : qualityLabelForTier(entry.tier),
+            headers: okHeaders,
+          ),
+        ));
+      }
+    }
+    mp4Items.sort((a, b) => b.rank.compareTo(a.rank));
+    final out = <StreamResult>[for (final item in mp4Items) item.stream];
+    final hls =
+        (meta['ondemandHls']?.toString().trim().isNotEmpty == true
+            ? meta['ondemandHls'].toString().trim()
+            : meta['hlsManifestUrl']?.toString().trim()) ??
+        '';
     if (hls.isNotEmpty) {
       out.add(
         StreamResult(
           url: hls,
           source: source,
           quality: 'متعدد',
-          headers: const {'Referer': 'https://ok.ru/'},
+          headers: okHeaders,
         ),
       );
-    }
-    final videos = meta['videos'];
-    if (videos is List) {
-      for (final video in videos) {
-        if (video is! Map) continue;
-        final url = video['url']?.toString().trim() ?? '';
-        if (url.isEmpty) continue;
-        final name = video['name']?.toString().trim() ?? '';
-        out.add(
-          StreamResult(
-            url: url,
-            source: source,
-            quality: name.isNotEmpty ? name : qualityLabelForTier(entry.tier),
-            headers: const {'Referer': 'https://ok.ru/'},
-          ),
-        );
-      }
     }
     return out;
   }
@@ -1110,6 +1819,7 @@ class WitanimePlaybackResolver {
     const dmHeaders = <String, String>{
       'Referer': '$dmOrigin/',
       'Origin': dmOrigin,
+      'User-Agent': DioWitanimeTransport.defaultUserAgent,
     };
     final embedResp = await _transport.get(
       Uri.parse(link),
@@ -1213,12 +1923,31 @@ class WitanimePlaybackResolver {
     ).firstMatch(resp.body)?.group(1);
     if (rawMeta == null) return const <StreamResult>[];
     final metaUrl = rawMeta.startsWith('//') ? 'https:$rawMeta' : rawMeta;
+    final pageCookie = _extractCookieHeader(resp);
     final mr = await _transport.get(
       Uri.parse(metaUrl),
-      headers: {'Referer': link, 'X-Requested-With': 'XMLHttpRequest'},
+      headers: {
+        'Referer': link,
+        'X-Requested-With': 'XMLHttpRequest',
+        if (pageCookie.isNotEmpty) 'Cookie': pageCookie,
+      },
       operation: 'host_mailru_meta',
     );
     if (!mr.isSuccess) return const <StreamResult>[];
+    final metaCookie = _extractCookieHeader(mr);
+    final cookieMap = <String, String>{};
+    for (final raw in [pageCookie, metaCookie]) {
+      for (final part in raw.split(';')) {
+        final eq = part.indexOf('=');
+        if (eq > 0) {
+          cookieMap[part.substring(0, eq).trim()] =
+              part.substring(eq + 1).trim();
+        }
+      }
+    }
+    final combinedCookie = cookieMap.entries
+        .map((e) => '${e.key}=${e.value}')
+        .join('; ');
     final data = _tryJsonMap(mr.body);
     final videos = data?['videos'];
     if (videos is! List) return const <StreamResult>[];
@@ -1237,7 +1966,11 @@ class WitanimePlaybackResolver {
           quality: key != null && key.isNotEmpty
               ? key
               : qualityLabelForTier(entry.tier),
-          headers: {'Referer': link},
+          headers: {
+            'Referer': link,
+            'User-Agent': DioWitanimeTransport.defaultUserAgent,
+            if (combinedCookie.isNotEmpty) 'Cookie': combinedCookie,
+          },
         ),
       );
     }
@@ -1249,50 +1982,104 @@ class WitanimePlaybackResolver {
     String link,
     WitanimeSourceToken entry,
   ) async {
-    List<String> extractUrls(String body) {
+    List<String> extractUrls(String body, Uri baseUri) {
       final unpacked = unpackPackedJs(body);
       final text = unpacked.isNotEmpty ? '$unpacked\n$body' : body;
       final seen = <String>{};
-      final urls = <String>[];
-      for (final pattern in [
-        RegExp(r'''https?://[^"'\s<>\\]+master\.txt[^"'\s<>\\]*'''),
-        RegExp(r'''https?://[^"'\s<>\\]+master\.m3u8[^"'\s<>\\]*'''),
-        RegExp(r'''https?://[^"'\s<>\\]+\.m3u8[^"'\s<>\\]*'''),
-      ]) {
-        for (final match in pattern.allMatches(text)) {
-          final clean = match
-              .group(0)!
-              .replaceAll(r'\/', '/')
-              .replaceAll('&amp;', '&');
-          if (seen.add(clean)) urls.add(clean);
+      final m3u8Urls = <String>[];
+      final txtUrls = <String>[];
+
+      void addCandidate(String raw) {
+        final clean = raw
+            .replaceAll(r'\/', '/')
+            .replaceAll('&amp;', '&')
+            .trim();
+        if (clean.isEmpty) return;
+        final resolved = _absUrl(clean, baseUri);
+        if (!looksLikeStreamUrl(resolved) || !seen.add(resolved)) return;
+        if (resolved.toLowerCase().contains('.m3u8')) {
+          m3u8Urls.add(resolved);
+        } else {
+          txtUrls.add(resolved);
         }
       }
-      return urls;
+
+      for (final keyName in const ['hls4', 'hls3', 'hls2', 'file']) {
+        for (final match in RegExp(
+          '''["']$keyName["']\\s*:\\s*["']([^"']+)["']''',
+        ).allMatches(text)) {
+          final raw = match.group(1)!.replaceAll(r'\/', '/').trim();
+          if (raw.contains('.m3u8') ||
+              raw.contains('master.txt') ||
+              raw.startsWith('/stream/')) {
+            addCandidate(raw);
+          }
+        }
+      }
+      for (final pattern in [
+        RegExp(r'''https?://[^"'\s<>\\]+master\.m3u8[^"'\s<>\\]*'''),
+        RegExp(r'''https?://[^"'\s<>\\]+\.m3u8[^"'\s<>\\]*'''),
+        RegExp(r'''https?://[^"'\s<>\\]+master\.txt[^"'\s<>\\]*'''),
+      ]) {
+        for (final match in pattern.allMatches(text)) {
+          addCandidate(match.group(0)!);
+        }
+      }
+      // Prefer explicit .m3u8 playlists over .txt manifests for media_kit/AVPlayer.
+      return [...m3u8Urls, ...txtUrls];
     }
 
-    var finalRef = link;
-    final first = await _transport.get(
-      Uri.parse(link),
-      headers: {'Referer': episodeUrl},
-      operation: 'host_hgcloud',
-    );
-    var urls = first.isSuccess ? extractUrls(first.body) : const <String>[];
-    if (urls.isEmpty && first.body.contains('/main.js')) {
-      final path = Uri.parse(link).path;
+    final uri = Uri.parse(link);
+    final code =
+        RegExp(r'/(?:e|d|v)/([A-Za-z0-9]+)').firstMatch(uri.path)?.group(1) ??
+        (uri.pathSegments.isNotEmpty
+            ? uri.pathSegments.last.split('.').first
+            : '');
+    final hostLower = uri.host.toLowerCase();
+    final isHgRedirector = hostLower.contains('hgcloud.');
+
+    final candidates = <({Uri uri, String op})>[];
+    if (!isHgRedirector) {
+      candidates.add((uri: uri, op: 'host_hgcloud'));
+    }
+    if (code.isNotEmpty) {
+      final path = uri.path.startsWith('/e/') ? uri.path : '/e/$code';
       for (final mirror in _hgcloudMirrors) {
-        final ref = 'https://$mirror/';
-        final mirrorResp = await _transport.get(
-          Uri.https(mirror, path),
-          headers: {'Referer': ref},
-          operation: 'host_hgcloud_mirror',
-        );
-        if (!mirrorResp.isSuccess) continue;
-        final found = extractUrls(mirrorResp.body);
-        if (found.isNotEmpty) {
-          urls = found;
-          finalRef = ref;
-          break;
-        }
+        if (mirror == hostLower) continue;
+        candidates.add((
+          uri: Uri.https(mirror, path),
+          op: 'host_hgcloud_mirror',
+        ));
+      }
+    }
+    if (isHgRedirector) {
+      candidates.add((uri: uri, op: 'host_hgcloud'));
+    }
+
+    var urls = const <String>[];
+    var finalOrigin = uri.origin;
+    var finalRef = '${uri.origin}/';
+
+    // When the primary URL is hgcloud.*, try it first only if it directly serves
+    // packed config; otherwise fall through immediately to active player mirrors.
+    for (final candidate in candidates) {
+      final candOrigin = candidate.uri.origin;
+      final candRef = candidate.op == 'host_hgcloud'
+          ? episodeUrl
+          : '$candOrigin/';
+      final resp = await _transport.get(
+        candidate.uri,
+        headers: {'Referer': candRef},
+        operation: candidate.op,
+      );
+      if (!resp.isSuccess) continue;
+      final effectiveUri = resp.finalUri ?? candidate.uri;
+      final found = extractUrls(resp.body, effectiveUri);
+      if (found.isNotEmpty) {
+        urls = found;
+        finalOrigin = effectiveUri.origin;
+        finalRef = '${effectiveUri.origin}/';
+        break;
       }
     }
     final source = displaySourceName(entry.label, version: entry.version);
@@ -1303,7 +2090,11 @@ class WitanimePlaybackResolver {
           url: url,
           source: source,
           quality: quality,
-          headers: {'Referer': finalRef},
+          headers: {
+            'Referer': finalRef,
+            'Origin': finalOrigin,
+            'User-Agent': DioWitanimeTransport.defaultUserAgent,
+          },
         ),
     ];
   }
@@ -1351,7 +2142,10 @@ class WitanimePlaybackResolver {
         url: direct,
         source: displaySourceName(entry.label, version: entry.version),
         quality: qualityLabelForTier(entry.tier),
-        headers: {'Referer': '$origin/'},
+        headers: {
+          'Referer': '$origin/',
+          'User-Agent': DioWitanimeTransport.defaultUserAgent,
+        },
       ),
     ];
   }
@@ -1382,7 +2176,10 @@ class WitanimePlaybackResolver {
             quality: (label != null && label.isNotEmpty)
                 ? label
                 : qualityLabelForTier(entry.tier),
-            headers: {'Referer': link},
+            headers: {
+              'Referer': link,
+              'User-Agent': DioWitanimeTransport.defaultUserAgent,
+            },
           ),
         );
       }
@@ -1395,27 +2192,53 @@ class WitanimePlaybackResolver {
     String link,
     WitanimeSourceToken entry,
   ) async {
+    final uri = Uri.parse(link);
+    final String embedUrl;
+    if (link.contains('embed-')) {
+      embedUrl = link;
+    } else {
+      final lastSeg = uri.pathSegments.isNotEmpty
+          ? uri.pathSegments.last.split('.').first
+          : '';
+      embedUrl = lastSeg.isNotEmpty
+          ? 'https://www.mp4upload.com/embed-$lastSeg.html'
+          : link;
+    }
     final resp = await _transport.get(
-      Uri.parse(link),
-      headers: {'Referer': episodeUrl},
+      Uri.parse(embedUrl),
+      headers: const {'Referer': 'https://www.mp4upload.com/'},
       operation: 'host_mp4upload',
     );
     if (!resp.isSuccess) return const <StreamResult>[];
     final text = '${unpackPackedJs(resp.body)}\n${resp.body}';
-    final src = RegExp(
-      r'''player\.src\([^)]*?(https?://[^"'\s)]+\.mp4[^"'\s)]*)''',
-    ).firstMatch(text)?.group(1);
+    final src =
+        RegExp(
+          r'''player\.src\([^)]*?(https?://[^"'\s)]+\.mp4[^"'\s)]*)''',
+          caseSensitive: false,
+        ).firstMatch(text)?.group(1) ??
+        RegExp(
+          r'''src\s*:\s*["'](https?://[^"']+\.mp4[^"']*)["']''',
+          caseSensitive: false,
+        ).firstMatch(text)?.group(1) ??
+        RegExp(
+          r'''https?://[a-z0-9.-]*mp4upload\.com(?::\d+)?/d/[^"'\s<>]+\.mp4[^"'\s<>]*''',
+          caseSensitive: false,
+        ).firstMatch(text)?.group(0);
     if (src != null && looksLikeStreamUrl(src)) {
       return [
         StreamResult(
           url: src,
           source: displaySourceName(entry.label, version: entry.version),
           quality: qualityLabelForTier(entry.tier),
-          headers: {'Referer': link},
+          headers: const {
+            'Referer': 'https://www.mp4upload.com/',
+            'Origin': 'https://www.mp4upload.com',
+            'User-Agent': DioWitanimeTransport.defaultUserAgent,
+          },
         ),
       ];
     }
-    return _resolveGeneric(episodeUrl, link, entry, preloadedBody: text);
+    return _resolveGeneric(episodeUrl, embedUrl, entry, preloadedBody: text);
   }
 
   Future<List<StreamResult>> _resolveGeneric(
@@ -1485,7 +2308,7 @@ class WitanimePlaybackResolver {
     String? decodedDownload;
     if (scrambled != null) {
       try {
-        decodedDownload = utf8.decode(base64Decode(scrambled));
+        decodedDownload = utf8.decode(decodeBase64Loose(scrambled));
       } on FormatException {
         // Fall back to the regular link or an embed.
       }

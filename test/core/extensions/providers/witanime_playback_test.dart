@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:animewitcher/core/extensions/providers/witanime_crypto.dart';
+import 'package:animewitcher/core/extensions/providers/witanime_mega_proxy.dart';
 import 'package:animewitcher/core/extensions/providers/witanime_playback.dart';
 import 'package:animewitcher/core/extensions/providers/witanime_provider.dart';
 import 'package:animewitcher/core/extensions/providers/witanime_transport.dart';
@@ -407,10 +409,11 @@ void main() {
     final downloadSources = await provider.loadDownloadStreamSources(
       'https://witanime.site/watch/sample/1',
     );
-    expect(downloadSources.single.source, 'Google Drive (عربي مدبلج)');
-    expect(downloadSources.single.quality, '720p');
+    expect(downloadSources.first.source, 'Google Drive (عربي مدبلج)');
+    expect(downloadSources.first.quality, '720p');
+    expect(downloadSources.map((s) => s.source), contains('Yonaplay'));
 
-    final dl1 = await provider.loadDownloadStreams(downloadSources.single.url);
+    final dl1 = await provider.loadDownloadStreams(downloadSources.first.url);
     expect(dl1.single.url, contains('id=OLD_ID'));
 
     // Verify expired download URL renewal via DownloadUrlRefresher
@@ -422,8 +425,8 @@ void main() {
       DownloadUrlRefreshDescriptor(
         trackingUrl: 'https://witanime.site/watch/sample/1',
         providerId: WitanimeProvider.id,
-        source: downloadSources.single.source,
-        quality: downloadSources.single.quality,
+        source: downloadSources.first.source,
+        quality: downloadSources.first.quality,
         refreshUrl: dl1.single.refreshUrl,
         updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
       ),
@@ -772,6 +775,410 @@ void main() {
     expect(response.body, isEmpty);
     await canceled.future.timeout(const Duration(seconds: 2));
     await body.close();
+  });
+
+  test('unpackPackedJs handles p,a,c,k,e,r and multiple packed blocks', () {
+    const html =
+        "<script>eval(function(p,a,c,k,e,r){return p}('0=1',2,2,'noop|val'.split('|'),0,{}))</script>"
+        r"<script>eval(function(p,a,c,k,e,r){return p}('0={\'1\':\'/2/3.4\'}',5,5,'links|hls4|stream|master|m3u8'.split('|'),0,{}))</script>";
+    final unpacked = unpackPackedJs(html);
+    expect(unpacked, contains("links={'hls4':'/stream/master.m3u8'}"));
+  });
+
+  test('Aes128CtrCipher matches NIST SP 800-38A vector and WitanimeMegaProxy serves 200 and unaligned 206 ranges', () async {
+    // NIST SP 800-38A F.5.1 CTR-AES128.Encrypt block 1
+    Uint8List hex(String s) => Uint8List.fromList([
+      for (var i = 0; i < s.length; i += 2)
+        int.parse(s.substring(i, i + 2), radix: 16),
+    ]);
+    final nistCipher = Aes128CtrCipher(
+      key: hex('2b7e151628aed2a6abf7158809cf4f3c'),
+      iv16: hex('f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'),
+    );
+    final nistOut = nistCipher.process(hex('6bc1bee22e409f96e93d7e117393172a'));
+    expect(
+      nistOut.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
+      '874d6191b620e3261bef6864990db6ce',
+    );
+
+    // End-to-end MEGA proxy test with unaligned range request (bytes=5-42)
+    final plainPayload = Uint8List.fromList(
+      List<int>.generate(64, (i) => (i * 7 + 3) & 0xff),
+    );
+    final rawKey32 = Uint8List.fromList(List<int>.generate(32, (i) => i + 1));
+    final keyToken = base64Url.encode(rawKey32).replaceAll('=', '');
+    final megaUrl = 'https://mega.nz/embed/FILE1234#$keyToken';
+    final spec = WitanimeMegaProxy.parseMegaUrl(megaUrl)!;
+
+    // Encrypt plainPayload starting at block 0 with MEGA's derived key & nonce
+    final iv0 = Uint8List(16)..setRange(0, 8, spec.nonce8);
+    final encrypted = Aes128CtrCipher(key: spec.aesKey16, iv16: iv0)
+        .process(plainPayload);
+
+    final proxy = WitanimeMegaProxy(
+      openUpstream: (uri) async {
+        final rangeSeg = uri.pathSegments.last.split('-');
+        final start = int.parse(rangeSeg[0]);
+        final end = int.parse(rangeSeg[1]);
+        return Stream<List<int>>.value(encrypted.sublist(start, end + 1));
+      },
+    );
+    addTearDown(proxy.close);
+
+    final transport = _FakeWitanimeTransport((method, uri, body, _, _) async {
+      if (uri.host == 'g.api.mega.co.nz') {
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          body: jsonEncode([
+            {'g': 'https://cdn.mega.test/dl/ticket', 's': plainPayload.length},
+          ]),
+        );
+      }
+      return const WitanimeHttpResponse(statusCode: 404, body: '');
+    });
+
+    final resolver = WitanimePlaybackResolver(transport, megaProxy: proxy);
+    const token = WitanimeSourceToken(
+      kind: 'stream',
+      watchUrl: 'https://witanime.site/watch/sample/1',
+      token: 'tok-mega',
+      label: 'mega',
+      tier: 'FHD',
+    );
+    final streams = await resolver.resolveHostedLink(
+      token.watchUrl,
+      megaUrl,
+      token,
+    );
+    expect(streams.single.url, startsWith('http://127.0.0.1:'));
+
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    // HEAD check
+    final headReq = await client.headUrl(Uri.parse(streams.single.url));
+    final headResp = await headReq.close();
+    expect(headResp.statusCode, 200);
+    expect(headResp.headers.value(HttpHeaders.contentLengthHeader), '64');
+    await headResp.drain<void>();
+
+    // Unaligned byte-range check (crosses 16-byte AES block boundaries)
+    final rangeReq = await client.getUrl(Uri.parse(streams.single.url));
+    rangeReq.headers.set(HttpHeaders.rangeHeader, 'bytes=5-42');
+    final rangeResp = await rangeReq.close();
+    expect(rangeResp.statusCode, 206);
+    expect(
+      rangeResp.headers.value(HttpHeaders.contentRangeHeader),
+      'bytes 5-42/64',
+    );
+    final chunks = await rangeResp.toList();
+    final received = Uint8List.fromList(chunks.expand((c) => c).toList());
+    expect(received, plainPayload.sublist(5, 43));
+  });
+
+  test('Videa handles MIME-wrapped base64 XML and prioritizes MP4 over WebM', () async {
+    const secret =
+        'xHb0ZvME5q8CBcoQi6AngerDu3FGO9fkUlwPmLVY_RTzj2hJIS4NasXWKy1td7p';
+    // Build a 64-char _xt whose unscrambled output has predictable t & k
+    final xt = '${secret.substring(0, 32)}0123456789abcdefABCDEFGHIJKLMNOP';
+    final transport = _FakeWitanimeTransport((method, uri, _, headers, _) async {
+      if (uri.host == 'videa.hu' && uri.path == '/player') {
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          body: '<script>var _xt="$xt";</script>',
+        );
+      }
+      if (uri.host == 'videa.hu' && uri.path == '/player/xml') {
+        final rnd = uri.queryParameters['_s']!;
+        const xs = 'Enl9mXdZ';
+        const xml =
+            '<videa_video><video_sources exp="1795101813">'
+            '<video_source mimetype="video/webm" name="720p" exp="1795101813">//videa.hu/static/w720p/1</video_source>'
+            '<video_source mimetype="video/mp4" name="720p" exp="1795101813">//videa.hu/static/720p/1</video_source>'
+            '<video_source mimetype="video/mp4" name="360p" exp="1795101813">//videa.hu/static/360p/1</video_source>'
+            '</video_sources>'
+            '<hash_value_720p>HASH720</hash_value_720p>'
+            '<hash_value_360p>HASH360</hash_value_360p>'
+            '</videa_video>';
+        final enc = rc4Crypt(
+          utf8.encode('${'P' * 16}$rnd$xs'),
+          utf8.encode(xml),
+        );
+        final b64 = base64Encode(enc);
+        // Inject MIME newlines every 76 chars just like live videa.hu does!
+        final wrapped = b64.replaceAllMapped(
+          RegExp('.{1,76}'),
+          (m) => '${m.group(0)}\n',
+        );
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          body: wrapped,
+          headers: const {
+            'content-type': ['text/plain;charset=UTF-8'],
+            'x-videa-xs': [xs],
+          },
+        );
+      }
+      return const WitanimeHttpResponse(statusCode: 404, body: '');
+    });
+
+    final resolver = WitanimePlaybackResolver(transport);
+    const token = WitanimeSourceToken(
+      kind: 'stream',
+      watchUrl: 'https://witanime.site/watch/sample/1',
+      token: 'tok-videa',
+      label: 'videa',
+      tier: 'HD',
+    );
+    final streams = await resolver.resolveHostedLink(
+      token.watchUrl,
+      'https://videa.hu/player?v=abc123456789',
+      token,
+    );
+    expect(streams.length, 3);
+    expect(
+      streams.first.url,
+      'https://videa.hu/static/720p/1?md5=HASH720&expires=1795101813',
+    );
+    expect(streams[1].url, contains('/static/360p/'));
+    expect(streams[2].url, contains('/static/w720p/'));
+    expect(
+      streams.first.headers?['User-Agent'],
+      DioWitanimeTransport.defaultUserAgent,
+    );
+  });
+
+  test('resolves Videas 2-step API, HGCloud relative HLS, GoFile, Mp4Upload DL, 4Shared, MailRu cookies, and rejects MediaFire ZIP', () async {
+    String? videasOpening;
+    String? gofileWt;
+    final transport = _FakeWitanimeTransport((method, uri, body, headers, _) async {
+      if (uri.host == 'app.videas.com' && uri.path == '/embed/abcd1234-5678-9012-3456-7890abcdef12/') {
+        return const WitanimeHttpResponse(
+          statusCode: 200,
+          body:
+              '<script id="videas-embed-config" type="application/json">'
+              '{"embedId":"abcd1234-5678-9012-3456-7890abcdef12","opening":"open-tok"}'
+              '</script>',
+        );
+      }
+      if (uri.host == 'app.videas.com' &&
+          uri.path == '/api/visitor/embed/abcd1234-5678-9012-3456-7890abcdef12/') {
+        videasOpening = headers['X-Embed-Opening'];
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          body: jsonEncode({
+            'playback_token': 'pb-tok',
+            'session_id': 'sess-1',
+            'items': [
+              {
+                'asset': {
+                  'uid': 'asset-1',
+                  'subtitles': [
+                    {'label': 'Arabic', 'url': '/subs/ar.vtt'},
+                  ],
+                },
+              },
+            ],
+          }),
+        );
+      }
+      if (uri.host == 'app.videas.com' &&
+          uri.path == '/api/visitor/playback/info/') {
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          body: jsonEncode({
+            'hls_url': {'url': 'https://cdn.videas.com/hls/master.m3u8'},
+          }),
+        );
+      }
+      if (uri.host == 'vibuxer.com' && uri.path == '/e/hg123') {
+        return const WitanimeHttpResponse(
+          statusCode: 200,
+          body:
+              r"<script>eval(function(p,a,c,k,e,r){return p}('0={\'1\':\'/2/3/4.5\'}',6,6,'links|hls4|stream|abc|master|m3u8'.split('|'),0,{}))</script>",
+        );
+      }
+      if (uri.host == 'api.gofile.io' && uri.path == '/accounts') {
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          body: jsonEncode({
+            'status': 'ok',
+            'data': {'token': 'gf-tok-1'},
+          }),
+        );
+      }
+      if (uri.host == 'api.gofile.io' && uri.path == '/contents/GfCode1') {
+        gofileWt = headers['X-Website-Token'];
+        expect(headers['Authorization'], 'Bearer gf-tok-1');
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          body: jsonEncode({
+            'status': 'ok',
+            'data': {
+              'type': 'folder',
+              'children': {
+                'f1': {
+                  'name': 'ep07_HD.mp4',
+                  'mimetype': 'video/mp4',
+                  'link': 'https://store1.gofile.io/download/web/f1/ep07_HD.mp4',
+                },
+              },
+            },
+          }),
+        );
+      }
+      if (uri.host == 'www.mp4upload.com' && uri.path == '/embed-dl999.html') {
+        return const WitanimeHttpResponse(
+          statusCode: 200,
+          body: '<script>player.src("https://s1.mp4upload.com:183/d/abc/video.mp4");</script>',
+        );
+      }
+      if (uri.host == 'www.4shared.com' && uri.path == '/web/embed/file/sh123') {
+        return const WitanimeHttpResponse(
+          statusCode: 200,
+          body: '<video><source src="https://dc123.4shared.com/img/sh123/video.mp4"></video>',
+        );
+      }
+      if (uri.host == 'my.mail.ru' && uri.path == '/video/embed/1') {
+        return const WitanimeHttpResponse(
+          statusCode: 200,
+          body: '{"metadataUrl":"//my.mail.ru/+/video/meta/1"}',
+          headers: {
+            'set-cookie': ['m_sess=1; Path=/'],
+          },
+        );
+      }
+      if (uri.host == 'my.mail.ru' && uri.path == '/+/video/meta/1') {
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          body: jsonEncode({
+            'videos': [
+              {'key': '720p', 'url': '//cdn.mail.ru/v/720.mp4'},
+            ],
+          }),
+          headers: const {
+            'set-cookie': ['video_key=vk999; Path=/'],
+          },
+        );
+      }
+      return const WitanimeHttpResponse(statusCode: 404, body: '');
+    });
+
+    final resolver = WitanimePlaybackResolver(transport);
+    const baseToken = WitanimeSourceToken(
+      kind: 'stream',
+      watchUrl: 'https://witanime.site/watch/sample/1',
+      token: 'tok',
+      label: 'srv',
+      tier: 'FHD',
+    );
+
+    final videas = await resolver.resolveHostedLink(
+      baseToken.watchUrl,
+      'https://app.videas.com/embed/media/abcd1234-5678-9012-3456-7890abcdef12/',
+      baseToken,
+    );
+    expect(videasOpening, 'open-tok');
+    expect(videas.single.url, 'https://cdn.videas.com/hls/master.m3u8');
+    expect(videas.single.subtitles?.single.url, 'https://app.videas.com/subs/ar.vtt');
+
+    final hg = await resolver.resolveHostedLink(
+      baseToken.watchUrl,
+      'https://hgcloud.to/e/hg123',
+      baseToken,
+    );
+    expect(hg.single.url, 'https://vibuxer.com/stream/abc/master.m3u8');
+    expect(hg.single.headers?['Origin'], 'https://vibuxer.com');
+    expect(hg.single.headers?['Referer'], 'https://vibuxer.com/');
+
+    final gf = await resolver.resolveHostedLink(
+      baseToken.watchUrl,
+      'https://gofile.io/d/GfCode1',
+      baseToken,
+    );
+    expect(gofileWt, hasLength(64));
+    expect(gf.single.url, contains('ep07_HD.mp4'));
+    expect(gf.single.headers?['Cookie'], 'accountToken=gf-tok-1');
+
+    final mp4 = await resolver.resolveHostedLink(
+      baseToken.watchUrl,
+      'https://www.mp4upload.com/dl999',
+      baseToken,
+    );
+    expect(mp4.single.url, 'https://s1.mp4upload.com:183/d/abc/video.mp4');
+    expect(mp4.single.headers?['Origin'], 'https://www.mp4upload.com');
+
+    final shared = await resolver.resolveHostedLink(
+      baseToken.watchUrl,
+      'https://www.4shared.com/video/sh123/ep.html',
+      baseToken,
+    );
+    expect(shared.single.url, 'https://dc123.4shared.com/img/sh123/video.mp4');
+
+    final mail = await resolver.resolveHostedLink(
+      baseToken.watchUrl,
+      'https://my.mail.ru/video/embed/1',
+      baseToken,
+    );
+    expect(mail.single.headers?['Cookie'], contains('video_key=vk999'));
+
+    await expectLater(
+      resolver.resolveHostedLink(
+        baseToken.watchUrl,
+        'https://www.mediafire.com/file/abc/0649_07_HD.zip/file',
+        baseToken,
+      ),
+      throwsA(isA<FormatException>()),
+    );
+  });
+
+  test('WitanimePlaybackResolver caches watch_page meta across loadSources and resolveStreams', () async {
+    var watchGets = 0;
+    final transport = _FakeWitanimeTransport((method, uri, _, _, _) async {
+      if (uri.path == '/watch/sample/1') {
+        watchGets++;
+        return const WitanimeHttpResponse(
+          statusCode: 200,
+          body: '<meta name="csrf-token" content="csrf-cached">',
+        );
+      }
+      if (uri.path == '/watch/sample/1/sources') {
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          body: jsonEncode({
+            'players': {
+              'HD': [
+                {'label': 'Google Drive', 'token': 'tok-cache'},
+              ],
+            },
+          }),
+        );
+      }
+      if (uri.path == '/watch/stream-source/tok-cache') {
+        return const WitanimeHttpResponse(statusCode: 200, body: '{"ok":true}');
+      }
+      if (uri.path == '/watch/stream-gate/tok-cache') {
+        return const WitanimeHttpResponse(
+          statusCode: 302,
+          body: '',
+          headers: {
+            'location': ['https://drive.google.com/file/d/CACHE_ID/view'],
+          },
+        );
+      }
+      return const WitanimeHttpResponse(statusCode: 404, body: '');
+    });
+
+    final resolver = WitanimePlaybackResolver(transport);
+    final sources = await resolver.loadSources(
+      'https://witanime.site/watch/sample/1',
+      forDownload: false,
+    );
+    final resolved = await resolver.resolveStreams(
+      sources.single.url,
+      forDownload: false,
+    );
+    expect(resolved.single.url, contains('id=CACHE_ID'));
+    expect(watchGets, 1);
   });
 }
 

@@ -193,11 +193,171 @@ Uint8List _inc32(Uint8List counter) {
   return out;
 }
 
+/// Decodes standard or URL-safe Base64 while tolerating MIME line breaks,
+/// spaces, and missing trailing `=` padding.
+Uint8List decodeBase64Loose(String raw) {
+  final compact = raw
+      .replaceAll(RegExp(r'\s+'), '')
+      .replaceAll('-', '+')
+      .replaceAll('_', '/');
+  return base64Decode(base64.normalize(compact));
+}
+
+final Uint8List _xtime2 = Uint8List.fromList([
+  for (var i = 0; i < 256; i++) _xtime(i),
+]);
+
+final Uint8List _xtime3 = Uint8List.fromList([
+  for (var i = 0; i < 256; i++) _xtime(i) ^ i,
+]);
+
+List<Uint8List> expandAes128Key(Uint8List key) {
+  if (key.length != 16) {
+    throw ArgumentError.value(
+      key.length,
+      'key.length',
+      'AES-128 key must be 16 bytes',
+    );
+  }
+  final words = List<List<int>>.generate(44, (_) => List<int>.filled(4, 0));
+  for (var i = 0; i < 4; i++) {
+    final p = i * 4;
+    words[i] = [key[p], key[p + 1], key[p + 2], key[p + 3]];
+  }
+  var rcon = 1;
+  for (var i = 4; i < 44; i++) {
+    var temp = List<int>.of(words[i - 1]);
+    if (i % 4 == 0) {
+      temp = [
+        _aesSbox[temp[1]] ^ rcon,
+        _aesSbox[temp[2]],
+        _aesSbox[temp[3]],
+        _aesSbox[temp[0]],
+      ];
+      rcon = _xtime(rcon);
+    }
+    final prev = words[i - 4];
+    words[i] = [
+      prev[0] ^ temp[0],
+      prev[1] ^ temp[1],
+      prev[2] ^ temp[2],
+      prev[3] ^ temp[3],
+    ];
+  }
+  return [
+    for (var round = 0; round <= 10; round++)
+      Uint8List.fromList([
+        ...words[round * 4],
+        ...words[round * 4 + 1],
+        ...words[round * 4 + 2],
+        ...words[round * 4 + 3],
+      ]),
+  ];
+}
+
+void _aes128EncryptBlockInto(
+  List<Uint8List> roundKeys,
+  Uint8List input,
+  Uint8List s,
+) {
+  final rk0 = roundKeys[0];
+  for (var i = 0; i < 16; i++) {
+    s[i] = input[i] ^ rk0[i];
+  }
+  for (var round = 1; round <= 10; round++) {
+    for (var i = 0; i < 16; i++) {
+      s[i] = _aesSbox[s[i]];
+    }
+    final r1 = s[1];
+    s[1] = s[5];
+    s[5] = s[9];
+    s[9] = s[13];
+    s[13] = r1;
+
+    final r2a = s[2];
+    final r2b = s[6];
+    s[2] = s[10];
+    s[6] = s[14];
+    s[10] = r2a;
+    s[14] = r2b;
+
+    final r3 = s[15];
+    s[15] = s[11];
+    s[11] = s[7];
+    s[7] = s[3];
+    s[3] = r3;
+
+    if (round < 10) {
+      for (var c = 0; c < 4; c++) {
+        final o = c * 4;
+        final a0 = s[o];
+        final a1 = s[o + 1];
+        final a2 = s[o + 2];
+        final a3 = s[o + 3];
+        s[o] = _xtime2[a0] ^ _xtime3[a1] ^ a2 ^ a3;
+        s[o + 1] = a0 ^ _xtime2[a1] ^ _xtime3[a2] ^ a3;
+        s[o + 2] = a0 ^ a1 ^ _xtime2[a2] ^ _xtime3[a3];
+        s[o + 3] = _xtime3[a0] ^ a1 ^ a2 ^ _xtime2[a3];
+      }
+    }
+    final rk = roundKeys[round];
+    for (var i = 0; i < 16; i++) {
+      s[i] ^= rk[i];
+    }
+  }
+}
+
+Uint8List aes128EncryptBlock(List<Uint8List> roundKeys, Uint8List input) {
+  final out = Uint8List(16);
+  _aes128EncryptBlockInto(roundKeys, input, out);
+  return out;
+}
+
+/// Stateful AES-128-CTR stream cipher supporting arbitrary chunk boundaries and
+/// 64-bit big-endian block counters (used by MEGA's encrypted media streams).
+class Aes128CtrCipher {
+  Aes128CtrCipher({
+    required Uint8List key,
+    required Uint8List iv16,
+  }) : _roundKeys = expandAes128Key(key),
+       _counter = Uint8List.fromList(iv16) {
+    if (iv16.length != 16) {
+      throw ArgumentError.value(iv16.length, 'iv16.length', 'IV must be 16 bytes');
+    }
+  }
+
+  final List<Uint8List> _roundKeys;
+  final Uint8List _counter;
+  final Uint8List _keystream = Uint8List(16);
+  int _keystreamPos = 16;
+
+  void _incrementCounter() {
+    for (var i = 15; i >= 0; i--) {
+      final next = (_counter[i] + 1) & 0xff;
+      _counter[i] = next;
+      if (next != 0) break;
+    }
+  }
+
+  Uint8List process(Uint8List input) {
+    final out = Uint8List(input.length);
+    for (var i = 0; i < input.length; i++) {
+      if (_keystreamPos == 16) {
+        _aes128EncryptBlockInto(_roundKeys, _counter, _keystream);
+        _incrementCounter();
+        _keystreamPos = 0;
+      }
+      out[i] = input[i] ^ _keystream[_keystreamPos++];
+    }
+    return out;
+  }
+}
+
 /// Decrypts `iv (12 bytes) || tag (16 bytes) || ciphertext` using
 /// AES-256-GCM with `key = SHA-256(utf8(passphrase))`, or returns null on tag
 /// mismatch.
 String? decryptYonaplayPayload(String passphrase, String base64Payload) {
-  final raw = base64Decode(base64Payload.trim());
+  final raw = decodeBase64Loose(base64Payload);
   if (raw.length < 28) return null;
   final iv = Uint8List.sublistView(raw, 0, 12);
   final tag = Uint8List.sublistView(raw, 12, 28);
@@ -256,51 +416,66 @@ Uint8List rc4Crypt(List<int> key, List<int> data) {
   return out;
 }
 
-/// Unpacks Dean Edwards `eval(function(p,a,c,k,e,d){...}('...',radix,count,'...'.split('|')))`
-/// blocks when present in host embed HTML.
+/// Unpacks all Dean Edwards `eval(function(p,a,c,k,e,[dr]){...}('...',radix,count,'...'.split('|')))`
+/// blocks present in host embed HTML.
 String unpackPackedJs(String body) {
-  if (!body.contains('p,a,c,k,e,d')) return '';
-  final match =
-      RegExp(
-        r"}\('(.*?)',(\d+),(\d+),'([^']*)'\.split\('\|'\)",
-        dotAll: true,
-      ).firstMatch(body) ??
-      RegExp(
-        r"\('(.*?)',(\d+),(\d+),'([^']*)'\.split\('\|'\)",
-        dotAll: true,
-      ).firstMatch(body);
-  if (match == null) return '';
-  final payload = match.group(1) ?? '';
-  final radix = int.tryParse(match.group(2) ?? '');
-  if (radix == null || radix < 2 || radix > 62) return '';
-  final dict = (match.group(4) ?? '').split('|');
-
-  int? decodeBaseN(String token) {
-    var value = 0;
-    for (var i = 0; i < token.length; i++) {
-      final code = token.codeUnitAt(i);
-      int digit;
-      if (code >= 48 && code <= 57) {
-        digit = code - 48;
-      } else if (code >= 97 && code <= 122) {
-        digit = code - 87;
-      } else if (code >= 65 && code <= 90) {
-        digit = code - 29;
-      } else {
-        return null;
-      }
-      if (digit >= radix) return null;
-      value = value * radix + digit;
-    }
-    return value;
+  if (!RegExp(r'p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*[dr]').hasMatch(body)) {
+    return '';
   }
+  final blockPattern = RegExp(
+    r"""}\(\s*'((?:\\.|[^'\\])*)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'((?:\\.|[^'\\])*)'\s*\.split\(\s*'\|'\s*\)""",
+    dotAll: true,
+  );
+  final matches = blockPattern.allMatches(body).toList(growable: false);
+  final effectiveMatches = matches.isNotEmpty
+      ? matches
+      : RegExp(
+          r"""\(\s*'((?:\\.|[^'\\])*)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'((?:\\.|[^'\\])*)'\s*\.split\(\s*'\|'\s*\)""",
+          dotAll: true,
+        ).allMatches(body).toList(growable: false);
+  if (effectiveMatches.isEmpty) return '';
 
-  return payload.replaceAllMapped(RegExp(r'\b[0-9a-zA-Z]+\b'), (m) {
-    final token = m.group(0)!;
-    final index = decodeBaseN(token);
-    if (index != null && index < dict.length && dict[index].isNotEmpty) {
-      return dict[index];
+  final parts = <String>[];
+  for (final match in effectiveMatches) {
+    final rawPayload = match.group(1) ?? '';
+    final payload = rawPayload
+        .replaceAll(r"\'", "'")
+        .replaceAll(r'\"', '"')
+        .replaceAll(r'\\', r'\');
+    final radix = int.tryParse(match.group(2) ?? '');
+    if (radix == null || radix < 2 || radix > 62) continue;
+    final dict = (match.group(4) ?? '').split('|');
+
+    int? decodeBaseN(String token) {
+      var value = 0;
+      for (var i = 0; i < token.length; i++) {
+        final code = token.codeUnitAt(i);
+        int digit;
+        if (code >= 48 && code <= 57) {
+          digit = code - 48;
+        } else if (code >= 97 && code <= 122) {
+          digit = code - 87;
+        } else if (code >= 65 && code <= 90) {
+          digit = code - 29;
+        } else {
+          return null;
+        }
+        if (digit >= radix) return null;
+        value = value * radix + digit;
+      }
+      return value;
     }
-    return token;
-  });
+
+    parts.add(
+      payload.replaceAllMapped(RegExp(r'\b[0-9a-zA-Z]+\b'), (m) {
+        final token = m.group(0)!;
+        final index = decodeBaseN(token);
+        if (index != null && index < dict.length && dict[index].isNotEmpty) {
+          return dict[index];
+        }
+        return token;
+      }),
+    );
+  }
+  return parts.join('\n');
 }
