@@ -144,7 +144,7 @@ String? latestEpisodesPosterBadge(String? episodeName) {
   return value.trim().isEmpty ? null : value;
 }
 
-/// Primary line only — episode rows, poster badges and player headers.
+/// Primary line only — episode rows and poster badges.
 String formatEpisodePrimaryLabel({
   required int episode,
   bool isFinal = false,
@@ -171,6 +171,26 @@ String formatEpisodeLabel({
     serverName: serverName,
     isFinal: isFinal,
   ).full;
+}
+
+/// Episode number or catalog label followed by the title in the player header.
+String formatPlayerEpisodeLabel({
+  required int episode,
+  String? title,
+  bool isFinal = false,
+  String? serverName,
+}) {
+  final label = resolveEpisodeLabel(
+    episode: episode,
+    title: title,
+    isFinal: isFinal,
+    serverName: serverName,
+  );
+  final primary = label.primary.trim();
+  final secondary = label.secondary.trim();
+  if (primary.isEmpty) return secondary;
+  if (secondary.isEmpty || primary == secondary) return primary;
+  return '$primary : $secondary';
 }
 
 /// Characters that break or get rewritten on common mobile filesystems.
