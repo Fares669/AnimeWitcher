@@ -239,12 +239,14 @@ class PlayerRouteExtra {
     this.progressUrl,
     this.episode,
     this.selectedSource,
+    this.sourceResolution,
   });
   final MultimediaItem item;
   final String videoUrl;
   final String? progressUrl;
   final Episode? episode;
   final StreamResult? selectedSource;
+  final Future<List<StreamResult>>? sourceResolution;
 }
 
 class ViewAllRouteExtra {
@@ -477,6 +479,7 @@ class PlayerRoute extends _AppGoRouteData with $PlayerRoute {
       progressUrl: $extra.progressUrl,
       episode: $extra.episode,
       selectedSource: $extra.selectedSource,
+      sourceResolution: $extra.sourceResolution,
     );
   }
 }

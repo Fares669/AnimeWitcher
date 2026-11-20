@@ -61,6 +61,7 @@ class WitanimeMegaProxy {
   final MegaUpstreamStreamOpener? openUpstream;
   final Uri _apiUri;
   final Map<String, _MegaNodeEntry> _nodeCache = <String, _MegaNodeEntry>{};
+  final _nodeRequests = <String, Future<_MegaNodeEntry?>>{};
   final Map<String, MegaKeySpec> _keyRegistry = <String, MegaKeySpec>{};
   final Map<String, WitanimeTransport> _transports =
       <String, WitanimeTransport>{};
@@ -139,6 +140,27 @@ class WitanimeMegaProxy {
         return cached;
       }
     }
+    final request = _nodeRequests.putIfAbsent(
+      fileId,
+      () => _fetchNode(fileId, transport),
+    );
+    try {
+      final node = await request;
+      if (node != null && identical(_nodeRequests[fileId], request)) {
+        _nodeCache[fileId] = node;
+      }
+      return node;
+    } finally {
+      if (identical(_nodeRequests[fileId], request)) {
+        unawaited(_nodeRequests.remove(fileId));
+      }
+    }
+  }
+
+  Future<_MegaNodeEntry?> _fetchNode(
+    String fileId,
+    WitanimeTransport transport,
+  ) async {
     try {
       final resp = await transport.post(
         _apiUri,
@@ -168,14 +190,12 @@ class WitanimeMegaProxy {
       final httpsDl = rawDl
           .replaceFirst(RegExp(r'^http://', caseSensitive: false), 'https://')
           .replaceFirst(RegExp(r'/+$'), '');
-      final entry = _MegaNodeEntry(
+      return _MegaNodeEntry(
         fileId: fileId,
         dlBaseUrl: httpsDl,
         fileSize: size,
-        expiresAt: now.add(const Duration(minutes: 15)),
+        expiresAt: DateTime.now().add(const Duration(minutes: 15)),
       );
-      _nodeCache[fileId] = entry;
-      return entry;
     } catch (_) {
       return null;
     }
@@ -250,7 +270,7 @@ class WitanimeMegaProxy {
         return;
       }
 
-      var node = await _resolveNode(keySpec.fileId, transport);
+      final node = await _resolveNode(keySpec.fileId, transport);
       if (node == null) {
         response.statusCode = HttpStatus.badGateway;
         await response.close();
@@ -301,6 +321,31 @@ class WitanimeMegaProxy {
       }
 
       final contentLength = endByte - startByte + 1;
+      final alignedStart = (startByte ~/ 16) * 16;
+      Stream<List<int>>? upstream;
+      if (method == 'GET') {
+        upstream = await _openUpstreamRange(node, alignedStart, endByte);
+        if (upstream == null) {
+          final refreshed = await _resolveNode(
+            keySpec.fileId,
+            transport,
+            forceRefresh: true,
+          );
+          if (refreshed != null && refreshed.fileSize == totalSize) {
+            upstream = await _openUpstreamRange(
+              refreshed,
+              alignedStart,
+              endByte,
+            );
+          }
+        }
+        if (upstream == null) {
+          response.statusCode = HttpStatus.badGateway;
+          await response.close();
+          return;
+        }
+      }
+
       response.statusCode = hasRange
           ? HttpStatus.partialContent
           : HttpStatus.ok;
@@ -314,31 +359,13 @@ class WitanimeMegaProxy {
         );
       }
 
-      if (method == 'HEAD') {
+      if (upstream == null) {
         await response.close();
         return;
       }
 
-      final alignedStart = (startByte ~/ 16) * 16;
       final skipBytes = startByte - alignedStart;
       final blockIndex = alignedStart ~/ 16;
-
-      var upstream = await _openUpstreamRange(node, alignedStart, endByte);
-      if (upstream == null) {
-        node = await _resolveNode(
-          keySpec.fileId,
-          transport,
-          forceRefresh: true,
-        );
-        if (node != null) {
-          upstream = await _openUpstreamRange(node, alignedStart, endByte);
-        }
-      }
-      if (upstream == null) {
-        response.statusCode = HttpStatus.badGateway;
-        await response.close();
-        return;
-      }
 
       final iv16 = Uint8List(16);
       iv16.setRange(0, 8, keySpec.nonce8);
@@ -400,7 +427,13 @@ class WitanimeMegaProxy {
         HttpHeaders.userAgentHeader,
         DioWitanimeTransport.defaultUserAgent,
       );
-      final resp = await req.close();
+      final resp = await req.close().timeout(
+        const Duration(seconds: 8),
+        onTimeout: () {
+          req.abort();
+          throw TimeoutException('MEGA response headers');
+        },
+      );
       if (resp.statusCode < 200 || resp.statusCode >= 300) {
         unawaited(resp.drain<void>().catchError((_) {}));
         return null;
@@ -423,6 +456,7 @@ class WitanimeMegaProxy {
     final server = _server;
     _server = null;
     _starting = null;
+    _nodeRequests.clear();
     _httpClient?.close(force: true);
     _httpClient = null;
     if (server != null) {

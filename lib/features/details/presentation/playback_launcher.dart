@@ -148,9 +148,13 @@ class PlaybackLauncher {
           sources,
           qualityPriority: preferences.streamQualityPriority,
           serverPriority: preferences.streamServerPriority,
-          resolveCandidate: (StreamResult candidate) =>
-              provider.loadStreams(candidate.url),
-          tryNextOnError: (error) => error is! WitanimeRateLimitException,
+          resolveCandidate: (candidate) async {
+            if (canceled || !context.mounted) return const [];
+            return provider.loadStreams(candidate.url);
+          },
+          tryNextOnError: (error) =>
+              error is! WitanimeRateLimitException ||
+              error is WitanimeTokenRateLimitException,
         );
         if (canceled || !context.mounted) return null;
         dismissLoading();
@@ -465,12 +469,14 @@ class PlaybackLauncher {
     StreamResult? preselectedSource,
     required _PlaybackLaunch launch,
   }) async {
-    final settings = await launch.wait(
-      () => _ref.read(playerSettingsProvider.future),
-    );
+    final item = detailedItem ?? baseItem;
+    final isWitanimeItem = item.provider == WitanimeProvider.id;
+    final preferredPlayer = isWitanimeItem
+        ? null
+        : (await launch.wait(() => _ref.read(playerSettingsProvider.future)))
+              .preferredPlayer;
     if (!context.mounted || !launch.isCurrent) return;
 
-    final item = detailedItem ?? baseItem;
     final resolvedEpisode =
         episode ?? item.episodes?.firstWhereOrNull((e) => e.url == url);
     final resolvedEpisodeUrl = resolvedEpisode?.url.trim() ?? '';
@@ -501,8 +507,6 @@ class PlaybackLauncher {
     final playerItem = savedEpisodes.isEmpty
         ? item
         : item.copyWith(episodes: savedEpisodes);
-    final isWitanimeItem = playerItem.provider == WitanimeProvider.id;
-    final preferredPlayer = isWitanimeItem ? null : settings.preferredPlayer;
     final playerEpisode = _canonicalEpisode(
       playerItem,
       resolvedEpisode,
@@ -573,6 +577,11 @@ class PlaybackLauncher {
     if (selected == null || !context.mounted || !launch.isCurrent) return;
 
     if (preferredPlayer == null) {
+      final sourceResolution = isWitanimeItem && selected.requiresResolution
+          ? provider.loadStreams(selected.url)
+          : null;
+      // The route can subscribe on the next frame, after the request starts.
+      sourceResolution?.ignore();
       _recordEpisodeOpened(playerItem, playerEpisode);
       if (!context.mounted || !launch.isCurrent) return;
       await launch.push(
@@ -583,6 +592,7 @@ class PlaybackLauncher {
             progressUrl: canonicalProgressUrl,
             episode: playerEpisode,
             selectedSource: selected,
+            sourceResolution: sourceResolution,
           ),
         ),
       );

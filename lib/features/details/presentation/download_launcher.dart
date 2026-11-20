@@ -436,7 +436,9 @@ class DownloadLauncher {
             }
             return resolved;
           },
-          tryNextOnError: (error) => error is! WitanimeRateLimitException,
+          tryNextOnError: (error) =>
+              error is! WitanimeRateLimitException ||
+              error is WitanimeTokenRateLimitException,
         );
         if (selected == null) {
           throw Exception('لم يتم العثور على مصادر تشغيل.');

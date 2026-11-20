@@ -14,7 +14,9 @@ String classifyWitanimeFailure(Object error, {int? statusCode}) {
   if (code == 401 || code == 419) return 'auth_required';
   if (code == 403 || code == 503) return 'cloudflare_or_forbidden';
   if (code != null && code >= 400) return 'http_$code';
+  if (error is TimeoutException) return 'timeout';
   if (error is DioException) {
+    if (error.error is TimeoutException) return 'timeout';
     if (error.type == DioExceptionType.cancel) return 'cancelled';
     if (error.type == DioExceptionType.connectionTimeout ||
         error.type == DioExceptionType.receiveTimeout ||
@@ -143,6 +145,37 @@ class DioWitanimeTransport implements WitanimeTransport {
   final WitanimeSessionHeaderProvider? _sessionHeaders;
   final Map<String, String> _witanimeCookies = <String, String>{};
   String? _lastAuthCookie;
+
+  // Extraction requests only read player metadata. Video transfers use the
+  // player or download client and are independent of this deadline.
+  static const _hostRequestTimeout = Duration(seconds: 8);
+
+  ({CancelToken? token, Timer? timer}) _requestCancellation(
+    String operation,
+    CancelToken? upstream, {
+    bool inspectMedia = false,
+  }) {
+    final isHostRequest = operation.startsWith('host_');
+    if (!inspectMedia && !isHostRequest) return (token: upstream, timer: null);
+    final token = CancelToken();
+    if (upstream?.isCancelled == true) {
+      token.cancel(upstream?.cancelError?.error);
+    } else if (upstream != null) {
+      unawaited(
+        upstream.whenCancel.then((error) {
+          if (!token.isCancelled) token.cancel(error.error);
+        }),
+      );
+    }
+    final timer = isHostRequest
+        ? Timer(_hostRequestTimeout, () {
+            if (!token.isCancelled) {
+              token.cancel(TimeoutException(operation, _hostRequestTimeout));
+            }
+          })
+        : null;
+    return (token: token, timer: timer);
+  }
 
   static bool _isWitanimeHost(Uri uri) =>
       uri.host == 'witanime.site' || uri.host.endsWith('.witanime.site');
@@ -273,12 +306,14 @@ class DioWitanimeTransport implements WitanimeTransport {
     String operation = 'get',
   }) async {
     final elapsed = Stopwatch()..start();
+    final request = _requestCancellation(
+      operation,
+      cancelToken,
+      inspectMedia: inspectMedia,
+    );
     try {
       final merged = await _mergedHeaders(uri, headers);
-      final requestCancel = inspectMedia ? CancelToken() : cancelToken;
-      if (inspectMedia && cancelToken != null) {
-        unawaited(cancelToken.whenCancel.then(requestCancel!.cancel));
-      }
+      final requestCancel = request.token;
       final response = inspectMedia
           ? await _dio.getUri<ResponseBody>(
               uri,
@@ -355,6 +390,8 @@ class DioWitanimeTransport implements WitanimeTransport {
         errorType: classifyWitanimeFailure(error),
       );
       rethrow;
+    } finally {
+      request.timer?.cancel();
     }
   }
 
@@ -368,12 +405,13 @@ class DioWitanimeTransport implements WitanimeTransport {
     String operation = 'post',
   }) async {
     final elapsed = Stopwatch()..start();
+    final request = _requestCancellation(operation, cancelToken);
     try {
       final merged = await _mergedHeaders(uri, headers);
       final response = await _dio.postUri<String>(
         uri,
         data: body,
-        cancelToken: cancelToken,
+        cancelToken: request.token,
         options: Options(
           headers: merged,
           followRedirects: followRedirects,
@@ -403,6 +441,8 @@ class DioWitanimeTransport implements WitanimeTransport {
         errorType: classifyWitanimeFailure(error),
       );
       rethrow;
+    } finally {
+      request.timer?.cancel();
     }
   }
 

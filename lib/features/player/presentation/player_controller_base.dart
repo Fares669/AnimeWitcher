@@ -730,6 +730,7 @@ class PlayerController extends Notifier<PlayerState> {
     String? progressUrl,
     Episode? episode,
     StreamResult? selectedSource,
+    Future<List<StreamResult>>? sourceResolution,
     VideoController? videoViewController,
     Future<void>? localPlaybackReady,
   }) async {
@@ -828,7 +829,7 @@ class PlayerController extends Notifier<PlayerState> {
       if (selectedSource?.requiresResolution ?? false) {
         _videoUrl = selectedSource!.url;
       }
-      await _initStream();
+      await _initStream(sourceResolution: sourceResolution);
     }
     if (_isDisposed ||
         !identical(_player, player) ||
@@ -2400,6 +2401,7 @@ class PlayerController extends Notifier<PlayerState> {
     PlaybackUiPhaseKind requestedPhaseKind =
         PlaybackUiPhaseKind.fetchingSources,
     bool forceNewSourceSession = true,
+    Future<List<StreamResult>>? sourceResolution,
   }) async {
     // Any stream-level transition (new episode, source retry, manual
     // quality switch) should re-arm the next-episode overlay. Without
@@ -2448,7 +2450,8 @@ class PlayerController extends Notifier<PlayerState> {
     try {
       if (_videoUrl.isNotEmpty) {
         state = state.copyWith();
-        final rawStreams = await activeProvider.loadStreams(_videoUrl);
+        final rawStreams =
+            await (sourceResolution ?? activeProvider.loadStreams(_videoUrl));
         if (!_isCurrentSourceSession(sourceSessionId)) return;
         if (rawStreams.isNotEmpty) {
           // A source explicitly chosen in AnimeWitcher's picker must not be
@@ -2510,6 +2513,7 @@ class PlayerController extends Notifier<PlayerState> {
       }
     } catch (e) {
       if (e is WitanimeRateLimitException ||
+          e is WitanimeSourceUnavailableException ||
           e is WitanimeBrowserRequiredException) {
         if (_isCurrentSourceSession(sourceSessionId)) {
           state = state.copyWith(errorMessage: e.toString());
@@ -3880,6 +3884,7 @@ class PlayerController extends Notifier<PlayerState> {
         ((selectedSource?.requiresResolution ?? false)
             ? selectedSource!.url
             : nextEpisode.url);
+    final sourceResolution = _startWitanimeSourceResolution(finalUrl);
 
     // Save current episode's progress BEFORE updating _episode/_videoUrl.
     saveProgress();
@@ -3917,7 +3922,15 @@ class PlayerController extends Notifier<PlayerState> {
 
     await _initStream(
       requestedPhaseKind: PlaybackUiPhaseKind.loadingNextEpisode,
+      sourceResolution: sourceResolution,
     );
+  }
+
+  Future<List<StreamResult>>? _startWitanimeSourceResolution(String url) {
+    if (!url.startsWith(witanimeSourceUrlPrefix)) return null;
+    final request = _resolveProvider()?.loadStreams(url);
+    request?.ignore();
+    return request;
   }
 
   void dismissNextEpisodeOverlay() {
@@ -3959,6 +3972,7 @@ class PlayerController extends Notifier<PlayerState> {
         ((selectedSource?.requiresResolution ?? false)
             ? selectedSource!.url
             : episode.url);
+    final sourceResolution = _startWitanimeSourceResolution(finalUrl);
 
     await pause();
     if (!_isCurrentSourceSession(sourceSessionId)) return;
@@ -3994,6 +4008,7 @@ class PlayerController extends Notifier<PlayerState> {
 
     await _initStream(
       requestedPhaseKind: PlaybackUiPhaseKind.loadingNextEpisode,
+      sourceResolution: sourceResolution,
     );
   }
 
@@ -4325,7 +4340,7 @@ class PlayerController extends Notifier<PlayerState> {
           url: resolved.url,
           headers: resolved.headers,
           quality: resolved.quality,
-          refreshUrl: token,
+          refreshUrl: resolved.refreshUrl ?? token,
         );
         _replaceCurrentStream(merged);
         return AppUtils.normalizeUrl(merged.url);

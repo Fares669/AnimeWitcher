@@ -324,13 +324,21 @@ class _WitanimeTestTransport implements WitanimeTransport {
         body: '<meta name="csrf-token" content="csrf-1">',
       );
     }
-    if (uri.path == '/watch/stream-gate/tok-direct') {
+    if (uri.path == '/watch/download-gate/tok-gofile') {
       return const WitanimeHttpResponse(
         statusCode: 302,
         body: '',
         headers: {
-          'location': ['https://cdn.example.com/video/ep2.mp4'],
+          'location': ['https://gofile.io/d/episode2'],
         },
+      );
+    }
+    if (uri.host == 'api.gofile.io' && uri.path == '/contents/episode2') {
+      return const WitanimeHttpResponse(
+        statusCode: 200,
+        body:
+            '{"status":"ok","data":{"type":"file","name":"ep2.mp4",'
+            '"link":"https://store1.gofile.io/download/file/ep2.mp4"}}',
       );
     }
     return const WitanimeHttpResponse(statusCode: 404, body: '');
@@ -348,11 +356,19 @@ class _WitanimeTestTransport implements WitanimeTransport {
     if (uri.path == '/watch/sample/2/sources') {
       return const WitanimeHttpResponse(
         statusCode: 200,
-        body: '{"players":{"FHD":[{"label":"DirectStream","token":"tok-direct"}]}}',
+        body:
+            '{"players":{"FHD":[{"label":"DirectStream","token":"tok-direct"}]},'
+            '"downloads":{"FHD":[{"label":"GoFile","token":"tok-gofile"}]}}',
       );
     }
-    if (uri.path == '/watch/stream-source/tok-direct') {
+    if (uri.path == '/watch/download-source/tok-gofile') {
       return const WitanimeHttpResponse(statusCode: 200, body: '{"ok":true}');
+    }
+    if (uri.host == 'api.gofile.io' && uri.path == '/accounts') {
+      return const WitanimeHttpResponse(
+        statusCode: 200,
+        body: '{"status":"ok","data":{"token":"guest-token"}}',
+      );
     }
     return const WitanimeHttpResponse(statusCode: 404, body: '');
   }
@@ -399,7 +415,7 @@ void main() {
     },
   );
 
-  testWidgets('Witanime sends the selected source to the internal player', (
+  testWidgets('Witanime starts GoFile extraction before the player is ready', (
     tester,
   ) async {
     final transport = _WitanimeTestTransport();
@@ -408,7 +424,7 @@ void main() {
       provider: provider,
       file: Future.value(null),
       auto: false,
-      settings: Future.value(const PlayerSettings(preferredPlayer: 'vlc')),
+      settings: Completer<PlayerSettings>().future,
     );
     await app.mount(tester);
     final item = MultimediaItem(
@@ -431,13 +447,18 @@ void main() {
       baseItem: item,
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('DirectStream'));
+    expect(find.text('DirectStream'), findsOneWidget);
+    await tester.tap(find.text('GoFile'));
     await tester.pumpAndSettle();
     expect(app.pushes.count, 1);
     final selected = app.opened!.selectedSource!;
     expect(selected.requiresResolution, isTrue);
-    final streams = await provider.loadStreams(selected.url);
-    expect(streams.single.url, 'https://cdn.example.com/video/ep2.mp4');
+    final streams = await app.opened!.sourceResolution!;
+    expect(
+      streams.single.url,
+      'https://store1.gofile.io/download/file/ep2.mp4',
+    );
+    expect(streams.single.headers?['Cookie'], 'accountToken=guest-token');
     expect(app.watchHistory.calls, 1);
     app.router.pop();
     await tester.pumpAndSettle();

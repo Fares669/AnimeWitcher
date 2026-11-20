@@ -13,6 +13,8 @@ Future<StreamResult?> showStreamSourcePicker(
   required bool forDownload,
   String? episodeLabel,
 }) {
+  // A cached request can fail before the sheet's first frame subscribes.
+  sourcesFuture?.ignore();
   return showModalOverTaskbar<StreamResult>(
     context: context,
     isScrollControlled: true,

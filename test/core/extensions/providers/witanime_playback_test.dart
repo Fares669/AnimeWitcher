@@ -11,6 +11,7 @@ import 'package:animewitcher/core/extensions/providers/witanime_transport.dart';
 import 'package:animewitcher/core/services/download_url_refresh.dart';
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:dio/dio.dart';
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _FakeWitanimeTransport implements WitanimeTransport {
@@ -367,6 +368,12 @@ void main() {
           body: '<script src="/main.js?v=1.1.9"></script>',
         );
       }
+      if (uri.host == 'vibuxer.com' && uri.path == '/e/xyz') {
+        throw DioException.connectionError(
+          requestOptions: RequestOptions(path: uri.toString()),
+          reason: 'Mirror unavailable',
+        );
+      }
       if (uri.host == 'hanerix.com' && uri.path == '/e/xyz') {
         return const WitanimeHttpResponse(
           statusCode: 200,
@@ -381,7 +388,12 @@ void main() {
     final streamSources = await provider.loadStreamSources(
       'https://witanime.site/watch/sample/1',
     );
-    expect(streamSources.length, 3);
+    expect(streamSources.length, 4);
+    expect(streamSources.last.source, 'Google Drive (عربي مدبلج)');
+    expect(
+      WitanimeSourceToken.tryDecode(streamSources.last.url)?.kind,
+      'download',
+    );
     expect(streamSources.every((s) => s.requiresResolution), isTrue);
     expect(provider.isExplicitStreamSelection(streamSources.first.url), isTrue);
 
@@ -818,12 +830,39 @@ void main() {
       throwsA(isA<WitanimeSourceUnavailableException>()),
     );
 
-    // 4. ServerC (Google Drive) still resolves cleanly!
+    // Episode-level selection skips both the cooling-down and failed servers.
     final okStreams = await resolver.resolveStreams(
-      sources[2].url,
+      watch,
       forDownload: false,
     );
     expect(okStreams.single.url, contains('id=OK_ID'));
+  });
+
+  test('host extraction cancels a stalled request at its deadline', () {
+    fakeAsync((time) {
+      final dio = Dio();
+      final pending = Completer<ResponseBody>();
+      dio.httpClientAdapter = _Adapter((_) => pending.future);
+      final transport = DioWitanimeTransport(dio: dio);
+      Object? error;
+      unawaited(
+        transport
+            .post(
+              Uri.https('api.example.com', '/metadata'),
+              operation: 'host_test',
+            )
+            .then<void>(
+              (_) => fail('The request unexpectedly succeeded'),
+              onError: (Object e) {
+                error = e;
+              },
+            ),
+      );
+      time.elapse(const Duration(seconds: 8));
+      expect(error, isA<DioException>());
+      expect(classifyWitanimeFailure(error!), 'timeout');
+      dio.close(force: true);
+    });
   });
 
   test('host inspection recognizes media without buffering the file', () async {
@@ -890,8 +929,11 @@ void main() {
     final encrypted = Aes128CtrCipher(key: spec.aesKey16, iv16: iv0)
         .process(plainPayload);
 
+    var upstreamAvailable = true;
+    var metadataRequests = 0;
     final proxy = WitanimeMegaProxy(
       openUpstream: (uri) async {
+        if (!upstreamAvailable) return null;
         final rangeSeg = uri.pathSegments.last.split('-');
         final start = int.parse(rangeSeg[0]);
         final end = int.parse(rangeSeg[1]);
@@ -902,6 +944,7 @@ void main() {
 
     final transport = _FakeWitanimeTransport((method, uri, body, _, _) async {
       if (uri.host == 'g.api.mega.co.nz') {
+        metadataRequests++;
         return WitanimeHttpResponse(
           statusCode: 200,
           body: jsonEncode([
@@ -920,12 +963,16 @@ void main() {
       label: 'mega',
       tier: 'FHD',
     );
-    final streams = await resolver.resolveHostedLink(
+    final resolving = resolver.resolveHostedLink(
       token.watchUrl,
       megaUrl,
       token,
     );
+    final parallel = proxy.registerStream(megaUrl, transport);
+    final streams = await resolving;
     expect(streams.single.url, startsWith('http://127.0.0.1:'));
+    expect(await parallel, streams.single.url);
+    expect(metadataRequests, 1);
 
     final client = HttpClient();
     addTearDown(() => client.close(force: true));
@@ -948,6 +995,13 @@ void main() {
     final chunks = await rangeResp.toList();
     final received = Uint8List.fromList(chunks.expand((c) => c).toList());
     expect(received, plainPayload.sublist(5, 43));
+
+    upstreamAvailable = false;
+    final failedReq = await client.getUrl(Uri.parse(streams.single.url));
+    failedReq.headers.set(HttpHeaders.rangeHeader, 'bytes=0-15');
+    final failedResp = await failedReq.close();
+    expect(failedResp.statusCode, 502);
+    expect(await failedResp.toList(), isEmpty);
   });
 
   test('Videa handles MIME-wrapped base64 XML and prioritizes MP4 over WebM', () async {
@@ -1181,6 +1235,13 @@ void main() {
     );
     expect(mp4.single.url, 'https://s1.mp4upload.com:183/d/abc/video.mp4');
     expect(mp4.single.headers?['Origin'], 'https://www.mp4upload.com');
+    final directMp4 = await resolver.resolveHostedLink(
+      baseToken.watchUrl,
+      mp4.single.url,
+      baseToken,
+    );
+    expect(directMp4.single.url, mp4.single.url);
+    expect(directMp4.single.headers, mp4.single.headers);
 
     final shared = await resolver.resolveHostedLink(
       baseToken.watchUrl,
@@ -1206,17 +1267,22 @@ void main() {
     );
   });
 
-  test('WitanimePlaybackResolver caches watch_page meta across loadSources and resolveStreams', () async {
+  test('playback and download share a source listing and concurrent resolutions', () async {
     var watchGets = 0;
+    var sourcePosts = 0;
+    var unlockPosts = 0;
     final transport = _FakeWitanimeTransport((method, uri, _, _, _) async {
       if (uri.path == '/watch/sample/1') {
         watchGets++;
         return const WitanimeHttpResponse(
           statusCode: 200,
-          body: '<meta name="csrf-token" content="csrf-cached">',
+          body:
+              '<meta name="csrf-token" content="csrf-cached">'
+              '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>',
         );
       }
       if (uri.path == '/watch/sample/1/sources') {
+        sourcePosts++;
         return WitanimeHttpResponse(
           statusCode: 200,
           body: jsonEncode({
@@ -1229,6 +1295,7 @@ void main() {
         );
       }
       if (uri.path == '/watch/stream-source/tok-cache') {
+        unlockPosts++;
         return const WitanimeHttpResponse(statusCode: 200, body: '{"ok":true}');
       }
       if (uri.path == '/watch/stream-gate/tok-cache') {
@@ -1244,16 +1311,112 @@ void main() {
     });
 
     final resolver = WitanimePlaybackResolver(transport);
-    final sources = await resolver.loadSources(
-      'https://witanime.site/watch/sample/1',
-      forDownload: false,
+    const watch = 'https://witanime.site/watch/sample/1';
+    final [playback, download] = await Future.wait([
+      resolver.loadSources(watch, forDownload: false),
+      resolver.loadSources(watch, forDownload: true),
+    ]);
+    expect(playback.single.url, download.single.url);
+    final resolved = await Future.wait([
+      resolver.resolveStreams(playback.single.url, forDownload: false),
+      resolver.resolveStreams(download.single.url, forDownload: true),
+    ]);
+    expect(
+      resolved.every((result) => result.single.url.contains('id=CACHE_ID')),
+      isTrue,
     );
-    final resolved = await resolver.resolveStreams(
-      sources.single.url,
-      forDownload: false,
-    );
-    expect(resolved.single.url, contains('id=CACHE_ID'));
     expect(watchGets, 1);
+    expect(sourcePosts, 1);
+    expect(unlockPosts, 1);
+  });
+
+  test('distinct tokens share one host request and use declared video URLs', () async {
+    var hostRequests = 0;
+    final transport = _FakeWitanimeTransport((_, uri, _, _, _) async {
+      expect(uri.host, 'player.example.com');
+      hostRequests++;
+      return const WitanimeHttpResponse(
+        statusCode: 200,
+        body: '<video src="/media/episode"></video>'
+            '<script>const ad = "https://ads.example.com/ad.mp4";</script>',
+      );
+    });
+    final resolver = WitanimePlaybackResolver(transport);
+    const watch = 'https://witanime.site/watch/sample/1';
+    const embed = 'https://player.example.com/embed?ref=ok.ru';
+    final entries = [
+      for (final kind in ['stream', 'download'])
+        WitanimeSourceToken(
+          watchUrl: watch,
+          kind: kind,
+          token: 'token-$kind',
+          label: 'Mirror',
+          tier: 'FHD',
+        ),
+    ];
+    final streams = await Future.wait([
+      for (final entry in entries) resolver.resolveHostedLink(watch, embed, entry),
+    ]);
+    expect(hostRequests, 1);
+    for (final result in streams) {
+      expect(result.single.url, 'https://player.example.com/media/episode');
+    }
+    await resolver.resolveHostedLink(watch, embed, entries.first);
+    expect(hostRequests, 2);
+  });
+
+  test('GoFile guest setup runs while the selected source unlocks', () async {
+    final unlock = Completer<WitanimeHttpResponse>();
+    final guestStarted = Completer<void>();
+    var guests = 0;
+    const token = WitanimeSourceToken(
+      kind: 'download',
+      watchUrl: 'https://witanime.site/watch/sample/1',
+      token: 'gofile-token',
+      label: 'GoFile',
+      tier: 'FHD',
+    );
+    final resolver = WitanimePlaybackResolver(
+      _FakeWitanimeTransport((_, uri, _, _, _) async {
+        switch (uri.path) {
+          case '/watch/sample/1':
+            return const WitanimeHttpResponse(
+              statusCode: 200,
+              body: '<meta name="csrf-token" content="csrf">',
+            );
+          case '/watch/download-source/gofile-token':
+            return unlock.future;
+          case '/watch/download-gate/gofile-token':
+            return const WitanimeHttpResponse(
+              statusCode: 302,
+              body: '',
+              headers: {'location': ['https://gofile.io/d/sample']},
+            );
+          case '/accounts':
+            if (++guests == 1) guestStarted.complete();
+            return const WitanimeHttpResponse(
+              statusCode: 200,
+              body: '{"status":"ok","data":{"token":"guest"}}',
+            );
+          case '/contents/sample':
+            return const WitanimeHttpResponse(
+              statusCode: 200,
+              body: '{"status":"ok","data":{"type":"file","name":"sample.mp4",'
+                  '"link":"https://store.gofile.io/download/sample.mp4"}}',
+            );
+          default:
+            fail('Unexpected extraction request: ${uri.path}');
+        }
+      }),
+    );
+    final result = resolver.resolveStreams(token.encode(), forDownload: false);
+    try {
+      await guestStarted.future.timeout(const Duration(seconds: 1));
+    } finally {
+      unlock.complete(const WitanimeHttpResponse(statusCode: 200, body: '{}'));
+    }
+    expect((await result).single.url, 'https://store.gofile.io/download/sample.mp4');
+    expect(guests, 1);
   });
 
   test('GoFile resolves nested folders, directLink fallback, percent-encodes spaces, and rejects inaccessible folders', () async {
@@ -1414,14 +1577,17 @@ void main() {
 
   test('DioWitanimeTransport preserves application/json GET responses for GoFile and other JSON APIs', () async {
     final dio = Dio(BaseOptions(responseType: ResponseType.plain));
+    var accounts = 0;
+    var expireGoFileToken = false;
     addTearDown(() => dio.close(force: true));
     dio.httpClientAdapter = _Adapter((options) async {
       if (options.uri.host == 'api.gofile.io' &&
           options.uri.path == '/accounts') {
+        accounts++;
         return ResponseBody.fromString(
           jsonEncode({
             'status': 'ok',
-            'data': {'token': 'real-dio-tok'},
+            'data': {'token': 'real-dio-tok-$accounts'},
           }),
           200,
           headers: {
@@ -1431,6 +1597,10 @@ void main() {
       }
       if (options.uri.host == 'api.gofile.io' &&
           options.uri.path == '/contents/YptWOpSB') {
+        if (options.headers['Authorization'] == 'Bearer real-dio-tok-1' &&
+            expireGoFileToken) {
+          return ResponseBody.fromString('{"status":"error"}', 401);
+        }
         return ResponseBody.fromString(
           jsonEncode({
             'status': 'ok',
@@ -1471,8 +1641,23 @@ void main() {
       streams.single.url,
       'https://file-eu-par-2.gofile.io/download/web/adeb48a1/0649_07_FHD.mp4',
     );
-    expect(streams.single.headers?['Cookie'], 'accountToken=real-dio-tok');
+    expect(streams.single.headers?['Cookie'], 'accountToken=real-dio-tok-1');
     expect(streams.single.headers?['Origin'], 'https://gofile.io');
+    final second = await resolver.resolveHostedLink(
+      token.watchUrl,
+      'https://gofile.io/d/YptWOpSB',
+      token,
+    );
+    expect(second.single.url, streams.single.url);
+    expect(accounts, 1);
+    expireGoFileToken = true;
+    final refreshed = await resolver.resolveHostedLink(
+      token.watchUrl,
+      'https://gofile.io/d/YptWOpSB',
+      token,
+    );
+    expect(refreshed.single.headers?['Cookie'], 'accountToken=real-dio-tok-2');
+    expect(accounts, 2);
   });
 }
 

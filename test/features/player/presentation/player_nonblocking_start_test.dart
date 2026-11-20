@@ -500,6 +500,31 @@ void main() {
     await flush();
   }
 
+  test('player opens a prepared source without resolving it again', () async {
+    final episode = _episode(1);
+    final prepared = Completer<List<StreamResult>>();
+    final startup = controller.init(
+      player: player,
+      item: _item([episode]),
+      videoUrl: episode.url,
+      episode: episode,
+      selectedSource: const StreamResult(
+        url: 'witanime-source://stream/picked',
+        source: 'GoFile',
+        requiresResolution: true,
+      ),
+      sourceResolution: prepared.future,
+    );
+    await flush();
+    expect(player.opened, isEmpty);
+    expect(catalog.streamCalls, 0);
+    const url = 'https://video.test/prepared.mp4';
+    prepared.complete(const [StreamResult(url: url, source: 'GoFile')]);
+    await startup;
+    expect(player.opened, [url]);
+    expect(catalog.streamCalls, 0);
+  });
+
   test('debug output redacts stream, header, DRM and license values', () async {
     final messages = <String>[];
     final previous = debugPrint;
