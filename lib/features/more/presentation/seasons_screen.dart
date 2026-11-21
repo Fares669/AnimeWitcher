@@ -538,9 +538,9 @@ class _SeasonGridState extends State<_SeasonGrid>
     super.build(context);
     final isDesktop = context.isDesktop;
     final initialLoading = _pager.items.isEmpty && _pager.loading;
-    final extra = _pager.loading || (_pager.error != null && _pager.hasMore)
-        ? 1
-        : 0;
+    final extra = _pager.loading
+        ? AnimeCatalogShimmer.loadMoreCount
+        : (_pager.error != null && _pager.hasMore ? 1 : 0);
     return CatalogDirection(
       child: CustomScrollView(
         controller: _controller,

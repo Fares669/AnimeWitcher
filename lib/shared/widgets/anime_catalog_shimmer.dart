@@ -91,6 +91,13 @@ class AnimeCatalogShimmer extends StatelessWidget {
     this.characterCaptionSpace = false,
   });
 
+  static const int initialMobileCount = 12;
+  static const int initialDesktopCount = 18;
+  static const int loadMoreCount = 3;
+
+  static int initialCount(BuildContext context) =>
+      context.isDesktop ? initialDesktopCount : initialMobileCount;
+
   final int? itemCount;
   final EdgeInsetsGeometry? padding;
   final ScrollPhysics? physics;
@@ -101,7 +108,7 @@ class AnimeCatalogShimmer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDesktop = context.isDesktop;
-    final count = itemCount ?? (isDesktop ? 18 : 12);
+    final count = itemCount ?? initialCount(context);
     final horizontalPadding = MultimediaCardLayout.catalogGridHorizontalPadding(
       context,
     );

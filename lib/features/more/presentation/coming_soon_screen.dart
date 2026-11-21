@@ -111,10 +111,12 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
         emptyMessage: 'لا توجد أعمال قادمة حاليًا',
         onRefresh: _refresh,
         scrollController: _controller,
-        footer: _pager.loading || (_pager.error != null && _pager.hasMore)
+        footer: _pager.loading
             ? CatalogFooter.loading
+            : (_pager.error != null && _pager.hasMore)
+            ? CatalogFooter.retry
             : CatalogFooter.none,
-        footerBuilder: (context, _) => _pager.error != null
+        footerBuilder: (context, _) => _pager.error != null && !_pager.loading
             ? IconButton(
                 tooltip: 'إعادة المحاولة',
                 onPressed: _loadNext,

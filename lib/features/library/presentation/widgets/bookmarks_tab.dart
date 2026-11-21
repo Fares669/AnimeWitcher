@@ -130,6 +130,16 @@ class LibraryItemsGrid extends StatelessWidget {
 
     final canLoadMore =
         hasMore && (totalCount == null || items.length < totalCount!);
+    if (items.isEmpty && loadingMore && canLoadMore) {
+      return _LoadUnderfilledPage(
+        loadedCount: 0,
+        hasMore: canLoadMore,
+        loading: loadingMore,
+        failed: loadFailed,
+        onLoadMore: onLoadMore,
+        child: const AnimeCatalogShimmer(),
+      );
+    }
     return _LoadUnderfilledPage(
       loadedCount: items.length,
       hasMore: canLoadMore,

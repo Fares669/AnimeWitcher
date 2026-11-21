@@ -294,17 +294,6 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
     final gridMainAxisSpacing = _isPortrait
         ? MultimediaCardLayout.catalogGridMainAxisSpacing(context)
         : 16.0;
-    // Derived from the same helper the grid delegate uses, so the trailing
-    // shimmer tiles always complete the last row instead of guessing.
-    final crossAxisCount = ResponsiveBreakpoints.animeGridCrossAxisCount(
-      context,
-      maxCrossAxisExtent: maxExtent,
-      crossAxisSpacing: gridCrossAxisSpacing,
-      horizontalPadding: gridHorizontalPadding,
-      handsetPortraitCrossAxisCount: _isPortrait
-          ? MultimediaCardLayout.handsetPortraitGridColumns
-          : null,
-    );
     final childAspectRatio = MultimediaCardLayout.gridAspectRatio(
       isPortrait: _isPortrait,
       isDesktop: isDesktop,
@@ -328,6 +317,7 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
       ),
       builder: (context, topInset) => CatalogBody(
         topInset: topInset,
+        isLoading: isLoading,
         errorMessage: hasProviderLoadError && items.isEmpty ? '' : null,
         errorWidget: MouseDragRefreshIndicator(
           onRefresh: _retryProviderPage,
@@ -343,11 +333,12 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
           ),
         ),
         scrollController: _scrollController,
-        footer: isLoading || hasProviderLoadError
+        footer: isLoading
             ? CatalogFooter.loading
+            : hasProviderLoadError
+            ? CatalogFooter.retry
             : CatalogFooter.none,
-        footerCount: isLoading ? crossAxisCount : 1,
-        footerBuilder: hasProviderLoadError
+        footerBuilder: hasProviderLoadError && !isLoading
             ? (context, _) => _ProviderPageLoadError(
                 compact: true,
                 onRetry: _retryProviderPage,
