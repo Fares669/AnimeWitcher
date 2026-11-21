@@ -170,7 +170,10 @@ final class _Firestore extends FirestoreRestClient {
   Completer<void>? blockWrites;
   final List<String> detailRequests = <String>[];
   final List<List<String>> posterBatchRequests = <List<String>>[];
+  final List<({bool manga, List<String> ids})> libraryBatchRequests =
+      <({bool manga, List<String> ids})>[];
   bool failPosterBatch = false;
+  bool failLibraryBatch = false;
   int countRequests = 0;
 
   @override
@@ -183,6 +186,22 @@ final class _Firestore extends FirestoreRestClient {
     return {
       for (final id in animeIds)
         if (documents['anime_list/$id'] case final FirestoreDocument doc)
+          id: doc.fields,
+    };
+  }
+
+  @override
+  Future<Map<String, Map<String, dynamic>>> fetchCatalogLibraryFields(
+    List<String> ids,
+    String idToken, {
+    required bool manga,
+  }) async {
+    libraryBatchRequests.add((manga: manga, ids: List<String>.of(ids)));
+    if (failLibraryBatch) throw StateError('library batch unavailable');
+    final collection = manga ? 'manga_list' : 'anime_list';
+    return {
+      for (final id in ids)
+        if (documents['$collection/$id'] case final FirestoreDocument doc)
           id: doc.fields,
     };
   }
@@ -735,9 +754,56 @@ void main() {
   );
 
   test(
-    'legacy library details are requested concurrently, not one by one',
+    'legacy library details are resolved in a single masked batchGet',
     () async {
-      final firestore = _Firestore()..blockDetails = Completer<void>();
+      final firestore = _Firestore();
+      firestore.collections['users/profile-1/user_anime'] = [
+        for (var i = 0; i < 3; i++)
+          _remote(
+            path: 'users/profile-1/user_anime/a$i',
+            fields: {'type': 'watching', 'date': DateTime.utc(2026, 1, 1)},
+          ),
+      ];
+      for (var i = 0; i < 3; i++) {
+        firestore.documents['anime_list/a$i'] = _remote(
+          path: 'anime_list/a$i',
+          fields: {
+            'name': 'Anime $i',
+            'poster': {'large': 'https://cdn.example/large-$i.jpg'},
+          },
+        );
+      }
+      final service = await _signedInService(firestore);
+      final page = await service.fetchLibraryPage(
+        category: LibraryCategory.watching,
+      );
+      expect(firestore.libraryBatchRequests, hasLength(1));
+      expect(firestore.libraryBatchRequests.single.manga, isFalse);
+      expect(firestore.libraryBatchRequests.single.ids, ['a0', 'a1', 'a2']);
+      expect(firestore.detailRequests, isEmpty);
+      expect(firestore.posterBatchRequests, isEmpty);
+      expect(page.items.map((item) => item.title), [
+        'Anime 0',
+        'Anime 1',
+        'Anime 2',
+      ]);
+      expect(page.items.map((item) => item.posterUrl), [
+        'https://cdn.example/large-0.jpg',
+        'https://cdn.example/large-1.jpg',
+        'https://cdn.example/large-2.jpg',
+      ]);
+      expect(page.total, 3);
+      expect(page.hasMore, isFalse);
+      expect(firestore.pageRequests, hasLength(1));
+    },
+  );
+
+  test(
+    'legacy library details fall back to concurrent GETs when batchGet fails',
+    () async {
+      final firestore = _Firestore()
+        ..failLibraryBatch = true
+        ..blockDetails = Completer<void>();
       firestore.collections['users/profile-1/user_anime'] = [
         for (var i = 0; i < 3; i++)
           _remote(
@@ -760,7 +826,7 @@ void main() {
         expect(
           firestore.detailRequests,
           hasLength(3),
-          reason: 'Old APK starts all missing-detail tasks together',
+          reason: 'Fallback starts all missing-detail tasks together',
         );
       } finally {
         firestore.blockDetails!.complete();

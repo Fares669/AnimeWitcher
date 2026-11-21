@@ -163,61 +163,148 @@ class FirestoreRestClient {
     }
   }
 
+  static const List<String> _catalogPosterMaskFields = <String>[
+    'poster',
+    'poster_uri',
+    'poster_url_aniList',
+    'posterUrlAniList',
+  ];
+
+  static const List<String> _animeLibraryMaskFields = <String>[
+    'name',
+    'english_title',
+    'poster',
+    'poster_uri',
+    'cover_uri',
+    'poster_url_aniList',
+    'posterUrlAniList',
+    'type',
+    'year',
+    'details.type',
+    'details.year',
+    'details.mal_mean',
+    'details.mal_score',
+    'animewitcher_item',
+  ];
+
+  static const List<String> _mangaLibraryMaskFields = <String>[
+    'name',
+    'manga_name',
+    'title',
+    'english_title',
+    'englishTitle',
+    'name_english',
+    'manga_name_english',
+    'image',
+    'poster',
+    'poster_uri',
+    'cover_uri',
+    'poster_url_aniList',
+    'posterUrlAniList',
+    'type',
+    'manga_type',
+    'year',
+    'state',
+    'status',
+    'statictes',
+    'mal_id',
+    'malId',
+    'aniList_id',
+    'anilist_id',
+    'anilistId',
+    'mangalek_page_url',
+    'mangalekPageUrl',
+    'rating',
+    'details.year',
+    'details.type',
+    'details.state',
+    'details.status',
+    'details.mal_mean',
+    'details.mal_score',
+    'animewitcher_item',
+  ];
+
   /// Fetch only catalog poster metadata for the visible library page.
   /// Firestore batchGet returns newline-delimited JSON (or a JSON list in
   /// mocked responses); never download full documents one by one for artwork.
   Future<Map<String, Map<String, dynamic>>> fetchCatalogPosterFields(
     List<String> animeIds,
     String idToken,
-  ) async {
-    if (animeIds.isEmpty) return const {};
-    final ids = animeIds.toSet();
-    try {
-      final response = await _dio.post<dynamic>(
-        '$_documentsBase:batchGet',
-        data: {
-          'documents': [
-            for (final id in ids) _documentResource('anime_list/$id'),
-          ],
-          'mask': const {
-            'fieldPaths': [
-              'poster',
-              'poster_uri',
-              'poster_url_aniList',
-              'posterUrlAniList',
-            ],
-          },
-        },
-        options: _options(idToken)..responseType = ResponseType.plain,
+  ) => _batchGetMaskedFields(
+    collection: 'anime_list',
+    ids: animeIds,
+    fieldPaths: _catalogPosterMaskFields,
+    idToken: idToken,
+  );
+
+  /// Fetch lightweight card fields for legacy un-migrated library items in a
+  /// single masked Firestore `:batchGet` instead of per-item full `getDocument`
+  /// calls.
+  Future<Map<String, Map<String, dynamic>>> fetchCatalogLibraryFields(
+    List<String> ids,
+    String idToken, {
+    required bool manga,
+  }) => _batchGetMaskedFields(
+    collection: manga ? 'manga_list' : 'anime_list',
+    ids: ids,
+    fieldPaths: manga ? _mangaLibraryMaskFields : _animeLibraryMaskFields,
+    idToken: idToken,
+  );
+
+  Future<Map<String, Map<String, dynamic>>> _batchGetMaskedFields({
+    required String collection,
+    required List<String> ids,
+    required List<String> fieldPaths,
+    required String idToken,
+  }) async {
+    if (ids.isEmpty) return const <String, Map<String, dynamic>>{};
+    final uniqueIds = ids.toSet();
+    final found = <String, Map<String, dynamic>>{};
+    final idList = uniqueIds.toList(growable: false);
+    for (var start = 0; start < idList.length; start += 100) {
+      final chunk = idList.sublist(
+        start,
+        start + 100 > idList.length ? idList.length : start + 100,
       );
-      final data = response.data;
-      final List<dynamic> rows;
-      if (data is List) {
-        rows = data;
-      } else if (data is String) {
-        final trimmed = data.trim();
-        rows = trimmed.startsWith('[')
-            ? List<dynamic>.from(jsonDecode(trimmed) as List)
-            : [
-                for (final line in const LineSplitter().convert(trimmed))
-                  if (line.trim().isNotEmpty) jsonDecode(line),
-              ];
-      } else {
-        rows = [data];
-      }
-      final found = <String, Map<String, dynamic>>{};
-      for (final row in rows) {
-        final document = _decodeDocument(_map(row)['found']);
-        if (document != null &&
-            document.path == 'anime_list/${document.id}' &&
-            ids.contains(document.id)) {
-          found[document.id] = document.fields;
+      try {
+        final response = await _dio.post<dynamic>(
+          '$_documentsBase:batchGet',
+          data: {
+            'documents': [
+              for (final id in chunk) _documentResource('$collection/$id'),
+            ],
+            'mask': {'fieldPaths': fieldPaths},
+          },
+          options: _options(idToken)..responseType = ResponseType.plain,
+        );
+        final data = response.data;
+        final List<dynamic> rows;
+        if (data is List) {
+          rows = data;
+        } else if (data is String) {
+          final trimmed = data.trim();
+          rows = trimmed.startsWith('[')
+              ? List<dynamic>.from(jsonDecode(trimmed) as List)
+              : [
+                  for (final line in const LineSplitter().convert(trimmed))
+                    if (line.trim().isNotEmpty) jsonDecode(line),
+                ];
+        } else {
+          rows = [data];
         }
+        for (final row in rows) {
+          final document = _decodeDocument(_map(row)['found']);
+          if (document != null &&
+              document.path == '$collection/${document.id}' &&
+              uniqueIds.contains(document.id)) {
+            found[document.id] = document.fields;
+          }
+        }
+      } on DioException catch (error) {
+        throw _firestoreException(error);
       }
-      return found;
-    } on DioException catch (error) {
-      throw _firestoreException(error);
     }
+    return found;
   }
 
   Future<List<FirestoreDocument>> listDocuments(

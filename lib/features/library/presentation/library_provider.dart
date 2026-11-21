@@ -215,6 +215,14 @@ class Library extends _$Library {
       return items.take(page.visibleLimit).toList(growable: false);
     }
     final page = _page(kind, category);
+    if (_accountUid != null) {
+      if (!page.receivedRemotePage && page.mutationVersion == 0) {
+        page.cachedLocalCount = 0;
+        return const <MultimediaItem>[];
+      }
+      page.cachedLocalCount = page.items.length;
+      return page.items.take(page.visibleLimit).toList(growable: false);
+    }
     final local = _localItems(kind, category);
     page.cachedLocalCount = local.length;
     // After a successful page, Firestore ordering is authoritative. Older
@@ -234,7 +242,17 @@ class Library extends _$Library {
   }) {
     final page = _page(kind, category);
     final total = _knownTotal(kind, category);
-    final count = page.receivedRemotePage
+    final signedInNative =
+        _accountUid != null &&
+        !(_useWitanimeShelf(kind) && isWitanimeSyncedCategory(category));
+    final pendingInitialRemote =
+        signedInNative &&
+        !page.receivedRemotePage &&
+        page.mutationVersion == 0 &&
+        !page.loadFailed;
+    final count =
+        (page.receivedRemotePage ||
+            (signedInNative && page.mutationVersion > 0))
         ? page.items.length
         : (loadedLocalCount ?? page.cachedLocalCount);
     final loaded = count.clamp(0, page.visibleLimit);
@@ -246,9 +264,10 @@ class Library extends _$Library {
           (page.hasMore ||
               page.loading ||
               page.loadFailed ||
+              pendingInitialRemote ||
               (!page.receivedRemotePage &&
                   page.cachedLocalCount > page.visibleLimit)),
-      loading: page.loading,
+      loading: page.loading || pendingInitialRemote,
       loadFailed: page.loadFailed,
     );
   }
@@ -360,9 +379,7 @@ class Library extends _$Library {
     final service = ref.read(animeWitcherAccountServiceProvider);
     final account = service.accountUid;
     if (account == null) return;
-    for (final media in LibraryMediaKind.values) {
-      unawaited(refreshServerCounts(media));
-    }
+    unawaited(refreshServerCounts(kind));
     page.loading = true;
     page.loadFailed = false;
     refresh();

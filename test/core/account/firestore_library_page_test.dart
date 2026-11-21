@@ -88,6 +88,61 @@ void main() {
   );
 
   test(
+    'library catalog batchGet uses a lightweight field mask for anime and manga',
+    () async {
+      final requests = <RequestOptions>[];
+      final dio = Dio();
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (request, handler) {
+            requests.add(request);
+            final body = request.data as Map;
+            final docs = body['documents'] as List;
+            final isManga = (docs.first as String).contains('/manga_list/');
+            handler.resolve(
+              Response<dynamic>(
+                requestOptions: request,
+                statusCode: 200,
+                data: isManga
+                    ? '{"found":{"name":"projects/animewitcher-1c66d/databases/(default)/documents/manga_list/m1","fields":{"name":{"stringValue":"Solo Leveling"},"image":{"stringValue":"https://cdn.example/m1.jpg"}}}}\n'
+                    : '{"found":{"name":"projects/animewitcher-1c66d/databases/(default)/documents/anime_list/a1","fields":{"name":{"stringValue":"Bleach"},"poster":{"mapValue":{"fields":{"large":{"stringValue":"https://cdn.example/a1.jpg"}}}}}}}\n',
+              ),
+            );
+          },
+        ),
+      );
+      final client = FirestoreRestClient(dio: dio);
+      final anime = await client.fetchCatalogLibraryFields(
+        ['a1'],
+        'fixture',
+        manga: false,
+      );
+      final manga = await client.fetchCatalogLibraryFields(
+        ['m1'],
+        'fixture',
+        manga: true,
+      );
+      expect(requests, hasLength(2));
+      expect(requests[0].path, endsWith('/documents:batchGet'));
+      expect(
+        ((requests[0].data as Map)['mask'] as Map)['fieldPaths'],
+        containsAll(['name', 'poster', 'details.year']),
+      );
+      expect(
+        ((requests[0].data as Map)['mask'] as Map)['fieldPaths'],
+        isNot(contains('story')),
+      );
+      expect(anime['a1']?['name'], 'Bleach');
+      expect(requests[1].path, endsWith('/documents:batchGet'));
+      expect(
+        ((requests[1].data as Map)['documents'] as List).single,
+        endsWith('/manga_list/m1'),
+      );
+      expect(manga['m1']?['name'], 'Solo Leveling');
+    },
+  );
+
+  test(
     'library page bounds reads and keeps filter and tie-break cursor',
     () async {
       final requests = <RequestOptions>[];

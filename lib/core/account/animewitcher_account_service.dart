@@ -2123,17 +2123,21 @@ class AnimeWitcherAccountService {
           .then<int?>((value) => value)
           .catchError((Object _) => null);
       final pageDocs = await docsFuture;
+      if (pageDocs.length < 30) {
+        // The first page already contains the entire shelf; avoid waiting on
+        // the aggregation round-trip.
+        unawaited(countFuture);
+        return (pageDocs.length, pageDocs);
+      }
       final counted = await countFuture;
       final effectiveTotal =
           counted ??
-          (pageDocs.length < 30
-              ? pageDocs.length
-              : (_storage.getCachedLibraryCounts(
-                      providerKey: 'native',
-                      accountKey: profile.uid,
-                      mediaKindKey: manga ? 'manga' : 'anime',
-                    )[category.storageKey] ??
-                    pageDocs.length));
+          (_storage.getCachedLibraryCounts(
+                providerKey: 'native',
+                accountKey: profile.uid,
+                mediaKindKey: manga ? 'manga' : 'anime',
+              )[category.storageKey] ??
+              pageDocs.length);
       return (effectiveTotal, pageDocs);
     });
     final pendingDeletes = {
@@ -2174,89 +2178,157 @@ class AnimeWitcherAccountService {
         if (animeId != null) localById[animeId] = item;
       }
     }
+    final hqPosters = !manga && _storage.isHighQualityPostersEnabled();
+    final resolvedById = <String, MultimediaItem>{};
     final largePosters = <String, String>{};
-    if (!manga && _storage.isHighQualityPostersEnabled()) {
-      final missingIds = <String>{};
-      for (final doc in visibleDocs) {
-        final id = mediaIdFromDocument(doc);
-        if (id == null) continue;
-        final embedded = _largeLibraryPoster(doc.fields);
-        if (embedded.isNotEmpty) {
-          largePosters[id] = embedded;
-        } else if (_libraryLargePosterCache.containsKey(id)) {
-          if (_libraryLargePosterCache[id] case final String cached) {
-            largePosters[id] = cached;
+    final unresolvedIds = <String>{};
+    final missingPosterIds = <String>{};
+
+    for (final doc in visibleDocs) {
+      final id = mediaIdFromDocument(doc);
+      if (id == null) continue;
+      final item = manga
+          ? _mangaItemFromRemoteDocument(
+              doc,
+              id,
+              isFavorite: favorite,
+              cached: localById[id] ?? _resolvedMangaCache[id],
+            )
+          : _animeItemFromRemoteDocument(
+              doc,
+              id,
+              isFavorite: favorite,
+              cached: localById[id] ?? _resolvedAnimeCache[id],
+            );
+      if (item != null) {
+        resolvedById[id] = item;
+        if (hqPosters) {
+          final embedded = _largeLibraryPoster(doc.fields);
+          if (embedded.isNotEmpty) {
+            largePosters[id] = embedded;
+          } else if (_libraryLargePosterCache.containsKey(id)) {
+            if (_libraryLargePosterCache[id] case final String cached) {
+              largePosters[id] = cached;
+            }
+          } else {
+            missingPosterIds.add(id);
           }
-        } else {
-          missingIds.add(id);
         }
+      } else {
+        unresolvedIds.add(id);
       }
-      if (missingIds.isNotEmpty) {
+    }
+
+    // Run legacy catalog card resolution and HQ poster upgrades in parallel
+    // using single masked Firestore :batchGet requests instead of up to 30
+    // full-document GETs.
+    final parallelLookups = <Future<void>>[];
+    if (unresolvedIds.isNotEmpty) {
+      parallelLookups.add(() async {
+        final ids = unresolvedIds.toList(growable: false);
         try {
-          // One masked catalog read for the visible 30 cards; never make a
-          // missing/blocked poster endpoint delay the whole library page.
           final catalog = await _authenticated(
-            (token) => _firestore.fetchCatalogPosterFields(
-              missingIds.toList(growable: false),
+            (token) => _firestore.fetchCatalogLibraryFields(
+              ids,
               token,
+              manga: manga,
             ),
-          ).timeout(const Duration(seconds: 5));
+          );
           if (!_isCurrentProfile(profile) || generation != _sessionGeneration) {
             throw const AnimeWitcherAccountException(
               'session-changed',
               'The active account changed.',
             );
           }
-          for (final id in missingIds) {
+          for (final id in ids) {
+            final fields = catalog[id];
+            if (fields == null) continue;
+            final mapped = manga
+                ? _mangaItemFromFields(fields, id)
+                : _animeItemFromCatalogFields(fields, id);
+            if (mapped != null) {
+              if (manga) {
+                _resolvedMangaCache[id] = mapped;
+              } else {
+                _resolvedAnimeCache[id] = mapped;
+                if (hqPosters) {
+                  final poster = _largeLibraryPoster(fields);
+                  _libraryLargePosterCache[id] = poster.isEmpty ? null : poster;
+                  if (poster.isNotEmpty) largePosters[id] = poster;
+                }
+              }
+              resolvedById[id] = mapped;
+            }
+          }
+        } on AnimeWitcherAccountException {
+          rethrow;
+        } catch (_) {
+          // Fallback to concurrent individual GETs if batchGet is unavailable.
+          final fallback = await Future.wait(
+            ids.map((id) async {
+              final item = manga
+                  ? await _itemForMangaId(id)
+                  : await _itemForAnimeId(id);
+              return (id, item);
+            }),
+          );
+          for (final (id, item) in fallback) {
+            if (item != null) resolvedById[id] = item;
+          }
+        }
+      }());
+    }
+    if (missingPosterIds.isNotEmpty) {
+      parallelLookups.add(() async {
+        try {
+          // One masked catalog read for the visible cards; keep the timeout
+          // short so a slow poster endpoint never delays the library page.
+          final catalog = await _authenticated(
+            (token) => _firestore.fetchCatalogPosterFields(
+              missingPosterIds.toList(growable: false),
+              token,
+            ),
+          ).timeout(const Duration(seconds: 2));
+          if (!_isCurrentProfile(profile) || generation != _sessionGeneration) {
+            throw const AnimeWitcherAccountException(
+              'session-changed',
+              'The active account changed.',
+            );
+          }
+          for (final id in missingPosterIds) {
             final poster = _largeLibraryPoster(catalog[id] ?? const {});
             _libraryLargePosterCache[id] = poster.isEmpty ? null : poster;
             if (poster.isNotEmpty) largePosters[id] = poster;
           }
+        } on AnimeWitcherAccountException {
+          rethrow;
         } catch (_) {
-          // Offline: use the shelf's cached poster; a later visit can retry.
+          // Offline or slow: use the shelf's embedded poster immediately.
         }
+      }());
+    }
+    if (parallelLookups.isNotEmpty) {
+      await Future.wait(parallelLookups);
+    }
+
+    final resolved = <MultimediaItem>[];
+    for (final doc in visibleDocs) {
+      final id = mediaIdFromDocument(doc);
+      if (id == null) continue;
+      final item = resolvedById[id];
+      if (item == null) continue;
+      final poster = largePosters[id];
+      if (!manga && poster != null) {
+        final upgraded = item.copyWith(
+          posterUrl: poster,
+          fullPosterUrl: poster,
+        );
+        _resolvedAnimeCache[id] = upgraded;
+        resolved.add(upgraded);
+      } else {
+        resolved.add(item);
       }
     }
-    // Like the original APK, modern shelf documents already contain embedded
-    // title/image/type/year fields and need no extra GET. Only un-migrated
-    // entries that also miss the local cache fall back to individual GETs.
-    final resolved = await Future.wait(
-      visibleDocs.map((doc) async {
-        if (!_isCurrentProfile(profile) || generation != _sessionGeneration) {
-          throw const AnimeWitcherAccountException(
-            'session-changed',
-            'The active account changed.',
-          );
-        }
-        final id = mediaIdFromDocument(doc);
-        if (id == null) return null;
-        final item = manga
-            ? (_mangaItemFromRemoteDocument(
-                    doc,
-                    id,
-                    isFavorite: favorite,
-                    cached: localById[id] ?? _resolvedMangaCache[id],
-                  ) ??
-                  await _itemForMangaId(id))
-            : (_animeItemFromRemoteDocument(
-                    doc,
-                    id,
-                    isFavorite: favorite,
-                    cached: localById[id] ?? _resolvedAnimeCache[id],
-                  ) ??
-                  await _itemForAnimeId(id));
-        final poster = largePosters[id];
-        if (!manga && item != null && poster != null) {
-          final upgraded = item.copyWith(
-            posterUrl: poster,
-            fullPosterUrl: poster,
-          );
-          _resolvedAnimeCache[id] = upgraded;
-          return upgraded;
-        }
-        return item;
-      }),
-    );
     if (!_isCurrentProfile(profile) || generation != _sessionGeneration) {
       throw const AnimeWitcherAccountException(
         'session-changed',
@@ -2274,7 +2346,7 @@ class AnimeWitcherAccountService {
       );
     }
     return AnimeWitcherLibraryPage(
-      items: List.unmodifiable(resolved.whereType<MultimediaItem>()),
+      items: List.unmodifiable(resolved),
       total: visibleTotal,
       nextCursor:
           docs.length < 30 || (cursor?.loaded ?? 0) + docs.length >= total
@@ -4559,12 +4631,19 @@ class AnimeWitcherAccountService {
       (token) => _firestore.getDocument('anime_list/$animeId', token),
     );
     if (document == null) return null;
-    final own = _itemFromCompact(document.fields['animewitcher_item']);
-    if (own != null) {
-      _resolvedAnimeCache[animeId] = own;
-      return own;
+    final item = _animeItemFromCatalogFields(document.fields, animeId);
+    if (item != null) {
+      _resolvedAnimeCache[animeId] = item;
     }
-    final source = document.fields;
+    return item;
+  }
+
+  MultimediaItem? _animeItemFromCatalogFields(
+    Map<String, dynamic> source,
+    String animeId,
+  ) {
+    final own = _itemFromCompact(source['animewitcher_item']);
+    if (own != null) return own;
     final details = _map(source['details']);
     final poster = _map(source['poster']);
     final title =
@@ -4585,7 +4664,7 @@ class AnimeWitcherAccountService {
     final rawType = _firstString(<dynamic>[source['type'], details['type']]);
     final isMovie =
         rawType.toLowerCase().contains('movie') || rawType.contains('فيلم');
-    final item = MultimediaItem(
+    return MultimediaItem(
       title: title,
       url: AnimeWitcherSyncIds.mainUrl(animeId),
       posterUrl: posterUrl,
@@ -4602,8 +4681,6 @@ class AnimeWitcherAccountService {
       catalogType: rawType.isEmpty ? null : rawType,
       score: _doubleValue(details['mal_mean'] ?? details['mal_score']),
     );
-    _resolvedAnimeCache[animeId] = item;
-    return item;
   }
 
   MultimediaItem? _animeItemFromRemoteDocument(

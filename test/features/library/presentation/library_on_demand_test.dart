@@ -115,7 +115,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 1));
     expect(native.pages, 1);
-    expect(native.counts, 2);
+    expect(native.counts, 1);
   });
 
   for (final wide in [false, true]) {
