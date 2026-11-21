@@ -38,6 +38,7 @@ import 'package:animewitcher/core/utils/localized_text.dart';
 import '../../../core/navigation/app_layout_style.dart';
 import '../../details/presentation/widgets/details_seasons_bar.dart';
 import '../../details/presentation/widgets/seasons_bar_style_picker.dart';
+import '../../home/presentation/latest_episodes_provider.dart';
 import '../../../shared/widgets/app_layout_picker.dart';
 import '../../player/data/anime4k.dart';
 import 'widgets/anime4k_dialog.dart';
@@ -125,6 +126,7 @@ class SettingsScreen extends ConsumerWidget {
     final animeDataSettings = ref.watch(animeDataSourceSettingsProvider);
     final activeCatalog = ref.watch(activeProviderProvider);
     final installedProviders = ref.watch(extensionManagerProvider);
+    final latestEpisodes = ref.watch(latestEpisodesSettingsProvider);
 
     final playerSettings =
         ref.watch(playerSettingsProvider).asData?.value ??
@@ -187,6 +189,29 @@ class SettingsScreen extends ConsumerWidget {
                     await ref.read(activeProviderProvider.notifier).set(next);
                   },
           ),
+          ...installedProviders
+              .where(
+                (source) => source.supportedTypes.contains(ProviderType.anime),
+              )
+              .map((source) {
+                final id = source.packageName;
+                final active = id == activeCatalog?.packageName;
+                final enabled = active || latestEpisodes.contains(id);
+                Future<void> toggle(bool value) => ref
+                    .read(latestEpisodesSettingsProvider.notifier)
+                    .setEnabled(id, value);
+                return SettingsTile(
+                  key: ValueKey('settings-latest-episodes-$id'),
+                  icon: Icons.new_releases_outlined,
+                  title: 'أحدث الحلقات (${source.name})',
+                  subtitle: active ? 'المصدر النشط' : null,
+                  trailing: Switch(
+                    value: enabled,
+                    onChanged: active ? null : toggle,
+                  ),
+                  onTap: active ? null : () => toggle(!enabled),
+                );
+              }),
           SettingsTile(
             icon: Icons.view_carousel_rounded,
             title: 'شريط المواسم',

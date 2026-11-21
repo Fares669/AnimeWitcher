@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import '../domain/entity/manga.dart';
 import '../domain/entity/multimedia_item.dart';
+import 'home_section_titles.dart';
 
 enum ProviderType { movie, series, anime, manga, livestream, other }
 
@@ -398,6 +399,15 @@ abstract class AnimeWitcherProvider {
 
   // Returns categorized content (Section Name -> Items)
   Future<Map<String, List<MultimediaItem>>> getHome();
+
+  /// The latest episode preview and its original section name for pagination.
+  Future<MapEntry<String, List<MultimediaItem>>?>
+  getLatestHomeEpisodes() async {
+    final home = await getHome();
+    return home.entries
+        .where((entry) => isLatestEpisodesSectionTitle(entry.key))
+        .firstOrNull;
+  }
 
   /// Loads the compact news feed shown on the provider home page.
   ///

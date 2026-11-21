@@ -11,6 +11,7 @@ import 'package:animewitcher/features/library/presentation/library_lists.dart';
 import 'package:animewitcher/features/library/presentation/library_media_kind.dart';
 import 'package:animewitcher/features/library/presentation/widgets/library_phone_shelves.dart';
 import 'package:animewitcher/features/library/presentation/widgets/library_side_list.dart';
+import 'package:animewitcher/features/home/presentation/latest_episodes_provider.dart';
 import 'package:animewitcher/features/settings/presentation/app_version_provider.dart';
 import 'package:animewitcher/features/settings/presentation/settings_screen.dart';
 import 'package:animewitcher/features/settings/presentation/widgets/witanime_account_section.dart';
@@ -73,6 +74,8 @@ void main() {
   testWidgets(
     'settings allows switching freely between AnimeWitcher and Witanime',
     (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
       final storage = MemoryStorageService();
       late ProviderContainer container;
       await tester.pumpWidget(
@@ -102,13 +105,6 @@ void main() {
       final providerTile = find.byKey(
         const ValueKey('settings-active-anime-provider'),
       );
-      await tester.dragUntilVisible(
-        providerTile,
-        find.byType(Scrollable).first,
-        const Offset(0, -250),
-      );
-      await tester.pumpAndSettle();
-
       expect(
         container.read(activeProviderProvider),
         isA<AnimeWitcherNativeProvider>(),
@@ -128,16 +124,42 @@ void main() {
         findsOneWidget,
       );
 
-      await tester.tap(
-        find.descendant(
-          of: providerTile,
-          matching: find.widgetWithText(ChoiceChip, 'Witanime'),
-        ),
+      final witSwitch = find.widgetWithText(
+        ListTile,
+        'أحدث الحلقات (Witanime)',
       );
+      final nativeSwitch = find.widgetWithText(
+        ListTile,
+        'أحدث الحلقات (AnimeWitcher)',
+      );
+      Switch latestSwitch(Finder tile) => tester.widget(
+        find.descendant(of: tile, matching: find.byType(Switch)),
+      );
+      expect(latestSwitch(nativeSwitch).value, isTrue);
+      expect(latestSwitch(nativeSwitch).onChanged, isNull);
+      expect(latestSwitch(witSwitch).value, isFalse);
+      expect(latestSwitch(witSwitch).onChanged, isNotNull);
+      await tester.tap(
+        find.descendant(of: witSwitch, matching: find.byType(Switch)),
+      );
+      await tester.pumpAndSettle();
+      container.invalidate(latestEpisodesSettingsProvider);
+      await tester.pumpAndSettle();
+      expect(latestSwitch(witSwitch).value, isTrue);
+
+      final witChip = find.descendant(
+        of: providerTile,
+        matching: find.widgetWithText(ChoiceChip, 'Witanime'),
+      );
+      await tester.tap(witChip);
       await tester.pumpAndSettle();
 
       expect(container.read(activeProviderProvider), isA<WitanimeProvider>());
       expect(storage.getActiveProviderId(), WitanimeProvider.id);
+      expect(latestSwitch(witSwitch).value, isTrue);
+      expect(latestSwitch(witSwitch).onChanged, isNull);
+      expect(latestSwitch(nativeSwitch).value, isFalse);
+      expect(latestSwitch(nativeSwitch).onChanged, isNotNull);
 
       await tester.tap(
         find.descendant(
@@ -151,22 +173,22 @@ void main() {
         container.read(activeProviderProvider),
         isA<AnimeWitcherNativeProvider>(),
       );
+      expect(latestSwitch(witSwitch).value, isTrue);
+      expect(latestSwitch(witSwitch).onChanged, isNotNull);
     },
   );
 
-  test(
-    'tryCompleteBrowserAuth ignores unauthenticated cookies and activates valid ones',
-    () async {
-      final storage = MemoryStorageService();
-      final backend = _FakeWitanimeAccountBackend()
-        ..profilesByCookie['witanime_session=valid'] = const WitanimeProfile(
-          accountId: 'user-1',
-          displayName: 'فارس',
-        );
-      final service = WitanimeAccountService(
-        tokenStorage: _MemoryTokenStorage(storage),
-        backend: backend,
+  test('tryCompleteBrowserAuth ignores unauthenticated cookies and activates valid ones', () async {
+    final storage = MemoryStorageService();
+    final backend = _FakeWitanimeAccountBackend()
+      ..profilesByCookie['witanime_session=valid'] = const WitanimeProfile(
+        accountId: 'user-1',
+        displayName: 'فارس',
       );
+    final service = WitanimeAccountService(
+      tokenStorage: _MemoryTokenStorage(storage),
+      backend: backend,
+    );
 
       final unverified = await service.tryCompleteBrowserAuth(
         sessionCookie: 'witanime_session=guest',

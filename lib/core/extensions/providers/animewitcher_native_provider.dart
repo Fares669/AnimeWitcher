@@ -17,6 +17,7 @@ import '../../utils/episode_label.dart';
 import '../../utils/artwork_host_fallback.dart';
 import '../../utils/safe_uri.dart';
 import '../base_provider.dart';
+import '../home_section_titles.dart';
 import 'animewitcher_manga_mapping.dart';
 import 'mediafire_utils.dart';
 import 'server_extraction_utils.dart';
@@ -4043,6 +4044,23 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       output[key] = pages[i].items;
     }
     return output;
+  }
+
+  @override
+  Future<MapEntry<String, List<MultimediaItem>>?>
+  getLatestHomeEpisodes() async {
+    await _refreshRemoteConstants();
+    final sections = await _fetchOfficialHomeSections();
+    final latest = sections.where((section) {
+      return section.type != 'carousel' &&
+          isLatestEpisodesSectionTitle(section.title);
+    }).firstOrNull;
+    if (latest == null) return null;
+    final page = await getHomeSectionPage(
+      latest.title,
+      limit: latest.hitsPerPage.clamp(1, _previewSize).toInt(),
+    );
+    return MapEntry(latest.title, page.items);
   }
 
   @override

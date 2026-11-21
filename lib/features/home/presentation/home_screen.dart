@@ -15,6 +15,7 @@ import 'package:animewitcher/core/navigation/app_layout_style.dart';
 import 'home_provider.dart';
 import 'home_section_titles.dart';
 import 'home_state.dart';
+import 'latest_episodes_provider.dart';
 import '../../news/presentation/open_news.dart';
 
 import 'package:animewitcher/features/home/presentation/widgets/continue_watching_section.dart';
@@ -31,6 +32,7 @@ import '../../../l10n/generated/app_localizations.dart';
 
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
+import 'package:animewitcher/core/extensions/home_section_titles.dart';
 import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
 import 'package:animewitcher/core/router/app_router.dart';
 
@@ -140,6 +142,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   Future<void> _refresh() {
     if (_refreshFuture != null) return _refreshFuture!;
+    ref.invalidate(secondaryLatestEpisodesProvider);
     for (final ranking in MalRanking.values) {
       ref.invalidate(homeMalRankingPageProvider(ranking));
     }
@@ -286,8 +289,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     List<NewsItem> news,
     List<MangaLatestChapter> latestManga,
     AnimeWitcherProvider provider,
+    List<Widget> secondaryEpisodeRails,
   ) {
     final entries = visibleHomeRailEntries(data).toList(growable: false);
+    final latestEpisodesIndex = entries.indexWhere(
+      (entry) => isLatestEpisodesSectionTitle(entry.key),
+    );
     final mangaHasOwnTab = ref.watch(mangaHasOwnTabProvider);
     var newsAfterIndex = entries.indexWhere(
       (entry) => isMostWatchedAnimationSectionTitle(entry.key),
@@ -314,40 +321,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     }
 
     final sections = <Widget>[];
+    if (latestEpisodesIndex < 0) sections.addAll(secondaryEpisodeRails);
     if (entries.isEmpty && news.isNotEmpty) {
       sections.add(buildNewsSection());
     }
 
-    // Each rail's first posters are fetched to disk now, before the rail
-    // is scrolled to: drawn from disk, they appear at once.
-    for (final entry in entries) {
-      warmPosters(entry.value.take(12).map((item) => item.posterUrl));
-    }
-
     for (var index = 0; index < entries.length; index++) {
       final entry = entries[index];
-      sections.add(
-        MediaHorizontalList(
-          title: entry.key,
-          mediaList: entry.value,
-          category: ViewAllCategory.providerContent,
-          showViewAll: true,
-          loadViewAllPage: (offset) => provider.getHomeSectionPage(
-            entry.key,
-            offset: offset,
-            limit: provider.viewAllPageSize,
-          ),
-          onTap: (item) {
-            item.openDetails(context);
-          },
-          heroTagPrefix: 'home',
-          forcePortrait: isLatestAddedSectionTitle(entry.key),
-        ),
-      );
+      sections.add(_buildMediaSection(context, provider, entry));
+      if (index == latestEpisodesIndex) sections.addAll(secondaryEpisodeRails);
       // With manga on a tab of its own, its new chapters live there.
       if (latestManga.isNotEmpty &&
           !mangaHasOwnTab &&
-          _isNewEpisodesSectionTitle(entry.key)) {
+          index == latestEpisodesIndex) {
         sections.add(
           LatestMangaChaptersSection(
             title: AppLocalizations.of(context)!.latestChapters,
@@ -369,6 +355,29 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     if (entries.isEmpty) sections.addAll(_malRankingRails(context));
 
     return sections;
+  }
+
+  Widget _buildMediaSection(
+    BuildContext context,
+    AnimeWitcherProvider provider,
+    MapEntry<String, List<MultimediaItem>> entry, {
+    String? title,
+  }) {
+    warmPosters(entry.value.take(12).map((item) => item.posterUrl));
+    return MediaHorizontalList(
+      key: ValueKey((provider.packageName, entry.key)),
+      title: title ?? entry.key,
+      mediaList: entry.value,
+      category: ViewAllCategory.providerContent,
+      loadViewAllPage: (offset) => provider.getHomeSectionPage(
+        entry.key,
+        offset: offset,
+        limit: provider.viewAllPageSize,
+      ),
+      onTap: (item) => item.openDetails(context),
+      heroTagPrefix: title == null ? 'home' : 'home_${provider.packageName}',
+      forcePortrait: isLatestAddedSectionTitle(entry.key),
+    );
   }
 
   /// MyAnimeList's rankings — popular now, best rated, most watched — as
@@ -412,14 +421,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     return rails;
   }
 
-  bool _isNewEpisodesSectionTitle(String title) {
-    final normalized = title.trim().toLowerCase();
-    return normalized.contains('الحلقات الجديدة') ||
-        normalized.contains('حلقات جديدة') ||
-        normalized.contains('new episodes') ||
-        normalized.contains('latest episodes');
-  }
-
   Widget _buildBody(
     BuildContext context,
     HomeState state,
@@ -448,6 +449,27 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     if (activeProvider == null) {
       return _buildNoProviderState(context, l10n, isWidescreen: isWidescreen);
     }
+    final secondarySources = ref
+        .watch(extensionManagerProvider)
+        .where(
+          (source) =>
+              source.packageName != activeProvider.packageName &&
+              source.supportedTypes.contains(ProviderType.anime),
+        );
+    final secondaryEpisodeRails = <Widget>[
+      for (final source in secondarySources)
+        if (ref
+            .watch(latestEpisodesSettingsProvider)
+            .contains(source.packageName))
+          if (ref.watch(secondaryLatestEpisodesProvider(source)).value
+              case final entry? when entry.value.isNotEmpty)
+            _buildMediaSection(
+              context,
+              source,
+              entry,
+              title: 'أحدث الحلقات (${source.name})',
+            ),
+    ];
 
     return switch (state) {
       HomeLoading() => _withGradientEdgeHint(
@@ -511,6 +533,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                       newsFor(homeNews),
                       latestManga,
                       activeProvider,
+                      secondaryEpisodeRails,
                     ),
                   ),
                 ),
