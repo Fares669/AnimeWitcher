@@ -3,7 +3,6 @@
 
 import 'package:flutter/material.dart';
 
-import '../../../../core/account/animewitcher_character_models.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/utils/localized_text.dart';
 import '../../../../shared/widgets/fallback_poster_image.dart';
@@ -26,7 +25,7 @@ class SearchInstantResults extends StatefulWidget {
     required this.onSeeAll,
     this.animation = const <MultimediaItem>[],
     this.manga = const <MultimediaItem>[],
-    this.characters = const <AnimeWitcherCharacterHit>[],
+    this.characters = const <Actor>[],
     this.onOpenCharacter,
     this.firstFocusNode,
     this.onClose,
@@ -41,8 +40,8 @@ class SearchInstantResults extends StatefulWidget {
   /// The other categories, when every one is searched.
   final List<MultimediaItem> animation;
   final List<MultimediaItem> manga;
-  final List<AnimeWitcherCharacterHit> characters;
-  final ValueChanged<AnimeWitcherCharacterHit>? onOpenCharacter;
+  final List<Actor> characters;
+  final ValueChanged<Actor>? onOpenCharacter;
 
   /// A newer search is on its way; the results shown are the last ones.
   final bool loading;
@@ -366,12 +365,12 @@ class _SearchInstantResultsState extends State<SearchInstantResults> {
 class _CharacterBubble extends StatelessWidget {
   const _CharacterBubble({required this.character, this.onOpen});
 
-  final AnimeWitcherCharacterHit character;
-  final ValueChanged<AnimeWitcherCharacterHit>? onOpen;
+  final Actor character;
+  final ValueChanged<Actor>? onOpen;
 
   @override
   Widget build(BuildContext context) {
-    final image = character.imageUrl?.trim() ?? '';
+    final image = character.image?.trim() ?? '';
     return InkWell(
       key: ValueKey<String>('search-instant-character-${character.id}'),
       borderRadius: BorderRadius.circular(12),

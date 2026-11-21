@@ -17,19 +17,16 @@ import '../../utils/episode_label.dart';
 import '../../utils/artwork_host_fallback.dart';
 import '../../utils/safe_uri.dart';
 import '../base_provider.dart';
+import '../home_section_titles.dart';
 import 'animewitcher_manga_mapping.dart';
 import 'mediafire_utils.dart';
 import 'server_extraction_utils.dart';
 
-class AnimeWitcherSeasonConfig {
-  final String past;
-  final String current;
-  final String next;
-
+class AnimeWitcherSeasonConfig extends ProviderSeasonConfig {
   const AnimeWitcherSeasonConfig({
-    required this.past,
-    required this.current,
-    required this.next,
+    required super.past,
+    required super.current,
+    required super.next,
   });
 }
 
@@ -238,6 +235,9 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   String get packageName => 'com.fares669.animewitcher.native';
 
   @override
+  bool get supportsCharacters => true;
+
+  @override
   String get name => 'AnimeWitcher';
 
   @override
@@ -257,7 +257,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   };
 
   @override
-  int get viewAllPageSize => _homeViewMoreHitsPerPage;
+  int get viewAllPageSize => 30;
 
   @override
   int get searchPageSize => 30;
@@ -940,6 +940,46 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       throwOnFailure: true,
     );
     return _characterPageFromAlgolia(payload, requestedPage: 0, isSearch: true);
+  }
+
+  @override
+  Future<ProviderCharacterPage> getCharacterPage({int page = 0}) async {
+    final legacy = await getCharactersPage(page: page);
+    return _providerCharacterPage(legacy);
+  }
+
+  @override
+  Future<ProviderCharacterPage> searchCharacterPage(
+    String query, {
+    int page = 0,
+  }) async {
+    if (page > 0 && query.trim().isNotEmpty) {
+      return ProviderCharacterPage(
+        items: const <Actor>[],
+        page: page,
+        hasMore: false,
+      );
+    }
+    final legacy = query.trim().isEmpty
+        ? await getCharactersPage(page: page)
+        : await searchCharacters(query);
+    return _providerCharacterPage(legacy);
+  }
+
+  ProviderCharacterPage _providerCharacterPage(AnimeWitcherCharacterPage page) {
+    return ProviderCharacterPage(
+      items: <Actor>[
+        for (final character in page.items)
+          Actor(
+            id: character.id,
+            name: character.name,
+            image: character.imageUrl,
+            likes: character.likes,
+          ),
+      ],
+      page: page.page,
+      hasMore: page.hasMore,
+    );
   }
 
   AnimeWitcherCharacterPage _characterPageFromAlgolia(
@@ -2039,6 +2079,11 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       ],
     );
   }
+
+  @override
+  bool get supportsSeasons => true;
+  @override
+  bool get supportsBroadcastSchedule => true;
 
   AnimeWitcherSeasonConfig _fallbackSeasonConfig() {
     const names = <String>['شتاء', 'ربيع', 'صيف', 'خريف'];
@@ -3725,10 +3770,14 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     );
   }
 
+  @override
+  bool get supportsUpcoming => true;
+
   /// Coming soon lists titles whose AnimeWitcher status is "not yet aired",
   /// matching the official Android drawer item "قادم قريبا":
   /// `Index.browse` on `series` with `details.state:"لم يتم بثه بعد"`.
   /// There is no Firestore fallback when browse fails.
+  @override
   Future<ProviderMediaPage> getUpcomingPage({int offset = 0}) async {
     const unairedStatus = 'لم يتم بثه بعد';
     final safeOffset = offset < 0 ? 0 : offset;
@@ -3998,6 +4047,23 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   }
 
   @override
+  Future<MapEntry<String, List<MultimediaItem>>?>
+  getLatestHomeEpisodes() async {
+    await _refreshRemoteConstants();
+    final sections = await _fetchOfficialHomeSections();
+    final latest = sections.where((section) {
+      return section.type != 'carousel' &&
+          isLatestEpisodesSectionTitle(section.title);
+    }).firstOrNull;
+    if (latest == null) return null;
+    final page = await getHomeSectionPage(
+      latest.title,
+      limit: latest.hitsPerPage.clamp(1, _previewSize).toInt(),
+    );
+    return MapEntry(latest.title, page.items);
+  }
+
+  @override
   Future<List<MultimediaItem>> getHomeSection(String sectionName) async {
     return (await _loadHomePage(sectionName, limit: viewAllPageSize)).items;
   }
@@ -4008,19 +4074,11 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     int offset = 0,
     int limit = 30,
   }) {
-    if (offset > 0) {
-      return Future<ProviderMediaPage>.value(
-        ProviderMediaPage(
-          items: const <MultimediaItem>[],
-          nextOffset: offset,
-          hasMore: false,
-        ),
-      );
-    }
     return _loadHomePage(
       sectionName,
-      offset: 0,
-      limit: _homeViewMoreHitsPerPage,
+      offset: offset,
+      limit: limit,
+      throwOnFailure: true,
     );
   }
 
@@ -4673,11 +4731,9 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   ) async {
     final hits = await _resolveMalIds(rawIds);
     return <int, MultimediaItem>{
-      for (final entry in hits.entries)
-        entry.key: _relatedItem(entry.value),
+      for (final entry in hits.entries) entry.key: _relatedItem(entry.value),
     };
   }
-
 
   String _relationType(dynamic raw) {
     final value = _text(raw).replaceAll(RegExp(r'[\s-]+'), '_').toUpperCase();

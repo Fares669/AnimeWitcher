@@ -27,7 +27,10 @@ void main() {
       ).readAsStringSync();
       expect(source, contains('manager.presentationChanges.listen'));
       final start = source.indexOf('void _refreshPresentationState()');
-      final end = source.indexOf('Future<void> _reloadMetadataAndRefresh()', start);
+      final end = source.indexOf(
+        'Future<void> _reloadMetadataAndRefresh()',
+        start,
+      );
       expect(start, greaterThanOrEqualTo(0));
       expect(end, greaterThan(start));
       final body = source.substring(start, end);
@@ -63,10 +66,7 @@ void main() {
       ).readAsStringSync();
 
       expect(source, contains('final Set<String> _artworkScheduledIds'));
-      expect(
-        source,
-        contains('_artworkScheduledIds.add(projected.id)'),
-      );
+      expect(source, contains('_artworkScheduledIds.add(projected.id)'));
     });
 
     test('presentation lifecycle commands route through V2 logical IDs', () {
@@ -81,13 +81,23 @@ void main() {
 
       final commandBody = source.substring(pause);
       expect(commandBody, contains('downloadManagerV2Provider'));
-      expect(commandBody, contains('.pause(DownloadLogicalId(logical))'));
-      expect(commandBody, contains('.resume(DownloadLogicalId(logical))'));
+      expect(
+        commandBody,
+        contains('.pause(DownloadLogicalId(logical), expectedTaskId: taskId)'),
+      );
+      expect(
+        commandBody,
+        contains('.retry(DownloadLogicalId(logical), expectedTaskId: taskId)'),
+      );
+      expect(
+        commandBody,
+        contains('.resume(DownloadLogicalId(logical), expectedTaskId: taskId)'),
+      );
 
       final remove = source.indexOf('Future<bool> removeDownloads(');
       expect(remove, greaterThanOrEqualTo(0));
       final removeBody = source.substring(remove, pause);
-      expect(removeBody, contains('manager.delete(DownloadLogicalId(logical))'));
+      expect(removeBody, contains('expectedTaskId: item.id'));
       expect(removeBody, isNot(contains('downloadServiceProvider')));
     });
   });

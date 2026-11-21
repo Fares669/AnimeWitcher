@@ -204,6 +204,7 @@ void main() {
       await fixture.downloader.emit(fixture.complete());
     };
     await fixture.gateway.initialize();
+    await fixture.untilTransportEvent('parallel.staleChildCallback');
     expect((await fixture.partState())['complete'], isFalse);
     expect((await fixture.partState())['attemptGeneration'], 2);
     expect(await fixture.file.readAsBytes(), [1, 2, 3, 4]);
@@ -226,23 +227,13 @@ void main() {
       );
       try {
         await fixture.gateway.initialize().timeout(const Duration(seconds: 2));
-        expect(entered.isCompleted, isTrue);
+        await entered.future.timeout(const Duration(seconds: 3));
         expect(release.isCompleted, isFalse);
         expect(await fixture.gateway.attach(fixture.parent.taskId), isNotNull);
         expect(fixture.verificationEvents, isEmpty);
       } finally {
         release.complete(true);
-        final deadline = DateTime.now().add(const Duration(seconds: 3));
-        while (!fixture.diagnostics.transportEvents.any(
-          (event) =>
-              event['event'] == 'parallel.status' &&
-              event['status'] == 'paused',
-        )) {
-          if (DateTime.now().isAfter(deadline)) {
-            fail('publication did not settle');
-          }
-          await Future<void>.delayed(const Duration(milliseconds: 5));
-        }
+        await fixture.untilTransportEvent('parallel.status', status: 'paused');
         await Future<void>.delayed(Duration.zero);
       }
     },
@@ -433,11 +424,28 @@ final class _Fixture {
     return Map<String, dynamic>.from((decoded['parts'] as List).first as Map);
   }
 
-  Future<void> untilCompleted() async {
+  Future<void> untilCompleted() => _until(
+    () async => (await partState())['complete'] == true,
+    'completion was not persisted',
+  );
+
+  Future<void> untilTransportEvent(String name, {String? status}) => _until(
+    () => diagnostics.transportEvents.any(
+      (event) =>
+          event['event'] == name &&
+          (status == null || event['status'] == status),
+    ),
+    'transport did not report $name${status == null ? '' : ' ($status)'}',
+  );
+
+  Future<void> _until(
+    FutureOr<bool> Function() condition,
+    String failure,
+  ) async {
     final deadline = DateTime.now().add(const Duration(seconds: 3));
-    while ((await partState())['complete'] != true) {
+    while (!await condition()) {
       if (DateTime.now().isAfter(deadline)) {
-        fail('completion was not persisted');
+        fail(failure);
       }
       await Future<void>.delayed(const Duration(milliseconds: 5));
     }

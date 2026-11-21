@@ -7,6 +7,34 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
+  test('Witanime episode links target the canonical anime without autoplay', () {
+    final extra = const DetailsRoute(
+      provider: 'witanime',
+      url: 'https://witanime.site/watch/sample/1.5/?from=home#start',
+    ).resolvedExtra!;
+    expect(extra.item.url, 'https://witanime.site/anime/sample');
+    expect(extra.item.contentType, MultimediaContentType.anime);
+    expect(extra.resumeEpisodeUrl, 'https://witanime.site/watch/sample/1.5');
+    expect(extra.autoPlay, isFalse);
+  });
+
+  test('Witanime movie links preserve type and reject foreign watch links', () {
+    final extra = const DetailsRoute(
+      provider: 'witanime',
+      url: '/watch/movie/sample',
+    ).resolvedExtra!;
+    expect(extra.item.url, 'https://witanime.site/movie/sample');
+    expect(extra.item.contentType, MultimediaContentType.movie);
+    expect(extra.resumeEpisodeUrl, 'https://witanime.site/watch/movie/sample');
+    expect(
+      const DetailsRoute(
+        provider: 'witanime',
+        url: 'https://witanime.site.example/watch/sample/1',
+      ).resolvedExtra,
+      isNull,
+    );
+  });
+
   for (final manga in <bool>[false, true]) {
     testWidgets(
       'idle taps schedule navigation and only open one ${manga ? 'manga' : 'anime'}',

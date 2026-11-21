@@ -17,6 +17,7 @@ import 'account_management_screens.dart';
 import 'account_privacy_settings_screen.dart';
 import 'account_ui_helpers.dart';
 import 'widgets/settings_widgets.dart';
+import 'widgets/witanime_account_section.dart';
 
 enum _AccountFormMode { signIn, createAccount }
 
@@ -63,11 +64,7 @@ class _AnimeWitcherAccountScreenState
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(
-        title: appText(
-          context,
-          english: 'Account',
-          arabic: 'الحساب',
-        ),
+        title: appText(context, english: 'Account', arabic: 'الحساب'),
         canPop: canPop,
         actions: [if (profile != null) const AccountNotificationsButton()],
       ),
@@ -98,6 +95,7 @@ class _AnimeWitcherAccountScreenState
                     _buildSignedIn(profile, busy)
                   else
                     _buildSignedOut(busy, asyncError),
+                  _witanimeAccountTile(),
                 ],
               ),
             ),
@@ -106,6 +104,8 @@ class _AnimeWitcherAccountScreenState
       ),
     );
   }
+
+  Widget _witanimeAccountTile() => const WitanimeAccountSection();
 
   Widget _buildSignedOut(bool busy, Object? asyncError) {
     final colors = Theme.of(context).colorScheme;
@@ -123,10 +123,8 @@ class _AnimeWitcherAccountScreenState
             child: _ErrorBanner(
               message: appText(
                 context,
-                english:
-                    'Account sync is not configured in this build. Add the AnimeWitcher Firebase values through build secrets.',
-                arabic:
-                    'مزامنة الحساب غير مهيأة في هذه النسخة. أضف إعدادات Firebase الخاصة بـ AnimeWitcher من أسرار البناء.',
+                english: 'Account sync is not configured in this build. Add the AnimeWitcher Firebase values through build secrets.',
+                arabic: 'مزامنة الحساب غير مهيأة في هذه النسخة. أضف إعدادات Firebase الخاصة بـ AnimeWitcher من أسرار البناء.',
               ),
             ),
           ),
@@ -158,23 +156,19 @@ class _AnimeWitcherAccountScreenState
                   arabic: 'خلي تقدمك وقوائمك معك دائمًا',
                 ),
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
+                style: Theme.of(context).textTheme.headlineSmall
+                    ?.copyWith(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: LayoutConstants.spacingSm),
               Text(
                 appText(
                   context,
-                  english:
-                      'Sync watched episodes, resume positions, and all AnimeWitcher lists across devices.',
-                  arabic:
-                      'زامن الحلقات المشاهدة ومكان إكمال الحلقة وكل قوائم AnimeWitcher بين أجهزتك.',
+                  english: 'Sync watched episodes, resume positions, and all AnimeWitcher lists across devices.',
+                  arabic: 'زامن الحلقات المشاهدة ومكان إكمال الحلقة وكل قوائم AnimeWitcher بين أجهزتك.',
                 ),
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: colors.onSurfaceVariant,
-                ),
+                style: Theme.of(context).textTheme.bodyMedium
+                    ?.copyWith(color: colors.onSurfaceVariant),
               ),
             ],
           ),
@@ -364,6 +358,7 @@ class _AnimeWitcherAccountScreenState
               _buildManageGroup(profile, busy),
               const SizedBox(height: LayoutConstants.spacingSm),
               _buildDangerGroup(profile, busy),
+              _witanimeAccountTile(),
             ],
           ),
         ),
@@ -715,10 +710,8 @@ class _AnimeWitcherAccountScreenState
       _showMessage(
         appText(
           context,
-          english:
-              'Verification link sent to the new email. Confirm it, then sign in again.',
-          arabic:
-              'أُرسل رابط التحقق إلى البريد الجديد. أكده ثم سجل الدخول مرة ثانية.',
+          english: 'Verification link sent to the new email. Confirm it, then sign in again.',
+          arabic: 'أُرسل رابط التحقق إلى البريد الجديد. أكده ثم سجل الدخول مرة ثانية.',
         ),
       );
     }
@@ -760,10 +753,8 @@ class _AnimeWitcherAccountScreenState
         content: Text(
           appText(
             dialogContext,
-            english:
-                'AnimeWitcher will receive a permanent deletion request. You will be signed out immediately.',
-            arabic:
-                'سيتلقى AnimeWitcher طلب حذف نهائي للحساب، وسيتم تسجيل خروجك فورًا.',
+            english: 'AnimeWitcher will receive a permanent deletion request. You will be signed out immediately.',
+            arabic: 'سيتلقى AnimeWitcher طلب حذف نهائي للحساب، وسيتم تسجيل خروجك فورًا.',
           ),
         ),
         actions: [
@@ -905,10 +896,8 @@ class _AnimeWitcherAccountScreenState
         _showMessage(
           appText(
             context,
-            english:
-                'Account created. Open the verification link sent to your email, then sign in.',
-            arabic:
-                'تم إنشاء الحساب. افتح رابط التحقق المرسل إلى بريدك ثم سجل الدخول.',
+            english: 'Account created. Open the verification link sent to your email, then sign in.',
+            arabic: 'تم إنشاء الحساب. افتح رابط التحقق المرسل إلى بريدك ثم سجل الدخول.',
           ),
         );
       } else {
@@ -936,10 +925,8 @@ class _AnimeWitcherAccountScreenState
         content: Text(
           appText(
             dialogContext,
-            english:
-                'Synced data stays in AnimeWitcher and local data stays on this device.',
-            arabic:
-                'ستبقى البيانات المزامنة في AnimeWitcher والبيانات المحلية على هذا الجهاز.',
+            english: 'Synced data stays in AnimeWitcher and local data stays on this device.',
+            arabic: 'ستبقى البيانات المزامنة في AnimeWitcher والبيانات المحلية على هذا الجهاز.',
           ),
         ),
         actions: [
@@ -1189,9 +1176,8 @@ class _BannerFact extends StatelessWidget {
           const SizedBox(width: 6),
           Text(
             label,
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-              color: Colors.white.withValues(alpha: 0.9),
-            ),
+            style: Theme.of(context).textTheme.labelMedium
+                ?.copyWith(color: Colors.white.withValues(alpha: 0.9)),
           ),
         ],
       ),

@@ -13,6 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
+import '../../../core/extensions/extension_manager.dart';
 import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
@@ -62,9 +63,6 @@ class _BroadcastScheduleScreenState
   void initState() {
     super.initState();
     _selectedDay = _todayIndex();
-    for (final day in animeWitcherBroadcastDays) {
-      _dayStates[day] = const _BroadcastScheduleDayState();
-    }
     _tabController = TabController(
       length: animeWitcherBroadcastDays.length,
       vsync: this,
@@ -92,7 +90,7 @@ class _BroadcastScheduleScreenState
     setState(() => _selectedDay = value);
     final day = animeWitcherBroadcastDays[value];
     final state = _dayStates[day] ?? const _BroadcastScheduleDayState();
-    if (state.items.isEmpty && !state.loading && state.error == null) {
+    if (!state.loaded && !state.loading && state.error == null) {
       unawaited(_loadDay(day, refresh: true));
     }
   }
@@ -113,7 +111,10 @@ class _BroadcastScheduleScreenState
   Future<void> _loadDay(String day, {required bool refresh}) async {
     final previous = _dayStates[day] ?? const _BroadcastScheduleDayState();
     if (!refresh && (previous.loading || !previous.hasMore)) return;
-    final provider = ref.nativeProvider;
+    final active = ref.read(activeProviderProvider);
+    final provider = active?.supportsBroadcastSchedule == true
+        ? active
+        : ref.nativeProvider;
     if (provider == null) {
       if (!mounted) return;
       setState(() {
@@ -121,7 +122,7 @@ class _BroadcastScheduleScreenState
           items: previous.items,
           nextOffset: previous.nextOffset,
           hasMore: previous.hasMore,
-          error: StateError('AnimeWitcher Native provider is unavailable'),
+          error: StateError('Broadcast schedule provider is unavailable'),
         );
       });
       return;
@@ -167,7 +168,11 @@ class _BroadcastScheduleScreenState
         );
       });
     } on DioException catch (error) {
-      if (CancelToken.isCancel(error) || !mounted) return;
+      if (CancelToken.isCancel(error) ||
+          !mounted ||
+          !identical(_requestTokens[day], token)) {
+        return;
+      }
       setState(() {
         _dayStates[day] = _BroadcastScheduleDayState(
           items: previous.items,
@@ -178,7 +183,7 @@ class _BroadcastScheduleScreenState
         );
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || !identical(_requestTokens[day], token)) return;
       setState(() {
         _dayStates[day] = _BroadcastScheduleDayState(
           items: previous.items,
@@ -195,22 +200,26 @@ class _BroadcastScheduleScreenState
     }
   }
 
+  void _resetSchedule() {
+    for (final token in _requestTokens.values) {
+      token.cancel('Broadcast schedule source or preferences changed');
+    }
+    _requestTokens.clear();
+    setState(() => _dayStates.clear());
+    unawaited(_loadDay(animeWitcherBroadcastDays[_selectedDay], refresh: true));
+  }
+
   @override
   Widget build(BuildContext context) {
-    ref.listen<int>(accountDataRevisionProvider, (previous, next) {
-      if (previous == next) return;
-      for (final token in List<CancelToken>.from(_requestTokens.values)) {
-        token.cancel('Account content preference changed');
+    ref.listen(accountDataRevisionProvider, (previous, next) {
+      if (previous != next) _resetSchedule();
+    });
+    ref.listen(activeProviderProvider, (previous, next) {
+      if (previous?.packageName != next?.packageName &&
+          (next?.supportsBroadcastSchedule == true ||
+              previous?.supportsBroadcastSchedule == true)) {
+        _resetSchedule();
       }
-      _requestTokens.clear();
-      setState(() {
-        for (final day in animeWitcherBroadcastDays) {
-          _dayStates[day] = const _BroadcastScheduleDayState();
-        }
-      });
-      unawaited(
-        _loadDay(animeWitcherBroadcastDays[_selectedDay], refresh: true),
-      );
     });
 
     final embedded = MorePaneScope.of(context);

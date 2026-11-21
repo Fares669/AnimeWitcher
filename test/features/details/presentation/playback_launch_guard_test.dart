@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/witanime_provider.dart';
+import 'package:animewitcher/core/extensions/providers/witanime_transport.dart';
 import 'package:animewitcher/core/router/app_router.dart';
 import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 
@@ -200,7 +202,7 @@ class _Harness {
     Widget? home,
     List<DownloadItem>? rows,
     bool requireEpisode = false,
-    _Provider? provider,
+    AnimeWitcherProvider? provider,
     bool auto = true,
   }) {
     files = _Files(
@@ -296,7 +298,174 @@ class _Harness {
   }
 }
 
+class _WitanimeTestTransport implements WitanimeTransport {
+  @override
+  void close({bool force = false}) {}
+
+  @override
+  Future<String> fetchHtml(
+    Uri uri, {
+    CancelToken? cancelToken,
+    String operation = 'catalog',
+  }) async => '<main></main>';
+
+  @override
+  Future<WitanimeHttpResponse> get(
+    Uri uri, {
+    Map<String, String> headers = const {},
+    bool followRedirects = true,
+    bool inspectMedia = false,
+    CancelToken? cancelToken,
+    String operation = 'get',
+  }) async {
+    if (uri.path == '/watch/sample/2') {
+      return const WitanimeHttpResponse(
+        statusCode: 200,
+        body: '<meta name="csrf-token" content="csrf-1">',
+      );
+    }
+    if (uri.path == '/watch/download-gate/tok-gofile') {
+      return const WitanimeHttpResponse(
+        statusCode: 302,
+        body: '',
+        headers: {
+          'location': ['https://gofile.io/d/episode2'],
+        },
+      );
+    }
+    if (uri.host == 'api.gofile.io' && uri.path == '/contents/episode2') {
+      return const WitanimeHttpResponse(
+        statusCode: 200,
+        body:
+            '{"status":"ok","data":{"type":"file","name":"ep2.mp4",'
+            '"link":"https://store1.gofile.io/download/file/ep2.mp4"}}',
+      );
+    }
+    return const WitanimeHttpResponse(statusCode: 404, body: '');
+  }
+
+  @override
+  Future<WitanimeHttpResponse> post(
+    Uri uri, {
+    Object? body,
+    Map<String, String> headers = const {},
+    bool followRedirects = true,
+    CancelToken? cancelToken,
+    String operation = 'post',
+  }) async {
+    if (uri.path == '/watch/sample/2/sources') {
+      return const WitanimeHttpResponse(
+        statusCode: 200,
+        body:
+            '{"players":{"FHD":[{"label":"DirectStream","token":"tok-direct"}]},'
+            '"downloads":{"FHD":[{"label":"GoFile","token":"tok-gofile"}]}}',
+      );
+    }
+    if (uri.path == '/watch/download-source/tok-gofile') {
+      return const WitanimeHttpResponse(statusCode: 200, body: '{"ok":true}');
+    }
+    if (uri.host == 'api.gofile.io' && uri.path == '/accounts') {
+      return const WitanimeHttpResponse(
+        statusCode: 200,
+        body: '{"status":"ok","data":{"token":"guest-token"}}',
+      );
+    }
+    return const WitanimeHttpResponse(statusCode: 404, body: '');
+  }
+}
+
 void main() {
+  testWidgets(
+    'Witanime reports unavailable playback without opening the site',
+    (tester) async {
+      final app = _Harness(
+        provider: WitanimeProvider((_, {cancelToken}) async => '<main></main>'),
+        file: Future.value(null),
+      );
+      await app.mount(tester);
+      final item = MultimediaItem(
+        title: 'Sample',
+        url: 'https://witanime.site/anime/sample',
+        posterUrl: '',
+        provider: WitanimeProvider.id,
+      );
+      final launcher = app.container.read(playbackLauncherProvider);
+      final refused = launcher.play(
+        app.origin,
+        'https://witanime.site/watch/different/2',
+        baseItem: item,
+      );
+      await tester.pumpAndSettle();
+      await refused;
+      expect(find.text('فتح الموقع'), findsNothing);
+      expect(app.notifications.errors, 1);
+
+      final play = launcher.play(
+        app.origin,
+        'https://witanime.site/watch/sample/2/?ref=app#top',
+        baseItem: item,
+      );
+      await tester.pumpAndSettle();
+      await play;
+      expect(find.text('فتح الموقع'), findsNothing);
+      expect(app.notifications.errors, 2);
+      expect(app.pushes.count, 0);
+      expect(app.watchHistory.calls, 0);
+      await app.dispose(tester);
+    },
+  );
+
+  testWidgets('Witanime starts GoFile extraction before the player is ready', (
+    tester,
+  ) async {
+    final transport = _WitanimeTestTransport();
+    final provider = WitanimeProvider.withTransport(transport);
+    final app = _Harness(
+      provider: provider,
+      file: Future.value(null),
+      auto: false,
+      settings: Completer<PlayerSettings>().future,
+    );
+    await app.mount(tester);
+    final item = MultimediaItem(
+      title: 'Sample',
+      url: 'https://witanime.site/anime/sample',
+      posterUrl: '',
+      provider: WitanimeProvider.id,
+      episodes: [
+        Episode(
+          name: 'الحلقة 2',
+          url: 'https://witanime.site/watch/sample/2',
+          episode: 2,
+        ),
+      ],
+    );
+    final launcher = app.container.read(playbackLauncherProvider);
+    final play = launcher.play(
+      app.origin,
+      'https://witanime.site/watch/sample/2',
+      baseItem: item,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('DirectStream'), findsOneWidget);
+    await tester.tap(find.text('GoFile (download)'));
+    await tester.pumpAndSettle();
+    expect(app.pushes.count, 1);
+    final selected = app.opened!.selectedSource!;
+    expect(selected.requiresResolution, isTrue);
+    final streams = await app.opened!.sourceResolution!;
+    expect(
+      streams.single.url,
+      'https://store1.gofile.io/download/file/ep2.mp4',
+    );
+    expect(streams.single.headers?['Cookie'], 'accountToken=guest-token');
+    expect(app.watchHistory.calls, 1);
+    app.router.pop();
+    await tester.pumpAndSettle();
+    await play;
+    await app.dispose(tester);
+  });
+
   testWidgets(
     'repeated episode launches while settings wait open one player and unlock on pop',
     (tester) async {

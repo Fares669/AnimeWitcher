@@ -5,6 +5,8 @@ import 'package:animewitcher/shared/widgets/app_side_menu.dart';
 import 'package:animewitcher/shared/widgets/app_page_header.dart';
 
 import '../../../core/account/account_providers.dart';
+import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/providers/witanime_provider.dart';
 import '../../../core/navigation/app_layout_style.dart';
 import '../../../core/theme/theme_provider.dart';
 import '../../../shared/widgets/live_previews.dart';
@@ -18,6 +20,7 @@ import 'broadcast_schedule_screen.dart';
 import 'coming_soon_screen.dart';
 import 'global_statistics_screen.dart';
 import 'seasons_screen.dart';
+import 'witanime_website_screen.dart';
 import '../../../core/utils/localized_text.dart';
 import '../../../core/utils/layout_constants.dart';
 import 'more_sidebar_shell.dart';
@@ -63,6 +66,10 @@ class MoreScreen extends ConsumerWidget {
     final theme = Theme.of(context);
     final bottomPadding = MediaQuery.viewPaddingOf(context).bottom + 88;
     final accountState = ref.watch(animeWitcherAccountControllerProvider);
+    final activeCatalog = ref.watch(activeProviderProvider);
+    final catalogLabel = activeCatalog is WitanimeProvider
+        ? 'Witanime'
+        : 'AnimeWitcher';
     final accountProfile = accountState.asData?.value.profile;
     final accountPhotoUrl = accountProfile?.photoUrl?.trim() ?? '';
 
@@ -158,6 +165,16 @@ class MoreScreen extends ConsumerWidget {
                 heading: moreHeadingApp(context),
                 items: _settingsDestinations(context, ref),
               ),
+              MoreDestinationGroup(
+                heading: 'Witanime',
+                items: [
+                  MoreDestination(
+                    icon: Icons.support_agent_rounded,
+                    label: 'الحساب والدعم على الموقع',
+                    builder: (_) => const WitanimeWebsiteScreen(),
+                  ),
+                ],
+              ),
             ],
           ),
         ),
@@ -218,7 +235,7 @@ class MoreScreen extends ConsumerWidget {
               _MoreTile(
                 icon: Icons.upcoming_rounded,
                 title: 'القادم قريبًا',
-                subtitle: 'أنميات لم يتم بثها بعد حسب بيانات AnimeWitcher',
+                subtitle: 'أنميات لم يتم بثها بعد حسب بيانات $catalogLabel',
                 onTap: () => Navigator.of(context, rootNavigator: true).push(
                   MaterialPageRoute<void>(
                     builder: (_) => const ComingSoonScreen(),
@@ -267,6 +284,16 @@ class MoreScreen extends ConsumerWidget {
                 onTap: () => Navigator.of(context, rootNavigator: true).push(
                   MaterialPageRoute<void>(
                     builder: (_) => const SettingsScreen(),
+                  ),
+                ),
+              ),
+              _MoreTile(
+                icon: Icons.support_agent_rounded,
+                title: 'Witanime',
+                subtitle: 'الحساب والدعم على الموقع',
+                onTap: () => Navigator.of(context, rootNavigator: true).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const WitanimeWebsiteScreen(),
                   ),
                 ),
               ),

@@ -148,4 +148,31 @@ void main() {
       contains(LibraryCategory.completed),
     );
   });
+
+  test('hides AnimeWitcher-only lists for Witanime anime titles', () {
+    final witanimeAnime = MultimediaItem(
+      title: 'Frieren',
+      url: 'https://witanime.site/anime/frieren',
+      posterUrl: '',
+      provider: 'witanime',
+      status: ShowStatus.completed,
+    );
+    expect(
+      LibraryCategory.assignmentValuesFor(witanimeAnime),
+      <LibraryCategory>[
+        LibraryCategory.watching,
+        LibraryCategory.planToWatch,
+        LibraryCategory.completed,
+      ],
+    );
+    expect(
+      LibraryCategory.valuesForCatalog(witanimeAnime: true),
+      <LibraryCategory>[
+        LibraryCategory.favorite,
+        LibraryCategory.watching,
+        LibraryCategory.planToWatch,
+        LibraryCategory.completed,
+      ],
+    );
+  });
 }

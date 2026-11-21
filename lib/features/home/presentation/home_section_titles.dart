@@ -1,16 +1,5 @@
 import '../../../core/domain/entity/multimedia_item.dart';
-
-/// Lowercases and folds Arabic letters so home rail titles from the catalog
-/// can be matched without depending on hamza, taa marbuta, or diacritics.
-String normalizeHomeSectionTitle(String title) {
-  return title
-      .toLowerCase()
-      .replaceAll(RegExp(r'[ً-ٰٟ]'), '')
-      .replaceAll(RegExp(r'[أإآ]'), 'ا')
-      .replaceAll('ة', 'ه')
-      .replaceAll(RegExp(r' +'), ' ')
-      .trim();
-}
+import '../../../core/extensions/home_section_titles.dart';
 
 bool isLatestAddedSectionTitle(String title) {
   final normalized = normalizeHomeSectionTitle(title);

@@ -1,7 +1,5 @@
 import 'more_sidebar_shell.dart';
 
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:animewitcher/shared/widgets/app_page_header.dart';
@@ -10,8 +8,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
+import '../../../core/extensions/base_provider.dart';
+import '../../../core/extensions/extension_manager.dart';
 import '../../../../core/extensions/native_provider_resolution.dart';
-import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/offset_pager.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
@@ -61,9 +60,12 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
   }
 
   Future<_SeasonsBootstrap> _loadBootstrap() async {
-    final provider = ref.nativeProvider;
+    final active = ref.read(activeProviderProvider);
+    final provider = active?.supportsSeasons == true
+        ? active
+        : ref.nativeProvider;
     if (provider == null) {
-      throw StateError('AnimeWitcher Native provider is unavailable');
+      throw StateError('Season catalog provider is unavailable');
     }
     final config = await provider.getSeasonConfig();
     final allSeasons = await provider.getAllSeasons();
@@ -87,7 +89,13 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
   Widget build(BuildContext context) {
     ref.listen<int>(accountDataRevisionProvider, (previous, next) {
       if (previous == next) return;
-      unawaited(_refreshSeasons());
+      _refreshSeasons().ignore();
+    });
+    ref.listen(activeProviderProvider, (previous, next) {
+      if (previous?.packageName != next?.packageName &&
+          (previous?.supportsSeasons == true || next?.supportsSeasons == true)) {
+        _refreshSeasons().ignore();
+      }
     });
 
     final embedded = MorePaneScope.of(context);
@@ -254,8 +262,8 @@ class _SeasonsLoadingBody extends StatelessWidget {
 }
 
 class _SeasonsBootstrap {
-  final AnimeWitcherNativeProvider provider;
-  final AnimeWitcherSeasonConfig config;
+  final AnimeWitcherProvider provider;
+  final ProviderSeasonConfig config;
   final List<String> allSeasons;
 
   const _SeasonsBootstrap({
@@ -295,7 +303,7 @@ class _SeasonTabs extends StatelessWidget {
 }
 
 class _OtherSeasonsList extends StatelessWidget {
-  final AnimeWitcherNativeProvider provider;
+  final AnimeWitcherProvider provider;
   final List<String> allSeasons;
 
   const _OtherSeasonsList({
@@ -421,7 +429,7 @@ class _SeasonYearButton extends StatelessWidget {
 }
 
 class _SeasonResultsScreen extends StatelessWidget {
-  final AnimeWitcherNativeProvider provider;
+  final AnimeWitcherProvider provider;
   final String season;
 
   const _SeasonResultsScreen({required this.provider, required this.season});
@@ -447,7 +455,7 @@ class _SeasonResultsScreen extends StatelessWidget {
 }
 
 class _SeasonGrid extends StatefulWidget {
-  final AnimeWitcherNativeProvider provider;
+  final AnimeWitcherProvider provider;
   final double topPadding;
   final String season;
   final String emptyLabel;
@@ -530,9 +538,9 @@ class _SeasonGridState extends State<_SeasonGrid>
     super.build(context);
     final isDesktop = context.isDesktop;
     final initialLoading = _pager.items.isEmpty && _pager.loading;
-    final extra = _pager.loading || (_pager.error != null && _pager.hasMore)
-        ? 1
-        : 0;
+    final extra = _pager.loading
+        ? AnimeCatalogShimmer.loadMoreCount
+        : (_pager.error != null && _pager.hasMore ? 1 : 0);
     return CatalogDirection(
       child: CustomScrollView(
         controller: _controller,

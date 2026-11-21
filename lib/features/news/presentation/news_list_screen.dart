@@ -117,8 +117,9 @@ class _NewsListScreenState extends State<NewsListScreen> {
                 physics: const AlwaysScrollableScrollPhysics(),
                 itemCount: _items.length + (_isLoading ? 1 : 0),
                 separatorBuilder: (_, index) {
-                  if (index >= _items.length - 1)
+                  if (index >= _items.length - 1) {
                     return const SizedBox.shrink();
+                  }
                   return const SizedBox(height: 12);
                 },
                 itemBuilder: (context, index) =>

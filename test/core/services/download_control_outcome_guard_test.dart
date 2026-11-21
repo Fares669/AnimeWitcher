@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-    test('V2 callers use logical control commands', () {
+  test('V2 callers use logical control commands', () {
     final provider = File(
       'lib/features/library/presentation/downloads_provider.dart',
     ).readAsStringSync();
@@ -12,8 +12,18 @@ void main() {
     ).readAsStringSync();
 
     expect(provider, contains('downloadManagerV2Provider'));
-    expect(provider, contains('.pause(DownloadLogicalId(logical))'));
-    expect(provider, contains('.resume(DownloadLogicalId(logical))'));
+    expect(
+      provider,
+      contains('.pause(DownloadLogicalId(logical), expectedTaskId: taskId)'),
+    );
+    expect(
+      provider,
+      contains('.resume(DownloadLogicalId(logical), expectedTaskId: taskId)'),
+    );
+    expect(
+      provider,
+      contains('.retry(DownloadLogicalId(logical), expectedTaskId: taskId)'),
+    );
     expect(dialog, contains('downloadManagerV2Provider'));
     expect(dialog, contains('.cancel(DownloadLogicalId(logical))'));
     // The pause/resume/retry dispatch itself lives in the one shared
@@ -35,25 +45,32 @@ void main() {
 
     final start = provider.indexOf('Future<bool> removeDownloads(');
     expect(start, greaterThanOrEqualTo(0));
-    final end = provider.indexOf(
-      '\n  Future<void> pauseDownload(',
-      start,
-    );
+    final end = provider.indexOf('\n  Future<void> pauseDownload(', start);
     expect(end, greaterThan(start));
     final body = provider.substring(start, end);
 
     expect(body, contains('downloadManagerV2Provider'));
     expect(body, contains('if (logical != null && logical.isNotEmpty)'));
-    expect(body, contains('manager.delete(DownloadLogicalId(logical))'));
+    expect(body, contains('expectedTaskId: item.id'));
+    expect(body, contains('await manager.delete('));
     expect(body, contains('await _reloadDurableState()'));
     expect(body, isNot(contains('_deletingIds')));
-    expect(body, contains("state.value!.where((item) => !droppedIds.contains(item.id))"));
+    expect(
+      body,
+      contains("state.value!.where((item) => !droppedIds.contains(item.id))"),
+    );
     expect(body, contains('storage.removeDownloadMetadata('));
-    expect(body, contains('if (!await manager.deleteLegacyDownloadedVideo(file))'));
+    expect(
+      body,
+      contains('if (!await manager.deleteLegacyDownloadedVideo(file))'),
+    );
     expect(body, contains('droppedIds.add(item.id)'));
     expect(body, contains('return droppedIds.length == toRemove.length'));
     expect(body, isNot(contains('final droppedIds = toRemove.keys.toSet()')));
-    expect(body, isNot(contains('FileDownloader().database.deleteRecordWithId')));
+    expect(
+      body,
+      isNot(contains('FileDownloader().database.deleteRecordWithId')),
+    );
     expect(body, isNot(contains('.deleteDownloadOutcome(')));
     expect(body, isNot(contains('.cancelDownloadOutcome(')));
   });

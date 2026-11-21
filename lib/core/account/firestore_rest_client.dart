@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:dio/dio.dart';
@@ -71,7 +72,8 @@ class FirestoreValueCodec {
     if (raw is! Map) return null;
     final value = Map<String, dynamic>.from(raw);
     if (value.containsKey('nullValue')) return null;
-    if (value.containsKey('stringValue')) return value['stringValue'] as String?;
+    if (value.containsKey('stringValue'))
+      return value['stringValue'] as String?;
     if (value.containsKey('booleanValue')) return value['booleanValue'] == true;
     if (value.containsKey('integerValue')) {
       return int.tryParse(value['integerValue'].toString()) ?? 0;
@@ -121,7 +123,8 @@ class FirestoreValueCodec {
 
 class FirestoreRestClient {
   FirestoreRestClient({Dio? dio})
-    : _dio = dio ??
+    : _dio =
+          dio ??
           Dio(
             BaseOptions(
               connectTimeout: const Duration(seconds: 15),
@@ -138,18 +141,13 @@ class FirestoreRestClient {
       'https://firestore.googleapis.com/v1/projects/'
       '${AnimeWitcherAccountConfig.projectId}/databases/(default)';
 
-  String get _documentsBase =>
-      '$_databaseBase/documents';
+  String get _documentsBase => '$_databaseBase/documents';
 
   String _documentResource(String path) =>
       'projects/${AnimeWitcherAccountConfig.projectId}'
       '/databases/(default)/documents/$path';
 
-  Future<FirestoreDocument?> getDocument(
-    String path,
-    String idToken,
-  ) async {
-
+  Future<FirestoreDocument?> getDocument(String path, String idToken) async {
     try {
       final response = await _dio.get<dynamic>(
         '$_documentsBase/${_encodedPath(path)}',
@@ -165,12 +163,155 @@ class FirestoreRestClient {
     }
   }
 
+  static const List<String> _catalogPosterMaskFields = <String>[
+    'poster',
+    'poster_uri',
+    'poster_url_aniList',
+    'posterUrlAniList',
+  ];
+
+  static const List<String> _animeLibraryMaskFields = <String>[
+    'name',
+    'english_title',
+    'poster',
+    'poster_uri',
+    'cover_uri',
+    'poster_url_aniList',
+    'posterUrlAniList',
+    'type',
+    'year',
+    'details.type',
+    'details.year',
+    'details.mal_mean',
+    'details.mal_score',
+    'animewitcher_item',
+  ];
+
+  static const List<String> _mangaLibraryMaskFields = <String>[
+    'name',
+    'manga_name',
+    'title',
+    'english_title',
+    'englishTitle',
+    'name_english',
+    'manga_name_english',
+    'image',
+    'poster',
+    'poster_uri',
+    'cover_uri',
+    'poster_url_aniList',
+    'posterUrlAniList',
+    'type',
+    'manga_type',
+    'year',
+    'state',
+    'status',
+    'statictes',
+    'mal_id',
+    'malId',
+    'aniList_id',
+    'anilist_id',
+    'anilistId',
+    'mangalek_page_url',
+    'mangalekPageUrl',
+    'rating',
+    'details.year',
+    'details.type',
+    'details.state',
+    'details.status',
+    'details.mal_mean',
+    'details.mal_score',
+    'animewitcher_item',
+  ];
+
+  /// Fetch only catalog poster metadata for the visible library page.
+  /// Firestore batchGet returns newline-delimited JSON (or a JSON list in
+  /// mocked responses); never download full documents one by one for artwork.
+  Future<Map<String, Map<String, dynamic>>> fetchCatalogPosterFields(
+    List<String> animeIds,
+    String idToken,
+  ) => _batchGetMaskedFields(
+    collection: 'anime_list',
+    ids: animeIds,
+    fieldPaths: _catalogPosterMaskFields,
+    idToken: idToken,
+  );
+
+  /// Fetch lightweight card fields for legacy un-migrated library items in a
+  /// single masked Firestore `:batchGet` instead of per-item full `getDocument`
+  /// calls.
+  Future<Map<String, Map<String, dynamic>>> fetchCatalogLibraryFields(
+    List<String> ids,
+    String idToken, {
+    required bool manga,
+  }) => _batchGetMaskedFields(
+    collection: manga ? 'manga_list' : 'anime_list',
+    ids: ids,
+    fieldPaths: manga ? _mangaLibraryMaskFields : _animeLibraryMaskFields,
+    idToken: idToken,
+  );
+
+  Future<Map<String, Map<String, dynamic>>> _batchGetMaskedFields({
+    required String collection,
+    required List<String> ids,
+    required List<String> fieldPaths,
+    required String idToken,
+  }) async {
+    if (ids.isEmpty) return const <String, Map<String, dynamic>>{};
+    final uniqueIds = ids.toSet();
+    final found = <String, Map<String, dynamic>>{};
+    final idList = uniqueIds.toList(growable: false);
+    for (var start = 0; start < idList.length; start += 100) {
+      final chunk = idList.sublist(
+        start,
+        start + 100 > idList.length ? idList.length : start + 100,
+      );
+      try {
+        final response = await _dio.post<dynamic>(
+          '$_documentsBase:batchGet',
+          data: {
+            'documents': [
+              for (final id in chunk) _documentResource('$collection/$id'),
+            ],
+            'mask': {'fieldPaths': fieldPaths},
+          },
+          options: _options(idToken)..responseType = ResponseType.plain,
+        );
+        final data = response.data;
+        final List<dynamic> rows;
+        if (data is List) {
+          rows = data;
+        } else if (data is String) {
+          final trimmed = data.trim();
+          rows = trimmed.startsWith('[')
+              ? List<dynamic>.from(jsonDecode(trimmed) as List)
+              : [
+                  for (final line in const LineSplitter().convert(trimmed))
+                    if (line.trim().isNotEmpty) jsonDecode(line),
+                ];
+        } else {
+          rows = [data];
+        }
+        for (final row in rows) {
+          final document = _decodeDocument(_map(row)['found']);
+          if (document != null &&
+              document.path == '$collection/${document.id}' &&
+              uniqueIds.contains(document.id)) {
+            found[document.id] = document.fields;
+          }
+        }
+      } on DioException catch (error) {
+        throw _firestoreException(error);
+      }
+    }
+    return found;
+  }
+
   Future<List<FirestoreDocument>> listDocuments(
     String collectionPath,
     String idToken, {
     int pageSize = 100,
   }) async {
-
     final output = <FirestoreDocument>[];
     String? pageToken;
     do {
@@ -330,6 +471,162 @@ class FirestoreRestClient {
     }
   }
 
+  /// A bounded shelf query. Unlike queryOrderedDocuments this never drains
+  /// subsequent pages. The same query is used for the aggregation total.
+  Future<List<FirestoreDocument>> queryLibraryDocumentsPage(
+    String collectionPath,
+    String idToken, {
+    String? type,
+    FirestoreDocument? startAfter,
+    int limit = 30,
+  }) async {
+    final (endpoint, query) = _libraryQuery(collectionPath, type);
+    if (startAfter != null && !startAfter.path.startsWith('$collectionPath/')) {
+      throw ArgumentError('Cursor belongs to another collection');
+    }
+    query['limit'] = limit.clamp(1, 100);
+    if (startAfter != null) {
+      query['startAt'] = <String, dynamic>{
+        'values': [
+          FirestoreValueCodec.encode(startAfter.fields['date']),
+          FirestoreValueCodec.encode(FirestoreReference(startAfter.path)),
+        ],
+        'before': false,
+      };
+    }
+    try {
+      final response = await _dio.post<dynamic>(
+        '$endpoint:runQuery',
+        data: {'structuredQuery': query},
+        options: _options(idToken),
+      );
+      return _decodeRunQueryDocuments(response.data);
+    } on DioException catch (error) {
+      throw _firestoreException(error);
+    }
+  }
+
+  Future<int> countLibraryDocuments(
+    String collectionPath,
+    String idToken, {
+    String? type,
+  }) async {
+    final (endpoint, query) = _libraryQuery(collectionPath, type);
+    try {
+      final response = await _dio.post<dynamic>(
+        '$endpoint:runAggregationQuery',
+        data: {
+          'structuredAggregationQuery': {
+            'structuredQuery': query,
+            'aggregations': [
+              {'alias': 'total', 'count': <String, dynamic>{}},
+            ],
+          },
+        },
+        options: _options(idToken),
+      );
+      final rows = response.data;
+      if (rows is List) {
+        for (final row in rows) {
+          final fields = _map(_map(_map(row)['result'])['aggregateFields']);
+          final total = FirestoreValueCodec.decode(fields['total']);
+          if (total is int && total >= 0) return total;
+        }
+      }
+      throw const FormatException('Missing library aggregation total');
+    } on DioException catch (error) {
+      throw _firestoreException(error);
+    }
+  }
+
+  Future<FirestoreDocument?> findLibraryDocument(
+    String collectionPath,
+    String id,
+    String token, {
+    required bool favorite,
+    bool manga = false,
+  }) async {
+    final canonical = await getDocument('$collectionPath/$id', token);
+    if (canonical != null) return canonical;
+    final (endpoint, query) = _libraryQuery(collectionPath, null);
+    final media = manga ? 'manga' : 'anime';
+    final path = '${media}_list/$id';
+    final value = FirestoreValueCodec.encode([
+      FirestoreReference(path),
+      path,
+      id,
+      _documentResource(path),
+    ]);
+    for (final field in [
+      if (favorite) '${media}_doc_id',
+      'doc_ref',
+      if (manga && !favorite) 'manga_doc_id',
+      if (manga) 'manga_id',
+    ]) {
+      query['where'] = {
+        'fieldFilter': {
+          'field': {'fieldPath': field},
+          'op': 'IN',
+          'value': value,
+        },
+      };
+      query['limit'] = 1;
+      try {
+        final response = await _dio.post<dynamic>(
+          '$endpoint:runQuery',
+          data: {'structuredQuery': query},
+          options: _options(token),
+        );
+        final doc = _decodeRunQueryDocuments(response.data).firstOrNull;
+        if (doc != null) return doc;
+      } on DioException catch (error) {
+        throw _firestoreException(error);
+      }
+    }
+    return null;
+  }
+
+  (String, Map<String, dynamic>) _libraryQuery(
+    String collectionPath,
+    String? type,
+  ) {
+    final segments = collectionPath.split('/');
+    if (segments.isEmpty || segments.any((part) => part.isEmpty)) {
+      throw ArgumentError('Invalid collection path');
+    }
+    final collection = segments.removeLast();
+    final parent = segments.join('/');
+    final endpoint = parent.isEmpty
+        ? _documentsBase
+        : '$_documentsBase/${_encodedPath(parent)}';
+    return (
+      endpoint,
+      <String, dynamic>{
+        'from': [
+          {'collectionId': collection},
+        ],
+        if (type != null)
+          'where': {
+            'fieldFilter': {
+              'field': {'fieldPath': 'type'},
+              'op': 'EQUAL',
+              'value': FirestoreValueCodec.encode(type),
+            },
+          },
+        'orderBy': [
+          {
+            'field': {'fieldPath': 'date'},
+            'direction': 'DESCENDING',
+          },
+          {
+            'field': {'fieldPath': '__name__'},
+            'direction': 'DESCENDING',
+          },
+        ],
+      },
+    );
+  }
+
   Future<List<FirestoreDocument>> queryByStringField({
     required String collectionId,
     required String field,
@@ -337,7 +634,6 @@ class FirestoreRestClient {
     required String idToken,
     int limit = 20,
   }) async {
-
     try {
       final response = await _dio.post<dynamic>(
         '$_documentsBase:runQuery',
@@ -459,7 +755,6 @@ class FirestoreRestClient {
     required FirestoreDocument? startAfter,
     required int limit,
   }) async {
-
     final normalized = collectionPath.replaceFirst(RegExp(r'/+$'), '');
     final segments = normalized
         .split('/')
@@ -523,9 +818,11 @@ class FirestoreRestClient {
     required String idToken,
     int limit = 20,
   }) async {
-
     final normalized = collectionPath.replaceFirst(RegExp(r'/+$'), '');
-    final segments = normalized.split('/').where((segment) => segment.isNotEmpty).toList();
+    final segments = normalized
+        .split('/')
+        .where((segment) => segment.isNotEmpty)
+        .toList();
     if (segments.isEmpty) return const <FirestoreDocument>[];
     final collectionId = segments.removeLast();
     final parentPath = segments.join('/');
@@ -612,10 +909,7 @@ class FirestoreRestClient {
     final direction = descending ? 'DESCENDING' : 'ASCENDING';
     final structuredQuery = <String, dynamic>{
       'from': <Map<String, dynamic>>[
-        <String, dynamic>{
-          'collectionId': collectionId,
-          'allDescendants': true,
-        },
+        <String, dynamic>{'collectionId': collectionId, 'allDescendants': true},
       ],
       'where': <String, dynamic>{
         'fieldFilter': <String, dynamic>{
@@ -660,7 +954,6 @@ class FirestoreRestClient {
     required String userId,
     required String idToken,
   }) async {
-
     try {
       final response = await _dio.post<dynamic>(
         '$_documentsBase:runQuery',
@@ -701,7 +994,6 @@ class FirestoreRestClient {
     required String userId,
     required String idToken,
   }) async {
-
     try {
       final response = await _dio.post<dynamic>(
         '$_documentsBase:runQuery',
@@ -759,7 +1051,6 @@ class FirestoreRestClient {
     String idToken, {
     bool merge = true,
   }) async {
-
     try {
       final response = await _dio.patch<dynamic>(
         '$_documentsBase/${_encodedPath(path)}',
@@ -877,7 +1168,6 @@ class FirestoreRestClient {
     required Set<String> serverTimestampFields,
     bool merge = true,
   }) async {
-
     if (serverTimestampFields.isEmpty) {
       await setDocument(path, fields, idToken, merge: merge);
       return;
@@ -929,7 +1219,6 @@ class FirestoreRestClient {
     Map<String, dynamic> fields,
     String idToken,
   ) async {
-
     try {
       final response = await _dio.post<dynamic>(
         '$_documentsBase/${_encodedPath(collectionPath)}',
@@ -961,7 +1250,6 @@ class FirestoreRestClient {
     required Set<String> serverTimestampFields,
     String? documentId,
   }) async {
-
     final id = documentId ?? _randomFirestoreDocumentId();
     final path = '${collectionPath.replaceFirst(RegExp(r'/+$'), '')}/$id';
     await setDocumentWithServerTimestamps(
@@ -1019,13 +1307,9 @@ class FirestoreRestClient {
     final transform = <String, dynamic>{
       'fieldPath': field,
       if (append)
-        'appendMissingElements': <String, dynamic>{
-          'values': encodedValues,
-        }
+        'appendMissingElements': <String, dynamic>{'values': encodedValues}
       else
-        'removeAllFromArray': <String, dynamic>{
-          'values': encodedValues,
-        },
+        'removeAllFromArray': <String, dynamic>{'values': encodedValues},
     };
     final Map<String, dynamic> write;
     if (baseFields.isEmpty) {
@@ -1065,7 +1349,6 @@ class FirestoreRestClient {
   }
 
   Future<void> deleteDocument(String path, String idToken) async {
-
     try {
       await _dio.delete<dynamic>(
         '$_documentsBase/${_encodedPath(path)}',
@@ -1091,7 +1374,8 @@ class FirestoreRestClient {
   }
 
   Options _options(String idToken) {
-    if (!AnimeWitcherAccountConfig.firebaseConfigured) {
+    // Firestore REST authenticates with the Firebase ID token, not the API key.
+    if (!AnimeWitcherAccountConfig.firestoreConfigured) {
       throw const AnimeWitcherAccountException(
         'not-configured',
         'AnimeWitcher account services are not configured.',

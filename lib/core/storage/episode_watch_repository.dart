@@ -12,6 +12,38 @@ import '../utils/safe_uri.dart';
 import 'history_repository.dart';
 import 'storage_service.dart';
 
+bool? episodeExplicitStateFor(
+  EpisodeWatchRepository repository,
+  MultimediaItem item,
+  Episode episode,
+) => repository.getExplicitState(item.url, episode);
+
+bool episodeIsWatchedFor(
+  EpisodeWatchRepository repository,
+  MultimediaItem item,
+  Episode episode,
+) => repository.isWatched(item.url, episode);
+
+Future<void> setEpisodeWatchedFor(
+  EpisodeWatchRepository repository,
+  MultimediaItem item,
+  Episode episode,
+  bool watched,
+) => repository.setWatched(item.url, episode, watched);
+
+Future<void> setEpisodesWatchedFor(
+  EpisodeWatchRepository repository,
+  MultimediaItem item,
+  Iterable<Episode> episodes,
+  bool watched,
+) => repository.setManyWatched(item.url, episodes, watched);
+
+Future<void> reconcileEpisodeWatchFor(
+  EpisodeWatchRepository repository,
+  MultimediaItem item,
+  Iterable<Episode> episodes,
+) => repository.reconcileWithCloud(item.url, episodes);
+
 final episodeWatchRevisionProvider =
     NotifierProvider<EpisodeWatchRevision, int>(EpisodeWatchRevision.new);
 
@@ -48,8 +80,7 @@ class EpisodeWatchRepository {
 
   static const String _legacyStorageKey = 'episode_watch_overrides_v1';
   static const String _storageKey = 'episode_watch_states_v2';
-  static const String _cloudMigrationPrefix =
-      'episode_watch_cloud_migrated_v1';
+  static const String _cloudMigrationPrefix = 'episode_watch_cloud_migrated_v1';
 
   Map<String, _EpisodeWatchState>? _cachedStates;
 
@@ -102,9 +133,7 @@ class EpisodeWatchRepository {
         : [episode.url, episode.name, episode.dubStatus.name].join(':');
 
     return sha256
-        .convert(
-          utf8.encode('${_canonicalMainUrl(mainUrl)}|$stableEpisodeId'),
-        )
+        .convert(utf8.encode('${_canonicalMainUrl(mainUrl)}|$stableEpisodeId'))
         .toString();
   }
 
@@ -168,6 +197,24 @@ class EpisodeWatchRepository {
     _notifyChanged();
   }
 
+  bool? getExplicitStateFor(MultimediaItem item, Episode episode) =>
+      getExplicitState(item.url, episode);
+
+  bool isWatchedFor(MultimediaItem item, Episode episode) =>
+      isWatched(item.url, episode);
+
+  Future<void> setWatchedFor(
+    MultimediaItem item,
+    Episode episode,
+    bool watched,
+  ) => setWatched(item.url, episode, watched);
+
+  Future<void> setManyWatchedFor(
+    MultimediaItem item,
+    Iterable<Episode> episodes,
+    bool watched,
+  ) => setManyWatched(item.url, episodes, watched);
+
   bool? getExplicitState(String mainUrl, Episode episode) {
     final states = _readStates();
     final current = _visibleState(states[_episodeKey(episode)]);
@@ -175,9 +222,7 @@ class EpisodeWatchRepository {
 
     // Read states written by v1 so existing users do not lose their watched
     // marks after upgrading. New writes use the URL-based v2 identity above.
-    return _visibleState(
-      states[_legacyEpisodeKey(mainUrl, episode)],
-    )?.watched;
+    return _visibleState(states[_legacyEpisodeKey(mainUrl, episode)])?.watched;
   }
 
   _EpisodeWatchState? _visibleState(_EpisodeWatchState? state) {
@@ -393,10 +438,7 @@ class EpisodeWatchRepository {
 }
 
 class _EpisodeWatchState {
-  const _EpisodeWatchState({
-    required this.watched,
-    this.ownerUid,
-  });
+  const _EpisodeWatchState({required this.watched, this.ownerUid});
 
   final bool watched;
   final String? ownerUid;

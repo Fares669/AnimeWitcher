@@ -25,14 +25,14 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: 3.47.1
+          flutter-version: 3.50.1
           cache: true
 
       - name: Install dependencies and generate sources
         run: |
           flutter pub get
           flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
+          dart run build_runner build
 
       - name: Analyze
         # Existing warnings and infos remain visible in the log, but only
@@ -40,6 +40,9 @@ jobs:
         # reduced safely in dedicated cleanup PRs rather than masking real
         # build/test regressions behind a large baseline migration.
         run: flutter analyze --no-fatal-warnings --no-fatal-infos
+
+      - name: Validate build configuration serialization
+        run: python3 -m unittest discover -s test/tools -p 'test_*.py'
 
       - name: Focused V2 tests
         # Keep the V2 architecture/reliability gate visible independently from
@@ -64,14 +67,14 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: 3.47.1
+          flutter-version: 3.50.1
           cache: true
 
       - name: Install dependencies and generate sources
         run: |
           flutter pub get
           flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
+          dart run build_runner build
 
       - name: Validate Android release shrinking (not published)
         run: >-
@@ -94,14 +97,14 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: 3.47.1
+          flutter-version: 3.50.1
           cache: true
 
       - name: Install dependencies and generate sources
         run: |
           flutter pub get
           flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
+          dart run build_runner build
 
       - name: Test Windows durable download file semantics
         run: flutter test test/core/services/persistent_parallel_download_test.dart
@@ -110,21 +113,21 @@ jobs:
     if: >-
       github.event.head_commit.message != 'chore: purge obsolete workflow history'
     name: Build iOS V2 and retain log
-    runs-on: macos-latest
+    runs-on: macos-26-intel
     steps:
       - uses: actions/checkout@v5
 
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: 3.47.1
+          flutter-version: 3.50.1
           cache: true
 
       - name: Install dependencies and generate sources
         run: |
           flutter pub get
           flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
+          dart run build_runner build
 
       - name: Build iOS without code signing
         shell: bash
@@ -147,7 +150,7 @@ jobs:
     if: >-
       github.event.head_commit.message != 'chore: purge obsolete workflow history'
     name: Typecheck native download logger
-    runs-on: macos-latest
+    runs-on: macos-26-intel
     steps:
       - uses: actions/checkout@v5
       - name: Typecheck the production Foundation logger
@@ -176,7 +179,7 @@ jobs:
       - name: Exercise continued-processing manga transport integration
         run: |
           mkdir -p "$RUNNER_TEMP/background_downloader"
-          curl --fail --silent --show-error --location https://pub.dev/api/archives/background_downloader-9.6.5.tar.gz |
+          curl --fail --silent --show-error --location https://pub.dev/api/archives/background_downloader-9.6.6.tar.gz |
             tar -xz -C "$RUNNER_TEMP/background_downloader"
           BACKGROUND_DOWNLOADER_PLUGIN_ROOT="$RUNNER_TEMP/background_downloader" python3 test/native/continued_download_session_test.py
 

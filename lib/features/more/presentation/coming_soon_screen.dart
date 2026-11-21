@@ -7,8 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
+import '../../../core/extensions/extension_manager.dart';
 import '../../../../core/extensions/native_provider_resolution.dart';
-import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/offset_pager.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/catalog_page.dart';
@@ -24,11 +24,9 @@ class ComingSoonScreen extends ConsumerStatefulWidget {
 
 class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
   final ScrollController _controller = ScrollController();
-  final OffsetPager<MultimediaItem> _pager = OffsetPager<MultimediaItem>(
+  OffsetPager<MultimediaItem> _pager = OffsetPager<MultimediaItem>(
     keyOf: multimediaItemPageKey,
   );
-  AnimeWitcherNativeProvider? _provider;
-
   @override
   void initState() {
     super.initState();
@@ -41,15 +39,20 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
   }
 
   Future<void> _loadNext() async {
-    if (_pager.loading || !_pager.hasMore) return;
-    final provider = _provider ??= ref.nativeProvider;
+    if (!mounted) return;
+    final pager = _pager;
+    if (pager.loading || !pager.hasMore) return;
+    final active = ref.read(activeProviderProvider);
+    final provider = active?.supportsUpcoming == true
+        ? active
+        : ref.nativeProvider;
     if (provider == null) {
       if (mounted) {
         setState(() => _pager.error = nativeProviderUnavailable());
       }
       return;
     }
-    final future = _pager.loadNext(
+    final future = pager.loadNext(
       (offset) => provider
           .getUpcomingPage(offset: offset)
           .then(
@@ -62,11 +65,13 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
     );
     setState(() {});
     await future;
-    if (mounted) setState(() {});
+    if (mounted && identical(pager, _pager)) setState(() {});
   }
 
   Future<void> _refresh() async {
-    setState(_pager.reset);
+    setState(() {
+      _pager = OffsetPager<MultimediaItem>(keyOf: multimediaItemPageKey);
+    });
     await _loadNext();
   }
 
@@ -84,6 +89,12 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
       if (previous == next) return;
       unawaited(_refresh());
     });
+    ref.listen(activeProviderProvider, (previous, next) {
+      if (previous?.packageName != next?.packageName &&
+          (previous?.supportsUpcoming == true || next?.supportsUpcoming == true)) {
+        unawaited(_refresh());
+      }
+    });
 
     final embedded = MorePaneScope.of(context);
     return CatalogPage(
@@ -100,10 +111,12 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
         emptyMessage: 'لا توجد أعمال قادمة حاليًا',
         onRefresh: _refresh,
         scrollController: _controller,
-        footer: _pager.loading || (_pager.error != null && _pager.hasMore)
+        footer: _pager.loading
             ? CatalogFooter.loading
+            : (_pager.error != null && _pager.hasMore)
+            ? CatalogFooter.retry
             : CatalogFooter.none,
-        footerBuilder: (context, _) => _pager.error != null
+        footerBuilder: (context, _) => _pager.error != null && !_pager.loading
             ? IconButton(
                 tooltip: 'إعادة المحاولة',
                 onPressed: _loadNext,

@@ -346,7 +346,11 @@ class _RankingGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDesktop = context.isDesktop;
-    final hasFooter = loadingMore || loadMoreError;
+    final footerCount = loadingMore
+        ? AnimeCatalogShimmer.loadMoreCount
+        : loadMoreError
+        ? 1
+        : 0;
     return MouseDragRefreshIndicator(
       onRefresh: onRefresh,
       child: CatalogDirection(
@@ -378,7 +382,7 @@ class _RankingGrid extends StatelessWidget {
             horizontalPadding:
                 MultimediaCardLayout.catalogGridHorizontalPadding(context),
           ),
-          itemCount: items.length + (hasFooter ? 1 : 0),
+          itemCount: items.length + footerCount,
           itemBuilder: (context, index) {
             if (index >= items.length) {
               if (loadingMore) {

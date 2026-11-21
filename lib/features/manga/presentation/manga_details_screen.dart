@@ -22,6 +22,7 @@ import '../../../l10n/generated/app_localizations.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
 import '../../../shared/widgets/expandable_text.dart';
 import '../../../shared/widgets/loading_indicator.dart';
+import '../../details/presentation/details_library_membership.dart';
 import '../../details/presentation/widgets/details_desktop_hero.dart';
 import '../../details/presentation/widgets/details_hero_actions.dart';
 import '../../details/presentation/widgets/details_rating_actions.dart';
@@ -80,8 +81,13 @@ class MangaDetailsScreen extends ConsumerStatefulWidget {
 }
 
 class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
-    with SingleTickerProviderStateMixin {
+    with
+        SingleTickerProviderStateMixin,
+        DetailsLibraryMembership<MangaDetailsScreen> {
   static const String _removeLibraryAction = '__remove_from_library__';
+
+  @override
+  MultimediaItem get libraryItem => widget.item;
 
   int? _userRating;
   bool _loadingUserRating = false;
@@ -96,6 +102,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
   @override
   void initState() {
     super.initState();
+    scheduleLibraryRead();
     _chaptersRevealController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 240),
@@ -178,28 +185,63 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
   }
 
   Future<void> _setLibraryCategory(
-    dynamic libraryNotifier,
+    Library? libraryNotifier,
     MultimediaItem item,
     String value,
   ) async {
     if (libraryNotifier == null) return;
-    if (!await _ensureSignedInForLibrary(context)) return;
+    if (!await _ensureSignedInForLibrary(context) || !mounted) return;
+    final current = libraryMembership;
     if (value == _removeLibraryAction) {
-      await libraryNotifier.clearItemCategory(item.url, manga: true);
+      await editLibrary(
+        (category: null, favorite: current.favorite),
+        () => libraryNotifier.clearItemCategory(
+          item.url,
+          manga: true,
+          previousCategory: current.category,
+        ),
+        favorite: false,
+      );
       return;
     }
     for (final category in LibraryCategory.primaryValues) {
       if (category.storageKey == value) {
-        await libraryNotifier.addItem(item, category: category);
+        await editLibrary(
+          (category: category, favorite: current.favorite),
+          () => libraryNotifier.addItem(
+            item,
+            category: category,
+            membership: current,
+          ),
+          favorite: false,
+        );
         return;
       }
     }
   }
 
+  Future<void> _toggleFavorite(
+    Library? libraryNotifier,
+    MultimediaItem item,
+  ) async {
+    if (libraryNotifier == null) return;
+    if (!await _ensureSignedInForLibrary(context) || !mounted) return;
+    final current = libraryMembership;
+    await editLibrary(
+      (category: current.category, favorite: !current.favorite),
+      () => libraryNotifier.setFavorite(
+        item,
+        !current.favorite,
+        membership: current,
+      ),
+      favorite: true,
+    );
+  }
+
   List<AppleLiquidGlassToolbarButton> _headerButtons(
     BuildContext context,
     MultimediaItem item, {
-    required dynamic libraryNotifier,
+    required Library? libraryNotifier,
     required bool isFavorite,
     required LibraryCategory? currentCategory,
   }) {
@@ -216,10 +258,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
         color: isFavorite ? favoriteRed : foreground,
         onPressed: libraryNotifier == null
             ? null
-            : () async {
-                if (!await _ensureSignedInForLibrary(context)) return;
-                await libraryNotifier.setFavorite(item, !isFavorite);
-              },
+            : () => _toggleFavorite(libraryNotifier, item),
       ),
       AppleLiquidGlassToolbarButton(
         tooltip: 'اختر قائمة',
@@ -545,7 +584,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
   Widget _heroActions(
     BuildContext context,
     MultimediaItem item, {
-    required dynamic libraryNotifier,
+    required Library? libraryNotifier,
     required bool isFavorite,
     required LibraryCategory? currentCategory,
   }) {
@@ -627,8 +666,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
           fallbackColor: fallback,
           onPressed: () async {
             if (libraryNotifier == null) return;
-            if (!await _ensureSignedInForLibrary(context)) return;
-            await libraryNotifier.setFavorite(item, !isFavorite);
+            await _toggleFavorite(libraryNotifier, item);
           },
         ),
         DetailsHeroIconButton(
@@ -761,7 +799,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     required MultimediaItem item,
     required MangaDetailsState state,
     required List<DownloadItem> downloads,
-    required dynamic libraryNotifier,
+    required Library? libraryNotifier,
     required bool isFavorite,
     required LibraryCategory? currentCategory,
   }) {
@@ -940,15 +978,16 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     final downloads =
         ref.watch(downloadsProvider).value ?? const <DownloadItem>[];
 
-    dynamic libraryNotifier;
+    Library? libraryNotifier;
     var isFavorite = false;
     LibraryCategory? currentCategory;
     try {
       ref.watch(libraryProvider);
       libraryNotifier = ref.read(libraryProvider.notifier);
-      isFavorite = libraryNotifier.isFavorite(item.url) as bool;
-      currentCategory =
-          libraryNotifier.itemCategory(item.url) as LibraryCategory?;
+      listenToLibraryAccount();
+      final membership = libraryMembership;
+      isFavorite = membership.favorite;
+      currentCategory = membership.category;
     } catch (_) {
       // Isolated widget tests can intentionally omit persistent storage.
     }

@@ -79,14 +79,17 @@ void main() {
       addTearDown(() { if (!enqueueAck.isCompleted) enqueueAck.complete(accepted); });
       f.downloader.enqueueAck = enqueueAck.future;
       f.downloader.commitBeforeEnqueueAck = committed;
-      var resumed = false;
-      final resume = f.handle.resume().then((_) { resumed = true; });
+      final resume = f.handle.resume();
       await f.downloader.enqueueEntered.future.timeout(const Duration(seconds: 2));
-      await Future<void>.delayed(const Duration(milliseconds: 5200));
-      final bounded = resumed;
+      // Allow time for durable checkpoint IO after the five-second ACK budget.
+      final bounded = await resume.then((_) => true).timeout(
+        const Duration(seconds: 7), onTimeout: () => false,
+      );
       if (!bounded) enqueueAck.complete(accepted);
       await resume;
       expect(bounded, isTrue, reason: 'a lost enqueue ACK cannot hold the per-parent control queue');
+      expect(enqueueAck.isCompleted, isFalse,
+        reason: 'resume must finish while the native enqueue ACK is still missing');
       if (committed) {
         expect(await f.handle.cancel(), isTrue,
           reason: 'exact raw native ownership proves the already-submitted enqueue committed');

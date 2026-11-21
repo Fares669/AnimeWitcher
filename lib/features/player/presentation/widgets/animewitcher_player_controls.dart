@@ -1161,7 +1161,7 @@ class AnimeWitcherPlayerControlsState
   static String _sourceLabel(StreamResult stream) => [
     if ((stream.quality ?? '').trim().isNotEmpty)
       streamSourceQualityLabel(stream),
-    if (stream.source.trim().isNotEmpty) stream.source.trim(),
+    if (stream.source.trim().isNotEmpty) streamSourceDisplayName(stream),
   ].join(' · ');
 
   /// The quality number alone ("1080" from "1080p"), for telling which
@@ -1195,8 +1195,12 @@ class AnimeWitcherPlayerControlsState
       for (final group in groupStreamSourcesByQuality(sources))
         for (final source in group.sources)
           PlayerPanelChoice(
-            label: source.source.trim().isEmpty ? '—' : source.source.trim(),
+            label: source.source.trim().isEmpty
+                ? '—'
+                : streamSourceDisplayName(source),
             sectionLabel: group.qualityLabel,
+            language: streamSourceAudioMetadata(source).language,
+            audioType: streamSourceAudioMetadata(source).audioType,
             selected:
                 current != null &&
                 current.source.trim() == source.source.trim() &&
@@ -1306,17 +1310,6 @@ class AnimeWitcherPlayerControlsState
     return "$minutes:${twoDigits(seconds)}";
   }
 
-  String? _buildEpisodeLine(BuildContext context, Episode? episode) {
-    if (episode == null) return null;
-    final label = formatEpisodeLabel(
-      episode: episode.episode,
-      title: episode.name,
-      isFinal: episode.isFinal,
-      serverName: episode.serverName,
-    );
-    return label.isEmpty ? null : label;
-  }
-
   Widget _buildKickAnimation() {
     final absoluteSeconds = _seekAccumulatedSeconds.abs();
     final label = _seekAccumulatedSeconds > 0
@@ -1374,6 +1367,7 @@ class AnimeWitcherPlayerControlsState
     // Watch relevant player state selectively, falling back to props for initial frame
     final playerNotifier = ref.read(playerControllerProvider.notifier);
     ref.watch(playerControllerProvider.select((s) => s.episodes));
+    ref.watch(playerControllerProvider.select((s) => s.activeEpisodeUrl));
     final controllerTitle = ref.watch(
       playerControllerProvider.select((s) => s.playerTitle),
     );
@@ -1453,10 +1447,15 @@ class AnimeWitcherPlayerControlsState
         ? storyEpisode.serverName
         : 'الحلقة ${storyEpisode.episode}';
     final hasEpisodePicker = playerNotifier.hasEpisodePicker;
-    final episodeLabel = _buildEpisodeLine(
-      context,
-      playerNotifier.currentEpisode,
-    );
+    final episode = playerNotifier.currentEpisode;
+    final episodeLabel = episode == null
+        ? null
+        : formatPlayerEpisodeLabel(
+            episode: episode.episode,
+            title: episode.name,
+            isFinal: episode.isFinal,
+            serverName: episode.serverName,
+          );
     final skipSegments = ref.watch(
       playerControllerProvider.select((s) => s.skipSegments),
     );

@@ -69,7 +69,7 @@ class CatalogBody extends StatelessWidget {
     this.onRefresh,
     this.scrollController,
     this.footer = CatalogFooter.none,
-    this.footerCount = 1,
+    this.footerCount,
     this.footerBuilder,
     this.characterTiles = false,
     this.isPortrait = true,
@@ -113,7 +113,7 @@ class CatalogBody extends StatelessWidget {
 
   /// Extra cells after the last item while more pages load or fail.
   final CatalogFooter footer;
-  final int footerCount;
+  final int? footerCount;
 
   /// Custom footer cell (the index is 0-based within the footer),
   /// taking precedence over [footer]'s built-in cells.
@@ -195,7 +195,14 @@ class CatalogBody extends StatelessWidget {
           handsetPortraitCrossAxisCount: handsetPortraitColumns,
           horizontalPadding: hPad,
         ),
-        itemCount: itemCount + (footer == CatalogFooter.none ? 0 : footerCount),
+        itemCount:
+            itemCount +
+            switch (footer) {
+              CatalogFooter.none => 0,
+              CatalogFooter.loading =>
+                footerCount ?? AnimeCatalogShimmer.loadMoreCount,
+              CatalogFooter.retry => footerCount ?? 1,
+            },
         itemBuilder: (context, index) {
           if (index < itemCount) return itemBuilder(context, index);
           final footerIndex = index - itemCount;

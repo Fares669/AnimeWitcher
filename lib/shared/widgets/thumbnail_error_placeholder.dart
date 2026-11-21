@@ -20,8 +20,11 @@ class ThumbnailErrorPlaceholder extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final bg = theme.colorScheme.onPrimaryFixed;
-    final fg = theme.colorScheme.onSurface.withValues(alpha: 0.3);
+    final bg = Color.alphaBlend(
+      theme.colorScheme.primary.withValues(alpha: 0.08),
+      theme.colorScheme.surfaceContainerHighest,
+    );
+    final fg = theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6);
     final size = iconSize ?? 32.0;
 
     return LayoutBuilder(

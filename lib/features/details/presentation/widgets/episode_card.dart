@@ -11,6 +11,7 @@ import 'package:background_downloader/background_downloader.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_comment_models.dart';
+import 'package:animewitcher/core/extensions/providers/witanime_provider.dart';
 import 'package:animewitcher/features/comments/presentation/animewitcher_comments_screen.dart';
 import 'package:animewitcher/core/storage/history_repository.dart';
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
@@ -34,6 +35,7 @@ import '../downloaded_file_provider.dart';
 import 'episode_action_chip.dart';
 import 'download_progress_dialog.dart';
 import 'download_management_dialog.dart';
+import 'witanime_report_dialog.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 
 /// `{series} - {episode}` for download dialogs, keeping the name of numberless
@@ -160,23 +162,25 @@ class EpisodeCard extends HookConsumerWidget {
     final hasPrimaryLabel = episodeNumberLabel.isNotEmpty;
     final hasServerName = episodeTitle.isNotEmpty;
     final historyRepo = ref.watch(historyRepositoryProvider);
-    final historyItem = ref.watch(
-      watchHistoryProvider.select(
-        (list) => list.whereType<HistoryItem>().firstWhereOrNull(
-          (h) => h.item.url == parentItem.url,
-        ),
-      ),
-    );
+    ref.watch(watchHistoryProvider);
+    final historyItem = historyForItem(historyRepo, parentItem)
+        .firstWhereOrNull(
+          (h) =>
+              h.item.url == parentItem.url &&
+              sameDownloadProvider(h.item, parentItem),
+        );
 
-    final epPos = historyRepo.getEpisodePosition(
-      episode.url,
-      mainUrl: parentItem.url,
+    final epPos = historyPositionForItem(
+      historyRepo,
+      parentItem,
+      episodeUrl: episode.url,
       season: episode.season,
       episode: episode.episode,
     );
-    final epDur = historyRepo.getEpisodeDuration(
-      episode.url,
-      mainUrl: parentItem.url,
+    final epDur = historyDurationForItem(
+      historyRepo,
+      parentItem,
+      episodeUrl: episode.url,
       season: episode.season,
       episode: episode.episode,
     );
@@ -186,11 +190,16 @@ class EpisodeCard extends HookConsumerWidget {
     final episodeWatchRepo = ref.watch(episodeWatchRepositoryProvider);
 
     final double progress = epDur > 0 ? (epPos / epDur).clamp(0.0, 1.0) : 0.0;
-    final explicitWatchState = episodeWatchRepo.getExplicitState(
-      parentItem.url,
+    final explicitWatchState = episodeExplicitStateFor(
+      episodeWatchRepo,
+      parentItem,
       episode,
     );
-    final isWatched = episodeWatchRepo.isWatched(parentItem.url, episode);
+    final isWatched = episodeIsWatchedFor(
+      episodeWatchRepo,
+      parentItem,
+      episode,
+    );
     final displayedProgress = isWatched ? 1.0 : progress;
 
     String? statusBadge;
@@ -225,13 +234,18 @@ class EpisodeCard extends HookConsumerWidget {
       final matchesEpisode =
           item.trackingUrl.trim() == episodeTrackingUrl ||
           (item.episode?.url.trim() ?? '') == episodeTrackingUrl;
-      if (!matchesEpisode) return false;
+      if (!matchesEpisode ||
+          !sameDownloadProvider(item.item, parentItem) ||
+          item.item.url.trim() != parentItem.url.trim())
+        return false;
       return item.status != TaskStatus.complete &&
           item.status != TaskStatus.canceled;
     });
     final isDownloading = activeDownload != null;
 
-    final detailsState = ref.watch(detailsControllerProvider(parentItem.url));
+    final detailsState = ref.watch(
+      detailsControllerProvider(detailsControllerKey(parentItem)),
+    );
     final details = detailsState.item;
     final selectionKey = episodeSelectionKey(episode);
     final isSelectionMode = detailsState.selectedEpisodeKeys.isNotEmpty;
@@ -242,13 +256,24 @@ class EpisodeCard extends HookConsumerWidget {
     final downloadIdentity = logicalId != null && logicalId.isNotEmpty
         ? logicalId
         : episode.url;
-    final downloadProgressData = logicalId != null && logicalId.isNotEmpty
+    final hasOwnedProgressIdentity =
+        (logicalId != null && logicalId.isNotEmpty) ||
+        progressMap[episode.url]?.taskId == activeDownload?.id;
+    final candidateProgress = logicalId != null && logicalId.isNotEmpty
         ? progressMap[logicalId]
+        : null;
+    final downloadProgressData = candidateProgress?.taskId == activeDownload?.id
+        ? candidateProgress
         : null;
     final downloadProgress =
         downloadProgressData?.progress ?? activeDownload?.progress ?? 0.0;
 
-    final downloadedFile = ref.watch(downloadedFilesProvider)[episode.url];
+    final fileKey = downloadedFileKey(parentItem, episode: episode);
+    // Each visible row resolves its file asynchronously. Watching the whole
+    // map rebuilds every row for every result as the user scrolls.
+    final downloadedFile = ref.watch(
+      downloadedFilesProvider.select((files) => files[fileKey]),
+    );
 
     // Check for downloaded file on load
     useEffect(() {
@@ -294,11 +319,13 @@ class EpisodeCard extends HookConsumerWidget {
           episode: episode,
         );
       } else if (isDownloading) {
-        DownloadProgressDialog.show(
-          context,
-          _downloadDialogTitle(parentItem, episode),
-          downloadIdentity,
-        );
+        if (hasOwnedProgressIdentity) {
+          DownloadProgressDialog.show(
+            context,
+            _downloadDialogTitle(parentItem, episode),
+            downloadIdentity,
+          );
+        }
       } else {
         ref
             .read(downloadLauncherProvider)
@@ -315,13 +342,16 @@ class EpisodeCard extends HookConsumerWidget {
       HapticFeedback.selectionClick();
 
       ref
-          .read(detailsControllerProvider(parentItem.url).notifier)
+          .read(
+            detailsControllerProvider(detailsControllerKey(parentItem))
+                .notifier,
+          )
           .toggleEpisodeSelection(episode);
     }
 
     void handleEpisodeTap() {
       final selectionActive = ref
-          .read(detailsControllerProvider(parentItem.url))
+          .read(detailsControllerProvider(detailsControllerKey(parentItem)))
           .selectedEpisodeKeys
           .isNotEmpty;
 
@@ -331,7 +361,10 @@ class EpisodeCard extends HookConsumerWidget {
       }
 
       ref
-          .read(detailsControllerProvider(parentItem.url).notifier)
+          .read(
+            detailsControllerProvider(detailsControllerKey(parentItem))
+                .notifier,
+          )
           .handlePlayPress(context, parentItem, specificEpisode: episode);
     }
 
@@ -535,6 +568,7 @@ class EpisodeCard extends HookConsumerWidget {
                         downloadProgress,
                         downloadProgressData,
                         downloadIdentity,
+                        hasOwnedProgressIdentity,
                         details,
                         downloadFocusNode,
                         bodyFocusNode,
@@ -576,6 +610,7 @@ class EpisodeCard extends HookConsumerWidget {
     double downloadProgress,
     DownloadProgressData? downloadProgressData,
     String downloadIdentity,
+    bool hasOwnedProgressIdentity,
     MultimediaItem? details,
     FocusNode focusNode,
     FocusNode bodyFocusNode,
@@ -589,15 +624,14 @@ class EpisodeCard extends HookConsumerWidget {
       downloadProgress,
       downloadProgressData,
       downloadIdentity,
+      hasOwnedProgressIdentity,
       details,
     );
-    if (rawDownload == null) return const SizedBox.shrink();
-
-    final Widget downloadAction;
-    // On desktop/TV the download icon stays visible for mouse clicks but
-    // is NOT a separate D-pad focus target. Downloads are triggered via
-    // Menu key or long-press OK (handled in the outer Focus.onKeyEvent).
-    if (context.isDesktop) {
+    final Widget? downloadAction;
+    // No download permission must not also hide the independent comments.
+    if (rawDownload == null) {
+      downloadAction = null;
+    } else if (context.isDesktop) {
       downloadAction = ExcludeFocus(child: rawDownload);
     } else {
       downloadAction = _FocusableActionWrapper(
@@ -610,26 +644,53 @@ class EpisodeCard extends HookConsumerWidget {
     final commentsTarget = isAnimeWitcherCommentItem(parentItem)
         ? animeWitcherEpisodeCommentTarget(parentItem, episode)
         : null;
-    if (commentsTarget == null) return downloadAction;
+    final showReport = parentItem.provider == WitanimeProvider.id;
+    if (commentsTarget == null && !showReport) {
+      return downloadAction ?? const SizedBox.shrink();
+    }
 
-    final commentsButton = EpisodeActionChip(
-      tooltip: 'تعليقات الحلقة',
-      icon: Icons.chat_bubble_outline_rounded,
-      onPressed: () {
-        Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => AnimeWitcherCommentsScreen(target: commentsTarget),
+    final extraButtons = <Widget>[
+      if (commentsTarget != null)
+        ExcludeFocus(
+          child: EpisodeActionChip(
+            tooltip: 'تعليقات الحلقة',
+            icon: Icons.chat_bubble_outline_rounded,
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) =>
+                      AnimeWitcherCommentsScreen(target: commentsTarget),
+                ),
+              );
+            },
           ),
-        );
-      },
-    );
+        ),
+      if (showReport)
+        ExcludeFocus(
+          child: EpisodeActionChip(
+            tooltip: 'الإبلاغ عن مشكلة',
+            icon: Icons.flag_outlined,
+            onPressed: () => unawaited(
+              showWitanimeReportDialog(
+                context,
+                ref,
+                title: _downloadDialogTitle(parentItem, episode),
+                targetUrl: episode.url,
+              ),
+            ),
+          ),
+        ),
+    ];
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        downloadAction,
-        const SizedBox(height: _actionSpacing),
-        ExcludeFocus(child: commentsButton),
+        if (downloadAction != null) downloadAction,
+        for (var i = 0; i < extraButtons.length; i++) ...[
+          if (downloadAction != null || i > 0)
+            const SizedBox(height: _actionSpacing),
+          extraButtons[i],
+        ],
       ],
     );
   }
@@ -643,6 +704,7 @@ class EpisodeCard extends HookConsumerWidget {
     double downloadProgress,
     DownloadProgressData? downloadProgressData,
     String downloadIdentity,
+    bool hasOwnedProgressIdentity,
     MultimediaItem? details,
   ) {
     if (completedDownload != null && !isDownloading) {
@@ -683,11 +745,14 @@ class EpisodeCard extends HookConsumerWidget {
           english: 'Downloading',
           arabic: 'جارٍ التنزيل',
         ),
-        onPressed: () => DownloadProgressDialog.show(
-          context,
-          _downloadDialogTitle(parentItem, episode),
-          downloadIdentity,
-        ),
+        onPressed: () {
+          if (!hasOwnedProgressIdentity) return;
+          DownloadProgressDialog.show(
+            context,
+            _downloadDialogTitle(parentItem, episode),
+            downloadIdentity,
+          );
+        },
         child: Padding(
           padding: const EdgeInsets.all(4.0),
           child: downloadProgressData?.status == TaskStatus.paused

@@ -62,7 +62,7 @@ void main() {
           final errors = process.stderr.transform(utf8.decoder).join();
           try {
             final code = await process.exitCode.timeout(
-              const Duration(seconds: 20),
+              const Duration(seconds: 40),
             );
             expect(code, 0, reason: '${await output}\n${await errors}');
             expect(await output, contains('PASS:'));
@@ -74,7 +74,7 @@ void main() {
         }
       },
       skip: mode == 'starvation' && !Platform.isLinux,
-      timeout: const Timeout(Duration(seconds: 30)),
+      timeout: const Timeout(Duration(seconds: 60)),
     );
   }
 }

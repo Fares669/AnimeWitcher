@@ -130,8 +130,12 @@ class _MangaViewAllScreenState<T> extends State<MangaViewAllScreen<T>> {
                               ),
                             );
                           },
-                          childCount:
-                              _pager.items.length + (_pager.loading ? 6 : 0),
+                          childCount: _pager.items.isEmpty && _pager.loading
+                              ? AnimeCatalogShimmer.initialCount(context)
+                              : _pager.items.length +
+                                    (_pager.loading
+                                        ? AnimeCatalogShimmer.loadMoreCount
+                                        : 0),
                         ),
                       ),
               ),

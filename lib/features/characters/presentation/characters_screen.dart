@@ -401,7 +401,9 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
       );
     }
 
-    final extra = _catalogLoading && _activeQuery.isEmpty ? 1 : 0;
+    final extra = _catalogLoading && _activeQuery.isEmpty
+        ? AnimeCatalogShimmer.loadMoreCount
+        : 0;
     return MouseDragRefreshIndicator(
       onRefresh: _refreshVisible,
       child: CatalogDirection(
@@ -434,7 +436,7 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
           itemCount: _catalog.length + extra,
           itemBuilder: (context, index) {
             if (index >= _catalog.length) {
-              return const AnimePosterShimmer();
+              return const AnimePosterShimmer(characterCaptionSpace: true);
             }
             final character = _catalog[index];
             return CharacterPosterCard(
@@ -488,7 +490,7 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
       );
     }
 
-    final extra = _favoritesLoading ? 1 : 0;
+    final extra = _favoritesLoading ? AnimeCatalogShimmer.loadMoreCount : 0;
     return MouseDragRefreshIndicator(
       onRefresh: () => _loadFavorites(reset: true),
       child: CatalogDirection(
@@ -521,7 +523,7 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
           itemCount: _favorites.length + extra,
           itemBuilder: (context, index) {
             if (index >= _favorites.length) {
-              return const AnimePosterShimmer();
+              return const AnimePosterShimmer(characterCaptionSpace: true);
             }
             final favorite = _favorites[index];
             return CharacterPosterCard(
