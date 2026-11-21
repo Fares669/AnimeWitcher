@@ -84,6 +84,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
+          flutter-version: 3.50.1
 
       # Gradle downloads its own distribution before it will build anything,
       # and with nothing cached that is a fresh ~200MB fetch on every run. A
@@ -104,7 +105,7 @@ jobs:
         run: |
           flutter pub get
           flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
+          dart run build_runner build
 
       - name: Decode Keystore
         if: env.ANDROID_KEYSTORE_BASE64 != ''
@@ -162,12 +163,13 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
+          flutter-version: 3.50.1
           
       - name: Install Dependencies
         run: |
           flutter pub get
           flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
+          dart run build_runner build
 
       - name: Prepare media_kit iOS Headers
         run: bash scripts/prepare_media_kit_ios_headers.sh
@@ -223,12 +225,13 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
+          flutter-version: 3.50.1
 
       - name: Install Dependencies
         run: |
           flutter pub get
           flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
+          dart run build_runner build
 
       - name: Generate dart-defines file
         env:
@@ -330,12 +333,13 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
+          flutter-version: 3.50.1
 
       - name: Install Dependencies
         run: |
           flutter pub get
           flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
+          dart run build_runner build
 
       - name: Download libmpv-2.dll
         shell: pwsh
@@ -455,6 +459,7 @@ jobs:
         if: ${{ matrix.arch != 'arm64' }}
         with:
           channel: 'stable'
+          flutter-version: 3.50.1
       - name: Setup Flutter (ARM64 Linux)
         if: ${{ matrix.arch == 'arm64' }}
         run: |
@@ -474,7 +479,7 @@ jobs:
           flutter config --enable-linux-desktop
           flutter pub get
           flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
+          dart run build_runner build
 
       - name: Generate dart-defines file
         env:

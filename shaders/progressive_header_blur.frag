@@ -12,22 +12,7 @@ out vec4 fragColor;
 
 const int kHalf = 12;
 
-void main() {
-  vec2 safeRegionSize = max(uRegionSizePx, vec2(1.0));
-  vec2 region = clamp(
-    (FlutterFragCoord().xy - uRegionOriginPx) / safeRegionSize,
-    0.0,
-    1.0
-  );
-
-  float sigma = uMaxSigma * pow(max(0.0, 1.0 - region.y), uFalloff);
-  vec2 uv = FlutterFragCoord().xy / uSize;
-
-  if (sigma < 0.35) {
-    fragColor = texture(uTexture, uv);
-    return;
-  }
-
+vec4 sampleBlur(vec2 uv, float sigma) {
   vec2 axis = uAxis < 0.5
       ? vec2(1.0 / uSize.x, 0.0)
       : vec2(0.0, 1.0 / uSize.y);
@@ -62,5 +47,18 @@ void main() {
     totalWeight += weight * (plusValid + minusValid);
   }
 
-  fragColor = color / totalWeight;
+  return color / totalWeight;
+}
+
+void main() {
+  vec2 safeRegionSize = max(uRegionSizePx, vec2(1.0));
+  vec2 region = clamp(
+    (FlutterFragCoord().xy - uRegionOriginPx) / safeRegionSize,
+    0.0,
+    1.0
+  );
+
+  float sigma = uMaxSigma * pow(max(0.0, 1.0 - region.y), uFalloff);
+  vec2 uv = FlutterFragCoord().xy / uSize;
+  fragColor = sigma < 0.35 ? texture(uTexture, uv) : sampleBlur(uv, sigma);
 }

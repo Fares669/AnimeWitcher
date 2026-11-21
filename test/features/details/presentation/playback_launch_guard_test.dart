@@ -448,7 +448,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('DirectStream'), findsOneWidget);
-    await tester.tap(find.text('GoFile'));
+    await tester.tap(find.text('GoFile (download)'));
     await tester.pumpAndSettle();
     expect(app.pushes.count, 1);
     final selected = app.opened!.selectedSource!;

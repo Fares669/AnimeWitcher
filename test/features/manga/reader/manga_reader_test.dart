@@ -774,6 +774,8 @@ void main() {
         (reader) => reader.pages.length == 3,
       );
       final stateBefore = tester.state(find.byType(MangaWebtoonReader));
+      final scrollController = reader.controller!;
+      expect(reader.initialPage, 0);
 
       for (var i = 0; i < 40 && reader.pages.length < 6; i++) {
         await tester.drag(
@@ -791,10 +793,10 @@ void main() {
 
       expect(reader.pages.length, 6);
       expect(reader.sectionDividers.keys, <int>[3]);
-      // Same reader state, same starting point: the chapter was appended
-      // to the scroll, not navigated to.
+      // Appending the chapter preserves the reader and its scroll position.
       expect(tester.state(find.byType(MangaWebtoonReader)), same(stateBefore));
-      expect(reader.initialPage, 0);
+      expect(reader.controller, same(scrollController));
+      expect(scrollController.offset, greaterThan(0));
     });
 
     testWidgets('the chrome follows the stream into the appended chapter', (

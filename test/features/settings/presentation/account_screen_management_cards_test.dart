@@ -144,7 +144,10 @@ void main() {
         if (!AnimeWitcherAccountConfig.firebaseConfigured) return;
 
         final comments = find.widgetWithText(SettingsTile, 'تعليقاتي');
-        await tester.ensureVisible(comments);
+        await Scrollable.ensureVisible(
+          tester.element(comments),
+          alignment: 0.5,
+        );
         await tester.pumpAndSettle();
         expect(
           tester.widget<SettingsTile>(comments).icon,

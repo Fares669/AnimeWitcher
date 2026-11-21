@@ -27,6 +27,7 @@ void main() {
           [
             'test',
             '--no-pub',
+            '--no-test-assets',
             '--dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key',
             'test/support/offline_download_delete_check.dart',
           ],
@@ -35,8 +36,10 @@ void main() {
         final output = process.stdout.transform(utf8.decoder).join();
         final errors = process.stderr.transform(utf8.decoder).join();
         try {
+          // Flutter builds native dependencies before the child runs its
+          // separate two-second deadlines for offline I/O.
           final code = await process.exitCode.timeout(
-            const Duration(seconds: 90),
+            const Duration(minutes: 6),
           );
           expect(code, 0, reason: '${await output}\n${await errors}');
           expect(
@@ -51,6 +54,6 @@ void main() {
       }
     },
     skip: !Platform.isLinux,
-    timeout: const Timeout(Duration(seconds: 100)),
+    timeout: const Timeout(Duration(minutes: 7)),
   );
 }
