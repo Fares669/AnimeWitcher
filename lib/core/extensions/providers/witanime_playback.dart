@@ -616,10 +616,13 @@ class WitanimePlaybackResolver {
               (rawEntryVersion != null && rawEntryVersion.toLowerCase() == 'dub'
                   ? 'dub'
                   : null);
-          final sourceName = displaySourceName(
+          final baseSourceName = displaySourceName(
             label,
             version: effectiveVersion,
           );
+          final sourceName = (!forDownload && kind == 'download')
+              ? '$baseSourceName (download)'
+              : baseSourceName;
           final quality = qualityLabelForTier(tier);
           if (!seen.add('$kind|$token|$effectiveVersion|$tier')) continue;
           if (forDownload &&
@@ -770,6 +773,11 @@ class WitanimePlaybackResolver {
         if (!forDownload || !_isPlaylist(stream.url))
           stream.copyWith(
             url: _encodeUrlIfNeeded(stream.url),
+            source: (!forDownload &&
+                    current.isDownload &&
+                    !stream.source.endsWith(' (download)'))
+                ? '${stream.source} (download)'
+                : stream.source,
             refreshUrl: current.encode(),
           ),
     ];

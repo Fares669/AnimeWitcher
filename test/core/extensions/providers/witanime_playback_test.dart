@@ -389,7 +389,10 @@ void main() {
       'https://witanime.site/watch/sample/1',
     );
     expect(streamSources.length, 4);
-    expect(streamSources.last.source, 'Google Drive (عربي مدبلج)');
+    expect(
+      streamSources.last.source,
+      'Google Drive (عربي مدبلج) (download)',
+    );
     expect(
       WitanimeSourceToken.tryDecode(streamSources.last.url)?.kind,
       'download',
@@ -1658,6 +1661,68 @@ void main() {
     );
     expect(refreshed.single.headers?['Cookie'], 'accountToken=real-dio-tok-2');
     expect(accounts, 2);
+  });
+
+  test('watch sources label download-bucket servers with (download) suffix while download mode keeps original names', () async {
+    const watch = 'https://witanime.site/watch/sample/7';
+    final transport = _FakeWitanimeTransport((method, uri, _, _, _) async {
+      if (uri.path == '/watch/sample/7') {
+        return const WitanimeHttpResponse(
+          statusCode: 200,
+          body: '<meta name="csrf-token" content="csrf-dl-label">',
+        );
+      }
+      if (uri.path == '/watch/sample/7/sources') {
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          body: jsonEncode({
+            'players': {
+              'FHD': [
+                {'label': 'mp4upload', 'token': 'tok-pl-mp4'},
+              ],
+            },
+            'downloads': {
+              'FHD': [
+                {'label': 'gofile', 'token': 'tok-dl-gf'},
+                {'label': 'mp4upload', 'token': 'tok-dl-mp4'},
+              ],
+            },
+          }),
+        );
+      }
+      if (uri.path == '/watch/download-source/tok-dl-gf') {
+        return const WitanimeHttpResponse(statusCode: 200, body: '{"ok":true}');
+      }
+      if (uri.path == '/watch/download-gate/tok-dl-gf') {
+        return const WitanimeHttpResponse(
+          statusCode: 302,
+          body: '',
+          headers: {
+            'location': ['https://store4.gofile.io/download/web/abc/ep7.mp4'],
+          },
+        );
+      }
+      return const WitanimeHttpResponse(statusCode: 404, body: '');
+    });
+
+    final resolver = WitanimePlaybackResolver(transport);
+    final watchSources = await resolver.loadSources(watch, forDownload: false);
+    expect(
+      watchSources.map((s) => s.source).toList(),
+      ['mp4upload', 'gofile (download)', 'mp4upload (download)'],
+    );
+
+    final resolvedWatch = await resolver.resolveStreams(
+      watchSources[1].url,
+      forDownload: false,
+    );
+    expect(resolvedWatch.single.source, 'gofile (download)');
+
+    final downloadSources = await resolver.loadSources(watch, forDownload: true);
+    expect(
+      downloadSources.map((s) => s.source).toList(),
+      ['mp4upload', 'gofile'],
+    );
   });
 }
 

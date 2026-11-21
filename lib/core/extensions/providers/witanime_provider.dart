@@ -45,8 +45,8 @@ class WitanimeProvider extends AnimeWitcherProvider {
     r'(شتاء|ربيع|صيف|خريف)\s+(?:عام\s+)?([0-9]{4})',
   );
   static const _homeShelves = [
-    'الأكثر مشاهدة',
     'أحدث الحلقات',
+    'الأكثر مشاهدة',
     'أحدث الأفلام',
     'أكثر الأنميات مشاهدة',
     'أكثر الأفلام مشاهدة',

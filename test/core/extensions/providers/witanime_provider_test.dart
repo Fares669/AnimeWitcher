@@ -181,10 +181,17 @@ void main() {
           ? '<main><section><h2>السبت</h2>${_card('/anime/saturday', 'Saturday')}</section>'
                 '<section><h2>الأحد</h2>${_card('/anime/sunday', 'Sunday')}</section></main>'
           : '<main><section aria-roledescription="carousel">${_card('/anime/hero', 'Hero')}</section>'
+                '<section><h2>الأكثر مشاهدة</h2>${_card('/anime/popular', 'Popular')}</section>'
                 '<section><h2>أحدث الحلقات</h2>${_card('/watch/new/7', 'Episode')}</section>'
                 '<section><h2>أحدث الأفلام</h2>${_card('/movie/new', 'Movie')}</section></main>',
     );
     final home = await provider.getHome();
+    expect(home.keys.toList(), [
+      'Trending',
+      'أحدث الحلقات',
+      'الأكثر مشاهدة',
+      'أحدث الأفلام',
+    ]);
     expect(home['Trending']?.single.title, 'Hero');
     expect(home['أحدث الحلقات']?.single.episodeBadge, 'الحلقة 7');
     expect(
