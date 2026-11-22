@@ -120,19 +120,27 @@ class Anime3rbWebViewSolver {
     Uri playerUri,
   ) async {
     var hookInstalled = false;
+    DateTime? tokenSeenAt;
     return _withWebViewOverlay<Anime3rbTurnstileResult>(
       initialUri: playerUri,
+      requestHeaders: const <String, String>{
+        'Referer': 'https://anime3rb.com/',
+      },
       title: 'التحقق من مشغّل Vid3rb',
-      subtitle: 'أكمل التحقق الأمني لتحميل سيرفرات المشاهدة.',
+      subtitle: 'أكمل التحقق الأمني لتحميل سيرفرات المشاهدة والتحميل.',
       invisibleGracePeriod: const Duration(milliseconds: 5500),
       totalTimeout: const Duration(seconds: 90),
+      onPageStartedHook: (controller) async {
+        hookInstalled = false;
+        await _installVid3rbHook(controller);
+      },
       onPageFinishedHook: (controller) async {
         hookInstalled = false;
         await _installVid3rbHook(controller);
         hookInstalled = true;
       },
       onProgressHook: (controller, progress) async {
-        if (progress >= 15) {
+        if (progress >= 10) {
           await _installVid3rbHook(controller);
         }
       },
@@ -169,6 +177,51 @@ class Anime3rbWebViewSolver {
     }
   } catch (_) {}
 
+  var vjsSources = '';
+  if (!inlineSources) {
+    try {
+      var list = [];
+      if (window.videojs && typeof window.videojs.getAllPlayers === 'function') {
+        var players = window.videojs.getAllPlayers() || [];
+        for (var i = 0; i < players.length; i++) {
+          var p = players[i];
+          var srcs = (typeof p.currentSources === 'function' ? p.currentSources() : null) ||
+            (p.options_ && Array.isArray(p.options_.sources) ? p.options_.sources : []);
+          for (var j = 0; j < srcs.length; j++) {
+            var s = srcs[j];
+            if (s && s.src && String(s.src).indexOf('http') === 0) {
+              list.push({
+                src: String(s.src),
+                label: String(s.label || s.res || s.quality || 'HD'),
+                premium: Boolean(s.premium)
+              });
+            }
+          }
+          if (!list.length && typeof p.currentSrc === 'function') {
+            var csrc = p.currentSrc();
+            if (csrc && String(csrc).indexOf('http') === 0) {
+              list.push({ src: String(csrc), label: 'HD', premium: false });
+            }
+          }
+        }
+      }
+      if (!list.length) {
+        var els = document.querySelectorAll('video source[src], video[src]');
+        for (var k = 0; k < els.length; k++) {
+          var u = els[k].getAttribute('src') || els[k].currentSrc || '';
+          if (u && u.indexOf('http') === 0) {
+            list.push({
+              src: u,
+              label: els[k].getAttribute('label') || els[k].getAttribute('size') || 'HD',
+              premium: false
+            });
+          }
+        }
+      }
+      if (list.length > 0) vjsSources = JSON.stringify(list);
+    } catch (_) {}
+  }
+
   var tokenInput = document.querySelector('input[name="cf-turnstile-response"]');
   var domToken = tokenInput && tokenInput.value ? String(tokenInput.value).trim() : '';
 
@@ -176,7 +229,7 @@ class Anime3rbWebViewSolver {
   return JSON.stringify({
     cfChallenge: cfChallenge,
     managedVisible: managedVisible,
-    sourcesJson: cap.sourcesJson || inlineSources || '',
+    sourcesJson: cap.sourcesJson || inlineSources || vjsSources || '',
     token: cap.token || domToken || '',
     tokenType: cap.tokenType || (domToken ? (managedVisible ? 'managed' : 'invisible') : ''),
     ua: navigator.userAgent || ''
@@ -193,8 +246,15 @@ class Anime3rbWebViewSolver {
         final sourcesJson = state['sourcesJson']?.toString().trim() ?? '';
         final token = state['token']?.toString().trim() ?? '';
         final tokenType = state['tokenType']?.toString().trim() ?? '';
-        if (sourcesJson.isEmpty && token.isEmpty) {
-          return null;
+        if (sourcesJson.isEmpty) {
+          if (token.isEmpty) return null;
+          // Wait for the WebView's own /sources XHR to finish so we capture
+          // the JSON directly instead of burning a single-use Turnstile token.
+          tokenSeenAt ??= DateTime.now();
+          if (DateTime.now().difference(tokenSeenAt!) <
+              const Duration(seconds: 6)) {
+            return null;
+          }
         }
 
         final cookies = await _collectCookies(controller, currentUrl);
@@ -226,11 +286,21 @@ class Anime3rbWebViewSolver {
     } catch (_) {}
   }
 
+  function hasNonEmptySources(parsed) {
+    if (Array.isArray(parsed)) return parsed.length > 0;
+    if (!parsed || typeof parsed !== 'object') return false;
+    if (Array.isArray(parsed.sources) && parsed.sources.length > 0) return true;
+    if (Array.isArray(parsed.data) && parsed.data.length > 0) return true;
+    if (parsed.data && Array.isArray(parsed.data.sources) && parsed.data.sources.length > 0) return true;
+    if (Array.isArray(parsed.videos) && parsed.videos.length > 0) return true;
+    return Boolean(parsed.src || parsed.file || parsed.url);
+  }
+
   function maybeSaveSources(url, text) {
     if (!url || String(url).indexOf('/sources') === -1 || !text) return;
     try {
       var parsed = JSON.parse(text);
-      if (Array.isArray(parsed) || (parsed && (parsed.sources || parsed.data || parsed.src || parsed.url))) {
+      if (hasNonEmptySources(parsed)) {
         cap.sourcesJson = text;
       }
     } catch (_) {}
@@ -278,6 +348,7 @@ class Anime3rbWebViewSolver {
 
   Future<T?> _withWebViewOverlay<T>({
     required Uri initialUri,
+    Map<String, String> requestHeaders = const <String, String>{},
     required String title,
     required String subtitle,
     required Duration invisibleGracePeriod,
@@ -288,6 +359,7 @@ class Anime3rbWebViewSolver {
       VoidCallback promoteVisible,
     )
     evaluateState,
+    Future<void> Function(WebViewController controller)? onPageStartedHook,
     Future<void> Function(WebViewController controller)? onPageFinishedHook,
     Future<void> Function(WebViewController controller, int progress)?
     onProgressHook,
@@ -355,6 +427,12 @@ class Anime3rbWebViewSolver {
           onUrlChange: (change) {
             if (change.url != null && change.url!.isNotEmpty) {
               currentUrl = change.url!;
+            }
+          },
+          onPageStarted: (url) {
+            if (url.isNotEmpty) currentUrl = url;
+            if (onPageStartedHook != null) {
+              unawaited(onPageStartedHook(controller));
             }
           },
           onPageFinished: (url) {
@@ -467,7 +545,7 @@ class Anime3rbWebViewSolver {
 
     overlay.insert(entry);
     try {
-      await controller.loadRequest(initialUri);
+      await controller.loadRequest(initialUri, headers: requestHeaders);
     } catch (_) {
       finish(null);
       return completer.future;

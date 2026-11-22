@@ -79,13 +79,13 @@ class _StubTransport implements Anime3rbTransport {
 }
 
 String _episodeHtml({
-  String playerUrl =
+  String? playerUrl =
       'https://video.vid3rb.com/player/uuid-1?token=t1&expires=999',
   bool includeDownloads = true,
 }) {
   final snapshot = const HtmlEscape().convert(
     jsonEncode({
-      'data': {'video_url': playerUrl, 'video_source': 'src1'},
+      'data': {'video_url': playerUrl ?? '', 'video_source': 'src1'},
     }),
   );
   final downloadBlock = includeDownloads
@@ -128,16 +128,32 @@ String _episodeHtml({
 }
 
 void main() {
-  test('loadSources uses free direct downloads for watch and download, sets quality, and falls back to Vid3rb only when empty', () async {
+  test('loadSources extracts watch and download qualities directly from Vid3rb player with re-3arabi iframe headers and caches them', () async {
+    var playerRequests = 0;
     final resolver = Anime3rbPlaybackResolver(
-      _StubTransport((uri, _, _) async {
-        if (uri.path.contains('no-dl')) {
-          return Anime3rbHttpResponse(
+      _StubTransport((uri, headers, _) async {
+        if (uri.path.startsWith('/episode/')) {
+          return Anime3rbHttpResponse(statusCode: 200, body: _episodeHtml());
+        }
+        if (uri.path == '/player/uuid-1') {
+          playerRequests++;
+          expect(headers['Referer'], 'https://anime3rb.com/');
+          expect(headers['Sec-Fetch-Dest'], 'iframe');
+          expect(headers['Sec-Fetch-Site'], 'cross-site');
+          return const Anime3rbHttpResponse(
             statusCode: 200,
-            body: _episodeHtml(includeDownloads: false),
+            body: '''
+<script>
+var video_sources = [
+  {"src": "https:\\/\\/cdn.vid3rb.com\\/prem.mp4", "label": "1080p Premium", "premium": true},
+  {"src": "https:\\/\\/cdn.vid3rb.com\\/480.mp4?a=1\\u0026b=2", "label": "480p", "premium": false},
+  {"src": "https:\\/\\/cdn.vid3rb.com\\/1080.mp4", "label": "1080p", "premium": false}
+];
+</script>
+''',
           );
         }
-        return Anime3rbHttpResponse(statusCode: 200, body: _episodeHtml());
+        return const Anime3rbHttpResponse(statusCode: 404, body: '');
       }),
     );
 
@@ -145,73 +161,42 @@ void main() {
       'https://anime3rb.com/episode/one-piece/1180',
       forDownload: false,
     );
-    expect(playSources.map((s) => s.quality).toList(), ['1080p', '720p']);
-    expect(playSources.map((s) => s.source).toList(), [
-      'ترجمة Crunchyroll · تحميل مباشر · 282.12 ميغابايت',
-      'ترجمة Crunchyroll · تحميل مباشر · 134.29 ميغابايت',
-    ]);
-    expect(playSources.every((s) => s.requiresResolution), isTrue);
-    expect(playSources.any((s) => s.source.contains('HEVC')), isFalse);
+    expect(playSources, hasLength(3));
+    expect(playSources[0].url, 'https://cdn.vid3rb.com/1080.mp4');
+    expect(playSources[0].quality, '1080p');
+    expect(playSources[0].source, 'Vid3rb · ترجمة Crunchyroll');
+    expect(playSources[0].requiresResolution, isFalse);
+    expect(playSources[0].headers?['Referer'], 'https://video.vid3rb.com/');
 
+    expect(playSources[1].url, 'https://cdn.vid3rb.com/480.mp4?a=1&b=2');
+    expect(playSources[1].quality, '480p');
+    expect(playSources[1].requiresResolution, isFalse);
+
+    // Secondary translation remains available as a deferred Vid3rb token.
+    expect(playSources[2].source, 'Vid3rb · ترجمة بديلة');
+    expect(playSources[2].requiresResolution, isTrue);
+
+    // Download mode reuses the same player-extracted sources (cached).
     final dlSources = await resolver.loadSources(
       'https://anime3rb.com/episode/one-piece/1180',
       forDownload: true,
     );
-    expect(dlSources.map((s) => s.quality).toList(), ['1080p', '720p']);
-    expect(dlSources.first.source, playSources.first.source);
+    expect(playerRequests, 1);
+    expect(dlSources.first.url, 'https://cdn.vid3rb.com/1080.mp4');
+    expect(dlSources.first.quality, '1080p');
 
-    final fallbackSources = await resolver.loadSources(
-      'https://anime3rb.com/episode/one-piece-no-dl/1',
-      forDownload: false,
-    );
-    expect(fallbackSources.map((s) => s.quality).toList(), ['HD', 'HD']);
-    expect(fallbackSources.map((s) => s.source).toList(), [
-      'Vid3rb · ترجمة Crunchyroll',
-      'Vid3rb · ترجمة بديلة',
-    ]);
-  });
-
-  test('resolveStreams parses inline video_sources fallback and skips premium entries', () async {
-    final resolver = Anime3rbPlaybackResolver(
-      _StubTransport((uri, headers, _) async {
-        if (uri.path.startsWith('/episode/')) {
-          return Anime3rbHttpResponse(
-            statusCode: 200,
-            body: _episodeHtml(includeDownloads: false),
-          );
-        }
-        expect(headers['Referer'], 'https://anime3rb.com/');
-        return const Anime3rbHttpResponse(
-          statusCode: 200,
-          body: '''
-<script>
-var video_sources = [
-  {"src": "https://cdn.vid3rb.com/prem.mp4", "label": "1080p Premium", "premium": true},
-  {"src": "https://cdn.vid3rb.com/480.mp4", "label": "480p", "premium": false},
-  {"src": "https://cdn.vid3rb.com/1080.mp4", "label": "1080p", "premium": false}
-];
-</script>
-''',
-        );
-      }),
-    );
-
-    final sources = await resolver.loadSources(
+    // resolveStreams with an episode URL returns the direct player streams cleanly.
+    final resolved = await resolver.resolveStreams(
       'https://anime3rb.com/episode/one-piece/1180',
       forDownload: false,
     );
-    final streams = await resolver.resolveStreams(
-      sources.first.url,
-      forDownload: false,
-    );
-    expect(streams.map((s) => s.url), [
+    expect(resolved.map((s) => s.url).toList(), [
       'https://cdn.vid3rb.com/1080.mp4',
-      'https://cdn.vid3rb.com/480.mp4',
+      'https://cdn.vid3rb.com/480.mp4?a=1&b=2',
     ]);
-    expect(streams.first.headers?['Referer'], 'https://video.vid3rb.com/');
   });
 
-  test('resolveStreams switches source via Livewire and resolves Turnstile /sources API', () async {
+  test('resolveStreams switches secondary translation via Livewire and resolves Turnstile /sources API', () async {
     Uri? sourcesRequest;
     final resolver = Anime3rbPlaybackResolver(
       _StubTransport((uri, _, _) async {
@@ -219,6 +204,18 @@ var video_sources = [
           return Anime3rbHttpResponse(
             statusCode: 200,
             body: _episodeHtml(includeDownloads: false),
+          );
+        }
+        if (uri.path == '/player/uuid-1') {
+          return const Anime3rbHttpResponse(
+            statusCode: 200,
+            body: '''
+<script>
+var video_sources = [
+  {"src": "https://files-3.vid3rb.com/1080.mp4", "label": "1080p", "premium": false}
+];
+</script>
+''',
           );
         }
         if (uri.path == '/player/uuid-2/sources') {
@@ -262,21 +259,26 @@ var video_sources = [
       'https://anime3rb.com/episode/one-piece/1180',
       forDownload: false,
     );
-    // Pick the 2nd watch source (src2), triggering Livewire setVideoSource.
+    // Pick the deferred secondary translation (src2), triggering Livewire setVideoSource.
+    final secondary = sources.firstWhere((s) => s.requiresResolution);
     final streams = await resolver.resolveStreams(
-      sources[1].url,
+      secondary.url,
       forDownload: false,
     );
     expect(sourcesRequest?.queryParameters['cf_token'], 'cf-tok');
     expect(sourcesRequest?.queryParameters['cf_token_type'], 'invisible');
     expect(streams.single.url, 'https://files-3.vid3rb.com/720.mp4');
+    expect(streams.single.quality, '720p');
   });
 
-  test('resolveStreams follows 2-hop /download/{uuid} redirect and surfaces Cloudflare 403', () async {
+  test('falls back to 2-hop /download/{uuid} when no Vid3rb player exists and surfaces Cloudflare 403', () async {
     final resolver = Anime3rbPlaybackResolver(
       _StubTransport((uri, _, _) async {
         if (uri.path.startsWith('/episode/')) {
-          return Anime3rbHttpResponse(statusCode: 200, body: _episodeHtml());
+          return Anime3rbHttpResponse(
+            statusCode: 200,
+            body: _episodeHtml(playerUrl: null, includeDownloads: true),
+          );
         }
         if (uri.path == '/download/free-1080' && uri.queryParameters['signature'] == 'sig2') {
           return const Anime3rbHttpResponse(
@@ -325,7 +327,7 @@ var video_sources = [
     );
   });
 
-  test('resolveStreams parses pre-resolved sourcesJson captured inside Turnstile WebView', () async {
+  test('loadSources parses pre-resolved sourcesJson captured inside Turnstile WebView even when Dio player GET returns 403', () async {
     var hitSourcesEndpoint = false;
     final resolver = Anime3rbPlaybackResolver(
       _StubTransport((uri, _, _) async {
@@ -337,8 +339,9 @@ var video_sources = [
         }
         if (uri.path == '/player/uuid-1') {
           return const Anime3rbHttpResponse(
-            statusCode: 200,
-            body: '<script>var video_sources = [];</script>',
+            statusCode: 403,
+            body: '<title>Just a moment...</title>',
+            headers: {'cf-mitigated': ['challenge']},
           );
         }
         if (uri.path == '/player/uuid-1/sources') {
@@ -353,21 +356,25 @@ var video_sources = [
             'label': '1080p',
             'premium': false,
           },
+          {
+            'src': 'https://files-4.vid3rb.com/720p.mp4',
+            'label': '720p',
+            'premium': false,
+          },
         ]),
       ),
     );
 
     final sources = await resolver.loadSources(
       'https://anime3rb.com/episode/one-piece/1180',
-      forDownload: false,
-    );
-    final streams = await resolver.resolveStreams(
-      sources.first.url,
-      forDownload: false,
+      forDownload: true,
     );
     expect(hitSourcesEndpoint, isFalse);
-    expect(streams.single.url, 'https://files-4.vid3rb.com/1080p.mp4');
-    expect(streams.single.source, contains('[1080p]'));
+    expect(sources.first.url, 'https://files-4.vid3rb.com/1080p.mp4');
+    expect(sources.first.quality, '1080p');
+    expect(sources.first.requiresResolution, isFalse);
+    expect(sources[1].url, 'https://files-4.vid3rb.com/720p.mp4');
+    expect(sources[1].quality, '720p');
   });
 
   test('DioAnime3rbTransport invokes challengeResolver on 403 challenge and retries with solved cookies', () async {

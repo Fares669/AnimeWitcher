@@ -232,6 +232,11 @@ class DioAnime3rbTransport implements Anime3rbTransport {
   final Map<String, String?> _lastAuthCookies = {};
   String? _overrideUserAgent;
 
+  String get effectiveUserAgent =>
+      (_overrideUserAgent != null && _overrideUserAgent!.isNotEmpty)
+      ? _overrideUserAgent!
+      : kDefaultBrowserUserAgent;
+
   static const _hostRequestTimeout = Duration(seconds: 10);
 
   static String? _cookieDomain(Uri uri) {

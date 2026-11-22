@@ -153,6 +153,8 @@ class Anime3rbPlaybackResolver {
   final HtmlUnescape _unescape = HtmlUnescape();
   final Map<Uri, ({_ParsedEpisodePage page, DateTime expiresAt})> _episodeCache =
       {};
+  final Map<String, ({List<StreamResult> streams, DateTime expiresAt})>
+  _playerStreamsCache = {};
   final Map<String, Future<List<StreamResult>>> _inFlight = {};
 
   static const _cacheTtl = Duration(minutes: 2);
@@ -171,7 +173,14 @@ class Anime3rbPlaybackResolver {
   );
   static final _qualityRegex = RegExp(r'(2160p|1440p|1080p|720p|480p|360p)', caseSensitive: false);
 
-  void clearCache() => _episodeCache.clear();
+  String get _activeUserAgent => _transport is DioAnime3rbTransport
+      ? _transport.effectiveUserAgent
+      : kDefaultBrowserUserAgent;
+
+  void clearCache() {
+    _episodeCache.clear();
+    _playerStreamsCache.clear();
+  }
 
   static String _normalizeQualityLabel(String raw) {
     final normalized = normalizeLocalizedDigits(raw);
@@ -356,49 +365,43 @@ class Anime3rbPlaybackResolver {
     final page = await _loadEpisodePage(watchUri);
     final results = <StreamResult>[];
 
-    final freeDownloads = page.downloadOptions
-        .where((opt) => !opt.isPremium)
-        .toList()
-      ..sort(
-        (a, b) =>
-            _qualityRank(b.qualityLabel).compareTo(_qualityRank(a.qualityLabel)),
-      );
+    final activeWatchSource = page.watchSources.isEmpty
+        ? null
+        : page.watchSources.firstWhere(
+            (s) => page.activeSourceId == null || s.id == page.activeSourceId,
+            orElse: () => page.watchSources.first,
+          );
+    final primaryLabel = activeWatchSource != null
+        ? 'Vid3rb · ${activeWatchSource.label}'
+        : 'Vid3rb';
 
-    void addWatchSources() {
-      if (page.watchSources.isNotEmpty) {
-        for (final src in page.watchSources) {
-          final isActive =
-              page.activeSourceId == null || src.id == page.activeSourceId;
-          final token = Anime3rbSourceToken(
-            kind: 'stream',
-            watchUrl: watchUri.toString(),
-            label: 'Vid3rb (${src.label})',
-            quality: 'HD',
-            targetUrl: isActive ? page.defaultPlayerUri?.toString() : null,
-            sourceId: src.id,
-          );
-          results.add(
-            StreamResult(
-              url: token.encode(),
-              source: 'Vid3rb · ${src.label}',
-              quality: 'HD',
-              requiresResolution: true,
-              refreshUrl: watchUri.toString(),
-            ),
-          );
+    // Extract watch and download qualities directly from the Vid3rb player
+    // (same flow as Abodabodd/re-3arabi Anim3rb, plus Turnstile /sources).
+    if (page.defaultPlayerUri != null) {
+      final extracted = await _extractPlayerStreams(
+        page.defaultPlayerUri!,
+        primaryLabel,
+        watchUri,
+      );
+      results.addAll(extracted);
+
+      // Expose any additional translation sources as deferred Vid3rb tokens so
+      // the user can switch translations on demand via Livewire setVideoSource.
+      for (final src in page.watchSources) {
+        if (activeWatchSource != null && src.id == activeWatchSource.id) {
+          continue;
         }
-      } else if (page.defaultPlayerUri != null) {
         final token = Anime3rbSourceToken(
           kind: 'stream',
           watchUrl: watchUri.toString(),
-          label: 'Vid3rb',
+          label: 'Vid3rb · ${src.label}',
           quality: 'HD',
-          targetUrl: page.defaultPlayerUri.toString(),
+          sourceId: src.id,
         );
         results.add(
           StreamResult(
             url: token.encode(),
-            source: 'Vid3rb',
+            source: 'Vid3rb · ${src.label}',
             quality: 'HD',
             requiresResolution: true,
             refreshUrl: watchUri.toString(),
@@ -407,7 +410,17 @@ class Anime3rbPlaybackResolver {
       }
     }
 
-    void addDownloadSources() {
+    // Fallback to free direct download links only when no Vid3rb player URL
+    // was present on the episode page.
+    if (results.isEmpty) {
+      final freeDownloads = page.downloadOptions
+          .where((opt) => !opt.isPremium)
+          .toList()
+        ..sort(
+          (a, b) => _qualityRank(b.qualityLabel).compareTo(
+            _qualityRank(a.qualityLabel),
+          ),
+        );
       for (final dl in freeDownloads) {
         final hasTranslation = dl.translationLabel.isNotEmpty;
         final tokenLabel = hasTranslation
@@ -434,14 +447,6 @@ class Anime3rbPlaybackResolver {
           ),
         );
       }
-    }
-
-    // Use Anime3rb direct download servers for both watch and download;
-    // only fall back to Vid3rb when no free direct download options exist.
-    if (freeDownloads.isNotEmpty) {
-      addDownloadSources();
-    } else {
-      addWatchSources();
     }
 
     if (results.isEmpty) {
@@ -476,11 +481,17 @@ class Anime3rbPlaybackResolver {
     if (token == null) {
       // Called directly with an episode watch URL instead of a deferred token.
       final sources = await loadSources(urlOrToken, forDownload: forDownload);
+      final direct = sources
+          .where((candidate) => !candidate.requiresResolution)
+          .toList(growable: false);
+      if (direct.isNotEmpty) return direct;
       Object? lastError;
       for (final candidate in sources) {
+        final decoded = Anime3rbSourceToken.tryDecode(candidate.url);
+        if (decoded == null) return [candidate];
         try {
           final resolved = await _resolveToken(
-            Anime3rbSourceToken.tryDecode(candidate.url)!,
+            decoded,
             forDownload: forDownload,
           );
           if (resolved.isNotEmpty) return resolved;
@@ -592,39 +603,64 @@ class Anime3rbPlaybackResolver {
       );
     }
 
+    return _extractPlayerStreams(playerUri, token.label, watchUri);
+  }
+
+  Future<List<StreamResult>> _extractPlayerStreams(
+    Uri playerUri,
+    String sourceLabel,
+    Uri watchUri,
+  ) async {
+    final cacheKey = '${playerUri.toString()}|$sourceLabel';
+    final now = DateTime.now();
+    final cached = _playerStreamsCache[cacheKey];
+    if (cached != null && now.isBefore(cached.expiresAt)) {
+      return cached.streams;
+    }
+
     final playerResp = await _transport.get(
       playerUri,
       headers: {
         'Accept':
             'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Referer': '${_origin.origin}/',
+        'Sec-Fetch-Dest': 'iframe',
+        'Sec-Fetch-Site': 'cross-site',
+        'Sec-Fetch-Mode': 'navigate',
       },
       operation: 'host_vid3rb_player',
     );
     if (playerResp.statusCode == 429) throw const Anime3rbRateLimitException();
-    if (playerResp.isCloudflareChallenge) {
+    if (playerResp.isCloudflareChallenge && _turnstileResolver == null) {
       throw Anime3rbBrowserRequiredException(
         'يتطلب مشغّل Vid3rb إكمال تحقق Cloudflare.',
         watchUrl: watchUri,
       );
     }
-    if (!playerResp.isSuccess) {
+    if (!playerResp.isSuccess && _turnstileResolver == null) {
       throw const Anime3rbSourceUnavailableException();
     }
 
-    // 1. Check inline `var video_sources = [...];` if populated.
-    final inlineMatch = _inlineSourcesRegex.firstMatch(playerResp.body);
-    if (inlineMatch != null) {
-      final parsedInline = _parseVideoSourcesJson(
-        inlineMatch.group(1)!,
-        playerUri,
-        token.label,
-        watchUri,
-      );
-      if (parsedInline.isNotEmpty) return parsedInline;
+    // 1. Check all inline `var video_sources = [...];` blocks (re-3arabi Anim3rb style).
+    if (playerResp.isSuccess) {
+      for (final match in _inlineSourcesRegex.allMatches(playerResp.body)) {
+        final parsedInline = _parseVideoSourcesJson(
+          match.group(1)!,
+          playerUri,
+          sourceLabel,
+          watchUri,
+        );
+        if (parsedInline.isNotEmpty) {
+          _playerStreamsCache[cacheKey] = (
+            streams: parsedInline,
+            expiresAt: DateTime.now().add(_cacheTtl),
+          );
+          return parsedInline;
+        }
+      }
     }
 
-    // 2. Modern Vid3rb flow: `/player/{uuid}/sources?...&cf_token=...`.
+    // 2. Modern Vid3rb flow: `/player/{uuid}/sources?...&cf_token=...` via Turnstile WebView.
     final pathSegments = playerUri.pathSegments
         .where((s) => s.isNotEmpty)
         .toList();
@@ -651,10 +687,16 @@ class Anime3rbPlaybackResolver {
         final parsedPre = _parseVideoSourcesJson(
           preResolvedSourcesJson,
           playerUri,
-          token.label,
+          sourceLabel,
           watchUri,
         );
-        if (parsedPre.isNotEmpty) return parsedPre;
+        if (parsedPre.isNotEmpty) {
+          _playerStreamsCache[cacheKey] = (
+            streams: parsedPre,
+            expiresAt: DateTime.now().add(_cacheTtl),
+          );
+          return parsedPre;
+        }
       }
 
       final sourcesUri = playerUri.replace(
@@ -687,28 +729,16 @@ class Anime3rbPlaybackResolver {
         final parsedApi = _parseVideoSourcesJson(
           sourcesResp.body,
           playerUri,
-          token.label,
+          sourceLabel,
           watchUri,
         );
-        if (parsedApi.isNotEmpty) return parsedApi;
-      }
-    }
-
-    // 3. Fallback to free direct download links if Vid3rb requires Turnstile.
-    if (!forDownload) {
-      for (final dl in page.downloadOptions.where((d) => !d.isPremium)) {
-        try {
-          final resolved = await _resolveDirectDownloadToken(
-            Anime3rbSourceToken(
-              kind: 'download',
-              watchUrl: watchUri.toString(),
-              label: token.label,
-              quality: dl.qualityLabel,
-              targetUrl: dl.url.toString(),
-            ),
+        if (parsedApi.isNotEmpty) {
+          _playerStreamsCache[cacheKey] = (
+            streams: parsedApi,
+            expiresAt: DateTime.now().add(_cacheTtl),
           );
-          if (resolved.isNotEmpty) return resolved;
-        } catch (_) {}
+          return parsedApi;
+        }
       }
     }
 
@@ -738,14 +768,26 @@ class Anime3rbPlaybackResolver {
         entries = decoded['sources'] as List<Object?>;
       } else if (decoded is Map && decoded['data'] is List<Object?>) {
         entries = decoded['data'] as List<Object?>;
+      } else if (decoded is Map &&
+          decoded['data'] is Map &&
+          (decoded['data'] as Map)['sources'] is List<Object?>) {
+        entries = (decoded['data'] as Map)['sources'] as List<Object?>;
+      } else if (decoded is Map && decoded['videos'] is List<Object?>) {
+        entries = decoded['videos'] as List<Object?>;
+      } else if (decoded is Map &&
+          (decoded['src'] != null ||
+              decoded['file'] != null ||
+              decoded['url'] != null)) {
+        entries = [decoded];
       } else {
         return const [];
       }
 
       final parsed = <({int rank, StreamResult stream})>[];
+      final seenUrls = <String>{};
       final headers = <String, String>{
         'Referer': '${playerUri.scheme}://${playerUri.host}/',
-        'User-Agent': kDefaultBrowserUserAgent,
+        'User-Agent': _activeUserAgent,
       };
       for (final entry in entries) {
         if (entry is! Map) continue;
@@ -753,21 +795,29 @@ class Anime3rbPlaybackResolver {
             entry['premium'] == true ||
             entry['premium']?.toString().toLowerCase() == 'true';
         if (isPremium) continue;
-        final rawSrc = entry['src']?.toString() ?? entry['file']?.toString();
+        final rawSrc =
+            entry['src']?.toString() ??
+            entry['file']?.toString() ??
+            entry['url']?.toString();
         if (rawSrc == null || rawSrc.trim().isEmpty) continue;
         final cleanedSrc = _cleanUnescapedUrl(rawSrc);
         final uri = Uri.tryParse(cleanedSrc);
         if (uri == null || !uri.hasScheme) continue;
+        if (!seenUrls.add(uri.toString())) continue;
         final rawLabel =
-            entry['label']?.toString() ?? entry['res']?.toString() ?? 'HD';
+            entry['label']?.toString() ??
+            entry['res']?.toString() ??
+            entry['quality']?.toString() ??
+            'HD';
         final quality = _normalizeQualityLabel(rawLabel);
         parsed.add((
           rank: _qualityRank(quality),
           stream: StreamResult(
             url: uri.toString(),
-            source: '$sourceLabel [$quality]',
+            source: sourceLabel,
             quality: quality,
             headers: headers,
+            requiresResolution: false,
             refreshUrl: watchUri.toString(),
           ),
         ));
