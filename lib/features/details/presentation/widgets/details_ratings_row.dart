@@ -48,6 +48,12 @@ const Key kDetailsRatingsCompactExternalBadgeKey = Key(
 const Color kMalBadgeBlue = Color(0xFF2E51A2);
 const Color kImdbBadgeYellow = Color(0xFFF5C518);
 
+String _providerRatingLabel(AnimeDetailsRatings ratings) {
+  if (ratings.isAnime3rb) return 'تقييم أنمي عرب';
+  if (ratings.isWitanime) return 'تقييم WitAnime';
+  return 'تقييم انمي ويتشر';
+}
+
 bool hasDetailsRatingsSummary(MultimediaItem item) {
   final ratings = AnimeDetailsRatings.fromItem(item);
   return ratings.witcherScore != null ||
@@ -99,7 +105,7 @@ class DetailsRatingsSummary extends StatelessWidget {
             children: [
               if (showWitcher)
                 Semantics(
-                  label: 'تقييم انمي ويتشر',
+                  label: _providerRatingLabel(ratings),
                   child: KeyedSubtree(
                     key: kDetailsRatingsCompactWitcherKey,
                     child: Row(
@@ -499,7 +505,7 @@ class _DetailsRatingsRowState extends ConsumerState<DetailsRatingsRow> {
         child: Column(
           children: [
             Text(
-              ratings.isAnime3rb ? 'تقييم أنمي عرب' : 'تقييم انمي ويتشر',
+              _providerRatingLabel(ratings),
               textAlign: TextAlign.center,
               style: theme.textTheme.labelLarge?.copyWith(
                 color: AppTheme.animeWitcherAccent,

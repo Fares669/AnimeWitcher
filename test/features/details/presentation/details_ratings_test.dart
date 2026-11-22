@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:animewitcher/core/account/animewitcher_comment_models.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
+import 'package:animewitcher/core/extensions/providers/witanime_provider.dart';
 import 'package:animewitcher/features/details/presentation/details_ratings.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -9,6 +10,7 @@ MultimediaItem _item({
   String url = 'https://animewitcher.com/anime/naruto',
   String? provider,
   ShowStatus status = ShowStatus.ongoing,
+  double? score,
   Map<String, String>? syncData,
   String? imdbId,
 }) {
@@ -18,6 +20,7 @@ MultimediaItem _item({
     posterUrl: '',
     provider: provider,
     status: status,
+    score: score,
     imdbId: imdbId,
     syncData: syncData,
   );
@@ -279,5 +282,19 @@ void main() {
       animeWitcherAnimeRatingPath('naruto', 'user-doc'),
       'anime_list/naruto/ratings/user-doc',
     );
+  });
+
+  test('Witanime items expose site score without enabling AW user rating', () {
+    final ratings = AnimeDetailsRatings.fromItem(
+      _item(
+        url: 'https://witanime.site/anime/tempal-item-no-chikara',
+        provider: WitanimeProvider.id,
+        score: 7.7,
+      ),
+    );
+    expect(ratings.isWitanime, isTrue);
+    expect(ratings.witcherScore, 7.7);
+    expect(ratings.witcherVoteCount, isNull);
+    expect(ratings.canRate, isFalse);
   });
 }

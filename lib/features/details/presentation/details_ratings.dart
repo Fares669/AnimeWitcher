@@ -1,6 +1,7 @@
 import '../../../core/account/animewitcher_comment_models.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/providers/anime3rb_provider.dart';
+import '../../../core/extensions/providers/witanime_provider.dart';
 import '../../../core/utils/digit_normalization.dart';
 
 enum ExternalRatingSource { mal, imdb }
@@ -14,6 +15,7 @@ class AnimeDetailsRatings {
   const AnimeDetailsRatings({
     required this.animeId,
     this.isAnime3rb = false,
+    this.isWitanime = false,
     this.witcherScore,
     this.witcherVoteCount,
     this.malMean,
@@ -27,6 +29,7 @@ class AnimeDetailsRatings {
 
   final String animeId;
   final bool isAnime3rb;
+  final bool isWitanime;
   final double? witcherScore;
   final int? witcherVoteCount;
   final double? malMean;
@@ -83,6 +86,7 @@ class AnimeDetailsRatings {
     final data = item.syncData ?? const <String, String>{};
     final isWitcherItem = isAnimeWitcherAccountItem(item);
     final isAnime3rb = item.provider == Anime3rbProvider.id;
+    final isWitanime = item.provider == WitanimeProvider.id;
     final malId = _firstNonEmpty(<String?>[
       data['malId'],
       data['mal_id'],
@@ -97,9 +101,12 @@ class AnimeDetailsRatings {
     return AnimeDetailsRatings(
       animeId: animeWitcherAnimeIdFromItem(item),
       isAnime3rb: isAnime3rb,
+      isWitanime: isWitanime,
       witcherScore: isWitcherItem
           ? _positiveScore(data['awScore'])
-          : (isAnime3rb && item.score != null && item.score! > 0
+          : ((isAnime3rb || isWitanime) &&
+                    item.score != null &&
+                    item.score! > 0
                 ? item.score
                 : null),
       witcherVoteCount: isWitcherItem

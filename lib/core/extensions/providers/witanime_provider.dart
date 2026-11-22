@@ -459,7 +459,7 @@ class WitanimeProvider extends AnimeWitcherProvider {
         'awEnglishTitle': ?_string(json['alternateName']),
       },
       trailers: _trailers(main, uri),
-      score: _rating(json['aggregateRating']),
+      score: _extractScore(main, skipLinks: true) ?? _rating(json['aggregateRating']),
       tags: genres
           .map((value) => value.trim())
           .where((value) => value.isNotEmpty)
@@ -582,6 +582,7 @@ class WitanimeProvider extends AnimeWitcherProvider {
         contentType: link.movie
             ? MultimediaContentType.movie
             : MultimediaContentType.anime,
+        score: link.watch == null ? _extractScore(anchor) : null,
         syncData: link.watch == null
             ? null
             : {watchUrlKey: link.watch.toString()},
@@ -784,5 +785,28 @@ class WitanimeProvider extends AnimeWitcherProvider {
     if (value is! Map) return null;
     final score = double.tryParse('${value['ratingValue']}');
     return score != null && score >= 0 && score <= 10 ? score : null;
+  }
+
+  static double? _extractScore(Element scope, {bool skipLinks = false}) {
+    for (final span in scope.querySelectorAll('span')) {
+      if (span.querySelector('svg') == null) continue;
+      if (skipLinks && _hasAncestorTag(span, scope, 'a')) continue;
+      final normalized = normalizeLocalizedDigits(_text(span) ?? '');
+      final match = RegExp(r'^([0-9]+(?:\.[0-9]+)?)$').firstMatch(normalized);
+      final score = double.tryParse(match?.group(1) ?? '');
+      if (score != null && score > 0 && score <= 10) return score;
+    }
+    return null;
+  }
+
+  static bool _hasAncestorTag(Element node, Element boundary, String tag) {
+    for (
+      var parent = node.parent;
+      parent != null && parent != boundary;
+      parent = parent.parent
+    ) {
+      if (parent.localName == tag) return true;
+    }
+    return false;
   }
 }

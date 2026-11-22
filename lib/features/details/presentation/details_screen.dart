@@ -411,18 +411,20 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
             fallbackColor: fallbackColor,
             onPressed: () => _openAnime3rbComments(context, a3Target),
           ),
-        DetailsHeroIconButton(
-          icon: (_userRating ?? 0) > 0
-              ? Icons.star_rounded
-              : Icons.star_outline_rounded,
-          tooltip: appText(context, english: 'Rate this', arabic: 'قيّم'),
-          foregroundColor: (_userRating ?? 0) > 0
-              ? AppTheme.animeWitcherAccent
-              : foregroundColor,
-          fallbackColor: fallbackColor,
-          ratingCaption: _userRating == null ? null : '${_userRating!}/10',
-          onPressed: () async => _rateAnimeFromHero(item),
-        ),
+        if (isAnimeWitcherAccountItem(item) ||
+            item.provider == Anime3rbProvider.id)
+          DetailsHeroIconButton(
+            icon: (_userRating ?? 0) > 0
+                ? Icons.star_rounded
+                : Icons.star_outline_rounded,
+            tooltip: appText(context, english: 'Rate this', arabic: 'قيّم'),
+            foregroundColor: (_userRating ?? 0) > 0
+                ? AppTheme.animeWitcherAccent
+                : foregroundColor,
+            fallbackColor: fallbackColor,
+            ratingCaption: _userRating == null ? null : '${_userRating!}/10',
+            onPressed: () async => _rateAnimeFromHero(item),
+          ),
         if (_firstTrailerUrl(item) != null)
           DetailsHeroIconButton(
             icon: Icons.movie_outlined,

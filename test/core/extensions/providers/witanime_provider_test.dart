@@ -295,4 +295,56 @@ void main() {
       expect(details.episodes?.last.episode, 1050);
     },
   );
+
+  test(
+    'details and cards extract score from SVG star badges without reading related card scores',
+    () async {
+      final provider = WitanimeProvider((uri, {cancelToken}) async {
+        if (uri.path == '/anime/tempal-item-no-chikara') {
+          return '''
+            <main>
+              <div>
+                <img src="/posters/tempal.jpg">
+                <div>
+                  <h1><span>TEMPAL ~Item no Chikara~</span></h1>
+                  <div class="mb-4 flex flex-wrap items-center gap-2">
+                    <span>TV</span>
+                    <span>مستمر</span>
+                    <span dir="ltr"><svg></svg> 7.70</span>
+                  </div>
+                </div>
+              </div>
+              <section>
+                <h2>قد يعجبك أيضًا</h2>
+                <a href="/anime/other">
+                  <img src="/posters/other.jpg" alt="Other">
+                  <span><svg></svg> 8.1</span>
+                  <h3>Other</h3>
+                </a>
+              </section>
+            </main>
+          ''';
+        }
+        return '''
+          <main>
+            <h1>No Score Series</h1>
+            <section>
+              <h2>قد يعجبك أيضًا</h2>
+            </section>
+            <a href="/anime/no-score-series">
+              <img src="/posters/other.jpg" alt="No Score">
+              <h3>No Score</h3>
+            </a>
+          </main>
+        ''';
+      });
+
+      final details = await provider.getDetails('/anime/tempal-item-no-chikara');
+      expect(details.score, 7.7);
+      expect(details.recommendations?.single.score, 8.1);
+
+      final fallbackDetails = await provider.getDetails('/anime/no-score-series');
+      expect(fallbackDetails.score, isNull);
+    },
+  );
 }

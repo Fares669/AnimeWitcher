@@ -6,6 +6,8 @@ import 'package:animewitcher/core/extensions/providers/witanime_support_service.
 import 'package:animewitcher/core/extensions/providers/witanime_transport.dart';
 import 'package:animewitcher/core/storage/secure_token_storage.dart';
 import 'package:animewitcher/features/details/presentation/widgets/anime_information_section.dart';
+import 'package:animewitcher/features/details/presentation/widgets/details_ratings_row.dart';
+import 'package:animewitcher/features/details/presentation/widgets/premium_details_widgets.dart';
 import 'package:animewitcher/features/details/presentation/widgets/witanime_report_dialog.dart';
 import 'package:animewitcher/features/more/presentation/witanime_website_screen.dart';
 import 'package:animewitcher/features/settings/presentation/widgets/witanime_account_section.dart';
@@ -268,5 +270,35 @@ void main() {
     await tester.tap(find.text('تسجيل الخروج من Witanime'));
     await tester.pumpAndSettle();
     expect(service.isSignedIn, isFalse);
+  });
+
+  testWidgets('MetadataBar renders Witanime score compact summary', (
+    tester,
+  ) async {
+    final item = MultimediaItem(
+      title: 'TEMPAL ~Item no Chikara~',
+      url: 'https://witanime.site/anime/tempal-item-no-chikara',
+      posterUrl: '',
+      provider: WitanimeProvider.id,
+      contentType: MultimediaContentType.anime,
+      status: ShowStatus.ongoing,
+      year: 2026,
+      contentRating: 'PG-13',
+      score: 7.7,
+    );
+
+    expect(hasDetailsRatingsSummary(item), isTrue);
+    await tester.pumpWidget(
+      MaterialApp(
+        locale: const Locale('ar'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(body: MetadataBar(item: item)),
+      ),
+    );
+
+    expect(find.byKey(kDetailsRatingsCompactKey), findsOneWidget);
+    expect(find.text('7.7'), findsOneWidget);
+    expect(find.bySemanticsLabel(RegExp('تقييم WitAnime')), findsOneWidget);
   });
 }
