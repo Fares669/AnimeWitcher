@@ -16,6 +16,7 @@ import '../../comments/presentation/animewitcher_my_comments_screen.dart';
 import 'account_management_screens.dart';
 import 'account_privacy_settings_screen.dart';
 import 'account_ui_helpers.dart';
+import 'widgets/anime3rb_account_section.dart';
 import 'widgets/settings_widgets.dart';
 import 'widgets/witanime_account_section.dart';
 
@@ -95,6 +96,7 @@ class _AnimeWitcherAccountScreenState
                     _buildSignedIn(profile, busy)
                   else
                     _buildSignedOut(busy, asyncError),
+                  _anime3rbAccountTile(),
                   _witanimeAccountTile(),
                 ],
               ),
@@ -104,6 +106,8 @@ class _AnimeWitcherAccountScreenState
       ),
     );
   }
+
+  Widget _anime3rbAccountTile() => const Anime3rbAccountSection();
 
   Widget _witanimeAccountTile() => const WitanimeAccountSection();
 
@@ -358,6 +362,7 @@ class _AnimeWitcherAccountScreenState
               _buildManageGroup(profile, busy),
               const SizedBox(height: LayoutConstants.spacingSm),
               _buildDangerGroup(profile, busy),
+              _anime3rbAccountTile(),
               _witanimeAccountTile(),
             ],
           ),

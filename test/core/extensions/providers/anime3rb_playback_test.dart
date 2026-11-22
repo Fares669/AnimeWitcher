@@ -40,6 +40,26 @@ class _StubTransport implements Anime3rbTransport {
       : Future.value(const Anime3rbHttpResponse(statusCode: 404, body: ''));
 
   @override
+  Future<Anime3rbHttpResponse> put(
+    Uri uri, {
+    Object? body,
+    Map<String, String> headers = const {},
+    bool followRedirects = true,
+    CancelToken? cancelToken,
+    String operation = 'put',
+  }) => Future.value(const Anime3rbHttpResponse(statusCode: 404, body: ''));
+
+  @override
+  Future<Anime3rbHttpResponse> delete(
+    Uri uri, {
+    Object? body,
+    Map<String, String> headers = const {},
+    bool followRedirects = true,
+    CancelToken? cancelToken,
+    String operation = 'delete',
+  }) => Future.value(const Anime3rbHttpResponse(statusCode: 404, body: ''));
+
+  @override
   Future<String> fetchHtml(
     Uri uri, {
     Map<String, String> headers = const {},

@@ -1,15 +1,18 @@
 import 'dart:async';
 
 import 'package:animewitcher/core/account/account_providers.dart';
+import 'package:animewitcher/core/account/anime3rb_account_service.dart';
 import 'package:animewitcher/core/account/animewitcher_account_service.dart';
 import 'package:animewitcher/core/account/animewitcher_sync_ids.dart';
 import 'package:animewitcher/core/account/witanime_account_service.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/anime3rb_provider.dart';
 import 'package:animewitcher/core/extensions/providers/witanime_provider.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/services/app_diagnostics.dart';
+import '../../../../core/storage/anime3rb_library_service.dart';
 import '../../../../core/storage/library_category.dart';
 import '../../../../core/storage/library_repository.dart';
 import '../../../../core/storage/storage_service.dart';
@@ -94,6 +97,34 @@ class Library extends _$Library {
     final normalized = providerId?.trim() ?? '';
     return normalized == WitanimeProvider.id ||
         (normalized.isEmpty && _isWitanimeActiveCatalog);
+  }
+
+  bool get _anime3rbAccountSignedIn {
+    try {
+      return ref.read(anime3rbAccountServiceProvider).isSignedIn;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool get _isAnime3rbActiveCatalog {
+    try {
+      return ref.read(activeProviderProvider) is Anime3rbProvider;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool _useAnime3rbShelf(LibraryMediaKind kind) =>
+      kind == LibraryMediaKind.anime &&
+      _isAnime3rbActiveCatalog &&
+      _anime3rbAccountSignedIn;
+
+  bool _usesAnime3rbSync({String? providerId, bool manga = false}) {
+    if (manga || !_anime3rbAccountSignedIn) return false;
+    final normalized = providerId?.trim() ?? '';
+    return normalized == Anime3rbProvider.id ||
+        (normalized.isEmpty && _isAnime3rbActiveCatalog);
   }
 
   LibraryCategory? localOnlyAnimeWitcherCategory(String url) {
@@ -216,6 +247,14 @@ class Library extends _$Library {
       page.cachedLocalCount = items.length;
       return items.take(page.visibleLimit).toList(growable: false);
     }
+    if (_useAnime3rbShelf(kind)) {
+      final page = _page(kind, category);
+      final items = ref.read(anime3rbLibraryServiceProvider).itemsForCategory(
+        category,
+      );
+      page.cachedLocalCount = items.length;
+      return items.take(page.visibleLimit).toList(growable: false);
+    }
     final page = _page(kind, category);
     if (_accountUid != null) {
       if (!page.receivedRemotePage && page.mutationVersion == 0) {
@@ -246,7 +285,8 @@ class Library extends _$Library {
     final total = _knownTotal(kind, category);
     final signedInNative =
         _accountUid != null &&
-        !(_useWitanimeShelf(kind) && isWitanimeSyncedCategory(category));
+        !(_useWitanimeShelf(kind) && isWitanimeSyncedCategory(category)) &&
+        !_useAnime3rbShelf(kind);
     final pendingInitialRemote =
         signedInNative &&
         !page.receivedRemotePage &&
@@ -277,6 +317,9 @@ class Library extends _$Library {
   int? categoryCount(LibraryMediaKind kind, LibraryCategory category) {
     if (_useWitanimeShelf(kind) && isWitanimeSyncedCategory(category)) {
       return ref.read(witanimeLibraryServiceProvider).countForCategory(category);
+    }
+    if (_useAnime3rbShelf(kind)) {
+      return ref.read(anime3rbLibraryServiceProvider).countForCategory(category);
     }
     final confirmed = _knownTotal(kind, category);
     if (confirmed != null) return confirmed;
@@ -312,6 +355,16 @@ class Library extends _$Library {
 
     wtService.addListener(onWitanimeChanged);
     ref.onDispose(() => wtService.removeListener(onWitanimeChanged));
+    final a3Service = ref.watch(anime3rbLibraryServiceProvider);
+    void onAnime3rbChanged() {
+      if (ref.mounted) {
+        _countRevision++;
+        refresh();
+      }
+    }
+
+    a3Service.addListener(onAnime3rbChanged);
+    ref.onDispose(() => a3Service.removeListener(onAnime3rbChanged));
 
     final kind = LibraryMediaKind.fromStorageKey(
       ref.read(storageServiceProvider).getString('library_media_kind'),
@@ -369,6 +422,29 @@ class Library extends _$Library {
         );
         await wtLibrary.refreshListsFromServer();
         unawaited(ref.read(witanimeAccountServiceProvider).refreshProfile());
+      } catch (_) {
+        page.loadFailed = true;
+      } finally {
+        page.loading = false;
+        _countRevision++;
+        if (ref.mounted) refresh();
+      }
+      return;
+    }
+    if (_useAnime3rbShelf(kind)) {
+      page.loading = true;
+      page.loadFailed = false;
+      refresh();
+      try {
+        final a3Library = ref.read(anime3rbLibraryServiceProvider);
+        await a3Library.retryPendingSync(
+          onLocalChanged: () {
+            _countRevision++;
+            if (ref.mounted) refresh();
+          },
+        );
+        await a3Library.refreshListsFromServer();
+        unawaited(ref.read(anime3rbAccountServiceProvider).refreshProfile());
       } catch (_) {
         page.loadFailed = true;
       } finally {
@@ -793,6 +869,21 @@ class Library extends _$Library {
         );
       }
     }
+    if (_usesAnime3rbSync(providerId: item.provider, manga: manga)) {
+      final a3Library = ref.read(anime3rbLibraryServiceProvider);
+      await a3Library.setCategory(
+        item,
+        selected,
+        previousMembership: membership,
+        onLocalChanged: () {
+          _countRevision++;
+          refresh();
+        },
+      );
+      _countRevision++;
+      refresh();
+      return;
+    }
     _requireSignedIn(allowWitanimeOnly: _usesWitanimeSync(providerId: item.provider, manga: manga) && !isWitanimeSyncedCategory(selected));
     final kind = manga ? LibraryMediaKind.manga : LibraryMediaKind.anime;
     var tracked =
@@ -874,6 +965,30 @@ class Library extends _$Library {
       refresh();
       return;
     }
+    if (_usesAnime3rbSync(providerId: providerId, manga: manga)) {
+      final a3Library = ref.read(anime3rbLibraryServiceProvider);
+      final existing = a3Library.cachedMembership(url);
+      await a3Library.setCategory(
+        MultimediaItem(
+          title: '',
+          url: url,
+          posterUrl: '',
+          provider: Anime3rbProvider.id,
+        ),
+        null,
+        previousMembership: (
+          category: previousCategory ?? existing?.category,
+          favorite: existing?.favorite ?? false,
+        ),
+        onLocalChanged: () {
+          _countRevision++;
+          refresh();
+        },
+      );
+      _countRevision++;
+      refresh();
+      return;
+    }
     _requireSignedIn();
     final kind = manga ? LibraryMediaKind.manga : LibraryMediaKind.anime;
     var tracked = _trackedCategoryForMutation(url, kind) ?? previousCategory;
@@ -932,6 +1047,20 @@ class Library extends _$Library {
       refresh();
       return;
     }
+    if (_usesAnime3rbSync(providerId: item.provider, manga: manga)) {
+      await ref.read(anime3rbLibraryServiceProvider).setFavorite(
+        item,
+        favorite,
+        previousMembership: membership,
+        onLocalChanged: () {
+          _countRevision++;
+          refresh();
+        },
+      );
+      _countRevision++;
+      refresh();
+      return;
+    }
     _requireSignedIn();
     final kind = manga ? LibraryMediaKind.manga : LibraryMediaKind.anime;
     var trackedFavorite = membership?.favorite ?? isFavorite(item.url);
@@ -977,6 +1106,10 @@ class Library extends _$Library {
       final wt = ref.read(witanimeLibraryServiceProvider).cachedMembership(url);
       if (wt != null) return wt.favorite;
     }
+    if (_usesAnime3rbSync(providerId: providerId)) {
+      final a3 = ref.read(anime3rbLibraryServiceProvider).cachedMembership(url);
+      if (a3 != null) return a3.favorite;
+    }
     return ref.read(libraryRepositoryProvider).isFavorite(url);
   }
 
@@ -989,6 +1122,12 @@ class Library extends _$Library {
       final wt = ref.read(witanimeLibraryServiceProvider).cachedMembership(url);
       if (wt?.category != null) return wt!.category;
       return localOnlyAnimeWitcherCategory(url);
+    }
+    if (_usesAnime3rbSync(providerId: providerId, manga: manga)) {
+      return ref
+          .read(anime3rbLibraryServiceProvider)
+          .cachedMembership(url)
+          ?.category;
     }
     return _trackedCategoryForMutation(
       url,

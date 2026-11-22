@@ -10,8 +10,11 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/account/account_providers.dart';
+import 'package:animewitcher/core/account/anime3rb_comment_models.dart';
 import 'package:animewitcher/core/account/animewitcher_comment_models.dart';
+import 'package:animewitcher/core/extensions/providers/anime3rb_provider.dart';
 import 'package:animewitcher/core/extensions/providers/witanime_provider.dart';
+import 'package:animewitcher/features/comments/presentation/anime3rb_comments_screen.dart';
 import 'package:animewitcher/features/comments/presentation/animewitcher_comments_screen.dart';
 import 'package:animewitcher/core/storage/history_repository.dart';
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
@@ -33,6 +36,7 @@ import '../details_controller.dart';
 import '../download_launcher.dart';
 import '../downloaded_file_provider.dart';
 import 'episode_action_chip.dart';
+import 'anime3rb_report_dialog.dart';
 import 'download_progress_dialog.dart';
 import 'download_management_dialog.dart';
 import 'witanime_report_dialog.dart';
@@ -644,8 +648,16 @@ class EpisodeCard extends HookConsumerWidget {
     final commentsTarget = isAnimeWitcherCommentItem(parentItem)
         ? animeWitcherEpisodeCommentTarget(parentItem, episode)
         : null;
-    final showReport = parentItem.provider == WitanimeProvider.id;
-    if (commentsTarget == null && !showReport) {
+    final anime3rbCommentsTarget = Anime3rbCommentTarget.fromEpisode(
+      parentItem,
+      episode,
+    );
+    final showWitanimeReport = parentItem.provider == WitanimeProvider.id;
+    final showAnime3rbReport = parentItem.provider == Anime3rbProvider.id;
+    if (commentsTarget == null &&
+        anime3rbCommentsTarget == null &&
+        !showWitanimeReport &&
+        !showAnime3rbReport) {
       return downloadAction ?? const SizedBox.shrink();
     }
 
@@ -665,7 +677,22 @@ class EpisodeCard extends HookConsumerWidget {
             },
           ),
         ),
-      if (showReport)
+      if (anime3rbCommentsTarget != null)
+        ExcludeFocus(
+          child: EpisodeActionChip(
+            tooltip: 'تعليقات الحلقة',
+            icon: Icons.chat_bubble_outline_rounded,
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) =>
+                      Anime3rbCommentsScreen(target: anime3rbCommentsTarget),
+                ),
+              );
+            },
+          ),
+        ),
+      if (showWitanimeReport)
         ExcludeFocus(
           child: EpisodeActionChip(
             tooltip: 'الإبلاغ عن مشكلة',
@@ -676,6 +703,21 @@ class EpisodeCard extends HookConsumerWidget {
                 ref,
                 title: _downloadDialogTitle(parentItem, episode),
                 targetUrl: episode.url,
+              ),
+            ),
+          ),
+        ),
+      if (showAnime3rbReport)
+        ExcludeFocus(
+          child: EpisodeActionChip(
+            tooltip: 'الإبلاغ عن مشكلة',
+            icon: Icons.flag_outlined,
+            onPressed: () => unawaited(
+              showAnime3rbReportDialog(
+                context,
+                ref,
+                title: _downloadDialogTitle(parentItem, episode),
+                episodeUrl: episode.url,
               ),
             ),
           ),

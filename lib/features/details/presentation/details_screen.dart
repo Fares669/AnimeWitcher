@@ -12,13 +12,18 @@ import '../../home/presentation/view_all_screen.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/account/animewitcher_comment_models.dart';
+import '../../../core/account/anime3rb_account_service.dart';
+import '../../../core/account/anime3rb_comment_models.dart';
 import '../../../core/account/animewitcher_account_service.dart';
 import '../../../core/account/witanime_account_service.dart';
+import '../../../core/extensions/providers/anime3rb_provider.dart';
 import '../../../core/extensions/providers/witanime_provider.dart';
+import '../../../core/storage/anime3rb_library_service.dart';
 import '../../../core/storage/witanime_library_service.dart';
 import '../../characters/presentation/anime_characters_screen.dart';
 import '../../characters/presentation/character_details_screen.dart';
 import 'related_anime_screen.dart';
+import '../../comments/presentation/anime3rb_comments_screen.dart';
 import '../../comments/presentation/animewitcher_comments_screen.dart';
 import '../../../core/utils/window_controls_inset.dart';
 import '../../../core/utils/image_fallbacks.dart';
@@ -213,15 +218,23 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     const favoriteRed = Color(0xFFFF3B30);
     final colors = Theme.of(context).colorScheme;
     final commentTarget = animeWitcherAnimeCommentTarget(item);
+    final anime3rbCommentTarget = Anime3rbCommentTarget.fromAnime(item);
     final currentCategory = libraryMembership.category;
 
     return <AppleLiquidGlassToolbarButton>[
-      if (includeComments && commentTarget != null)
+      if (includeComments &&
+          (commentTarget != null || anime3rbCommentTarget != null))
         AppleLiquidGlassToolbarButton(
           tooltip: appText(context, english: 'Comments', arabic: 'التعليقات'),
           icon: Icons.chat_bubble_outline_rounded,
           color: foregroundColor,
-          onPressed: () => _openAnimeComments(context, commentTarget),
+          onPressed: () {
+            if (anime3rbCommentTarget != null) {
+              unawaited(_openAnime3rbComments(context, anime3rbCommentTarget));
+            } else if (commentTarget != null) {
+              unawaited(_openAnimeComments(context, commentTarget));
+            }
+          },
         ),
       AppleLiquidGlassToolbarButton(
         tooltip: isFavorite
@@ -308,8 +321,11 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     Color? fallbackColor,
   }) {
     final category = libraryMembership.category;
-    final pending = item.provider == WitanimeProvider.id &&
-        ref.read(witanimeLibraryServiceProvider).isItemPending(item.url);
+    final pending =
+        (item.provider == WitanimeProvider.id &&
+            ref.read(witanimeLibraryServiceProvider).isItemPending(item.url)) ||
+        (item.provider == Anime3rbProvider.id &&
+            ref.read(anime3rbLibraryServiceProvider).isItemPending(item.url));
     final categoryPillLabel = category == null
         ? appText(context, english: 'Add to list', arabic: 'أضف لقائمة')
         : '${_libraryCategoryLabel(context, category)}${pending ? ' · معلّق' : ''}';
@@ -386,6 +402,14 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
             foregroundColor: foregroundColor,
             fallbackColor: fallbackColor,
             onPressed: () => _openAnimeComments(context, target),
+          )
+        else if (Anime3rbCommentTarget.fromAnime(item) case final a3Target?)
+          DetailsHeroIconButton(
+            icon: Icons.chat_bubble_outline_rounded,
+            tooltip: appText(context, english: 'Comments', arabic: 'التعليقات'),
+            foregroundColor: foregroundColor,
+            fallbackColor: fallbackColor,
+            onPressed: () => _openAnime3rbComments(context, a3Target),
           ),
         DetailsHeroIconButton(
           icon: (_userRating ?? 0) > 0
@@ -438,6 +462,19 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     final uri = Uri.tryParse(url);
     if (uri == null) return;
     await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  Future<void> _openAnime3rbComments(
+    BuildContext context,
+    Anime3rbCommentTarget target,
+  ) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => Anime3rbCommentsScreen(target: target),
+      ),
+    );
+    if (!mounted || !appleUsesPersistentLiquidGlassHeader) return;
+    setState(() {});
   }
 
   Future<void> _openAnimeComments(
@@ -561,7 +598,9 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   Future<bool> _ensureSignedInForLibrary(BuildContext context) async {
     if (ref.read(animeWitcherAccountServiceProvider).isSignedIn ||
         (widget.item.provider == WitanimeProvider.id &&
-            ref.read(witanimeAccountServiceProvider).isSignedIn)) {
+            ref.read(witanimeAccountServiceProvider).isSignedIn) ||
+        (widget.item.provider == Anime3rbProvider.id &&
+            ref.read(anime3rbAccountServiceProvider).isSignedIn)) {
       return true;
     }
 
@@ -580,7 +619,9 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     );
     return ref.read(animeWitcherAccountServiceProvider).isSignedIn ||
         (widget.item.provider == WitanimeProvider.id &&
-            ref.read(witanimeAccountServiceProvider).isSignedIn);
+            ref.read(witanimeAccountServiceProvider).isSignedIn) ||
+        (widget.item.provider == Anime3rbProvider.id &&
+            ref.read(anime3rbAccountServiceProvider).isSignedIn);
   }
 
   Future<void> _showPosterViewer(
@@ -705,6 +746,46 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   }
 
   Future<void> _loadUserRatingFor(MultimediaItem item) async {
+    if (item.provider == Anime3rbProvider.id) {
+      final a3Account = ref.read(anime3rbAccountServiceProvider);
+      if (!a3Account.isSignedIn) {
+        if (!mounted) return;
+        setState(() {
+          _userRating = null;
+          _loadingUserRating = false;
+          _loadedUserRatingAnimeId = item.url;
+          _loadedUserRatingSignedIn = false;
+        });
+        return;
+      }
+      if (_loadingUserRating ||
+          (_loadedUserRatingAnimeId == item.url &&
+              _loadedUserRatingSignedIn)) {
+        return;
+      }
+      setState(() => _loadingUserRating = true);
+      try {
+        final rating = await ref
+            .read(anime3rbLibraryServiceProvider)
+            .loadUserRating(item);
+        if (!mounted) return;
+        setState(() {
+          _userRating = rating;
+          _loadedUserRatingAnimeId = item.url;
+          _loadedUserRatingSignedIn = true;
+          _loadingUserRating = false;
+        });
+      } catch (_) {
+        if (!mounted) return;
+        setState(() {
+          _loadedUserRatingAnimeId = item.url;
+          _loadedUserRatingSignedIn = true;
+          _loadingUserRating = false;
+        });
+      }
+      return;
+    }
+
     final service = _accountServiceOrNull();
     if (service == null) {
       if (!mounted) return;
@@ -754,8 +835,11 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   }
 
   void _ensureUserRatingLoaded(MultimediaItem item) {
-    final animeId = animeWitcherAnimeIdFromItem(item);
-    final signedIn = _accountServiceOrNull()?.isSignedIn ?? false;
+    final isAnime3rb = item.provider == Anime3rbProvider.id;
+    final animeId = isAnime3rb ? item.url : animeWitcherAnimeIdFromItem(item);
+    final signedIn = isAnime3rb
+        ? ref.read(anime3rbAccountServiceProvider).isSignedIn
+        : (_accountServiceOrNull()?.isSignedIn ?? false);
     if (_loadingUserRating ||
         (_loadedUserRatingAnimeId == animeId &&
             _loadedUserRatingSignedIn == signedIn)) {
@@ -767,7 +851,8 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   }
 
   Future<void> _rateAnimeFromHero(MultimediaItem item) async {
-    final animeId = animeWitcherAnimeIdFromItem(item);
+    final isAnime3rb = item.provider == Anime3rbProvider.id;
+    final animeId = isAnime3rb ? item.url : animeWitcherAnimeIdFromItem(item);
     if (_loadedUserRatingAnimeId != animeId || !_loadedUserRatingSignedIn) {
       await _loadUserRatingFor(item);
     }
@@ -776,13 +861,16 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       context,
       ref,
       ratings: AnimeDetailsRatings.fromItem(item),
+      item: item,
       initialRating: _userRating ?? 0,
     );
     if (!mounted || !outcome.changed) return;
     setState(() {
       _userRating = outcome.rating;
-      _loadedUserRatingAnimeId = animeWitcherAnimeIdFromItem(item);
-      _loadedUserRatingSignedIn = _accountServiceOrNull()?.isSignedIn ?? false;
+      _loadedUserRatingAnimeId = animeId;
+      _loadedUserRatingSignedIn = isAnime3rb
+          ? ref.read(anime3rbAccountServiceProvider).isSignedIn
+          : (_accountServiceOrNull()?.isSignedIn ?? false);
     });
   }
 

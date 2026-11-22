@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
+import '../../../core/account/anime3rb_account_service.dart';
 import '../../../core/account/witanime_account_service.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
+import '../../../core/extensions/providers/anime3rb_provider.dart';
 import '../../../core/extensions/providers/witanime_provider.dart';
+import '../../../core/storage/anime3rb_library_service.dart';
 import '../../../core/storage/library_category.dart';
 import '../../../core/storage/witanime_library_service.dart';
 import '../../library/presentation/library_provider.dart';
@@ -23,14 +26,18 @@ mixin DetailsLibraryMembership<T extends ConsumerStatefulWidget>
   String? get _activeLibraryOwner {
     String? aw;
     String? wt;
+    String? a3;
     try {
       aw = ref.read(animeWitcherAccountServiceProvider).accountUid;
     } catch (_) {}
     try {
       wt = ref.read(witanimeAccountServiceProvider).accountId;
     } catch (_) {}
-    if (aw == null && wt == null) return null;
-    return '${aw ?? ''}|${wt ?? ''}';
+    try {
+      a3 = ref.read(anime3rbAccountServiceProvider).accountId;
+    } catch (_) {}
+    if (aw == null && wt == null && a3 == null) return null;
+    return '${aw ?? ''}|${wt ?? ''}|${a3 ?? ''}';
   }
 
   LibraryMembership get libraryMembership {
@@ -84,6 +91,17 @@ mixin DetailsLibraryMembership<T extends ConsumerStatefulWidget>
                 category: wtRemote.category ?? awCategory,
                 favorite: wtRemote.favorite,
               );
+            }
+          }
+        } else if (item.provider == Anime3rbProvider.id) {
+          final a3Account = ref.read(anime3rbAccountServiceProvider);
+          if (a3Account.isSignedIn) {
+            final a3Remote = await ref
+                .read(anime3rbLibraryServiceProvider)
+                .fetchMembership(item);
+            if (!mounted || request != _libraryRequest) return;
+            if (a3Remote != null) {
+              remote = a3Remote;
             }
           }
         }
@@ -143,6 +161,11 @@ mixin DetailsLibraryMembership<T extends ConsumerStatefulWidget>
       }
     });
     ref.listen(witanimeAccountRevisionProvider, (_, _) {
+      if (_libraryOwner != _activeLibraryOwner) {
+        setState(scheduleLibraryRead);
+      }
+    });
+    ref.listen(anime3rbAccountRevisionProvider, (_, _) {
       if (_libraryOwner != _activeLibraryOwner) {
         setState(scheduleLibraryRead);
       }

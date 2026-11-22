@@ -49,9 +49,26 @@ class Anime3rbProvider extends AnimeWitcherProvider {
   final Anime3rbPlaybackResolver? _playback;
 
   static const id = 'anime3rb';
+  static const originUrl = 'https://anime3rb.com';
   static const watchUrlKey = 'anime3rbWatchUrl';
   static final _origin = Uri.https('anime3rb.com');
   static Uri websiteUri(String path) => _origin.replace(path: path);
+  static String canonicalWorkUrl(String url) =>
+      parseCatalogLink(url)?.work.toString() ?? url.trim();
+  static String? slugFromUrl(String url) {
+    final link = parseCatalogLink(url);
+    if (link == null) return null;
+    final segments = link.work.pathSegments
+        .where((segment) => segment.isNotEmpty)
+        .toList();
+    return segments.length >= 2 && segments.first == 'titles'
+        ? segments[1]
+        : null;
+  }
+  static List<MultimediaItem> parseTitleCardsFromDocument(
+    Document doc,
+    Uri base,
+  ) => _parseTitleCards(doc.querySelector('.titles-list') ?? doc.body, base);
 
   static const _catalogPageSize = 20;
   static const _homeLatestEpisodesSection = 'أحدث الحلقات';
@@ -502,6 +519,40 @@ class Anime3rbProvider extends AnimeWitcherProvider {
       excludeClones: true,
     );
 
+    final titleCard = doc.querySelector('.title-card[data-title]');
+    final userList = titleCard?.attributes['data-list']?.trim();
+    final userRate = titleCard?.attributes['data-rate']?.trim();
+    final comntoEl = doc.querySelector('[wire\\:name="comnto"]');
+    String? comntoTopic;
+    String? comntoSso;
+    final comntoSnapshotRaw = comntoEl?.attributes['wire:snapshot'];
+    if (comntoSnapshotRaw != null && comntoSnapshotRaw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(comntoSnapshotRaw);
+        if (decoded is Map && decoded['data'] is Map) {
+          comntoTopic = (decoded['data'] as Map)['identifier']?.toString().trim();
+        }
+      } catch (_) {}
+    }
+    final comntoEffectsRaw = comntoEl?.attributes['wire:effects'];
+    if (comntoEffectsRaw != null && comntoEffectsRaw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(comntoEffectsRaw);
+        final scripts = decoded is Map ? decoded['scripts'] : null;
+        if (scripts is Map) {
+          for (final rawScript in scripts.values) {
+            final text = rawScript.toString();
+            comntoTopic ??= RegExp(
+              r'''topic\s*:\s*['"]([^'"]+)['"]''',
+            ).firstMatch(text)?.group(1);
+            comntoSso ??= RegExp(
+              r'''sso\s*:\s*['"]([^'"]+)['"]''',
+            ).firstMatch(text)?.group(1);
+          }
+        }
+      } catch (_) {}
+    }
+
     return MultimediaItem(
       title: title,
       url: uri.toString(),
@@ -517,6 +568,18 @@ class Anime3rbProvider extends AnimeWitcherProvider {
         'awStudio': ?(studio != null && studio.isNotEmpty ? studio : null),
         'awEnglishTitle': ?(altName != null && altName.isNotEmpty
             ? altName
+            : null),
+        'aw3rbUserList': ?(userList != null && userList.isNotEmpty
+            ? userList
+            : null),
+        'aw3rbUserRate': ?(userRate != null && userRate.isNotEmpty
+            ? userRate
+            : null),
+        'aw3rbComntoTopic': ?(comntoTopic != null && comntoTopic.isNotEmpty
+            ? comntoTopic
+            : null),
+        'aw3rbComntoSso': ?(comntoSso != null && comntoSso.isNotEmpty
+            ? comntoSso
             : null),
       },
       trailers: trailers,

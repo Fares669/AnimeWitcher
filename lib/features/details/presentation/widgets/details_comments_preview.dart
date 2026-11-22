@@ -14,7 +14,9 @@ import '../../../../core/account/account_providers.dart';
 import '../../../../core/account/firestore_rest_client.dart';
 import '../../../../core/account/animewitcher_comment_models.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
+import '../../../../core/extensions/providers/anime3rb_provider.dart';
 import '../../../../core/utils/localized_text.dart';
+import '../../../comments/presentation/anime3rb_comments_screen.dart';
 import '../../../comments/presentation/animewitcher_comments_screen.dart';
 import '../../../comments/presentation/animewitcher_replies_screen.dart';
 import '../../../../core/utils/avatar_image.dart';
@@ -209,6 +211,9 @@ class _DetailsCommentsPreviewState
 
   @override
   Widget build(BuildContext context) {
+    if (widget.item.provider == Anime3rbProvider.id) {
+      return Anime3rbDetailsCommentsPreview(item: widget.item);
+    }
     if (_target == null) return const SizedBox.shrink();
     if (!_startedLoading) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _onPageScroll());

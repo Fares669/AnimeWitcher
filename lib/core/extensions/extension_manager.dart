@@ -2,12 +2,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../account/account_providers.dart';
+import '../account/anime3rb_account_service.dart';
 import '../account/witanime_account_service.dart';
 import '../network/dio_client_provider.dart';
 import '../storage/settings_repository.dart';
 import 'base_provider.dart';
 import 'providers/anime3rb_provider.dart';
-import 'providers/anime3rb_transport.dart';
 import 'providers/animewitcher_native_provider.dart';
 import 'providers/witanime_provider.dart';
 

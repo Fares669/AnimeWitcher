@@ -157,6 +157,24 @@ abstract interface class Anime3rbTransport {
     String operation = 'post',
   });
 
+  Future<Anime3rbHttpResponse> put(
+    Uri uri, {
+    Object? body,
+    Map<String, String> headers = const {},
+    bool followRedirects = true,
+    CancelToken? cancelToken,
+    String operation = 'put',
+  });
+
+  Future<Anime3rbHttpResponse> delete(
+    Uri uri, {
+    Object? body,
+    Map<String, String> headers = const {},
+    bool followRedirects = true,
+    CancelToken? cancelToken,
+    String operation = 'delete',
+  });
+
   Future<String> fetchHtml(
     Uri uri, {
     Map<String, String> headers = const {},
@@ -463,16 +481,71 @@ class DioAnime3rbTransport implements Anime3rbTransport {
     bool followRedirects = true,
     CancelToken? cancelToken,
     String operation = 'post',
+  }) => _sendWithBody(
+    'POST',
+    uri,
+    body: body,
+    headers: headers,
+    followRedirects: followRedirects,
+    cancelToken: cancelToken,
+    operation: operation,
+  );
+
+  @override
+  Future<Anime3rbHttpResponse> put(
+    Uri uri, {
+    Object? body,
+    Map<String, String> headers = const {},
+    bool followRedirects = true,
+    CancelToken? cancelToken,
+    String operation = 'put',
+  }) => _sendWithBody(
+    'PUT',
+    uri,
+    body: body,
+    headers: headers,
+    followRedirects: followRedirects,
+    cancelToken: cancelToken,
+    operation: operation,
+  );
+
+  @override
+  Future<Anime3rbHttpResponse> delete(
+    Uri uri, {
+    Object? body,
+    Map<String, String> headers = const {},
+    bool followRedirects = true,
+    CancelToken? cancelToken,
+    String operation = 'delete',
+  }) => _sendWithBody(
+    'DELETE',
+    uri,
+    body: body,
+    headers: headers,
+    followRedirects: followRedirects,
+    cancelToken: cancelToken,
+    operation: operation,
+  );
+
+  Future<Anime3rbHttpResponse> _sendWithBody(
+    String method,
+    Uri uri, {
+    Object? body,
+    Map<String, String> headers = const {},
+    bool followRedirects = true,
+    CancelToken? cancelToken,
+    required String operation,
   }) async {
     final elapsed = Stopwatch()..start();
     final request = _requestCancellation(operation, cancelToken);
     try {
       final merged = await _mergedHeaders(uri, headers);
-      final response = await _dio.postUri<String>(
+      final response = await _dio.requestUri<String>(
         uri,
         data: body,
         cancelToken: request.token,
         options: Options(
+          method: method,
           headers: merged,
           followRedirects: followRedirects,
           responseType: ResponseType.plain,
@@ -547,9 +620,3 @@ class DioAnime3rbTransport implements Anime3rbTransport {
     if (_ownsDio) _dio.close(force: force);
   }
 }
-
-final anime3rbTransportProvider = Provider<Anime3rbTransport>((ref) {
-  final transport = DioAnime3rbTransport();
-  ref.onDispose(() => transport.close(force: true));
-  return transport;
-});
