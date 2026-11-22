@@ -199,7 +199,12 @@ void main() {
   <h2 class="lg:text-meta">ون بيس</h2>
   <img src="https://images.anime3rb.com/one-piece.jpg" alt="بوستر One Piece">
   <div x-data="{summary: false}">
-    <div x-show="! summary"><p>قصة لوفي وطاقم قبعة القش.</p></div>
+    <div x-show="! summary">
+      <p>قصة لوفي وطاقم قبعة القش.</p>
+      <p>الفقرة الثانية من القصة الكاملة.</p>
+      <p>الفقرة الثالثة والأخيرة.</p>
+    </div>
+    <div x-show="summary"><p>ملخص قصير</p></div>
   </div>
   <div wire:name="genres">
     <a href="https://anime3rb.com/genre/adventure" class="btn btn-md btn-link genre">مغامرة <span class="badge">1446</span></a>
@@ -242,6 +247,10 @@ void main() {
     expect(fetched.toString(), 'https://anime3rb.com/titles/one-piece');
     expect(item.provider, Anime3rbProvider.id);
     expect(item.title, 'One Piece');
+    expect(
+      item.description,
+      'قصة لوفي وطاقم قبعة القش.\n\nالفقرة الثانية من القصة الكاملة.\n\nالفقرة الثالثة والأخيرة.',
+    );
     expect(item.url, 'https://anime3rb.com/titles/one-piece');
     expect(item.status, ShowStatus.ongoing);
     expect(item.year, 1999);

@@ -8,6 +8,7 @@ import '../../account/anime3rb_livewire.dart';
 import '../../domain/entity/multimedia_item.dart';
 import '../../services/anizip_service.dart';
 import '../../utils/digit_normalization.dart';
+import '../../utils/html_synopsis.dart';
 import '../base_provider.dart';
 import 'anime3rb_filter_values.dart';
 import 'anime3rb_playback.dart';
@@ -560,13 +561,7 @@ class Anime3rbProvider extends AnimeWitcherProvider {
         _artwork(json['image']?.toString(), uri) ??
         '';
 
-    final synopsis =
-        _text(doc.querySelector('[x-data] > div[x-show="! summary"] p')) ??
-        _text(doc.querySelector('p.synopsis')) ??
-        _string(json['description']) ??
-        _string(
-          doc.querySelector('meta[name="description"]')?.attributes['content'],
-        );
+    final synopsis = _extractSynopsis(doc, json);
 
     final altName = _text(doc.querySelector('h2.lg\\:text-meta'));
     final tableFields = _parseDetailsTable(doc);
@@ -1318,6 +1313,28 @@ class Anime3rbProvider extends AnimeWitcherProvider {
       }
     }
     return const {};
+  }
+
+  static String? _extractSynopsis(Document doc, Map<String, dynamic> json) {
+    final fullBox = doc.querySelector(
+      '[x-data] div[x-show*="!"][x-show*="summary"]',
+    );
+    if (fullBox != null) {
+      final paragraphs = joinHtmlParagraphs(fullBox.querySelectorAll('p'));
+      if (paragraphs != null) return paragraphs;
+      final clone = fullBox.clone(true);
+      for (final button in clone.querySelectorAll('button')) {
+        button.remove();
+      }
+      final fallback = extractHtmlParagraphText(clone);
+      if (fallback != null) return fallback;
+    }
+    final synopsisList = joinHtmlParagraphs(doc.querySelectorAll('p.synopsis'));
+    if (synopsisList != null) return synopsisList;
+    return _string(json['description']) ??
+        _string(
+          doc.querySelector('meta[name="description"]')?.attributes['content'],
+        );
   }
 
   static double? _rating(Object? value) {

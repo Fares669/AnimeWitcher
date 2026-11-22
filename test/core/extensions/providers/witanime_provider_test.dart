@@ -347,4 +347,39 @@ void main() {
       expect(fallbackDetails.score, isNull);
     },
   );
+
+  test(
+    'details prefer full HTML synopsis over truncated JSON-LD description',
+    () async {
+      final provider = WitanimeProvider((uri, {cancelToken}) async {
+        if (uri.path == '/anime/full-story') {
+          return '''
+            <script type="application/ld+json">{"@type":"TVSeries","name":"Full Story",
+              "description":"قصة مختصرة من JSON-LD..."}</script>
+            <main>
+              <h1>Full Story</h1>
+              <div>
+                <p class="mb-6 text-sm leading-relaxed text-neutral-300">الفقرة الأولى كاملة.<br>تتمة السطر الثاني.</p>
+                <p class="mb-6 text-sm leading-relaxed text-neutral-300">الفقرة الثانية كاملة.</p>
+              </div>
+            </main>
+          ''';
+        }
+        return '''
+          <script type="application/ld+json">{"@type":"TVSeries","name":"Fallback Story",
+            "description":"قصة من JSON-LD عند غياب HTML."}</script>
+          <main><h1>Fallback Story</h1></main>
+        ''';
+      });
+
+      final full = await provider.getDetails('/anime/full-story');
+      expect(
+        full.description,
+        'الفقرة الأولى كاملة.\nتتمة السطر الثاني.\n\nالفقرة الثانية كاملة.',
+      );
+
+      final fallback = await provider.getDetails('/anime/fallback-story');
+      expect(fallback.description, 'قصة من JSON-LD عند غياب HTML.');
+    },
+  );
 }

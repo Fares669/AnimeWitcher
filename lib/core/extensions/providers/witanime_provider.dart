@@ -6,6 +6,7 @@ import 'package:html/parser.dart' as html;
 
 import '../../domain/entity/multimedia_item.dart';
 import '../../utils/digit_normalization.dart';
+import '../../utils/html_synopsis.dart';
 import '../base_provider.dart';
 import 'witanime_filter_values.dart';
 import 'witanime_playback.dart';
@@ -403,9 +404,7 @@ class WitanimeProvider extends AnimeWitcherProvider {
               ?.attributes['content'],
           uri,
         );
-    final description =
-        _string(json['description']) ??
-        _text(main.querySelector('p.leading-relaxed'));
+    final description = _extractDescription(main, json);
     final kind = link.movie
         ? MultimediaContentType.movie
         : MultimediaContentType.anime;
@@ -779,6 +778,18 @@ class WitanimeProvider extends AnimeWitcherProvider {
       }
     }
     return const {};
+  }
+
+  static String? _extractDescription(Element main, Map<String, dynamic> json) {
+    final first = main.querySelector('p.leading-relaxed');
+    if (first != null) {
+      final scope = first.parent;
+      final htmlDescription = joinHtmlParagraphs(
+        (scope ?? first).querySelectorAll('p.leading-relaxed'),
+      );
+      if (htmlDescription != null) return htmlDescription;
+    }
+    return _string(json['description']);
   }
 
   static double? _rating(Object? value) {
