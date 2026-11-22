@@ -586,6 +586,12 @@ class Anime3rbProvider extends AnimeWitcherProvider {
     final studio = _text(doc.querySelector('a[href*="/c/studio/"]')) ??
         tableFields['الاستديو'] ??
         tableFields['الاستوديو'];
+    final durationMinutes = _extractDurationMinutes(
+      tableFields['المدة'] ??
+          tableFields['مدة الحلقة'] ??
+          _extractSummaryCardValue(doc, 'المدة') ??
+          json['duration']?.toString(),
+    );
 
     final trailers = _trailers(doc, uri);
     final episodes = _episodes(doc, uri, title);
@@ -645,12 +651,14 @@ class Anime3rbProvider extends AnimeWitcherProvider {
       catalogType: typeLabel.replaceAll(RegExp(r'[()]'), '').trim(),
       status: status,
       year: year,
+      duration: durationMinutes,
       contentRating: ageRating,
       syncData: {
         'awStudio': ?(studio != null && studio.isNotEmpty ? studio : null),
         'awEnglishTitle': ?(altName != null && altName.isNotEmpty
             ? altName
             : null),
+        'awDuration': ?(durationMinutes != null ? '$durationMinutes' : null),
         'malId': ?externalIds.malId,
         'anidbId': ?externalIds.anidbId,
         'aw3rbUserList': ?(userList != null && userList.isNotEmpty
@@ -1204,6 +1212,24 @@ class Anime3rbProvider extends AnimeWitcherProvider {
       return ShowStatus.upcoming;
     }
     return ShowStatus.ongoing;
+  }
+
+  static int? _extractDurationMinutes(String? raw) {
+    final text = normalizeLocalizedDigits(raw?.trim() ?? '');
+    if (text.isEmpty) return null;
+    final iso = RegExp(
+      r'^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$',
+      caseSensitive: false,
+    ).firstMatch(text);
+    if (iso != null) {
+      final hours = int.tryParse(iso.group(1) ?? '') ?? 0;
+      final mins = int.tryParse(iso.group(2) ?? '') ?? 0;
+      final total = hours * 60 + mins;
+      return total > 0 ? total : null;
+    }
+    final match = RegExp(r'(\d+)').firstMatch(text);
+    final minutes = int.tryParse(match?.group(1) ?? '');
+    return minutes != null && minutes > 0 ? minutes : null;
   }
 
   static int? _extractYear(String raw) {

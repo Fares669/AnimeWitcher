@@ -217,6 +217,7 @@ void main() {
   <table>
     <tr><td>الحالة:</td><td>قيد البث</td></tr>
     <tr><td>إصدار:</td><td title="1999-10-20">خريف 1999</td></tr>
+    <tr><td>المدة:</td><td>24 دقيقة</td></tr>
     <tr><td>الاستديو:</td><td><a href="https://anime3rb.com/c/studio/toei-animation">Toei Animation</a></td></tr>
   </table>
   <iframe data-src="https://www.youtube.com/embed/abc123"></iframe>
@@ -254,9 +255,11 @@ void main() {
     expect(item.url, 'https://anime3rb.com/titles/one-piece');
     expect(item.status, ShowStatus.ongoing);
     expect(item.year, 1999);
+    expect(item.duration, 24);
     expect(item.score, 8.72);
     expect(item.syncData?['awStudio'], 'Toei Animation');
     expect(item.syncData?['awEnglishTitle'], 'ون بيس');
+    expect(item.syncData?['awDuration'], '24');
     expect(item.syncData?['malId'], '21');
     expect(item.syncData?['anidbId'], '69');
     expect(item.trailers?.map((t) => t.url), ['https://www.youtube.com/embed/abc123']);

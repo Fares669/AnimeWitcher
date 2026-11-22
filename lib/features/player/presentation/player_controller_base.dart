@@ -21,6 +21,8 @@ import '../../details/presentation/downloaded_file_provider.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/extensions/base_provider.dart';
 import '../../../../core/extensions/item_provider_resolution.dart';
+import '../../../../core/extensions/providers/anime3rb_provider.dart';
+import '../../../../core/extensions/providers/witanime_provider.dart';
 import '../../../../core/extensions/provider_stream_exception.dart';
 import '../../../../core/storage/history_repository.dart';
 import '../../../../core/storage/episode_watch_repository.dart';
@@ -463,6 +465,8 @@ class PlayerController extends Notifier<PlayerState> {
   /// MyAnimeList id for the anime being played, resolved from the catalog or
   /// from the title. Needed to submit a viewer's marks back to AniSkip.
   int? _resolvedMalId;
+  int _skipFetchGeneration = 0;
+  bool _skipNeedsDurationRefresh = false;
   bool _hasConfirmedPlaybackFrame = false;
 
   // RC1 — when a stream fails to start with a decode/codec error (common on
@@ -780,6 +784,9 @@ class PlayerController extends Notifier<PlayerState> {
     _pendingResumeSeekFuture = null;
     _hasMarkedWatched = false;
     ++_catalogGeneration;
+    ++_skipFetchGeneration;
+    _skipNeedsDurationRefresh = false;
+    _resolvedMalId = null;
     _item = item;
 
     final imdbId =
@@ -929,11 +936,22 @@ class PlayerController extends Notifier<PlayerState> {
     }
   }
 
-  void _maybeFetchSkipSegments() {
+  void _maybeFetchSkipSegments({int? knownDurationSec}) {
     // Downloaded episodes used to bail out here, which left them with no skip
     // button at all. They now go through the same path: the cache answers
     // offline, and the online sources still run when there is a connection.
-    unawaited(_fetchAndLogSkipSegments());
+    unawaited(_fetchAndLogSkipSegments(knownDurationSec: knownDurationSec));
+  }
+
+  void _refreshSkipSegmentsIfDurationPending(int? durationSec) {
+    if (!_skipNeedsDurationRefresh ||
+        _isDisposed ||
+        durationSec == null ||
+        durationSec <= 0) {
+      return;
+    }
+    _skipNeedsDurationRefresh = false;
+    _maybeFetchSkipSegments(knownDurationSec: durationSec);
   }
 
   /// Cache keys for the episode playing, offline-safe key first.
@@ -991,17 +1009,45 @@ class PlayerController extends Notifier<PlayerState> {
     return _catalogRuntimeSeconds();
   }
 
-  /// Episode runtime in seconds as published by the catalog (`awDuration` is
-  /// in minutes), or null when it isn't known.
+  /// Episode runtime in seconds as published by the catalog (`awDuration` or
+  /// `MultimediaItem.duration` in minutes), or null when it isn't known.
   int? _catalogRuntimeSeconds() {
     final raw = _item.syncData?['awDuration']?.trim();
-    final minutes = raw == null ? null : int.tryParse(raw);
+    final minutes = (raw == null ? null : int.tryParse(raw)) ?? _item.duration;
     if (minutes == null || minutes <= 0) return null;
     return minutes * 60;
   }
 
-  Future<void> _fetchAndLogSkipSegments() async {
-    if (_episode == null) return;
+  Future<void> _hydrateItemMetadataForSkip(int skipGen) async {
+    if (_item.url.trim().isEmpty) return;
+    final provider = _resolveProvider();
+    if (provider == null) return;
+    try {
+      final details = await provider
+          .getDetails(_item.url)
+          .timeout(const Duration(seconds: 4));
+      if (_isDisposed || skipGen != _skipFetchGeneration) return;
+      final mergedSync = <String, String>{
+        ...?details.syncData,
+        ...?_item.syncData,
+      };
+      _item = _item.copyWith(
+        duration: _item.duration ?? details.duration,
+        imdbId: _item.imdbId ?? details.imdbId,
+        tags: (_item.tags?.isNotEmpty == true) ? _item.tags : details.tags,
+        syncData: mergedSync.isEmpty ? null : mergedSync,
+      );
+      if (state.imdbId == null && (_item.imdbId?.isNotEmpty == true)) {
+        state = state.copyWith(imdbId: _item.imdbId);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _fetchAndLogSkipSegments({int? knownDurationSec}) async {
+    final episode = _episode;
+    if (episode == null) return;
+    final skipGen = _skipFetchGeneration;
+    bool isSkipCurrent() => !_isDisposed && skipGen == _skipFetchGeneration;
     if (state.isLive || _item.contentType == MultimediaContentType.livestream) {
       if (kDebugMode) {
         _debugPrint(
@@ -1028,29 +1074,58 @@ class PlayerController extends Notifier<PlayerState> {
       return;
     }
 
-    final malId = int.tryParse(
-      (_item.syncData?['malId'] ?? _item.syncData?['mal_id'] ?? '').trim(),
+    var malId = MalIdResolver.parsePositiveId(
+      _item.syncData?['malId'] ??
+          _item.syncData?['mal_id'] ??
+          _item.syncData?['awMalId'],
     );
-
-    final hasNoIds =
-        state.tmdbId == null &&
-        state.imdbId == null &&
-        malId == null &&
-        _item.syncData?['anilist'] == null &&
-        _item.syncData?['anilistId'] == null &&
-        _item.syncData?['anilist_id'] == null;
+    var aniListId = MalIdResolver.parsePositiveId(
+      _item.syncData?['anilist'] ??
+          _item.syncData?['anilistId'] ??
+          _item.syncData?['anilist_id'],
+    );
+    var aniDbId = MalIdResolver.parsePositiveId(
+      _item.syncData?['anidbId'] ?? _item.syncData?['anidb_id'],
+    );
 
     // Anything resolved on a previous play (or when the episode was
     // downloaded) is on disk, so show it straight away. This is the only
     // path that works with no connection.
     final cache = ref.read(skipSegmentCacheProvider);
-    final cached = cache.readAny(_skipCacheKeys());
-    if (cached.isNotEmpty) {
-      state = state.copyWith(skipSegments: cached);
-      if (kDebugMode) {
-        _debugPrint('Skip Segments: ${cached.length} restored from cache');
+    if (knownDurationSec == null) {
+      final cached = cache.readAny(_skipCacheKeys());
+      if (cached.isNotEmpty) {
+        state = state.copyWith(skipSegments: cached);
+        if (kDebugMode) {
+          _debugPrint('Skip Segments: ${cached.length} restored from cache');
+        }
       }
     }
+
+    if (malId == null && aniListId == null && aniDbId == null) {
+      await _hydrateItemMetadataForSkip(skipGen);
+      if (!isSkipCurrent()) return;
+      malId = MalIdResolver.parsePositiveId(
+        _item.syncData?['malId'] ??
+            _item.syncData?['mal_id'] ??
+            _item.syncData?['awMalId'],
+      );
+      aniListId = MalIdResolver.parsePositiveId(
+        _item.syncData?['anilist'] ??
+            _item.syncData?['anilistId'] ??
+            _item.syncData?['anilist_id'],
+      );
+      aniDbId = MalIdResolver.parsePositiveId(
+        _item.syncData?['anidbId'] ?? _item.syncData?['anidb_id'],
+      );
+    }
+
+    final hasNoIds =
+        state.tmdbId == null &&
+        state.imdbId == null &&
+        malId == null &&
+        aniListId == null &&
+        aniDbId == null;
 
     // A title alone is still workable: AniSkip is keyed by MyAnimeList id,
     // and the title resolves to one through AniList. The catalog provider
@@ -1069,8 +1144,8 @@ class PlayerController extends Notifier<PlayerState> {
       _debugPrint('=============================================');
       _debugPrint('SKIP SEGMENTS (AniSkip/IntroDB/chapters)');
       _debugPrint(
-        'ids: mal=$malId tmdb=${state.tmdbId} imdb=${state.imdbId} '
-        'anilist=${_item.syncData?['anilist'] ?? _item.syncData?['anilistId'] ?? _item.syncData?['anilist_id']}',
+        'ids: mal=$malId anidb=$aniDbId tmdb=${state.tmdbId} '
+        'imdb=${state.imdbId} anilist=$aniListId',
       );
       _debugPrint('syncData keys: ${_item.syncData?.keys.toList()}');
     }
@@ -1081,8 +1156,8 @@ class PlayerController extends Notifier<PlayerState> {
     var introDbSegments = const <SkipSegment>[];
     var aniSkipSegments = const <SkipSegment>[];
     var chapterSegments = const <SkipSegment>[];
-    final int season = _episode!.season > 0 ? _episode!.season : 1;
-    final int episodeNum = _episode!.episode > 0 ? _episode!.episode : 1;
+    final int season = episode.season > 0 ? episode.season : 1;
+    final int episodeNum = episode.episode > 0 ? episode.episode : 1;
 
     final isMovie = _item.contentType == MultimediaContentType.movie;
 
@@ -1098,7 +1173,7 @@ class PlayerController extends Notifier<PlayerState> {
           season: isMovie ? null : season,
           episode: isMovie ? null : episodeNum,
         );
-        if (_isDisposed) return;
+        if (!isSkipCurrent()) return;
         introDbSegments = segments;
         if (kDebugMode) {
           _debugPrint('IntroDB returned ${segments.length} segments:');
@@ -1115,16 +1190,17 @@ class PlayerController extends Notifier<PlayerState> {
       }
     }
 
-    if (_isDisposed) return;
+    if (!isSkipCurrent()) return;
 
     // 2. Check if the media is anime or animated to run AnimeSkip logic.
-    // A MyAnimeList id is itself proof of anime — MAL indexes nothing else.
+    // A MyAnimeList/AniList/AniDB id or anime catalog provider is proof of anime.
     final isAnime =
         _item.contentType == MultimediaContentType.anime ||
+        _item.provider == Anime3rbProvider.id ||
+        _item.provider == WitanimeProvider.id ||
         malId != null ||
-        _item.syncData?['anilist'] != null ||
-        _item.syncData?['anilistId'] != null ||
-        _item.syncData?['anilist_id'] != null ||
+        aniListId != null ||
+        aniDbId != null ||
         (_item.tags != null &&
             _item.tags!.any(
               (t) =>
@@ -1135,20 +1211,22 @@ class PlayerController extends Notifier<PlayerState> {
       // 2a. AniSkip (api.aniskip.com) — keyless and MAL-keyed, so it is the
       // primary anime source. Its data is anime-specific, so it replaces
       // whatever IntroDB returned for the same episode.
-      // The provider usually hands us a title and nothing else, so fall
-      // back to resolving the MyAnimeList id from it.
-      var resolvedMalId = malId;
-      if (resolvedMalId == null && _item.title.trim().isNotEmpty) {
-        resolvedMalId = await ref
-            .read(malIdResolverProvider)
-            .resolve(_item.title);
-        if (_isDisposed) return;
-        if (kDebugMode) {
-          _debugPrint(
-            'AniSkip: resolved MAL id $resolvedMalId from title '
-            '"${_item.title}"',
-          );
-        }
+      // When no direct MAL id came with the item, fall back to external ids
+      // (AniList/AniDB via ani.zip) or title search.
+      final resolvedMalId =
+          malId ??
+          await ref
+              .read(malIdResolverProvider)
+              .resolveForItem(
+                syncData: _item.syncData,
+                title: _item.title,
+                alternativeTitles: [?_item.syncData?['awEnglishTitle']],
+              );
+      if (!isSkipCurrent()) return;
+      if (kDebugMode && malId == null) {
+        _debugPrint(
+          'AniSkip: resolved MAL id $resolvedMalId for "${_item.title}"',
+        );
       }
       // Recorded after the fallback, not before it: the catalog hands us a
       // title and no ids for most anime, so an id assigned before this line
@@ -1159,8 +1237,11 @@ class PlayerController extends Notifier<PlayerState> {
 
       if (resolvedMalId != null) {
         try {
-          final durationSec = await _awaitDurationSeconds();
-          if (_isDisposed) return;
+          final durationSec = knownDurationSec ?? await _awaitDurationSeconds();
+          if (!isSkipCurrent()) return;
+          if (durationSec == null && knownDurationSec == null) {
+            _skipNeedsDurationRefresh = true;
+          }
           if (kDebugMode) {
             _debugPrint(
               'AniSkip: querying mal=$resolvedMalId season=$season '
@@ -1174,7 +1255,7 @@ class PlayerController extends Notifier<PlayerState> {
             episode: episodeNum,
             duration: durationSec,
           );
-          if (_isDisposed) return;
+          if (!isSkipCurrent()) return;
           aniSkipSegments = segments;
           if (kDebugMode) {
             _debugPrint('AniSkip returned ${segments.length} segments:');
@@ -1193,7 +1274,7 @@ class PlayerController extends Notifier<PlayerState> {
         }
       }
 
-      if (_isDisposed) return;
+      if (!isSkipCurrent()) return;
 
       // 2b. IntroDB, reached through the ids ani.zip keeps against the
       // MyAnimeList one. It is a separate database from AniSkip — where
@@ -1205,10 +1286,11 @@ class PlayerController extends Notifier<PlayerState> {
           final ids = await ref
               .read(animeIdMappingsProvider)
               .byMalId(resolvedMalId);
-          if (_isDisposed) return;
+          if (!isSkipCurrent()) return;
           if (ids != null && (ids.imdbId != null || ids.tmdbId != null)) {
-            final durationSec = await _awaitDurationSeconds();
-            if (_isDisposed) return;
+            final durationSec =
+                knownDurationSec ?? await _awaitDurationSeconds();
+            if (!isSkipCurrent()) return;
             introDbSegments = await ref
                 .read(introDbServiceProvider)
                 .getSkipSegments(
@@ -1218,7 +1300,7 @@ class PlayerController extends Notifier<PlayerState> {
                   episode: isMovie ? null : episodeNum,
                   duration: durationSec,
                 );
-            if (_isDisposed) return;
+            if (!isSkipCurrent()) return;
             if (kDebugMode) {
               _debugPrint(
                 'IntroDB via ani.zip ($ids) returned '
@@ -1237,14 +1319,14 @@ class PlayerController extends Notifier<PlayerState> {
     }
     // 3. The file's own chapter markers. Per-file data, so it covers the
     // episodes no crowd-sourced service has, and it costs no network call.
-    final durationSec = await _awaitDurationSeconds();
-    if (_isDisposed) return;
+    final durationSec = knownDurationSec ?? await _awaitDurationSeconds();
+    if (!isSkipCurrent()) return;
     try {
       chapterSegments = await ChapterSkipSource.read(
         _player,
         durationSec: durationSec?.toDouble(),
       );
-      if (_isDisposed) return;
+      if (!isSkipCurrent()) return;
       if (kDebugMode) {
         _debugPrint('Chapters returned ${chapterSegments.length} segments:');
         for (final s in chapterSegments) {
@@ -1272,7 +1354,7 @@ class PlayerController extends Notifier<PlayerState> {
       _debugPrint('=============================================');
     }
 
-    if (merged.isNotEmpty && !_isDisposed) {
+    if (merged.isNotEmpty && isSkipCurrent()) {
       state = state.copyWith(skipSegments: merged);
       // Keep them for the next play, which may be offline.
       unawaited(cache.write(_skipCacheKeys(), merged));
@@ -1308,6 +1390,9 @@ class PlayerController extends Notifier<PlayerState> {
         if ((info.duration > 0 || info.isLive) &&
             _suppressNextEpisodeDetection) {
           _suppressNextEpisodeDetection = false;
+        }
+        if (info.duration > 0) {
+          _refreshSkipSegmentsIfDurationPending(info.duration ~/ 1000);
         }
       }
     });
@@ -1601,6 +1686,7 @@ class PlayerController extends Notifier<PlayerState> {
         if (_pendingResumeSeekPosition != null) {
           unawaited(_flushPendingResumeSeek());
         }
+        _refreshSkipSegmentsIfDurationPending(duration.inSeconds);
         // Safe point to re-enable next-episode detection: the new episode's
         // duration is now confirmed, so remaining-time calculations are valid.
         if (_suppressNextEpisodeDetection) {
@@ -3791,6 +3877,8 @@ class PlayerController extends Notifier<PlayerState> {
     _pendingResumeSeekPosition = null;
     _isApplyingPendingResumeSeek = false;
     _pendingResumeSeekFuture = null;
+    ++_skipFetchGeneration;
+    _skipNeedsDurationRefresh = false;
     if (state.skipSegments.isNotEmpty) {
       state = state.copyWith(skipSegments: const []);
     }
