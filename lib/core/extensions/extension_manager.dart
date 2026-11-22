@@ -36,6 +36,8 @@ final anime3rbCatalogProvider = Provider<Anime3rbProvider?>((ref) {
   return Anime3rbProvider.withTransport(
     ref.watch(anime3rbTransportProvider),
     turnstileResolver: Anime3rbWebViewSolver.instance.solveVid3rbTurnstile,
+    useAniZipEpisodeImages: () =>
+        ref.read(settingsRepositoryProvider).isEpisodeImagesFromAniZipEnabled(),
   );
 });
 

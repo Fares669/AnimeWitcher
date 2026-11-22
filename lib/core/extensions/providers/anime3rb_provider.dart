@@ -6,6 +6,7 @@ import 'package:html/parser.dart' as html;
 
 import '../../account/anime3rb_livewire.dart';
 import '../../domain/entity/multimedia_item.dart';
+import '../../services/anizip_service.dart';
 import '../../utils/digit_normalization.dart';
 import '../base_provider.dart';
 import 'anime3rb_filter_values.dart';
@@ -18,7 +19,11 @@ class Anime3rbProvider extends AnimeWitcherProvider {
     this._fetchHtml, {
     Anime3rbTransport? transport,
     Anime3rbTurnstileResolver? turnstileResolver,
+    bool Function()? useAniZipEpisodeImages,
+    AniZipService? aniZip,
   }) : _transport = transport,
+       _useAniZipEpisodeImages = useAniZipEpisodeImages,
+       _aniZip = aniZip,
        _playback = transport == null
            ? null
            : Anime3rbPlaybackResolver(
@@ -30,6 +35,8 @@ class Anime3rbProvider extends AnimeWitcherProvider {
   factory Anime3rbProvider.withTransport(
     Anime3rbTransport transport, {
     Anime3rbTurnstileResolver? turnstileResolver,
+    bool Function()? useAniZipEpisodeImages,
+    AniZipService? aniZip,
   }) => Anime3rbProvider(
     (uri, {headers = const {}, cancelToken}) => transport.fetchHtml(
       uri,
@@ -38,6 +45,8 @@ class Anime3rbProvider extends AnimeWitcherProvider {
     ),
     transport: transport,
     turnstileResolver: turnstileResolver,
+    useAniZipEpisodeImages: useAniZipEpisodeImages,
+    aniZip: aniZip,
   );
 
   final Future<String> Function(
@@ -48,6 +57,8 @@ class Anime3rbProvider extends AnimeWitcherProvider {
   _fetchHtml;
   final Anime3rbTransport? _transport;
   final Anime3rbPlaybackResolver? _playback;
+  final bool Function()? _useAniZipEpisodeImages;
+  final AniZipService? _aniZip;
   ({String csrf, Uri updateUri, String snapshot, DateTime fetchedAt})?
   _cachedSearchBootstrap;
   final Map<String, ({MultimediaItem item, DateTime expiresAt})> _detailsCache =
@@ -583,6 +594,7 @@ class Anime3rbProvider extends AnimeWitcherProvider {
 
     final trailers = _trailers(doc, uri);
     final episodes = _episodes(doc, uri, title);
+    final externalIds = _extractExternalIds(doc, json);
     final related = _parseTitleCards(
       _findSectionByHeading(doc, 'أعمال ذات صلة'),
       uri,
@@ -644,6 +656,8 @@ class Anime3rbProvider extends AnimeWitcherProvider {
         'awEnglishTitle': ?(altName != null && altName.isNotEmpty
             ? altName
             : null),
+        'malId': ?externalIds.malId,
+        'anidbId': ?externalIds.anidbId,
         'aw3rbUserList': ?(userList != null && userList.isNotEmpty
             ? userList
             : null),
@@ -710,6 +724,22 @@ class Anime3rbProvider extends AnimeWitcherProvider {
       throw UnsupportedError('Anime3rb playback transport is not configured');
     }
     return resolver.resolveStreams(url, forDownload: false);
+  }
+
+  @override
+  Future<List<Episode>> getEpisodeMetadata(String url) async {
+    if (!(_useAniZipEpisodeImages?.call() ?? true)) {
+      return const <Episode>[];
+    }
+    try {
+      final details = await getDetails(url);
+      final episodes = details.episodes ?? const <Episode>[];
+      if (episodes.isEmpty) return const <Episode>[];
+      final service = _aniZip ?? AniZipService();
+      return await service.enrichEpisodes(details, episodes) ?? episodes;
+    } catch (_) {
+      return const <Episode>[];
+    }
   }
 
   @override
@@ -1294,5 +1324,44 @@ class Anime3rbProvider extends AnimeWitcherProvider {
     if (value is! Map) return null;
     final score = double.tryParse('${value['ratingValue']}');
     return score != null && score >= 0 && score <= 10 ? score : null;
+  }
+
+  static final _malAnimeIdRegex = RegExp(
+    r'myanimelist\.net/anime/(\d+)',
+    caseSensitive: false,
+  );
+  static final _anidbAnimeIdRegex = RegExp(
+    r'anidb\.net/(?:anime/|a)(\d+)',
+    caseSensitive: false,
+  );
+
+  static ({String? malId, String? anidbId}) _extractExternalIds(
+    Document doc,
+    Map<String, dynamic> json,
+  ) {
+    String? malId;
+    String? anidbId;
+
+    void inspectUrl(String? raw) {
+      if (raw == null || raw.isEmpty) return;
+      malId ??= _malAnimeIdRegex.firstMatch(raw)?.group(1);
+      anidbId ??= _anidbAnimeIdRegex.firstMatch(raw)?.group(1);
+    }
+
+    for (final anchor in doc.querySelectorAll('a[href]')) {
+      inspectUrl(anchor.attributes['href']?.trim());
+      if (malId != null && anidbId != null) break;
+    }
+
+    final sameAs = json['sameAs'];
+    if (sameAs is String) {
+      inspectUrl(sameAs);
+    } else if (sameAs is List<Object?>) {
+      for (final entry in sameAs) {
+        if (entry is String) inspectUrl(entry);
+      }
+    }
+
+    return (malId: malId, anidbId: anidbId);
   }
 }

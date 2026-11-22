@@ -2,6 +2,7 @@ import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/providers/anime3rb_provider.dart';
 import 'package:animewitcher/core/extensions/providers/anime3rb_transport.dart';
+import 'package:animewitcher/core/services/anizip_service.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -206,6 +207,8 @@ void main() {
   </div>
   <a href="https://anime3rb.com/genre/action">أكشن</a>
   <a href="https://anime3rb.com/genre/fantasy">خيال</a>
+  <a href="https://anidb.net/anime/69">anidb</a>
+  <a href="https://myanimelist.net/anime/21">myanimelist</a>
   <table>
     <tr><td>الحالة:</td><td>قيد البث</td></tr>
     <tr><td>إصدار:</td><td title="1999-10-20">خريف 1999</td></tr>
@@ -245,6 +248,8 @@ void main() {
     expect(item.score, 8.72);
     expect(item.syncData?['awStudio'], 'Toei Animation');
     expect(item.syncData?['awEnglishTitle'], 'ون بيس');
+    expect(item.syncData?['malId'], '21');
+    expect(item.syncData?['anidbId'], '69');
     expect(item.trailers?.map((t) => t.url), ['https://www.youtube.com/embed/abc123']);
     expect(item.episodes, hasLength(2));
     expect(item.episodes!.first.episode, 1);
@@ -283,6 +288,89 @@ void main() {
     provider.invalidateDetailCaches('https://anime3rb.com/titles/naruto');
     await provider.getEpisodes('https://anime3rb.com/titles/naruto');
     expect(detailFetches, 2);
+  });
+
+  test('getEpisodeMetadata enriches Anime3rb episodes from AniZip using extracted MAL ID (including long-running absolute episodes) and respects toggle', () async {
+    var detailFetches = 0;
+    var aniZipFetches = 0;
+    var aniZipEnabled = true;
+
+    final aniZipDio = Dio();
+    aniZipDio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          aniZipFetches++;
+          expect(options.path, '/mappings');
+          expect(options.queryParameters['mal_id'], '21');
+          handler.resolve(
+            Response<Map<String, dynamic>>(
+              requestOptions: options,
+              statusCode: 200,
+              data: <String, dynamic>{
+                'episodes': <String, dynamic>{
+                  '1': <String, dynamic>{
+                    'episodeNumber': 1,
+                    'absoluteEpisodeNumber': 1,
+                    'image': 'https://artworks.thetvdb.com/ep1-still.jpg',
+                  },
+                  '1180': <String, dynamic>{
+                    'seasonNumber': 23,
+                    'episodeNumber': 25,
+                    'absoluteEpisodeNumber': 1180,
+                    'image': 'https://artworks.thetvdb.com/ep1180-still.jpg',
+                  },
+                },
+              },
+            ),
+          );
+        },
+      ),
+    );
+
+    final provider = Anime3rbProvider(
+      (uri, {headers = const {}, cancelToken}) async {
+        detailFetches++;
+        return '''
+<html><body>
+  <h1><span dir="ltr">One Piece</span></h1>
+  <a href="https://myanimelist.net/anime/21">myanimelist</a>
+  <div class="video-list">
+    <a href="https://anime3rb.com/episode/one-piece/1">
+      <img src="https://images.anime3rb.com/fallback.jpg">
+      <div class="video-data"><span>الحلقة 1</span><p>أنا لوفي!</p></div>
+    </a>
+    <a href="https://anime3rb.com/episode/one-piece/1180">
+      <img src="https://images.anime3rb.com/fallback.jpg">
+      <div class="video-data"><span>الحلقة 1180</span><p>نهاية الآرك</p></div>
+    </a>
+  </div>
+</body></html>
+''';
+      },
+      useAniZipEpisodeImages: () => aniZipEnabled,
+      aniZip: AniZipService(dio: aniZipDio),
+    );
+
+    final enriched = await provider.getEpisodeMetadata(
+      'https://anime3rb.com/titles/one-piece',
+    );
+    expect(detailFetches, 1);
+    expect(aniZipFetches, 1);
+    expect(enriched.map((e) => e.posterUrl).toList(), [
+      'https://artworks.thetvdb.com/ep1-still.jpg',
+      'https://artworks.thetvdb.com/ep1180-still.jpg',
+    ]);
+    // Cached on second call without hitting AniZip or Anime3rb again.
+    await provider.getEpisodeMetadata('https://anime3rb.com/titles/one-piece');
+    expect(detailFetches, 1);
+    expect(aniZipFetches, 1);
+
+    // Turning off AniZip episode images skips enrichment just like AnimeWitcher.
+    aniZipEnabled = false;
+    final disabled = await provider.getEpisodeMetadata(
+      'https://anime3rb.com/titles/one-piece',
+    );
+    expect(disabled, isEmpty);
   });
 
   test('searchPage uses Livewire search component and parses simple-title-card results when transport is attached', () async {
