@@ -377,6 +377,46 @@ var video_sources = [
     expect(sources[1].quality, '720p');
   });
 
+  test('vid3rb regex stops before HTML-escaped &quot; and skips empty premium entries from live /sources payload', () async {
+    Uri? requestedPlayer;
+    final resolver = Anime3rbPlaybackResolver(
+      _StubTransport((uri, _, _) async {
+        if (uri.path.startsWith('/episode/')) {
+          return const Anime3rbHttpResponse(
+            statusCode: 200,
+            body:
+                '<div wire:snapshot="{&quot;data&quot;:{&quot;video_url&quot;:&quot;https:\\/\\/video.vid3rb.com\\/player\\/a2d9?token=tok1&amp;expires=999&quot;,&quot;video_source&quot;:&quot;s1&quot;}}"></div>',
+          );
+        }
+        requestedPlayer = uri;
+        return const Anime3rbHttpResponse(
+          statusCode: 200,
+          body: '<script>var video_sources = [];</script>',
+        );
+      }),
+      turnstileResolver: (_) async => Anime3rbTurnstileResult(
+        sourcesJson: jsonEncode([
+          {'src': '', 'type': 'video/mp4', 'label': '1080p Premium', 'res': '10802', 'premium': true},
+          {'src': 'https://video.vid3rb.com/video/id-1080?token=a', 'type': 'video/mp4', 'label': '1080p', 'res': '1080', 'premium': false},
+          {'src': 'https://video.vid3rb.com/video/id-720?token=b', 'type': 'video/mp4', 'label': '720p', 'res': '720', 'premium': false},
+          {'src': 'https://video.vid3rb.com/video/id-480?token=c', 'type': 'video/mp4', 'label': '480p', 'res': '480', 'premium': false},
+        ]),
+      ),
+    );
+
+    final streams = await resolver.loadSources(
+      'https://anime3rb.com/episode/one-piece/1180',
+      forDownload: false,
+    );
+    expect(requestedPlayer?.toString(), 'https://video.vid3rb.com/player/a2d9?token=tok1&expires=999');
+    expect(streams.map((s) => s.quality).toList(), ['1080p', '720p', '480p']);
+    expect(streams.map((s) => s.url).toList(), [
+      'https://video.vid3rb.com/video/id-1080?token=a',
+      'https://video.vid3rb.com/video/id-720?token=b',
+      'https://video.vid3rb.com/video/id-480?token=c',
+    ]);
+  });
+
   test('DioAnime3rbTransport invokes challengeResolver on 403 challenge and retries with solved cookies', () async {
     var attempts = 0;
     final dio = Dio();

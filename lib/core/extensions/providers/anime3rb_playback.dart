@@ -160,7 +160,7 @@ class Anime3rbPlaybackResolver {
   static const _cacheTtl = Duration(minutes: 2);
 
   static final _vid3rbIframeRegex = RegExp(
-    r'''https:(?:\\/|/){2}video\.vid3rb\.com(?:\\/|/)player(?:\\/|/)[^"'\s<>]+''',
+    r'''https:(?:\\/|/){2}video\.vid3rb\.com(?:\\/|/)player(?:\\/|/)(?:(?!&quot;)[^"'\s<>])+''',
     caseSensitive: false,
   );
   static final _inlineSourcesRegex = RegExp(
@@ -246,6 +246,15 @@ class Anime3rbPlaybackResolver {
     Uri? defaultPlayerUri;
     if (snapshotVideoUrl != null && snapshotVideoUrl.isNotEmpty) {
       defaultPlayerUri = Uri.tryParse(_cleanUnescapedUrl(snapshotVideoUrl));
+    }
+    if (defaultPlayerUri == null) {
+      final iframeSrc = doc
+          .querySelector('iframe[src*="video.vid3rb.com/player/"]')
+          ?.attributes['src']
+          ?.trim();
+      if (iframeSrc != null && iframeSrc.isNotEmpty) {
+        defaultPlayerUri = Uri.tryParse(_cleanUnescapedUrl(iframeSrc));
+      }
     }
     if (defaultPlayerUri == null) {
       final rawMatch = _vid3rbIframeRegex.firstMatch(body)?.group(0);

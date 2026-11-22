@@ -161,12 +161,12 @@ class Anime3rbWebViewSolver {
     text.indexOf('Checking your browser') !== -1 ||
     text.indexOf('Verify you are human') !== -1;
 
-  var managedWrap = document.querySelector('.captcha-wrapper, #cf-managed-turnstile');
+  var managedWrap = document.querySelector('.captcha-wrapper');
   var managedVisible = false;
   if (managedWrap) {
     var st = window.getComputedStyle ? window.getComputedStyle(managedWrap) : null;
-    if (!st || (st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0')) {
-      managedVisible = managedWrap.offsetWidth > 0 || managedWrap.offsetHeight > 0 || managedWrap.childElementCount > 0;
+    if (st && st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0') {
+      managedVisible = managedWrap.offsetWidth > 0 && managedWrap.offsetHeight > 0;
     }
   }
 
@@ -181,36 +181,55 @@ class Anime3rbWebViewSolver {
   if (!inlineSources) {
     try {
       var list = [];
-      if (window.videojs && typeof window.videojs.getAllPlayers === 'function') {
-        var players = window.videojs.getAllPlayers() || [];
-        for (var i = 0; i < players.length; i++) {
-          var p = players[i];
-          var srcs = (typeof p.currentSources === 'function' ? p.currentSources() : null) ||
-            (p.options_ && Array.isArray(p.options_.sources) ? p.options_.sources : []);
-          for (var j = 0; j < srcs.length; j++) {
-            var s = srcs[j];
-            if (s && s.src && String(s.src).indexOf('http') === 0) {
-              list.push({
-                src: String(s.src),
-                label: String(s.label || s.res || s.quality || 'HD'),
-                premium: Boolean(s.premium)
-              });
-            }
-          }
-          if (!list.length && typeof p.currentSrc === 'function') {
-            var csrc = p.currentSrc();
-            if (csrc && String(csrc).indexOf('http') === 0) {
-              list.push({ src: String(csrc), label: 'HD', premium: false });
+      var seen = {};
+      function addSrc(s) {
+        if (!s || !s.src) return;
+        var u = String(s.src).trim();
+        if (u.indexOf('http') !== 0 || seen[u]) return;
+        seen[u] = true;
+        list.push({
+          src: u,
+          label: String(s.label || s.res || s.quality || 'HD'),
+          res: s.res != null ? String(s.res) : '',
+          premium: Boolean(s.premium)
+        });
+      }
+      function collectFromPlayer(p) {
+        if (!p) return;
+        if (typeof p.getGroupedSrc === 'function') {
+          var g = p.getGroupedSrc();
+          var groups = (g && (g.label || g.res || g.type)) || null;
+          if (groups && typeof groups === 'object') {
+            var keys = Object.keys(groups);
+            for (var gi = 0; gi < keys.length; gi++) {
+              var arr = groups[keys[gi]];
+              if (Array.isArray(arr)) {
+                for (var ai = 0; ai < arr.length; ai++) addSrc(arr[ai]);
+              }
             }
           }
         }
+        if (!list.length && typeof p.currentSources === 'function') {
+          var cs = p.currentSources();
+          if (Array.isArray(cs)) {
+            for (var ci = 0; ci < cs.length; ci++) addSrc(cs[ci]);
+          }
+        }
+        if (!list.length && p.options_ && Array.isArray(p.options_.sources)) {
+          for (var oi = 0; oi < p.options_.sources.length; oi++) addSrc(p.options_.sources[oi]);
+        }
+      }
+      if (window.player) collectFromPlayer(window.player);
+      if (!list.length && window.videojs && typeof window.videojs.getAllPlayers === 'function') {
+        var players = window.videojs.getAllPlayers() || [];
+        for (var i = 0; i < players.length; i++) collectFromPlayer(players[i]);
       }
       if (!list.length) {
         var els = document.querySelectorAll('video source[src], video[src]');
         for (var k = 0; k < els.length; k++) {
           var u = els[k].getAttribute('src') || els[k].currentSrc || '';
           if (u && u.indexOf('http') === 0) {
-            list.push({
+            addSrc({
               src: u,
               label: els[k].getAttribute('label') || els[k].getAttribute('size') || 'HD',
               premium: false
@@ -514,6 +533,16 @@ class Anime3rbWebViewSolver {
                                       ).textTheme.bodySmall,
                                     ),
                                   ],
+                                ),
+                              ),
+                              IconButton(
+                                tooltip: 'إعادة التحميل',
+                                icon: const Icon(Icons.refresh_rounded),
+                                onPressed: () => unawaited(
+                                  controller.loadRequest(
+                                    initialUri,
+                                    headers: requestHeaders,
+                                  ),
                                 ),
                               ),
                               IconButton(
