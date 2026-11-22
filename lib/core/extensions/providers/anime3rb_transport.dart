@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../network/http_defaults.dart';
 import '../../services/app_diagnostics.dart';
@@ -185,6 +184,18 @@ abstract interface class Anime3rbTransport {
   void close({bool force = false});
 }
 
+typedef Anime3rbChallengeSolution = ({
+  Map<String, String> cookies,
+  String? html,
+  String? userAgent,
+});
+
+typedef Anime3rbChallengeResolver =
+    Future<Anime3rbChallengeSolution?> Function(
+      Uri uri, {
+      Map<String, String> currentCookies,
+    });
+
 typedef Anime3rbSessionHeaderProvider = Future<Map<String, String>> Function(
   Uri uri,
 );
@@ -192,28 +203,34 @@ typedef Anime3rbSessionHeaderProvider = Future<Map<String, String>> Function(
 /// [Dio]-backed transport keeping browser defaults, client hints, and per-host
 /// session cookies across `anime3rb.com` and `vid3rb.com`.
 class DioAnime3rbTransport implements Anime3rbTransport {
-  DioAnime3rbTransport({Dio? dio, this._sessionHeaders})
-    : _dio =
-          dio ??
-          Dio(
-            BaseOptions(
-              connectTimeout: const Duration(seconds: 15),
-              receiveTimeout: const Duration(seconds: 15),
-              responseType: ResponseType.plain,
-              validateStatus: (status) => status != null && status < 600,
-              headers: const {
-                'User-Agent': kDefaultBrowserUserAgent,
-                'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8',
-              },
-            ),
-          ),
-      _ownsDio = dio == null;
+  DioAnime3rbTransport({
+    Dio? dio,
+    this._sessionHeaders,
+    Anime3rbChallengeResolver? challengeResolver,
+  }) : _challengeResolver = challengeResolver,
+       _dio =
+           dio ??
+           Dio(
+             BaseOptions(
+               connectTimeout: const Duration(seconds: 15),
+               receiveTimeout: const Duration(seconds: 15),
+               responseType: ResponseType.plain,
+               validateStatus: (status) => status != null && status < 600,
+               headers: const {
+                 'User-Agent': kDefaultBrowserUserAgent,
+                 'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8',
+               },
+             ),
+           ),
+       _ownsDio = dio == null;
 
   final Dio _dio;
   final bool _ownsDio;
   final Anime3rbSessionHeaderProvider? _sessionHeaders;
+  final Anime3rbChallengeResolver? _challengeResolver;
   final Map<String, Map<String, String>> _cookiesByDomain = {};
   final Map<String, String?> _lastAuthCookies = {};
+  String? _overrideUserAgent;
 
   static const _hostRequestTimeout = Duration(seconds: 10);
 
@@ -335,6 +352,11 @@ class DioAnime3rbTransport implements Anime3rbTransport {
             .map((entry) => '${entry.key}=${entry.value}')
             .join('; ');
       }
+      if (_overrideUserAgent != null &&
+          _overrideUserAgent!.isNotEmpty &&
+          !_hasHeaderCaseInsensitive(explicit, 'User-Agent')) {
+        merged['User-Agent'] = _overrideUserAgent!;
+      }
       final activeUa =
           explicit['User-Agent'] ??
           explicit['user-agent'] ??
@@ -345,6 +367,46 @@ class DioAnime3rbTransport implements Anime3rbTransport {
     }
     merged.addAll(explicit);
     return merged;
+  }
+
+  /// Records cookies returned from an external WebView solve/login into the
+  /// transport cookie jar for [uri]'s domain.
+  void absorbCookies(Uri uri, Map<String, String> cookies) {
+    final domain = _cookieDomain(uri);
+    if (domain == null || cookies.isEmpty) return;
+    final jar = _cookiesByDomain.putIfAbsent(domain, () => <String, String>{});
+    for (final entry in cookies.entries) {
+      final k = entry.key.trim();
+      final v = entry.value.trim();
+      if (k.isNotEmpty && v.isNotEmpty) {
+        jar[k] = v;
+      }
+    }
+  }
+
+  Future<Anime3rbChallengeSolution?> _resolveChallengeIfPossible(
+    Uri uri,
+    Anime3rbHttpResponse blockedResponse,
+    CancelToken? cancelToken,
+  ) async {
+    if (_challengeResolver == null ||
+        !blockedResponse.isCloudflareChallenge ||
+        cancelToken?.isCancelled == true) {
+      return null;
+    }
+    final domain = _cookieDomain(uri);
+    final current = domain == null
+        ? const <String, String>{}
+        : Map<String, String>.unmodifiable(
+            _cookiesByDomain[domain] ?? const <String, String>{},
+          );
+    final solution = await _challengeResolver(uri, currentCookies: current);
+    if (solution == null) return null;
+    absorbCookies(uri, solution.cookies);
+    if (solution.userAgent != null && solution.userAgent!.trim().isNotEmpty) {
+      _overrideUserAgent = solution.userAgent!.trim();
+    }
+    return solution;
   }
 
   ({CancelToken? token, Timer? timer}) _requestCancellation(
@@ -376,6 +438,50 @@ class DioAnime3rbTransport implements Anime3rbTransport {
 
   @override
   Future<Anime3rbHttpResponse> get(
+    Uri uri, {
+    Map<String, String> headers = const {},
+    bool followRedirects = true,
+    bool inspectMedia = false,
+    CancelToken? cancelToken,
+    String operation = 'get',
+  }) async {
+    final first = await _getOnce(
+      uri,
+      headers: headers,
+      followRedirects: followRedirects,
+      inspectMedia: inspectMedia,
+      cancelToken: cancelToken,
+      operation: operation,
+    );
+    final solution = await _resolveChallengeIfPossible(uri, first, cancelToken);
+    if (solution == null) return first;
+
+    final retried = await _getOnce(
+      uri,
+      headers: headers,
+      followRedirects: followRedirects,
+      inspectMedia: inspectMedia,
+      cancelToken: cancelToken,
+      operation: '${operation}_cf_retry',
+    );
+    if (retried.isCloudflareChallenge &&
+        followRedirects &&
+        !inspectMedia &&
+        solution.html != null &&
+        solution.html!.trim().isNotEmpty) {
+      final webViewResp = Anime3rbHttpResponse(
+        statusCode: 200,
+        body: solution.html!,
+        finalUri: uri,
+      );
+      if (!webViewResp.isCloudflareChallenge) {
+        return webViewResp;
+      }
+    }
+    return retried;
+  }
+
+  Future<Anime3rbHttpResponse> _getOnce(
     Uri uri, {
     Map<String, String> headers = const {},
     bool followRedirects = true,
@@ -528,6 +634,41 @@ class DioAnime3rbTransport implements Anime3rbTransport {
   );
 
   Future<Anime3rbHttpResponse> _sendWithBody(
+    String method,
+    Uri uri, {
+    Object? body,
+    Map<String, String> headers = const {},
+    bool followRedirects = true,
+    CancelToken? cancelToken,
+    required String operation,
+  }) async {
+    final first = await _sendWithBodyOnce(
+      method,
+      uri,
+      body: body,
+      headers: headers,
+      followRedirects: followRedirects,
+      cancelToken: cancelToken,
+      operation: operation,
+    );
+    final solution = await _resolveChallengeIfPossible(
+      uri,
+      first,
+      cancelToken,
+    );
+    if (solution == null) return first;
+    return _sendWithBodyOnce(
+      method,
+      uri,
+      body: body,
+      headers: headers,
+      followRedirects: followRedirects,
+      cancelToken: cancelToken,
+      operation: '${operation}_cf_retry',
+    );
+  }
+
+  Future<Anime3rbHttpResponse> _sendWithBodyOnce(
     String method,
     Uri uri, {
     Object? body,

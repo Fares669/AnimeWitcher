@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:html/dom.dart';
 import 'package:html/parser.dart' as html;
 
+import '../../account/anime3rb_livewire.dart';
 import '../../domain/entity/multimedia_item.dart';
 import '../../utils/digit_normalization.dart';
 import '../base_provider.dart';
@@ -47,6 +48,8 @@ class Anime3rbProvider extends AnimeWitcherProvider {
   _fetchHtml;
   final Anime3rbTransport? _transport;
   final Anime3rbPlaybackResolver? _playback;
+  ({String csrf, Uri updateUri, String snapshot, DateTime fetchedAt})?
+  _cachedSearchBootstrap;
 
   static const id = 'anime3rb';
   static const originUrl = 'https://anime3rb.com';
@@ -144,7 +147,7 @@ class Anime3rbProvider extends AnimeWitcherProvider {
     int offset = 0,
     int limit = _catalogPageSize,
     CancelToken? cancelToken,
-  }) {
+  }) async {
     final text = query.trim();
     final (sortBy, sortDir) = switch (filters.sort) {
       'favorites' => ('rate', 'desc'),
@@ -190,6 +193,47 @@ class Anime3rbProvider extends AnimeWitcherProvider {
         ..sort();
       if (parsedYears.isNotEmpty) {
         yearRange = '${parsedYears.first}-${parsedYears.last}';
+      }
+    }
+
+    final hasOtherFilters =
+        typeSlug != null ||
+        genreSlugs.isNotEmpty ||
+        statusSlugs.isNotEmpty ||
+        ageSlugs.isNotEmpty ||
+        studioSlugs.isNotEmpty ||
+        yearRange != null;
+    final supportsLivewireSearch =
+        text.isNotEmpty &&
+        !hasOtherFilters &&
+        _transport != null &&
+        offset == 0 &&
+        (filters.sort.isEmpty ||
+            filters.sort == 'favorites' ||
+            filters.sort == 'relevance');
+    if (supportsLivewireSearch) {
+      try {
+        final livewireItems = await _livewireSearch(
+          text,
+          cancelToken: cancelToken,
+        );
+        if (livewireItems != null) {
+          final size = limit.clamp(1, 100);
+          final sliced = livewireItems.length > size
+              ? livewireItems.sublist(0, size)
+              : livewireItems;
+          return ProviderMediaPage(
+            items: sliced,
+            nextOffset: sliced.length,
+            hasMore: livewireItems.length > sliced.length,
+          );
+        }
+      } catch (e) {
+        if (e is DioException && e.type == DioExceptionType.cancel) rethrow;
+        if (e is Anime3rbRateLimitException ||
+            e is Anime3rbBrowserRequiredException) {
+          rethrow;
+        }
       }
     }
 
@@ -486,7 +530,7 @@ class Anime3rbProvider extends AnimeWitcherProvider {
     final tableFields = _parseDetailsTable(doc);
 
     final genres = <String>{
-      for (final a in doc.querySelectorAll('a[href*="/genre/"]')) ?_text(a),
+      for (final g in _parseDetailsGenres(doc)) g,
       if (json['genre'] case final List<Object?> list)
         for (final g in list) ?_string(g),
     }.toList(growable: false);
@@ -760,6 +804,234 @@ class Anime3rbProvider extends AnimeWitcherProvider {
     return items.values.toList(growable: false);
   }
 
+  Future<List<MultimediaItem>?> _livewireSearch(
+    String query, {
+    CancelToken? cancelToken,
+  }) async {
+    final transport = _transport;
+    if (transport == null) return null;
+
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final cached = _cachedSearchBootstrap;
+      final isFresh =
+          attempt == 0 &&
+          cached != null &&
+          DateTime.now().difference(cached.fetchedAt) <
+              const Duration(minutes: 2);
+
+      String csrf;
+      Uri updateUri;
+      String snapshot;
+
+      if (isFresh) {
+        csrf = cached.csrf;
+        updateUri = cached.updateUri;
+        snapshot = cached.snapshot;
+      } else {
+        final pageResp = await transport.get(
+          _origin,
+          headers: const {
+            'Accept':
+                'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          },
+          cancelToken: cancelToken,
+          operation: 'search_bootstrap',
+        );
+        if (pageResp.statusCode == 429) {
+          throw const Anime3rbRateLimitException();
+        }
+        if (pageResp.isCloudflareChallenge) {
+          throw Anime3rbBrowserRequiredException(
+            'يتطلب البحث في Anime3rb إكمال تحقق Cloudflare في المتصفح.',
+            watchUrl: _origin,
+          );
+        }
+        if (!pageResp.isSuccess || pageResp.body.trim().isEmpty) {
+          return null;
+        }
+        final doc = html.parse(pageResp.body);
+        final parsedCsrf = Anime3rbLivewireClient.extractCsrfToken(doc);
+        final component = Anime3rbLivewireClient.findComponent(doc, 'search');
+        if (parsedCsrf == null ||
+            parsedCsrf.isEmpty ||
+            component == null ||
+            component.snapshot.isEmpty) {
+          return null;
+        }
+        csrf = parsedCsrf;
+        updateUri = Anime3rbLivewireClient.extractUpdateUri(
+          doc,
+          pageResp.finalUri ?? _origin,
+        );
+        snapshot = component.snapshot;
+        _cachedSearchBootstrap = (
+          csrf: csrf,
+          updateUri: updateUri,
+          snapshot: snapshot,
+          fetchedAt: DateTime.now(),
+        );
+      }
+
+      final payload = <String, Object?>{
+        '_token': csrf,
+        'components': <Map<String, Object?>>[
+          <String, Object?>{
+            'snapshot': snapshot,
+            'updates': <String, Object?>{'query': query, 'ready': true},
+            'calls': const <Object?>[],
+          },
+        ],
+      };
+
+      final resp = await transport.post(
+        updateUri,
+        body: jsonEncode(payload),
+        headers: <String, String>{
+          'Content-Type': 'application/json',
+          'Accept': 'application/json, text/html, */*',
+          'X-Livewire': '1',
+          'X-CSRF-TOKEN': csrf,
+          'Origin': _origin.origin,
+          'Referer': '${_origin.origin}/',
+        },
+        cancelToken: cancelToken,
+        operation: 'search_livewire',
+      );
+      if (resp.statusCode == 419 && attempt == 0) {
+        _cachedSearchBootstrap = null;
+        continue;
+      }
+      if (resp.statusCode == 429) {
+        throw const Anime3rbRateLimitException();
+      }
+      if (resp.isCloudflareChallenge) {
+        throw Anime3rbBrowserRequiredException(
+          'يتطلب البحث في Anime3rb إكمال تحقق Cloudflare في المتصفح.',
+          watchUrl: _origin,
+        );
+      }
+      if (!resp.isSuccess) return null;
+
+      final decoded = jsonDecode(resp.body);
+      if (decoded is! Map) return null;
+      final components = decoded['components'];
+      if (components is! List ||
+          components.isEmpty ||
+          components.first is! Map) {
+        return const <MultimediaItem>[];
+      }
+      final first = Map<String, dynamic>.from(components.first as Map);
+      final nextSnapshot = first['snapshot']?.toString();
+      if (nextSnapshot != null && nextSnapshot.isNotEmpty) {
+        _cachedSearchBootstrap = (
+          csrf: csrf,
+          updateUri: updateUri,
+          snapshot: nextSnapshot,
+          fetchedAt: DateTime.now(),
+        );
+      }
+      final effects = first['effects'];
+      final htmlFragment = effects is Map ? effects['html']?.toString() : null;
+      if (htmlFragment == null || htmlFragment.trim().isEmpty) {
+        return const <MultimediaItem>[];
+      }
+      final fragmentDoc = html.parseFragment(htmlFragment);
+      final simpleCards = _parseSimpleTitleCards(fragmentDoc.children, _origin);
+      if (simpleCards.isNotEmpty) return simpleCards;
+      final wrapper = Element.tag('div')..nodes.addAll(fragmentDoc.nodes);
+      return _parseTitleCards(wrapper, _origin);
+    }
+    return null;
+  }
+
+  static List<MultimediaItem> _parseSimpleTitleCards(
+    List<Element> roots,
+    Uri base,
+  ) {
+    final container = Element.tag('div');
+    for (final root in roots) {
+      container.append(root.clone(true));
+    }
+    final items = <String, MultimediaItem>{};
+    for (final anchor in container.querySelectorAll('a.simple-title-card[href]')) {
+      final link = _reference(anchor.attributes['href'], base);
+      if (link == null) continue;
+      final title =
+          _text(anchor.querySelector('h4, h3, h2')) ??
+          _string(anchor.querySelector('img')?.attributes['alt']);
+      if (title == null || title.isEmpty) continue;
+      final altTitle = _text(anchor.querySelector('h5'));
+      final poster = _image(anchor.querySelector('img'), base) ?? '';
+      double? score;
+      String? badge;
+      int? year;
+      for (final b in anchor.querySelectorAll('.badge, span.badge')) {
+        final txt = normalizeLocalizedDigits(_text(b) ?? '');
+        if (txt.isEmpty) continue;
+        if (txt.contains('حلقة') || txt.contains('حلقات')) {
+          badge ??= txt;
+        } else if (RegExp(r'\b(19|20)\d{2}\b').hasMatch(txt)) {
+          year ??= _extractYear(txt);
+        } else {
+          final m = RegExp(r'^(\d+(?:\.\d+)?)$').firstMatch(txt);
+          final parsed = double.tryParse(m?.group(1) ?? '');
+          if (parsed != null && parsed >= 0 && parsed <= 10) {
+            score ??= parsed;
+          } else if (txt.contains('التقييم')) {
+            final sm = RegExp(r'(\d+(?:\.\d+)?)').firstMatch(txt);
+            score ??= double.tryParse(sm?.group(1) ?? '');
+          }
+        }
+      }
+      final key = link.work.toString();
+      if (items[key]?.posterUrl.isNotEmpty == true) continue;
+      items[key] = MultimediaItem(
+        title: title,
+        url: key,
+        posterUrl: poster,
+        provider: id,
+        contentType: MultimediaContentType.anime,
+        year: year,
+        score: score,
+        episodeBadge: badge,
+        syncData: altTitle != null && altTitle != title
+            ? <String, String>{'awEnglishTitle': altTitle}
+            : null,
+      );
+    }
+    return items.values.toList(growable: false);
+  }
+
+  static List<String> _parseDetailsGenres(Document doc) {
+    final genres = <String>[];
+    for (final anchor in doc.querySelectorAll('a[href*="/genre/"]')) {
+      if (anchor.querySelector('.badge') != null) continue;
+      if (_isInsideGlobalOrCardGenreContainer(anchor)) continue;
+      final text = _text(anchor);
+      if (text != null && text.isNotEmpty) {
+        genres.add(text);
+      }
+    }
+    return genres;
+  }
+
+  static bool _isInsideGlobalOrCardGenreContainer(Element el) {
+    for (var cur = el.parent; cur != null; cur = cur.parent) {
+      if (cur.attributes['wire:name'] == 'genres') return true;
+      final tag = cur.localName;
+      if (tag == 'nav' || tag == 'header' || tag == 'footer') return true;
+      final classes = cur.classes;
+      if (classes.contains('title-card') ||
+          classes.contains('simple-title-card') ||
+          classes.contains('glide__slide') ||
+          classes.contains('modal') ||
+          classes.contains('drawer')) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   static bool _isInsideCloneSlide(Element el, Element scope) {
     for (
       var cur = el.parent;
@@ -799,7 +1071,7 @@ class Anime3rbProvider extends AnimeWitcherProvider {
         url: key,
         episode: epNum,
         serverNumber: numberStr,
-        serverName: name,
+        serverName: epLabel,
         posterUrl: poster,
         isFinal: epLabel.contains('الأخيرة'),
       );

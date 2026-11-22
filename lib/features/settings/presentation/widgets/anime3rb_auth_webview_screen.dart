@@ -9,6 +9,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../../../core/account/anime3rb_account_models.dart';
 import '../../../../core/account/anime3rb_account_service.dart';
+import '../../../../core/network/http_defaults.dart';
 
 typedef Anime3rbBrowserAuthResult = ({
   Anime3rbProfile profile,
@@ -105,6 +106,7 @@ class _Anime3rbAuthWebViewScreenState
     super.initState();
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setUserAgent(kDefaultBrowserUserAgent)
       ..setNavigationDelegate(
         NavigationDelegate(
           onProgress: (progress) {

@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../extensions/providers/anime3rb_provider.dart';
 import '../extensions/providers/anime3rb_transport.dart';
+import '../extensions/providers/anime3rb_webview_solver.dart';
 import '../storage/secure_token_storage.dart';
 import '../storage/storage_service.dart';
 import '../utils/digit_normalization.dart';
@@ -1066,6 +1067,11 @@ final anime3rbTransportProvider = Provider<Anime3rbTransport>((ref) {
           ? const <String, String>{}
           : <String, String>{'Cookie': cookie};
     },
+    challengeResolver: (uri, {currentCookies = const <String, String>{}}) =>
+        Anime3rbWebViewSolver.instance.solveCloudflareChallenge(
+          uri,
+          currentCookies: currentCookies,
+        ),
   );
   ref.onDispose(() => transport.close(force: true));
   return transport;

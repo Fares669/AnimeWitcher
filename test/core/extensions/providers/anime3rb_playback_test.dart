@@ -227,7 +227,8 @@ var video_sources = [
           }),
         );
       }),
-      turnstileResolver: (playerUri) async => (token: 'cf-tok', type: 'invisible'),
+      turnstileResolver: (playerUri) async =>
+          const Anime3rbTurnstileResult(token: 'cf-tok', type: 'invisible'),
     );
 
     final sources = await resolver.loadSources(
@@ -295,5 +296,93 @@ var video_sources = [
       ),
       throwsA(isA<ProviderBrowserRequiredException>()),
     );
+  });
+
+  test('resolveStreams parses pre-resolved sourcesJson captured inside Turnstile WebView', () async {
+    var hitSourcesEndpoint = false;
+    final resolver = Anime3rbPlaybackResolver(
+      _StubTransport((uri, _, _) async {
+        if (uri.path.startsWith('/episode/')) {
+          return Anime3rbHttpResponse(statusCode: 200, body: _episodeHtml());
+        }
+        if (uri.path == '/player/uuid-1') {
+          return const Anime3rbHttpResponse(
+            statusCode: 200,
+            body: '<script>var video_sources = [];</script>',
+          );
+        }
+        if (uri.path == '/player/uuid-1/sources') {
+          hitSourcesEndpoint = true;
+        }
+        return const Anime3rbHttpResponse(statusCode: 404, body: '');
+      }),
+      turnstileResolver: (_) async => Anime3rbTurnstileResult(
+        sourcesJson: jsonEncode([
+          {
+            'src': 'https://files-4.vid3rb.com/1080p.mp4',
+            'label': '1080p',
+            'premium': false,
+          },
+        ]),
+      ),
+    );
+
+    final sources = await resolver.loadSources(
+      'https://anime3rb.com/episode/one-piece/1180',
+      forDownload: false,
+    );
+    final streams = await resolver.resolveStreams(
+      sources.first.url,
+      forDownload: false,
+    );
+    expect(hitSourcesEndpoint, isFalse);
+    expect(streams.single.url, 'https://files-4.vid3rb.com/1080p.mp4');
+    expect(streams.single.source, contains('[1080p]'));
+  });
+
+  test('DioAnime3rbTransport invokes challengeResolver on 403 challenge and retries with solved cookies', () async {
+    var attempts = 0;
+    final dio = Dio();
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          attempts++;
+          if (attempts == 1) {
+            handler.resolve(
+              Response<String>(
+                requestOptions: options,
+                statusCode: 403,
+                headers: Headers.fromMap({
+                  'cf-mitigated': ['challenge'],
+                }),
+                data: '<title>Just a moment...</title>',
+              ),
+            );
+            return;
+          }
+          expect(options.headers['Cookie']?.toString(), contains('cf_clearance=cleared-123'));
+          handler.resolve(
+            Response<String>(
+              requestOptions: options,
+              statusCode: 200,
+              data: '<div class="titles-list">ok</div>',
+            ),
+          );
+        },
+      ),
+    );
+
+    final transport = DioAnime3rbTransport(
+      dio: dio,
+      challengeResolver: (uri, {currentCookies = const <String, String>{}}) async => (
+        cookies: const {'cf_clearance': 'cleared-123'},
+        html: null,
+        userAgent: null,
+      ),
+    );
+
+    final html = await transport.fetchHtml(Uri.https('anime3rb.com', '/download/free-1080'));
+    expect(attempts, 2);
+    expect(html, contains('ok'));
   });
 }

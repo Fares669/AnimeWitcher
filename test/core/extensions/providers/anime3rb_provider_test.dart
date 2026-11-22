@@ -1,6 +1,7 @@
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/providers/anime3rb_provider.dart';
+import 'package:animewitcher/core/extensions/providers/anime3rb_transport.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -199,7 +200,12 @@ void main() {
   <div x-data="{summary: false}">
     <div x-show="! summary"><p>قصة لوفي وطاقم قبعة القش.</p></div>
   </div>
+  <div wire:name="genres">
+    <a href="https://anime3rb.com/genre/adventure" class="btn btn-md btn-link genre">مغامرة <span class="badge">1446</span></a>
+    <a href="https://anime3rb.com/genre/drama" class="btn btn-md btn-link genre">دراما <span class="badge">1416</span></a>
+  </div>
   <a href="https://anime3rb.com/genre/action">أكشن</a>
+  <a href="https://anime3rb.com/genre/fantasy">خيال</a>
   <table>
     <tr><td>الحالة:</td><td>قيد البث</td></tr>
     <tr><td>إصدار:</td><td title="1999-10-20">خريف 1999</td></tr>
@@ -241,9 +247,127 @@ void main() {
     expect(item.syncData?['awEnglishTitle'], 'ون بيس');
     expect(item.trailers?.map((t) => t.url), ['https://www.youtube.com/embed/abc123']);
     expect(item.episodes, hasLength(2));
+    expect(item.episodes!.first.episode, 1);
+    expect(item.episodes!.first.serverName, 'الحلقة 1');
+    expect(item.episodes!.first.name, 'أنا لوفي!');
     expect(item.episodes!.last.episode, 1180);
+    expect(item.episodes!.last.serverName, 'الحلقة 1180');
     expect(item.episodes!.last.name, 'نهاية الآرك');
+    expect(item.tags, ['أكشن', 'خيال']);
     expect(item.related?.map((e) => e.title), ['One Piece Film: Red']);
     expect(item.recommendations?.map((e) => e.title), ['Fairy Tail']);
   });
+
+  test('searchPage uses Livewire search component and parses simple-title-card results when transport is attached', () async {
+    var postCalls = 0;
+    final transport = _TestSearchTransport(
+      onGet: (uri) async {
+        expect(uri.path, anyOf('/', ''));
+        return const Anime3rbHttpResponse(
+          statusCode: 200,
+          body:
+              '<html><body>'
+              '<script src="/livewire/livewire.min.js" data-csrf="csrf-abc" data-update-uri="https://anime3rb.com/livewire-test/update"></script>'
+              '<div wire:name="search" wire:snapshot=\'{"data":{"query":"","ready":false}}\'></div>'
+              '</body></html>',
+        );
+      },
+      onPost: (uri, body, headers) async {
+        postCalls++;
+        expect(uri.toString(), 'https://anime3rb.com/livewire-test/update');
+        expect(headers['X-Livewire'], '1');
+        expect(body.toString(), contains('"query":"solo"'));
+        return const Anime3rbHttpResponse(
+          statusCode: 200,
+          body:
+              '{"components":[{"snapshot":"{\\"data\\":{\\"query\\":\\"solo\\",\\"ready\\":true}}","effects":{"html":"<div>'
+              '<a href=\\"https://anime3rb.com/titles/solo-leveling\\" class=\\"simple-title-card\\">'
+              '<img src=\\"https://images.anime3rb.com/solo.jpg\\">'
+              '<h4>Solo Leveling</h4>'
+              '<h5>سولو ليفيلينج</h5>'
+              '<span class=\\"badge\\">8.30</span>'
+              '<span class=\\"badge\\">12 حلقة</span>'
+              '<span class=\\"badge\\">2024</span>'
+              '</a></div>"}}]}',
+        );
+      },
+    );
+
+    final provider = Anime3rbProvider.withTransport(transport);
+    final res = await provider.searchPage(
+      'solo',
+      const ProviderSearchFilters(sort: 'favorites'),
+    );
+    expect(postCalls, 1);
+    expect(res.items, hasLength(1));
+    expect(res.items.single.title, 'Solo Leveling');
+    expect(res.items.single.url, 'https://anime3rb.com/titles/solo-leveling');
+    expect(res.items.single.score, 8.3);
+    expect(res.items.single.year, 2024);
+    expect(res.items.single.episodeBadge, '12 حلقة');
+    expect(res.items.single.syncData?['awEnglishTitle'], 'سولو ليفيلينج');
+  });
+}
+
+class _TestSearchTransport implements Anime3rbTransport {
+  _TestSearchTransport({required this.onGet, required this.onPost});
+
+  final Future<Anime3rbHttpResponse> Function(Uri uri) onGet;
+  final Future<Anime3rbHttpResponse> Function(
+    Uri uri,
+    Object? body,
+    Map<String, String> headers,
+  )
+  onPost;
+
+  @override
+  Future<Anime3rbHttpResponse> get(
+    Uri uri, {
+    Map<String, String> headers = const {},
+    bool followRedirects = true,
+    bool inspectMedia = false,
+    CancelToken? cancelToken,
+    String operation = 'get',
+  }) => onGet(uri);
+
+  @override
+  Future<Anime3rbHttpResponse> post(
+    Uri uri, {
+    Object? body,
+    Map<String, String> headers = const {},
+    bool followRedirects = true,
+    CancelToken? cancelToken,
+    String operation = 'post',
+  }) => onPost(uri, body, headers);
+
+  @override
+  Future<Anime3rbHttpResponse> put(
+    Uri uri, {
+    Object? body,
+    Map<String, String> headers = const {},
+    bool followRedirects = true,
+    CancelToken? cancelToken,
+    String operation = 'put',
+  }) => Future.value(const Anime3rbHttpResponse(statusCode: 404, body: ''));
+
+  @override
+  Future<Anime3rbHttpResponse> delete(
+    Uri uri, {
+    Object? body,
+    Map<String, String> headers = const {},
+    bool followRedirects = true,
+    CancelToken? cancelToken,
+    String operation = 'delete',
+  }) => Future.value(const Anime3rbHttpResponse(statusCode: 404, body: ''));
+
+  @override
+  Future<String> fetchHtml(
+    Uri uri, {
+    Map<String, String> headers = const {},
+    CancelToken? cancelToken,
+    String operation = 'catalog',
+  }) async => (await get(uri, headers: headers)).body;
+
+  @override
+  void close({bool force = false}) {}
 }

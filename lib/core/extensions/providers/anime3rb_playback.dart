@@ -11,10 +11,26 @@ import 'anime3rb_transport.dart';
 
 const String anime3rbSourceUrlPrefix = 'anime3rb-source://';
 
+/// Result returned by [Anime3rbTurnstileResolver] after running a
+/// `video.vid3rb.com` player page inside WebView.
+class Anime3rbTurnstileResult {
+  const Anime3rbTurnstileResult({
+    this.token,
+    this.type,
+    this.sourcesJson,
+    this.cookies = const <String, String>{},
+  });
+
+  final String? token;
+  final String? type;
+  final String? sourcesJson;
+  final Map<String, String> cookies;
+}
+
 /// Optional hook that can solve Cloudflare Turnstile on a `video.vid3rb.com`
 /// player page and return `{cfToken, cfTokenType}` or pre-resolved video JSON.
 typedef Anime3rbTurnstileResolver =
-    Future<({String token, String type})?> Function(Uri playerUri);
+    Future<Anime3rbTurnstileResult?> Function(Uri playerUri);
 
 class Anime3rbSourceToken {
   const Anime3rbSourceToken({
@@ -610,10 +626,28 @@ class Anime3rbPlaybackResolver {
       final uuid = pathSegments[playerIdx + 1];
       String? cfToken;
       String? cfTokenType;
+      String? preResolvedSourcesJson;
+      Map<String, String> solverCookies = const <String, String>{};
       if (_turnstileResolver != null) {
         final solved = await _turnstileResolver(playerUri);
         cfToken = solved?.token;
         cfTokenType = solved?.type;
+        preResolvedSourcesJson = solved?.sourcesJson;
+        solverCookies = solved?.cookies ?? const <String, String>{};
+        if (solverCookies.isNotEmpty && _transport is DioAnime3rbTransport) {
+          _transport.absorbCookies(playerUri, solverCookies);
+        }
+      }
+
+      if (preResolvedSourcesJson != null &&
+          preResolvedSourcesJson.trim().isNotEmpty) {
+        final parsedPre = _parseVideoSourcesJson(
+          preResolvedSourcesJson,
+          playerUri,
+          token.label,
+          watchUri,
+        );
+        if (parsedPre.isNotEmpty) return parsedPre;
       }
 
       final sourcesUri = playerUri.replace(
@@ -626,12 +660,18 @@ class Anime3rbPlaybackResolver {
         },
       );
 
+      final cookieHeader = solverCookies.isNotEmpty
+          ? solverCookies.entries
+              .map((entry) => '${entry.key}=${entry.value}')
+              .join('; ')
+          : null;
       final sourcesResp = await _transport.get(
         sourcesUri,
         headers: {
           'Accept': 'application/json',
           'X-Requested-With': 'XMLHttpRequest',
           'Referer': playerUri.toString(),
+          if (cookieHeader != null) 'Cookie': cookieHeader,
         },
         operation: 'host_vid3rb_sources',
       );

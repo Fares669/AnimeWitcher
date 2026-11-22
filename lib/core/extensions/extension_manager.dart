@@ -8,6 +8,7 @@ import '../network/dio_client_provider.dart';
 import '../storage/settings_repository.dart';
 import 'base_provider.dart';
 import 'providers/anime3rb_provider.dart';
+import 'providers/anime3rb_webview_solver.dart';
 import 'providers/animewitcher_native_provider.dart';
 import 'providers/witanime_provider.dart';
 
@@ -32,7 +33,10 @@ final anime3rbCatalogProvider = Provider<Anime3rbProvider?>((ref) {
     return null;
   }
 
-  return Anime3rbProvider.withTransport(ref.watch(anime3rbTransportProvider));
+  return Anime3rbProvider.withTransport(
+    ref.watch(anime3rbTransportProvider),
+    turnstileResolver: Anime3rbWebViewSolver.instance.solveVid3rbTurnstile,
+  );
 });
 
 /// Built-in provider registry for the standalone AnimeWitcher app.
