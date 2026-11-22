@@ -74,7 +74,7 @@ void main() {
   testWidgets(
     'settings allows switching freely between AnimeWitcher and Witanime',
     (tester) async {
-      await tester.binding.setSurfaceSize(const Size(390, 1000));
+      await tester.binding.setSurfaceSize(const Size(390, 1250));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final storage = MemoryStorageService();
       late ProviderContainer container;
@@ -120,6 +120,13 @@ void main() {
         find.descendant(
           of: providerTile,
           matching: find.widgetWithText(ChoiceChip, 'AnimeWitcher'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: providerTile,
+          matching: find.widgetWithText(ChoiceChip, 'Anime3rb'),
         ),
         findsOneWidget,
       );

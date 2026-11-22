@@ -19,6 +19,7 @@ import '../domain/entity/multimedia_item.dart';
 import '../../shared/widgets/app_scaffold.dart';
 import '../storage/settings_repository.dart';
 import '../extensions/base_provider.dart';
+import '../extensions/providers/anime3rb_provider.dart';
 import '../extensions/providers/witanime_provider.dart';
 import '../navigation/taskbar_destination.dart';
 import '../account/animewitcher_comment_models.dart'
@@ -203,10 +204,17 @@ class MangaDetailsRouteExtra {
 /// list does it, so the route's construction lives in a single place.
 extension OpenDetailsRoute on MultimediaItem {
   Future<void> openDetails(BuildContext context) {
-    final rawWatch = syncData?[WitanimeProvider.watchUrlKey];
-    final watch = provider == WitanimeProvider.id && rawWatch != null
-        ? WitanimeProvider.parseCatalogLink(rawWatch)
-        : null;
+    final watch = switch (provider) {
+      WitanimeProvider.id when syncData?[WitanimeProvider.watchUrlKey] != null =>
+        WitanimeProvider.parseCatalogLink(
+          syncData![WitanimeProvider.watchUrlKey]!,
+        ),
+      Anime3rbProvider.id when syncData?[Anime3rbProvider.watchUrlKey] != null =>
+        Anime3rbProvider.parseCatalogLink(
+          syncData![Anime3rbProvider.watchUrlKey]!,
+        ),
+      _ => null,
+    };
     return DetailsRoute(
       $extra: DetailsRouteExtra(
         item: this,
@@ -353,9 +361,12 @@ class DetailsRoute extends _AppGoRouteData with $DetailsRoute {
     final witanime = resolvedProvider == WitanimeProvider.id
         ? WitanimeProvider.parseCatalogLink(itemUrl)
         : null;
+    final anime3rb = resolvedProvider == Anime3rbProvider.id
+        ? Anime3rbProvider.parseCatalogLink(itemUrl)
+        : null;
     final resolvedUrl = resolvedProvider == animeWitcherNativeProviderId
         ? _canonicalNativeCatalogUrl(itemUrl)
-        : witanime?.work.toString();
+        : witanime?.work.toString() ?? anime3rb?.work.toString();
     if (resolvedUrl == null) return null;
     final itemTitle = title?.trim() ?? '';
     return DetailsRouteExtra(
@@ -370,7 +381,8 @@ class DetailsRoute extends _AppGoRouteData with $DetailsRoute {
             ? MultimediaContentType.movie
             : MultimediaContentType.anime,
       ),
-      resumeEpisodeUrl: witanime?.watch?.toString(),
+      resumeEpisodeUrl:
+          witanime?.watch?.toString() ?? anime3rb?.watch?.toString(),
     );
   }
 

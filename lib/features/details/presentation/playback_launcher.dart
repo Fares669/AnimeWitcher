@@ -9,7 +9,8 @@ import '../../../core/router/app_router.dart';
 import '../../../core/services/external_player_service.dart';
 import '../../../core/extensions/item_provider_resolution.dart';
 import '../../../core/extensions/base_provider.dart';
-import '../../../core/extensions/providers/witanime_playback.dart';
+import '../../../core/extensions/provider_stream_exception.dart';
+import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/extensions/providers/witanime_provider.dart';
 import '../../settings/presentation/player_settings_provider.dart';
 import '../../settings/presentation/general_settings_provider.dart';
@@ -153,8 +154,7 @@ class PlaybackLauncher {
             return provider.loadStreams(candidate.url);
           },
           tryNextOnError: (error) =>
-              error is! WitanimeRateLimitException ||
-              error is WitanimeTokenRateLimitException,
+              error is! ProviderRateLimitException || error.canTryNextSource,
         );
         if (canceled || !context.mounted) return null;
         dismissLoading();
@@ -256,7 +256,7 @@ class PlaybackLauncher {
         hintEpisode.episode > 0 || (hintEpisode.serverName.trim().isNotEmpty)
         ? hintEpisode
         : null;
-    if (provider is WitanimeProvider) {
+    if (provider is! AnimeWitcherNativeProvider) {
       final episodes = await launch.wait(() => provider.getEpisodes(item.url));
       if (!context.mounted || !launch.isCurrent) return;
       final episode = matchResumeEpisode(
@@ -577,7 +577,7 @@ class PlaybackLauncher {
     if (selected == null || !context.mounted || !launch.isCurrent) return;
 
     if (preferredPlayer == null) {
-      final sourceResolution = isWitanimeItem && selected.requiresResolution
+      final sourceResolution = selected.requiresResolution
           ? provider.loadStreams(selected.url)
           : null;
       // The route can subscribe on the next frame, after the request starts.

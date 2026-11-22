@@ -10,10 +10,11 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/domain/stream_source_preferences.dart';
+import '../../../core/account/animewitcher_comment_models.dart'
+    show animeWitcherNativeProviderId;
 import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/item_provider_resolution.dart';
-import '../../../core/extensions/providers/witanime_playback.dart';
-import '../../../core/extensions/providers/witanime_provider.dart';
+import '../../../core/extensions/provider_stream_exception.dart';
 import '../../../core/network/dio_client_provider.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/services/download_parallel.dart';
@@ -430,15 +431,14 @@ class DownloadLauncher {
           serverPriority: preferences.streamServerPriority,
           resolveCandidate: (candidate) async {
             final resolved = await provider.loadDownloadStreams(candidate.url);
-            if (provider.packageName == WitanimeProvider.id &&
+            if (provider.packageName != animeWitcherNativeProviderId &&
                 resolved.length > 1) {
               alternatives = resolved.sublist(1);
             }
             return resolved;
           },
           tryNextOnError: (error) =>
-              error is! WitanimeRateLimitException ||
-              error is WitanimeTokenRateLimitException,
+              error is! ProviderRateLimitException || error.canTryNextSource,
         );
         if (selected == null) {
           throw Exception('لم يتم العثور على مصادر تشغيل.');
@@ -518,7 +518,7 @@ class DownloadLauncher {
 
   bool _isDownloadable(DownloadSourceMetadataV2? metadata, String providerId) {
     if (metadata?.size == null) return false;
-    if (providerId != WitanimeProvider.id) return true;
+    if (providerId == animeWitcherNativeProviderId) return true;
     final type = metadata?.mimeType?.split(';').first.trim().toLowerCase();
     return type != 'text/html' &&
         type != 'application/xhtml+xml' &&
@@ -579,7 +579,9 @@ class DownloadLauncher {
 
     var stream = streams.first;
     DownloadSourceMetadataV2? metadata;
-    final candidates = providerId == WitanimeProvider.id ? streams : [stream];
+    final candidates = providerId != animeWitcherNativeProviderId
+        ? streams
+        : [stream];
     for (final candidate in candidates) {
       final probe = await probeDownloadSourceV2(
         _ref.read(dioClientProvider),

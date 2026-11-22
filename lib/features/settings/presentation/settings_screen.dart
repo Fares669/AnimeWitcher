@@ -13,7 +13,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
-import '../../../core/extensions/providers/witanime_provider.dart';
+import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/layout_constants.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../core/providers/device_info_provider.dart';
@@ -164,8 +164,10 @@ class SettingsScreen extends ConsumerWidget {
             key: const ValueKey('settings-active-anime-provider'),
             icon: Icons.video_library_outlined,
             title: 'مصدر الأنمي النشط',
-            subtitle: activeCatalog is WitanimeProvider
-                ? 'Witanime · المانجا على AnimeWitcher'
+            subtitle:
+                activeCatalog != null &&
+                    activeCatalog is! AnimeWitcherNativeProvider
+                ? '${activeCatalog.name} · المانجا على AnimeWitcher'
                 : '${activeCatalog?.name ?? 'AnimeWitcher'} (${installedProviders.length} مزوّد)',
             trailing: installedProviders.length > 1
                 ? const SizedBox.shrink()
@@ -182,10 +184,12 @@ class SettingsScreen extends ConsumerWidget {
             onTap: installedProviders.length <= 1
                 ? null
                 : () async {
-                    final next = installedProviders.firstWhere(
-                      (p) => p.packageName != activeCatalog?.packageName,
-                      orElse: () => installedProviders.first,
+                    final currentIndex = installedProviders.indexWhere(
+                      (p) => p.packageName == activeCatalog?.packageName,
                     );
+                    final next =
+                        installedProviders[(currentIndex + 1) %
+                            installedProviders.length];
                     await ref.read(activeProviderProvider.notifier).set(next);
                   },
           ),

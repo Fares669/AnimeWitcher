@@ -121,6 +121,35 @@ void main() {
     },
   );
 
+  test('provider scopes isolate native, witanime, and anime3rb identities', () {
+    expect(downloadProviderScopeV2(null), isNull);
+    expect(downloadProviderScopeV2('com.fares669.animewitcher.native'), isNull);
+    final witanimeScope = downloadProviderScopeV2('witanime');
+    final anime3rbScope = downloadProviderScopeV2('anime3rb');
+    expect(witanimeScope, isNotNull);
+    expect(anime3rbScope, isNotNull);
+    expect(anime3rbScope, isNot(witanimeScope));
+
+    final nativeId = logicalDownloadIdFor(
+      animeId: 'one-piece',
+      episodeKey: '1180',
+      variantKey: 'sub:1080p',
+    );
+    final witanimeId = logicalDownloadIdFor(
+      animeId: 'one-piece',
+      episodeKey: '1180',
+      variantKey: 'sub:1080p',
+      providerId: 'witanime',
+    );
+    final anime3rbId = logicalDownloadIdFor(
+      animeId: 'one-piece',
+      episodeKey: '1180',
+      variantKey: 'sub:1080p',
+      providerId: 'anime3rb',
+    );
+    expect({nativeId, witanimeId, anime3rbId}, hasLength(3));
+  });
+
   test('generated task parser rejects malformed IDs without broad prefix ownership', () {
     final manga = taskIdForGeneration(
       logicalDownloadIdForMangaChapter(mangaId: 'm', chapterId: 'c'),

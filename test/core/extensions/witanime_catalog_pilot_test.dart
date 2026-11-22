@@ -1,6 +1,7 @@
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/extensions/native_provider_resolution.dart';
+import 'package:animewitcher/core/extensions/providers/anime3rb_provider.dart';
 import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
 import 'package:animewitcher/core/extensions/providers/witanime_provider.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
@@ -32,6 +33,7 @@ void main() {
     final container = ProviderContainer(
       overrides: [
         witanimeCatalogProvider.overrideWithValue(null),
+        anime3rbCatalogProvider.overrideWithValue(null),
         storageServiceProvider.overrideWithValue(MemoryStorageService()),
       ],
     );
@@ -53,6 +55,7 @@ void main() {
       final container = ProviderContainer(
         overrides: [
           witanimeCatalogProvider.overrideWithValue(witanime),
+          anime3rbCatalogProvider.overrideWithValue(null),
           storageServiceProvider.overrideWithValue(storage),
         ],
       );
@@ -84,6 +87,27 @@ void main() {
       await container.read(activeProviderProvider.notifier).set(nativeProvider);
       expect(container.read(activeProviderProvider), same(nativeProvider));
       expect(storage.getActiveProviderId(), nativeProvider.packageName);
+    },
+  );
+
+  test(
+    'users can switch across AnimeWitcher, Witanime, and Anime3rb without changing manga',
+    () async {
+      final storage = MemoryStorageService();
+      final container = ProviderContainer(
+        overrides: [storageServiceProvider.overrideWithValue(storage)],
+      );
+      addTearDown(container.dispose);
+
+      final providers = container.read(extensionManagerProvider);
+      expect(providers.whereType<AnimeWitcherNativeProvider>(), hasLength(1));
+      expect(providers.whereType<WitanimeProvider>(), hasLength(1));
+      expect(providers.whereType<Anime3rbProvider>(), hasLength(1));
+
+      final anime3rb = providers.whereType<Anime3rbProvider>().single;
+      await container.read(activeProviderProvider.notifier).set(anime3rb);
+      expect(container.read(activeProviderProvider), same(anime3rb));
+      expect(storage.getActiveProviderId(), Anime3rbProvider.id);
     },
   );
 }

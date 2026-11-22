@@ -11,6 +11,7 @@ import 'package:html/parser.dart' as html;
 import 'package:html_unescape/html_unescape.dart';
 
 import '../../domain/entity/multimedia_item.dart';
+import '../provider_stream_exception.dart';
 import 'mediafire_utils.dart';
 import 'server_extraction_utils.dart';
 import 'witanime_crypto.dart';
@@ -19,33 +20,47 @@ import 'witanime_transport.dart';
 
 const String witanimeSourceUrlPrefix = 'witanime-source://';
 
-class WitanimeBrowserRequiredException implements Exception {
+class WitanimeBrowserRequiredException
+    implements ProviderBrowserRequiredException {
   const WitanimeBrowserRequiredException(this.message, {this.watchUrl});
 
+  @override
   final String message;
+  @override
   final Uri? watchUrl;
 
   @override
   String toString() => message;
 }
 
-class WitanimeRateLimitException implements Exception {
+class WitanimeRateLimitException implements ProviderRateLimitException {
   const WitanimeRateLimitException();
 
   @override
-  String toString() =>
+  bool get canTryNextSource => false;
+
+  @override
+  String get message =>
       'تجاوزت حد الطلبات على Witanime، انتظر قليلًا أو جرّب سيرفرًا آخر.';
+
+  @override
+  String toString() => message;
 }
 
 class WitanimeTokenRateLimitException extends WitanimeRateLimitException {
   const WitanimeTokenRateLimitException();
+
+  @override
+  bool get canTryNextSource => true;
 }
 
-class WitanimeSourceUnavailableException implements Exception {
+class WitanimeSourceUnavailableException
+    implements ProviderSourceUnavailableException {
   const WitanimeSourceUnavailableException([
     this.message = 'تعذّر تحميل هذا السيرفر، يُرجى اختيار سيرفر آخر.',
   ]);
 
+  @override
   final String message;
 
   @override

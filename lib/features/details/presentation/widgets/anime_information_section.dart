@@ -5,7 +5,6 @@ import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/extensions/base_provider.dart';
 import '../../../../core/extensions/item_provider_resolution.dart';
 import '../../../../core/extensions/providers/animewitcher_native_provider.dart';
-import '../../../../core/extensions/providers/witanime_provider.dart';
 import '../../../home/presentation/view_all_screen.dart';
 
 /// Trims empty, unknown, and "?" placeholders out of details metadata.
@@ -105,8 +104,7 @@ class AnimeInformationSection extends StatelessWidget {
     ).read(itemSourceProvider(item.provider));
     final nativeProvider =
         provider is AnimeWitcherNativeProvider ? provider : null;
-    final witanimeProvider = provider is WitanimeProvider ? provider : null;
-    if (nativeProvider == null && witanimeProvider == null) {
+    if (provider == null || (nativeProvider == null && !provider.hasSearch)) {
       return;
     }
 
@@ -123,11 +121,11 @@ class AnimeInformationSection extends StatelessWidget {
                   offset: offset,
                   limit: nativeProvider.viewAllPageSize,
                 )
-              : witanimeProvider!.searchPage(
+              : provider.searchPage(
                   '',
                   ProviderSearchFilters(studios: <String>{studio}),
                   offset: offset,
-                  limit: witanimeProvider.viewAllPageSize,
+                  limit: provider.viewAllPageSize,
                 ),
         ),
       ),

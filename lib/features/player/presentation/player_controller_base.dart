@@ -21,7 +21,7 @@ import '../../details/presentation/downloaded_file_provider.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/extensions/base_provider.dart';
 import '../../../../core/extensions/item_provider_resolution.dart';
-import '../../../../core/extensions/providers/witanime_playback.dart';
+import '../../../../core/extensions/provider_stream_exception.dart';
 import '../../../../core/storage/history_repository.dart';
 import '../../../../core/storage/episode_watch_repository.dart';
 import '../../library/presentation/history_provider.dart';
@@ -2512,9 +2512,7 @@ class PlayerController extends Notifier<PlayerState> {
         }
       }
     } catch (e) {
-      if (e is WitanimeRateLimitException ||
-          e is WitanimeSourceUnavailableException ||
-          e is WitanimeBrowserRequiredException) {
+      if (e is ProviderStreamException) {
         if (_isCurrentSourceSession(sourceSessionId)) {
           state = state.copyWith(errorMessage: e.toString());
         }
@@ -3884,7 +3882,7 @@ class PlayerController extends Notifier<PlayerState> {
         ((selectedSource?.requiresResolution ?? false)
             ? selectedSource!.url
             : nextEpisode.url);
-    final sourceResolution = _startWitanimeSourceResolution(finalUrl);
+    final sourceResolution = _startDeferredSourceResolution(finalUrl);
 
     // Save current episode's progress BEFORE updating _episode/_videoUrl.
     saveProgress();
@@ -3926,10 +3924,13 @@ class PlayerController extends Notifier<PlayerState> {
     );
   }
 
-  Future<List<StreamResult>>? _startWitanimeSourceResolution(String url) {
-    if (!url.startsWith(witanimeSourceUrlPrefix)) return null;
-    final request = _resolveProvider()?.loadStreams(url);
-    request?.ignore();
+  Future<List<StreamResult>>? _startDeferredSourceResolution(String url) {
+    final provider = _resolveProvider();
+    if (provider == null || !provider.isExplicitStreamSelection(url)) {
+      return null;
+    }
+    final request = provider.loadStreams(url);
+    request.ignore();
     return request;
   }
 
@@ -3972,7 +3973,7 @@ class PlayerController extends Notifier<PlayerState> {
         ((selectedSource?.requiresResolution ?? false)
             ? selectedSource!.url
             : episode.url);
-    final sourceResolution = _startWitanimeSourceResolution(finalUrl);
+    final sourceResolution = _startDeferredSourceResolution(finalUrl);
 
     await pause();
     if (!_isCurrentSourceSession(sourceSessionId)) return;

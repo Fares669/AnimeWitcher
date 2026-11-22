@@ -6,6 +6,8 @@ import '../account/witanime_account_service.dart';
 import '../network/dio_client_provider.dart';
 import '../storage/settings_repository.dart';
 import 'base_provider.dart';
+import 'providers/anime3rb_provider.dart';
+import 'providers/anime3rb_transport.dart';
 import 'providers/animewitcher_native_provider.dart';
 import 'providers/witanime_provider.dart';
 
@@ -20,6 +22,17 @@ final witanimeCatalogProvider = Provider<WitanimeProvider?>((ref) {
   }
 
   return WitanimeProvider.withTransport(ref.watch(witanimeTransportProvider));
+});
+
+final anime3rbCatalogProvider = Provider<Anime3rbProvider?>((ref) {
+  if (!const bool.fromEnvironment(
+    'ANIME3RB_CATALOG_ENABLED',
+    defaultValue: true,
+  )) {
+    return null;
+  }
+
+  return Anime3rbProvider.withTransport(ref.watch(anime3rbTransportProvider));
 });
 
 /// Built-in provider registry for the standalone AnimeWitcher app.
@@ -44,6 +57,7 @@ class ExtensionManager extends _$ExtensionManager {
             false,
       ),
       ?ref.watch(witanimeCatalogProvider),
+      ?ref.watch(anime3rbCatalogProvider),
     ];
   }
 

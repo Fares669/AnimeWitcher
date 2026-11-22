@@ -91,7 +91,9 @@ class Library extends _$Library {
 
   bool _usesWitanimeSync({String? providerId, bool manga = false}) {
     if (manga || !_witanimeAccountSignedIn) return false;
-    return providerId == WitanimeProvider.id || _isWitanimeActiveCatalog;
+    final normalized = providerId?.trim() ?? '';
+    return normalized == WitanimeProvider.id ||
+        (normalized.isEmpty && _isWitanimeActiveCatalog);
   }
 
   LibraryCategory? localOnlyAnimeWitcherCategory(String url) {
