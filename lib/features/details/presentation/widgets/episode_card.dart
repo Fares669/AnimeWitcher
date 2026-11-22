@@ -12,7 +12,6 @@ import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/anime3rb_comment_models.dart';
 import 'package:animewitcher/core/account/animewitcher_comment_models.dart';
-import 'package:animewitcher/core/extensions/providers/anime3rb_provider.dart';
 import 'package:animewitcher/core/extensions/providers/witanime_provider.dart';
 import 'package:animewitcher/features/comments/presentation/anime3rb_comments_screen.dart';
 import 'package:animewitcher/features/comments/presentation/animewitcher_comments_screen.dart';
@@ -36,7 +35,6 @@ import '../details_controller.dart';
 import '../download_launcher.dart';
 import '../downloaded_file_provider.dart';
 import 'episode_action_chip.dart';
-import 'anime3rb_report_dialog.dart';
 import 'download_progress_dialog.dart';
 import 'download_management_dialog.dart';
 import 'witanime_report_dialog.dart';
@@ -653,11 +651,9 @@ class EpisodeCard extends HookConsumerWidget {
       episode,
     );
     final showWitanimeReport = parentItem.provider == WitanimeProvider.id;
-    final showAnime3rbReport = parentItem.provider == Anime3rbProvider.id;
     if (commentsTarget == null &&
         anime3rbCommentsTarget == null &&
-        !showWitanimeReport &&
-        !showAnime3rbReport) {
+        !showWitanimeReport) {
       return downloadAction ?? const SizedBox.shrink();
     }
 
@@ -703,21 +699,6 @@ class EpisodeCard extends HookConsumerWidget {
                 ref,
                 title: _downloadDialogTitle(parentItem, episode),
                 targetUrl: episode.url,
-              ),
-            ),
-          ),
-        ),
-      if (showAnime3rbReport)
-        ExcludeFocus(
-          child: EpisodeActionChip(
-            tooltip: 'الإبلاغ عن مشكلة',
-            icon: Icons.flag_outlined,
-            onPressed: () => unawaited(
-              showAnime3rbReportDialog(
-                context,
-                ref,
-                title: _downloadDialogTitle(parentItem, episode),
-                episodeUrl: episode.url,
               ),
             ),
           ),

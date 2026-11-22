@@ -81,12 +81,37 @@ class _StubTransport implements Anime3rbTransport {
 String _episodeHtml({
   String playerUrl =
       'https://video.vid3rb.com/player/uuid-1?token=t1&expires=999',
+  bool includeDownloads = true,
 }) {
   final snapshot = const HtmlEscape().convert(
     jsonEncode({
       'data': {'video_url': playerUrl, 'video_source': 'src1'},
     }),
   );
+  final downloadBlock = includeDownloads
+      ? '''
+  <div wire:key="download.src1">
+    <h3><small>ترجمة Crunchyroll</small></h3>
+    <div class="grow flex flex-wrap gap-4 justify-center">
+      <div class="grow sm:max-w-[400px] flex rounded-lg">
+        <div class="grow flex flex-col">
+          <label>جودة عالية بحجم أقل [1080p HEVC]</label>
+          <a href="https://anime3rb.com/download/hevc-id?expires=999&signature=sig1">تحميل مباشر [210.03 ميغابايت]</a>
+        </div>
+        <a href="https://anime3rb.com/hevc">اعرف المزيد</a>
+      </div>
+      <div class="flex flex-col grow sm:max-w-[300px]">
+        <label>جودة عالية [1080p]</label>
+        <a href="https://anime3rb.com/download/free-1080?expires=999&signature=sig2">تحميل مباشر [282.12 ميغابايت]</a>
+      </div>
+      <div class="flex flex-col grow sm:max-w-[300px]">
+        <label>جودة متوسطة [720p]</label>
+        <a href="https://anime3rb.com/download/free-720?expires=999&signature=sig3">تحميل مباشر [134.29 ميغابايت]</a>
+      </div>
+    </div>
+  </div>
+'''
+      : '';
   return '''
 <html>
 <head><meta name="csrf-token" content="csrf123"></head>
@@ -96,31 +121,22 @@ String _episodeHtml({
     <button data-video-source="src1"><span title="ترجمة Crunchyroll">ترجمة Crunchyroll</span></button>
     <button data-video-source="src2"><span title="ترجمة بديلة">ترجمة بديلة</span></button>
   </div>
-  <div wire:key="download.src1">
-    <h3><small>ترجمة Crunchyroll</small></h3>
-    <div>
-      <div>
-        <label>جودة عالية بحجم أقل [1080p HEVC]</label>
-        <a href="https://anime3rb.com/download/hevc-id?expires=999&signature=sig1">تحميل</a>
-      </div>
-      <a href="https://anime3rb.com/hevc">اعرف المزيد</a>
-    </div>
-    <div>
-      <div>
-        <label>جودة عالية [1080p]</label>
-        <a href="https://anime3rb.com/download/free-1080?expires=999&signature=sig2">تحميل</a>
-      </div>
-    </div>
-  </div>
+  $downloadBlock
 </body>
 </html>
 ''';
 }
 
 void main() {
-  test('loadSources separates watch servers and skips premium HEVC download', () async {
+  test('loadSources uses free direct downloads for watch and download, sets quality, and falls back to Vid3rb only when empty', () async {
     final resolver = Anime3rbPlaybackResolver(
       _StubTransport((uri, _, _) async {
+        if (uri.path.contains('no-dl')) {
+          return Anime3rbHttpResponse(
+            statusCode: 200,
+            body: _episodeHtml(includeDownloads: false),
+          );
+        }
         return Anime3rbHttpResponse(statusCode: 200, body: _episodeHtml());
       }),
     );
@@ -129,32 +145,40 @@ void main() {
       'https://anime3rb.com/episode/one-piece/1180',
       forDownload: false,
     );
+    expect(playSources.map((s) => s.quality).toList(), ['1080p', '720p']);
     expect(playSources.map((s) => s.source).toList(), [
-      'Vid3rb · ترجمة Crunchyroll [HD]',
-      'Vid3rb · ترجمة بديلة [HD]',
-      'Anime3rb مباشر · ترجمة Crunchyroll [1080p]',
+      'ترجمة Crunchyroll · تحميل مباشر · 282.12 ميغابايت',
+      'ترجمة Crunchyroll · تحميل مباشر · 134.29 ميغابايت',
     ]);
     expect(playSources.every((s) => s.requiresResolution), isTrue);
+    expect(playSources.any((s) => s.source.contains('HEVC')), isFalse);
 
     final dlSources = await resolver.loadSources(
       'https://anime3rb.com/episode/one-piece/1180',
       forDownload: true,
     );
-    expect(
-      dlSources.first.source,
-      'Anime3rb مباشر · ترجمة Crunchyroll [1080p]',
+    expect(dlSources.map((s) => s.quality).toList(), ['1080p', '720p']);
+    expect(dlSources.first.source, playSources.first.source);
+
+    final fallbackSources = await resolver.loadSources(
+      'https://anime3rb.com/episode/one-piece-no-dl/1',
+      forDownload: false,
     );
-    expect(
-      dlSources.any((s) => s.source.contains('HEVC')),
-      isFalse,
-    );
+    expect(fallbackSources.map((s) => s.quality).toList(), ['HD', 'HD']);
+    expect(fallbackSources.map((s) => s.source).toList(), [
+      'Vid3rb · ترجمة Crunchyroll',
+      'Vid3rb · ترجمة بديلة',
+    ]);
   });
 
-  test('resolveStreams parses inline video_sources and skips premium entries', () async {
+  test('resolveStreams parses inline video_sources fallback and skips premium entries', () async {
     final resolver = Anime3rbPlaybackResolver(
       _StubTransport((uri, headers, _) async {
         if (uri.path.startsWith('/episode/')) {
-          return Anime3rbHttpResponse(statusCode: 200, body: _episodeHtml());
+          return Anime3rbHttpResponse(
+            statusCode: 200,
+            body: _episodeHtml(includeDownloads: false),
+          );
         }
         expect(headers['Referer'], 'https://anime3rb.com/');
         return const Anime3rbHttpResponse(
@@ -192,7 +216,10 @@ var video_sources = [
     final resolver = Anime3rbPlaybackResolver(
       _StubTransport((uri, _, _) async {
         if (uri.path.startsWith('/episode/')) {
-          return Anime3rbHttpResponse(statusCode: 200, body: _episodeHtml());
+          return Anime3rbHttpResponse(
+            statusCode: 200,
+            body: _episodeHtml(includeDownloads: false),
+          );
         }
         if (uri.path == '/player/uuid-2/sources') {
           sourcesRequest = uri;
@@ -303,7 +330,10 @@ var video_sources = [
     final resolver = Anime3rbPlaybackResolver(
       _StubTransport((uri, _, _) async {
         if (uri.path.startsWith('/episode/')) {
-          return Anime3rbHttpResponse(statusCode: 200, body: _episodeHtml());
+          return Anime3rbHttpResponse(
+            statusCode: 200,
+            body: _episodeHtml(includeDownloads: false),
+          );
         }
         if (uri.path == '/player/uuid-1') {
           return const Anime3rbHttpResponse(

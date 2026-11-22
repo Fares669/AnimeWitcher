@@ -258,6 +258,33 @@ void main() {
     expect(item.recommendations?.map((e) => e.title), ['Fairy Tail']);
   });
 
+  test('getDetails caches details and avoids a second request on getEpisodes until invalidated', () async {
+    var detailFetches = 0;
+    final provider = Anime3rbProvider((uri, {headers = const {}, cancelToken}) async {
+      detailFetches++;
+      return '''
+<html><body>
+  <h1><span dir="ltr">Naruto</span></h1>
+  <div class="video-list">
+    <a href="https://anime3rb.com/episode/naruto/1">
+      <div class="video-data"><span>الحلقة 1</span><p>Enter Naruto!</p></div>
+    </a>
+  </div>
+</body></html>
+''';
+    });
+
+    final item = await provider.getDetails('https://anime3rb.com/titles/naruto');
+    final episodes = await provider.getEpisodes('https://anime3rb.com/titles/naruto');
+    expect(detailFetches, 1);
+    expect(item.episodes, hasLength(1));
+    expect(episodes, hasLength(1));
+
+    provider.invalidateDetailCaches('https://anime3rb.com/titles/naruto');
+    await provider.getEpisodes('https://anime3rb.com/titles/naruto');
+    expect(detailFetches, 2);
+  });
+
   test('searchPage uses Livewire search component and parses simple-title-card results when transport is attached', () async {
     var postCalls = 0;
     final transport = _TestSearchTransport(

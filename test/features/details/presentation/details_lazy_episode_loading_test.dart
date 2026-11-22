@@ -31,8 +31,9 @@ final class _Storage extends MemoryStorageService {
 }
 
 final class _Provider extends AnimeWitcherProvider {
-  _Provider([this.packageName = 'test.anime']);
+  _Provider([this.packageName = 'test.anime', this.inlineEpisodes]);
 
+  final List<Episode>? inlineEpisodes;
   int detailsCalls = 0;
   int episodeCalls = 0;
 
@@ -75,6 +76,7 @@ final class _Provider extends AnimeWitcherProvider {
       posterUrl: '',
       contentType: MultimediaContentType.anime,
       provider: packageName,
+      episodes: inlineEpisodes,
     );
   }
 
@@ -270,4 +272,43 @@ void main() {
       expect(source.detailsCalls, 1);
     },
   );
+
+  test('inline episodes on single-fetch providers populate immediately without a second fetch', () async {
+    final provider = _Provider('anime3rb', [
+      Episode(name: 'Episode 1', url: 'https://anime3rb.com/episode/naruto/1', season: 1, episode: 1),
+    ]);
+    final container = ProviderContainer(
+      overrides: [
+        extensionManagerProvider.overrideWith(() => _Manager(provider)),
+        activeProviderProvider.overrideWithValue(provider),
+        episodeSortAscendingProvider.overrideWith(() => _AscendingSort()),
+        storageServiceProvider.overrideWithValue(_Storage()),
+        downloadsProvider.overrideWith(() => _EmptyDownloads()),
+        watchHistoryProvider.overrideWith(() => _EmptyHistory()),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    const url = 'https://anime3rb.com/titles/naruto';
+    final item = MultimediaItem(
+      title: 'Naruto',
+      url: url,
+      posterUrl: '',
+      contentType: MultimediaContentType.anime,
+      provider: provider.packageName,
+    );
+    final details = detailsControllerProvider(url);
+    addTearDown(container.listen(details, (_, _) {}).close);
+    final controller = container.read(details.notifier);
+
+    await controller.loadDetails(item);
+    await _flush();
+
+    expect(provider.detailsCalls, 1);
+    expect(provider.episodeCalls, 0);
+    expect(container.read(details).episodes.asData?.value, hasLength(1));
+
+    await controller.loadEpisodesOnDemand();
+    expect(provider.episodeCalls, 0);
+  });
 }

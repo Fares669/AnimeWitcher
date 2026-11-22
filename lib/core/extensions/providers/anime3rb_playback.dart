@@ -107,12 +107,14 @@ class _ParsedDownloadOption {
     required this.translationLabel,
     required this.qualityLabel,
     required this.isPremium,
+    this.sizeLabel,
   });
 
   final Uri url;
   final String translationLabel;
   final String qualityLabel;
   final bool isPremium;
+  final String? sizeLabel;
 }
 
 class _ParsedEpisodePage {
@@ -259,6 +261,50 @@ class Anime3rbPlaybackResolver {
 
     final downloadOptions = <_ParsedDownloadOption>[];
     final seenDownloadUrls = <String>{};
+
+    void collectDownloadAnchor(Element anchor, String translationLabel) {
+      final href = anchor.attributes['href']?.trim() ?? '';
+      if (href.isEmpty) return;
+      final resolved = watchUri.resolve(_cleanUnescapedUrl(href));
+      if (!resolved.queryParameters.containsKey('signature') ||
+          !seenDownloadUrls.add(resolved.toString())) {
+        return;
+      }
+      final card = anchor.parent;
+      final wrapper = card?.parent;
+      final wrapperContainsOnlyThisDownload =
+          wrapper != null &&
+          wrapper.querySelectorAll('a[href*="/download/"]').length == 1;
+      final labelText =
+          card
+              ?.querySelector('label')
+              ?.text
+              .replaceAll(RegExp(r'\s+'), ' ')
+              .trim() ??
+          anchor.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+      final anchorText = anchor.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+      final sizeMatch = RegExp(r'\[([^\]]+)\]').firstMatch(anchorText);
+      final sizeLabel = sizeMatch?.group(1)?.trim();
+      final isPremium =
+          labelText.toUpperCase().contains('HEVC') ||
+          card?.querySelector('a[href*="/hevc"], a[href*="/premium"]') !=
+              null ||
+          (wrapperContainsOnlyThisDownload &&
+              wrapper.querySelector('a[href*="/hevc"], a[href*="/premium"]') !=
+                  null);
+      downloadOptions.add(
+        _ParsedDownloadOption(
+          url: resolved,
+          translationLabel: translationLabel,
+          qualityLabel: _normalizeQualityLabel(labelText),
+          isPremium: isPremium,
+          sizeLabel: (sizeLabel != null && sizeLabel.isNotEmpty)
+              ? sizeLabel
+              : null,
+        ),
+      );
+    }
+
     for (final group in doc.querySelectorAll('[wire\\:key^="download."]')) {
       final translationLabel =
           group
@@ -268,61 +314,14 @@ class Anime3rbPlaybackResolver {
               .trim() ??
           '';
       for (final anchor in group.querySelectorAll('a[href*="/download/"]')) {
-        final href = anchor.attributes['href']?.trim() ?? '';
-        if (href.isEmpty) continue;
-        final resolved = watchUri.resolve(_cleanUnescapedUrl(href));
-        if (!resolved.queryParameters.containsKey('signature') ||
-            !seenDownloadUrls.add(resolved.toString())) {
-          continue;
-        }
-        final card = anchor.parent;
-        final labelText =
-            card
-                ?.querySelector('label')
-                ?.text
-                .replaceAll(RegExp(r'\s+'), ' ')
-                .trim() ??
-            anchor.text.replaceAll(RegExp(r'\s+'), ' ').trim();
-        final isPremium =
-            labelText.toUpperCase().contains('HEVC') ||
-            card?.parent?.querySelector('a[href*="/hevc"]') != null;
-        downloadOptions.add(
-          _ParsedDownloadOption(
-            url: resolved,
-            translationLabel: translationLabel,
-            qualityLabel: _normalizeQualityLabel(labelText),
-            isPremium: isPremium,
-          ),
-        );
+        collectDownloadAnchor(anchor, translationLabel);
       }
     }
 
     // Fallback scan when download cards lack wire:key wrapper.
     if (downloadOptions.isEmpty) {
       for (final anchor in doc.querySelectorAll('a[href*="/download/"]')) {
-        final href = anchor.attributes['href']?.trim() ?? '';
-        if (href.isEmpty) continue;
-        final resolved = watchUri.resolve(_cleanUnescapedUrl(href));
-        if (!resolved.queryParameters.containsKey('signature') ||
-            !seenDownloadUrls.add(resolved.toString())) {
-          continue;
-        }
-        final labelText =
-            anchor.parent
-                ?.querySelector('label')
-                ?.text
-                .replaceAll(RegExp(r'\s+'), ' ')
-                .trim() ??
-            anchor.text.replaceAll(RegExp(r'\s+'), ' ').trim();
-        final isPremium = labelText.toUpperCase().contains('HEVC');
-        downloadOptions.add(
-          _ParsedDownloadOption(
-            url: resolved,
-            translationLabel: '',
-            qualityLabel: _normalizeQualityLabel(labelText),
-            isPremium: isPremium,
-          ),
-        );
+        collectDownloadAnchor(anchor, '');
       }
     }
 
@@ -381,7 +380,8 @@ class Anime3rbPlaybackResolver {
           results.add(
             StreamResult(
               url: token.encode(),
-              source: 'Vid3rb · ${src.label} [HD]',
+              source: 'Vid3rb · ${src.label}',
+              quality: 'HD',
               requiresResolution: true,
               refreshUrl: watchUri.toString(),
             ),
@@ -398,7 +398,8 @@ class Anime3rbPlaybackResolver {
         results.add(
           StreamResult(
             url: token.encode(),
-            source: 'Vid3rb [HD]',
+            source: 'Vid3rb',
+            quality: 'HD',
             requiresResolution: true,
             refreshUrl: watchUri.toString(),
           ),
@@ -408,20 +409,26 @@ class Anime3rbPlaybackResolver {
 
     void addDownloadSources() {
       for (final dl in freeDownloads) {
-        final suffix = dl.translationLabel.isEmpty
-            ? ''
-            : ' · ${dl.translationLabel}';
+        final hasTranslation = dl.translationLabel.isNotEmpty;
+        final tokenLabel = hasTranslation
+            ? '${dl.translationLabel} · تحميل مباشر'
+            : 'Anime3rb تحميل مباشر';
+        final sizePart = dl.sizeLabel != null ? ' · ${dl.sizeLabel}' : '';
+        final displaySource = hasTranslation
+            ? '${dl.translationLabel} · تحميل مباشر$sizePart'
+            : 'تحميل مباشر$sizePart';
         final token = Anime3rbSourceToken(
           kind: 'download',
           watchUrl: watchUri.toString(),
-          label: 'تحميل مباشر$suffix',
+          label: tokenLabel,
           quality: dl.qualityLabel,
           targetUrl: dl.url.toString(),
         );
         results.add(
           StreamResult(
             url: token.encode(),
-            source: 'Anime3rb مباشر$suffix [${dl.qualityLabel}]',
+            source: displaySource,
+            quality: dl.qualityLabel,
             requiresResolution: true,
             refreshUrl: watchUri.toString(),
           ),
@@ -429,12 +436,12 @@ class Anime3rbPlaybackResolver {
       }
     }
 
-    if (forDownload) {
+    // Use Anime3rb direct download servers for both watch and download;
+    // only fall back to Vid3rb when no free direct download options exist.
+    if (freeDownloads.isNotEmpty) {
       addDownloadSources();
-      addWatchSources();
     } else {
       addWatchSources();
-      addDownloadSources();
     }
 
     if (results.isEmpty) {
@@ -759,6 +766,7 @@ class Anime3rbPlaybackResolver {
           stream: StreamResult(
             url: uri.toString(),
             source: '$sourceLabel [$quality]',
+            quality: quality,
             headers: headers,
             refreshUrl: watchUri.toString(),
           ),
@@ -771,139 +779,124 @@ class Anime3rbPlaybackResolver {
     }
   }
 
+  bool _isIntermediateDownloadUri(Uri uri) {
+    final host = uri.host.toLowerCase();
+    final isAnime3rb =
+        host == _origin.host || host.endsWith('.${_origin.host}');
+    return isAnime3rb && uri.path.startsWith('/download/');
+  }
+
+  List<StreamResult> _buildDownloadStreamResult(
+    Uri mediaUri,
+    Anime3rbSourceToken token,
+  ) => [
+    StreamResult(
+      url: mediaUri.toString(),
+      source: '${token.label} [${token.quality}]',
+      quality: token.quality,
+      headers: {
+        'Referer': '${_origin.origin}/',
+        'User-Agent': kDefaultBrowserUserAgent,
+      },
+      refreshUrl: token.watchUrl,
+    ),
+  ];
+
+  Uri? _extractNextDownloadHop(Document doc, Uri currentUri) {
+    for (final anchor in doc.querySelectorAll('a[href*="/download/"]')) {
+      final href = anchor.attributes['href']?.trim() ?? '';
+      if (href.contains('signature=')) {
+        return currentUri.resolve(_cleanUnescapedUrl(href));
+      }
+    }
+    for (final anchor in doc.querySelectorAll('a[href]')) {
+      final href = anchor.attributes['href']?.trim() ?? '';
+      final lower = href.toLowerCase();
+      if (lower.contains('vid3rb.com/') &&
+          (lower.contains('.mp4') || lower.contains('/video/'))) {
+        return currentUri.resolve(_cleanUnescapedUrl(href));
+      }
+    }
+    final meta = doc.querySelector('meta[http-equiv="refresh" i]');
+    final content = meta?.attributes['content'] ?? '';
+    final refreshMatch = RegExp(
+      r'url\s*=\s*([^\s;]+)',
+      caseSensitive: false,
+    ).firstMatch(content);
+    final refreshUrl = refreshMatch?.group(1)?.trim();
+    if (refreshUrl != null && refreshUrl.isNotEmpty) {
+      return currentUri.resolve(_cleanUnescapedUrl(refreshUrl));
+    }
+    return null;
+  }
+
   Future<List<StreamResult>> _resolveDirectDownloadToken(
     Anime3rbSourceToken token,
   ) async {
-    final hop1Uri = token.targetUrl != null
+    Uri? currentUri = token.targetUrl != null
         ? Uri.tryParse(token.targetUrl!)
         : null;
-    if (hop1Uri == null) {
+    if (currentUri == null) {
       throw const Anime3rbSourceUnavailableException();
     }
 
-    final headers = <String, String>{
-      'Accept':
-          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Referer': token.watchUrl,
-      'User-Agent': kDefaultBrowserUserAgent,
-    };
-
-    final hop1 = await _transport.get(
-      hop1Uri,
-      headers: headers,
-      followRedirects: false,
-      inspectMedia: true,
-      operation: 'host_anime3rb_dl_hop1',
-    );
-    if (hop1.statusCode == 429) throw const Anime3rbRateLimitException();
-    if (hop1.isCloudflareChallenge) {
-      throw Anime3rbBrowserRequiredException(
-        'يتطلب التحميل المباشر من Anime3rb إكمال تحقق Cloudflare في المتصفح.',
-        watchUrl: Uri.tryParse(token.watchUrl),
+    var referer = token.watchUrl;
+    for (var hop = 0; hop < 4; hop++) {
+      final resp = await _transport.get(
+        currentUri!,
+        headers: <String, String>{
+          'Accept':
+              'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Referer': referer,
+        },
+        followRedirects: false,
+        inspectMedia: true,
+        operation: hop == 0 ? 'host_anime3rb_dl_hop1' : 'host_anime3rb_dl_hop2',
       );
-    }
-
-    final hop1Location = hop1.header('location');
-    if (hop1.statusCode >= 300 &&
-        hop1.statusCode < 400 &&
-        hop1Location != null &&
-        hop1Location.trim().isNotEmpty) {
-      final mediaUri = hop1Uri.resolve(hop1Location.trim());
-      return [
-        StreamResult(
-          url: mediaUri.toString(),
-          source: '${token.label} [${token.quality}]',
-          headers: {
-            'Referer': '${_origin.origin}/',
-            'User-Agent': kDefaultBrowserUserAgent,
-          },
-          refreshUrl: token.watchUrl,
-        ),
-      ];
-    }
-    if (hop1.hasMediaContent) {
-      return [
-        StreamResult(
-          url: (hop1.finalUri ?? hop1Uri).toString(),
-          source: '${token.label} [${token.quality}]',
-          headers: {
-            'Referer': '${_origin.origin}/',
-            'User-Agent': kDefaultBrowserUserAgent,
-          },
-          refreshUrl: token.watchUrl,
-        ),
-      ];
-    }
-    if (!hop1.isSuccess) {
-      throw const Anime3rbSourceUnavailableException();
-    }
-
-    final doc = html.parse(hop1.body);
-    final hop2Anchor = doc
-        .querySelectorAll('a[href*="/download/"]')
-        .firstWhere(
-          (a) => (a.attributes['href'] ?? '').contains('signature='),
-          orElse: () => Element.tag('a'),
-        );
-    final hop2Href = hop2Anchor.attributes['href']?.trim() ?? '';
-    if (hop2Href.isEmpty) {
-      if (hop1.body.contains('اشتراك') || hop1.body.contains('premium')) {
-        throw const Anime3rbSourceUnavailableException(
-          'هذه الجودة مخصصة للاشتراك المميز على Anime3rb، اختر جودة أخرى.',
+      if (resp.statusCode == 429) throw const Anime3rbRateLimitException();
+      if (resp.isCloudflareChallenge) {
+        throw Anime3rbBrowserRequiredException(
+          'يتطلب التحميل المباشر من Anime3rb إكمال تحقق Cloudflare في المتصفح.',
+          watchUrl: Uri.tryParse(token.watchUrl),
         );
       }
-      throw const Anime3rbSourceUnavailableException();
-    }
 
-    final hop2Uri = hop1Uri.resolve(_cleanUnescapedUrl(hop2Href));
-    final hop2 = await _transport.get(
-      hop2Uri,
-      headers: {
-        ...headers,
-        'Referer': hop1Uri.toString(),
-      },
-      followRedirects: false,
-      inspectMedia: true,
-      operation: 'host_anime3rb_dl_hop2',
-    );
-    if (hop2.statusCode == 429) throw const Anime3rbRateLimitException();
-    if (hop2.isCloudflareChallenge) {
-      throw Anime3rbBrowserRequiredException(
-        'يتطلب التحميل المباشر من Anime3rb إكمال تحقق Cloudflare في المتصفح.',
-        watchUrl: Uri.tryParse(token.watchUrl),
-      );
-    }
+      final location = resp.header('location');
+      if (resp.statusCode >= 300 &&
+          resp.statusCode < 400 &&
+          location != null &&
+          location.trim().isNotEmpty) {
+        final nextUri = currentUri.resolve(location.trim());
+        if (_isIntermediateDownloadUri(nextUri) && nextUri != currentUri) {
+          referer = currentUri.toString();
+          currentUri = nextUri;
+          continue;
+        }
+        return _buildDownloadStreamResult(nextUri, token);
+      }
+      if (resp.hasMediaContent) {
+        return _buildDownloadStreamResult(resp.finalUri ?? currentUri, token);
+      }
+      if (!resp.isSuccess) {
+        throw const Anime3rbSourceUnavailableException();
+      }
 
-    final location = hop2.header('location');
-    if (hop2.statusCode >= 300 &&
-        hop2.statusCode < 400 &&
-        location != null &&
-        location.trim().isNotEmpty) {
-      final finalMediaUri = hop2Uri.resolve(location.trim());
-      return [
-        StreamResult(
-          url: finalMediaUri.toString(),
-          source: '${token.label} [${token.quality}]',
-          headers: {
-            'Referer': '${_origin.origin}/',
-            'User-Agent': kDefaultBrowserUserAgent,
-          },
-          refreshUrl: token.watchUrl,
-        ),
-      ];
-    }
-    if (hop2.hasMediaContent) {
-      return [
-        StreamResult(
-          url: (hop2.finalUri ?? hop2Uri).toString(),
-          source: '${token.label} [${token.quality}]',
-          headers: {
-            'Referer': '${_origin.origin}/',
-            'User-Agent': kDefaultBrowserUserAgent,
-          },
-          refreshUrl: token.watchUrl,
-        ),
-      ];
+      final doc = html.parse(resp.body);
+      final nextUri = _extractNextDownloadHop(doc, currentUri);
+      if (nextUri == null) {
+        if (resp.body.contains('اشتراك') || resp.body.contains('premium')) {
+          throw const Anime3rbSourceUnavailableException(
+            'هذه الجودة مخصصة للاشتراك المميز على Anime3rb، اختر جودة أخرى.',
+          );
+        }
+        throw const Anime3rbSourceUnavailableException();
+      }
+      if (!_isIntermediateDownloadUri(nextUri)) {
+        return _buildDownloadStreamResult(nextUri, token);
+      }
+      if (nextUri == currentUri) break;
+      referer = currentUri.toString();
+      currentUri = nextUri;
     }
 
     throw const Anime3rbSourceUnavailableException();

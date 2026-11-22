@@ -50,6 +50,10 @@ class Anime3rbProvider extends AnimeWitcherProvider {
   final Anime3rbPlaybackResolver? _playback;
   ({String csrf, Uri updateUri, String snapshot, DateTime fetchedAt})?
   _cachedSearchBootstrap;
+  final Map<String, ({MultimediaItem item, DateTime expiresAt})> _detailsCache =
+      {};
+  final Map<String, Future<MultimediaItem>> _inFlightDetails = {};
+  static const _detailsCacheTtl = Duration(minutes: 2);
 
   static const id = 'anime3rb';
   static const originUrl = 'https://anime3rb.com';
@@ -485,12 +489,39 @@ class Anime3rbProvider extends AnimeWitcherProvider {
   }
 
   @override
-  Future<MultimediaItem> getDetails(String url) async {
+  Future<MultimediaItem> getDetails(String url) {
     final link = parseCatalogLink(url);
     if (link == null) {
-      throw const FormatException('Invalid Anime3rb title URL');
+      return Future<MultimediaItem>.error(
+        const FormatException('Invalid Anime3rb title URL'),
+      );
     }
     final uri = link.work;
+    final cacheKey = uri.toString();
+    final now = DateTime.now();
+    final cached = _detailsCache[cacheKey];
+    if (cached != null && now.isBefore(cached.expiresAt)) {
+      return Future<MultimediaItem>.value(cached.item);
+    }
+    final existing = _inFlightDetails[cacheKey];
+    if (existing != null) return existing;
+
+    final future = _fetchDetailsUncached(uri)
+        .then((item) {
+          _detailsCache[cacheKey] = (
+            item: item,
+            expiresAt: DateTime.now().add(_detailsCacheTtl),
+          );
+          return item;
+        })
+        .whenComplete(() {
+          _inFlightDetails.remove(cacheKey);
+        });
+    _inFlightDetails[cacheKey] = future;
+    return future;
+  }
+
+  Future<MultimediaItem> _fetchDetailsUncached(Uri uri) async {
     final doc = await _document(uri);
     final json = _metadata(doc);
 
@@ -684,11 +715,15 @@ class Anime3rbProvider extends AnimeWitcherProvider {
   @override
   void prepareForNetworkRetry() {
     _transport;
+    _detailsCache.clear();
     _playback?.clearCache();
   }
 
   @override
   void invalidateDetailCaches(String url) {
+    final canonical = canonicalWorkUrl(url);
+    _detailsCache.remove(canonical);
+    _detailsCache.remove(url.trim());
     _playback?.clearCache();
   }
 

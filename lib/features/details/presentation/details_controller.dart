@@ -578,9 +578,15 @@ class DetailsController extends _$DetailsController {
       );
 
       final inlineEpisodes = fetchedItem.episodes ?? const <Episode>[];
-      if (_episodesRequested &&
+      final hasInlineEpisodesForSingleFetchProvider =
+          !provider.supportsIndependentDetailSections &&
+          inlineEpisodes.isNotEmpty;
+      if ((_episodesRequested || hasInlineEpisodesForSingleFetchProvider) &&
           inlineEpisodes.isNotEmpty &&
           (state.episodes.asData?.value.isEmpty ?? true)) {
+        if (hasInlineEpisodesForSingleFetchProvider) {
+          _episodesFetched = true;
+        }
         _applyEpisodes(
           provider,
           initialItem.url,

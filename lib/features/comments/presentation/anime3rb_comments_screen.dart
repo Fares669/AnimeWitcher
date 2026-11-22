@@ -11,7 +11,11 @@ import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/utils/avatar_image.dart';
 import '../../../core/utils/relative_time.dart';
+import '../../../core/utils/window_controls_inset.dart';
+import '../../../shared/widgets/animated_sort_menu_button.dart';
 import '../../../shared/widgets/app_page_header.dart';
+import '../../../shared/widgets/apple_liquid_glass.dart';
+import 'widgets/animewitcher_comment_sort_control.dart';
 import '../../../shared/widgets/loading_indicator.dart';
 import '../../../shared/widgets/mouse_drag_refresh_indicator.dart';
 import '../../home/presentation/widgets/home_section_header.dart';
@@ -62,6 +66,7 @@ class _Anime3rbCommentsScreenState extends ConsumerState<Anime3rbCommentsScreen>
 
   @override
   void dispose() {
+    applePersistentGlassHeaderController.hide(this);
     _scrollController
       ..removeListener(_onScroll)
       ..dispose();
@@ -442,115 +447,210 @@ class _Anime3rbCommentsScreenState extends ConsumerState<Anime3rbCommentsScreen>
     }
   }
 
+  String _sortSystemImage(Anime3rbCommentSort sort) => switch (sort) {
+    Anime3rbCommentSort.popular => 'heart',
+    Anime3rbCommentSort.latest => 'clock',
+    Anime3rbCommentSort.oldest => 'clock.arrow.circlepath',
+  };
+
+  IconData _sortFallbackIcon(Anime3rbCommentSort sort) => switch (sort) {
+    Anime3rbCommentSort.popular => Icons.favorite_border_rounded,
+    Anime3rbCommentSort.latest => Icons.schedule_rounded,
+    Anime3rbCommentSort.oldest => Icons.history_rounded,
+  };
+
+  List<AppleNativeMenuItem> _sortMenuItems() => [
+    for (final s in Anime3rbCommentSort.values)
+      AppleNativeMenuItem(
+        value: s.name,
+        label: s.label,
+        systemImage: _sortSystemImage(s),
+        icon: _sortFallbackIcon(s),
+      ),
+  ];
+
+  void _applySortByName(String value) {
+    final next = Anime3rbCommentSort.values.firstWhere(
+      (s) => s.name == value,
+      orElse: () => _sort,
+    );
+    if (next == _sort || !mounted) return;
+    setState(() => _sort = next);
+    if (_scrollController.hasClients) {
+      _scrollController.jumpTo(0);
+    }
+    unawaited(_loadInitial());
+  }
+
   @override
   Widget build(BuildContext context) {
     final account = ref.watch(anime3rbAccountServiceProvider);
     final signedIn = account.isSignedIn;
     final userSlug = account.profile?.userSlug;
     final viewerUuid = ref.watch(anime3rbCommentsServiceProvider).viewerUuid;
-    final topInset = appPageHeaderContentTopInset(context);
+
+    if (appleUsesPersistentLiquidGlassHeader) {
+      final colors = Theme.of(context).colorScheme;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || ModalRoute.of(context)?.isCurrent == false) return;
+        applePersistentGlassHeaderController.show(
+          ApplePersistentGlassHeaderConfig(
+            owner: this,
+            route: ModalRoute.of(context),
+            onBack: () => Navigator.of(context).pop(),
+            backForegroundColor: colors.onSurface,
+            backFallbackColor: colors.surfaceContainerHigh,
+            allowInstantBoundaryMorph: true,
+            toolbarTrailingInset:
+                AnimeWitcherCommentSortControl.persistentTrailingInset,
+            trailingButtons: [
+              AppleLiquidGlassToolbarButton(
+                width: AnimeWitcherCommentSortControl.size,
+                tooltip: 'ترتيب التعليقات',
+                icon: _sortFallbackIcon(_sort),
+                systemImage: _sortSystemImage(_sort),
+                title: null,
+                color: colors.primary,
+                menuTintColor: colors.primary,
+                onPressed: null,
+                selectedMenuValue: _sort.name,
+                menuItems: _sortMenuItems(),
+                onMenuSelected: _applySortByName,
+              ),
+            ],
+          ),
+        );
+      });
+    }
 
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(
-        title: _totalCount != null
-            ? 'تعليقات Anime3rb ($_totalCount)'
-            : 'تعليقات Anime3rb',
-        actions: [
-          PopupMenuButton<Anime3rbCommentSort>(
-            tooltip: 'ترتيب التعليقات',
-            icon: const Icon(Icons.sort_rounded),
-            initialValue: _sort,
-            onSelected: (next) {
-              if (next == _sort) return;
-              setState(() => _sort = next);
-              unawaited(_loadInitial());
-            },
-            itemBuilder: (_) => [
-              for (final s in Anime3rbCommentSort.values)
-                PopupMenuItem(value: s, child: Text(s.label)),
-            ],
+        title: 'التعليقات',
+        onBack: () => Navigator.of(context).pop(),
+        actions: appleUsesPersistentLiquidGlassHeader
+            ? const <Widget>[]
+            : <Widget>[
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: SizedBox(
+                    width: AnimeWitcherCommentSortControl.width,
+                    height: AnimeWitcherCommentSortControl.size,
+                    child: AnimatedSortMenuButton(
+                      tooltip: 'ترتيب التعليقات',
+                      selectedValue: _sort.name,
+                      items: _sortMenuItems(),
+                      onSelected: _applySortByName,
+                      icon: _sortFallbackIcon(_sort),
+                      systemImage: _sortSystemImage(_sort),
+                      tintColor: Theme.of(context).colorScheme.primary,
+                      size: AnimeWitcherCommentSortControl.size,
+                      fallbackIcon: AnimeWitcherCommentSortControl.fallbackIcon,
+                    ),
+                  ),
+                ),
+                const WindowControlsGap(),
+              ],
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: _buildCommentsBody(
+              context,
+              viewerUuid: viewerUuid,
+              userSlug: userSlug,
+            ),
           ),
+          _buildComposer(context, signedIn),
         ],
       ),
-      body: MouseDragRefreshIndicator(
+    );
+  }
+
+  Widget _buildCommentsBody(
+    BuildContext context, {
+    required String? viewerUuid,
+    required String? userSlug,
+  }) {
+    final topInset = appPageHeaderContentTopInset(context);
+    if (_loadingInitial) {
+      return const Center(child: AppLoadingIndicator());
+    }
+    if (_error != null && _comments.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_off_rounded, size: 40),
+              const SizedBox(height: 10),
+              const Text(
+                'تعذر تحميل التعليقات.',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 10),
+              FilledButton.tonalIcon(
+                onPressed: _loadInitial,
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('إعادة المحاولة'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (_comments.isEmpty) {
+      return MouseDragRefreshIndicator(
         onRefresh: _loadInitial,
-        child: CustomScrollView(
-          controller: _scrollController,
-          slivers: [
-            SliverToBoxAdapter(child: SizedBox(height: topInset + 8)),
-            SliverToBoxAdapter(
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 760),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: _buildComposer(context, signedIn),
-                  ),
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.only(top: topInset),
+          children: [
+            SizedBox(height: MediaQuery.sizeOf(context).height * 0.25),
+            Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                'لا توجد تعليقات منشورة بعد.',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
               ),
             ),
-            const SliverToBoxAdapter(child: SizedBox(height: 12)),
-            if (_loadingInitial)
-              const SliverFillRemaining(
-                hasScrollBody: false,
-                child: Center(child: AppLoadingIndicator()),
-              )
-            else if (_error != null)
-              SliverFillRemaining(
-                hasScrollBody: false,
-                child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text('تعذر تحميل التعليقات: $_error'),
-                        const SizedBox(height: 12),
-                        FilledButton(
-                          onPressed: _loadInitial,
-                          child: const Text('إعادة المحاولة'),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              )
-            else if (_comments.isEmpty)
-              const SliverFillRemaining(
-                hasScrollBody: false,
-                child: Center(child: Text('لا توجد تعليقات بعد. كن أول من يعلق!')),
-              )
-            else
-              SliverList.builder(
-                itemCount: _comments.length + (_loadingMore ? 1 : 0),
-                itemBuilder: (context, index) {
-                  if (index >= _comments.length) {
-                    return const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Center(child: AppLoadingIndicator()),
-                    );
-                  }
-                  final comment = _comments[index];
-                  return Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 760),
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-                        child: _buildCommentTile(
-                          context,
-                          comment,
-                          viewerUuid: viewerUuid,
-                          userSlug: userSlug,
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            const SliverToBoxAdapter(child: SizedBox(height: 80)),
           ],
         ),
+      );
+    }
+
+    return MouseDragRefreshIndicator(
+      onRefresh: _loadInitial,
+      child: ListView.separated(
+        controller: _scrollController,
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.fromLTRB(12, topInset + 12, 12, 24),
+        itemCount: _comments.length + (_loadingMore || _hasMore ? 1 : 0),
+        separatorBuilder: (_, _) => const SizedBox(height: 8),
+        itemBuilder: (context, index) {
+          if (index >= _comments.length) {
+            return const Padding(
+              padding: EdgeInsets.symmetric(vertical: 18),
+              child: Center(
+                child: SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2.2),
+                ),
+              ),
+            );
+          }
+          return _buildCommentTile(
+            context,
+            _comments[index],
+            viewerUuid: viewerUuid,
+            userSlug: userSlug,
+          );
+        },
       ),
     );
   }
@@ -558,71 +658,121 @@ class _Anime3rbCommentsScreenState extends ConsumerState<Anime3rbCommentsScreen>
   Widget _buildComposer(BuildContext context, bool signedIn) {
     final colors = Theme.of(context).colorScheme;
     if (_isTopicClosed) {
-      return Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: colors.surfaceContainerHighest.withValues(alpha: 0.45),
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: const Text('التعليقات مغلقة لهذا الموضوع.'),
-      );
-    }
-    if (!signedIn) {
-      return Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: colors.surfaceContainerHighest.withValues(alpha: 0.45),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: colors.outlineVariant.withValues(alpha: 0.4)),
-        ),
-        child: Row(
-          children: [
-            const Expanded(
-              child: Text('سجّل الدخول إلى Anime3rb لإضافة تعليق أو تقييم أو رد.'),
+      return SafeArea(
+        top: false,
+        child: Container(
+          decoration: BoxDecoration(
+            color: colors.surface,
+            border: Border(
+              top: BorderSide(color: Theme.of(context).dividerColor),
             ),
-            const SizedBox(width: 12),
-            FilledButton(
-              onPressed: _openSignIn,
-              child: const Text('تسجيل الدخول'),
-            ),
-          ],
-        ),
-      );
-    }
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: colors.surfaceContainerHighest.withValues(alpha: 0.45),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: colors.outlineVariant.withValues(alpha: 0.4)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Expanded(
-            child: TextField(
-              controller: _composerController,
-              enabled: !_publishing,
-              minLines: 1,
-              maxLines: 4,
-              decoration: const InputDecoration(
-                hintText: 'اكتب تعليقًا...',
-                border: InputBorder.none,
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.comments_disabled_outlined,
+                size: 18,
+                color: colors.onSurfaceVariant,
               ),
-            ),
+              const SizedBox(width: 8),
+              Text(
+                'تم إيقاف التعليقات على هذا المحتوى.',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: colors.onSurfaceVariant,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          FilledButton.icon(
-            onPressed: _publishing ? null : _publishComment,
-            icon: _publishing
-                ? const SizedBox.square(
-                    dimension: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.send_rounded, size: 18),
-            label: const Text('نشر'),
+        ),
+      );
+    }
+    return SafeArea(
+      top: false,
+      child: Container(
+        decoration: BoxDecoration(
+          color: colors.surface,
+          border: Border(
+            top: BorderSide(color: Theme.of(context).dividerColor),
           ),
-        ],
+        ),
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+        child: signedIn
+            ? Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _composerController,
+                      enabled: !_publishing,
+                      minLines: 1,
+                      maxLines: 4,
+                      textDirection: TextDirection.rtl,
+                      decoration: InputDecoration(
+                        hintText: 'اكتب تعليقًا...',
+                        filled: true,
+                        fillColor: colors.surfaceContainerLow,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          borderSide: BorderSide.none,
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          borderSide: BorderSide.none,
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          borderSide: BorderSide(
+                            color: colors.primary,
+                            width: 1.5,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  IconButton.filled(
+                    tooltip: 'نشر',
+                    onPressed: _publishing ? null : _publishComment,
+                    icon: _publishing
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.send_rounded),
+                  ),
+                ],
+              )
+            : Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.lock_outline_rounded,
+                      size: 18,
+                      color: colors.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        'سجّل الدخول إلى Anime3rb لإضافة تعليق.',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: colors.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    TextButton(
+                      onPressed: _openSignIn,
+                      child: const Text('تسجيل الدخول'),
+                    ),
+                  ],
+                ),
+              ),
       ),
     );
   }
@@ -644,173 +794,263 @@ class _Anime3rbCommentsScreenState extends ConsumerState<Anime3rbCommentsScreen>
     final expanded = _expandedReplies.contains(comment.uuid);
     final loadingReplies = _loadingReplies.contains(comment.uuid);
     final hasMoreReplies = _repliesHasMoreByParent[comment.uuid] == true;
+    final avatarRadius = isReply ? 16.0 : 20.0;
+    final avatarUrl = comment.author.avatarUrl?.trim() ?? '';
+    final voteBusy = _pendingVotes.contains(comment.uuid);
 
-    return Container(
-      padding: EdgeInsets.all(isReply ? 10 : 14),
-      decoration: BoxDecoration(
-        color: isReply
-            ? colors.surfaceContainer.withValues(alpha: 0.5)
-            : colors.surfaceContainerHighest.withValues(alpha: 0.35),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: colors.outlineVariant.withValues(alpha: 0.35),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              CircleAvatar(
-                radius: isReply ? 13 : 16,
-                backgroundImage: avatarImage(
-                  context,
-                  comment.author.avatarUrl,
-                  radius: isReply ? 13 : 16,
-                ),
-                child: comment.author.avatarUrl == null
-                    ? Text(
-                        comment.author.name.characters.firstOrNull ?? '؟',
-                        style: const TextStyle(fontSize: 12),
-                      )
-                    : null,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+    return Material(
+      color: isReply
+          ? colors.surfaceContainer.withValues(alpha: 0.65)
+          : colors.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(isReply ? 12 : 16),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: EdgeInsets.all(isReply ? 10 : 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Directionality(
+              textDirection: TextDirection.rtl,
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    radius: avatarRadius,
+                    backgroundColor: colors.surfaceContainerHighest,
+                    backgroundImage: avatarImage(
+                      context,
+                      avatarUrl,
+                      radius: avatarRadius,
+                    ),
+                    child: avatarUrl.isEmpty
+                        ? Icon(
+                            Icons.person_rounded,
+                            color: colors.onSurfaceVariant,
+                          )
+                        : null,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Flexible(
-                          child: Text(
-                            comment.author.name,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.labelLarge?.copyWith(
-                              fontWeight: FontWeight.w700,
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                comment.author.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.titleSmall?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
                             ),
-                          ),
+                            if (comment.isPinned) ...[
+                              const SizedBox(width: 6),
+                              Icon(
+                                Icons.push_pin_rounded,
+                                size: 14,
+                                color: colors.primary,
+                              ),
+                            ],
+                          ],
                         ),
-                        if (comment.isPinned) ...[
-                          const SizedBox(width: 6),
-                          Icon(
-                            Icons.push_pin_rounded,
-                            size: 14,
-                            color: colors.primary,
+                        if (comment.createdAt != null) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            '${formatArabicRelativeTime(comment.createdAt!)}${comment.isEdited ? ' · معدّل' : ''}',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colors.onSurfaceVariant,
+                            ),
                           ),
                         ],
                       ],
                     ),
-                    if (comment.createdAt != null)
-                      Text(
-                        '${formatArabicRelativeTime(comment.createdAt!)}${comment.isEdited ? ' · معدّل' : ''}',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: colors.onSurfaceVariant,
+                  ),
+                  if (isMine && !comment.isDeleted)
+                    PopupMenuButton<String>(
+                      tooltip: 'إدارة التعليق',
+                      onSelected: (action) {
+                        if (action == 'edit') unawaited(_editComment(comment));
+                        if (action == 'delete') {
+                          unawaited(_deleteComment(comment));
+                        }
+                      },
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(value: 'edit', child: Text('تعديل')),
+                        PopupMenuItem(value: 'delete', child: Text('حذف')),
+                      ],
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+            Directionality(
+              textDirection: TextDirection.rtl,
+              child: Text(
+                comment.bodyText,
+                textAlign: TextAlign.start,
+                style: theme.textTheme.bodyMedium?.copyWith(height: 1.45),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Directionality(
+              textDirection: TextDirection.rtl,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  _Anime3rbReactionButton(
+                    icon: comment.userVote == 1
+                        ? Icons.favorite_rounded
+                        : Icons.favorite_border_rounded,
+                    count: comment.upvotesCount,
+                    active: comment.userVote == 1,
+                    busy: voteBusy,
+                    tooltip: 'إعجاب',
+                    onTap: () => _toggleVote(comment, 1),
+                  ),
+                  const SizedBox(width: 8),
+                  _Anime3rbReactionButton(
+                    icon: comment.userVote == -1
+                        ? Icons.thumb_down_rounded
+                        : Icons.thumb_down_outlined,
+                    count: comment.downvotesCount,
+                    active: comment.userVote == -1,
+                    busy: voteBusy,
+                    tooltip: 'لم يعجبني',
+                    onTap: () => _toggleVote(comment, -1),
+                  ),
+                  if (!isReply) ...[
+                    const SizedBox(width: 12),
+                    _Anime3rbReactionButton(
+                      icon: Icons.chat_bubble_outline_rounded,
+                      count: comment.repliesCount,
+                      active: expanded,
+                      tooltip: expanded ? 'إخفاء الردود' : 'الردود',
+                      onTap: () {
+                        if (comment.repliesCount > 0) {
+                          unawaited(_toggleReplies(comment));
+                        } else if (!comment.isDeleted) {
+                          unawaited(_replyTo(comment));
+                        }
+                      },
+                    ),
+                    if (!comment.isDeleted && comment.repliesCount > 0) ...[
+                      const SizedBox(width: 6),
+                      Tooltip(
+                        message: 'إضافة رد',
+                        child: InkWell(
+                          onTap: () => _replyTo(comment),
+                          borderRadius: BorderRadius.circular(20),
+                          child: Padding(
+                            padding: const EdgeInsets.all(6),
+                            child: Icon(
+                              Icons.reply_rounded,
+                              size: 19,
+                              color: colors.onSurfaceVariant,
+                            ),
+                          ),
                         ),
                       ),
+                    ],
                   ],
-                ),
+                ],
               ),
-              if (isMine && !comment.isDeleted)
-                PopupMenuButton<String>(
-                  onSelected: (action) {
-                    if (action == 'edit') unawaited(_editComment(comment));
-                    if (action == 'delete') unawaited(_deleteComment(comment));
-                  },
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'edit', child: Text('تعديل')),
-                    PopupMenuItem(value: 'delete', child: Text('حذف')),
-                  ],
-                ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          SelectableText(
-            comment.bodyText,
-            style: theme.textTheme.bodyMedium?.copyWith(height: 1.45),
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              TextButton.icon(
-                onPressed: _pendingVotes.contains(comment.uuid)
-                    ? null
-                    : () => _toggleVote(comment, 1),
-                icon: Icon(
-                  comment.userVote == 1
-                      ? Icons.thumb_up_rounded
-                      : Icons.thumb_up_outlined,
-                  size: 16,
-                ),
-                label: Text('${comment.upvotesCount}'),
-              ),
-              TextButton.icon(
-                onPressed: _pendingVotes.contains(comment.uuid)
-                    ? null
-                    : () => _toggleVote(comment, -1),
-                icon: Icon(
-                  comment.userVote == -1
-                      ? Icons.thumb_down_rounded
-                      : Icons.thumb_down_outlined,
-                  size: 16,
-                ),
-                label: Text('${comment.downvotesCount}'),
-              ),
-              if (!isReply && !comment.isDeleted)
-                TextButton.icon(
-                  onPressed: () => _replyTo(comment),
-                  icon: const Icon(Icons.reply_rounded, size: 16),
-                  label: const Text('رد'),
-                ),
-              if (!isReply && comment.repliesCount > 0)
-                TextButton(
-                  onPressed: () => _toggleReplies(comment),
-                  child: Text(
-                    expanded
-                        ? 'إخفاء الردود'
-                        : 'عرض الردود (${comment.repliesCount})',
+            ),
+            if (!isReply && expanded) ...[
+              const SizedBox(height: 8),
+              if (loadingReplies && replies.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(8),
+                  child: Center(child: AppLoadingIndicator()),
+                )
+              else ...[
+                for (final reply in replies) ...[
+                  Padding(
+                    padding: const EdgeInsetsDirectional.only(
+                      start: 14,
+                      bottom: 6,
+                    ),
+                    child: _buildCommentTile(
+                      context,
+                      reply,
+                      viewerUuid: viewerUuid,
+                      userSlug: userSlug,
+                      isReply: true,
+                    ),
                   ),
-                ),
-            ],
-          ),
-          if (!isReply && expanded) ...[
-            if (loadingReplies && replies.isEmpty)
-              const Padding(
-                padding: EdgeInsets.all(8),
-                child: Center(child: AppLoadingIndicator()),
-              )
-            else ...[
-              const SizedBox(height: 6),
-              for (final reply in replies) ...[
-                Padding(
-                  padding: const EdgeInsetsDirectional.only(
-                    start: 16,
-                    bottom: 6,
+                ],
+                if (hasMoreReplies)
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: TextButton(
+                      onPressed: loadingReplies
+                          ? null
+                          : () => _loadReplies(comment),
+                      child: const Text('عرض المزيد من الردود'),
+                    ),
                   ),
-                  child: _buildCommentTile(
-                    context,
-                    reply,
-                    viewerUuid: viewerUuid,
-                    userSlug: userSlug,
-                    isReply: true,
-                  ),
-                ),
               ],
-              if (hasMoreReplies)
-                Align(
-                  alignment: AlignmentDirectional.centerStart,
-                  child: TextButton(
-                    onPressed: loadingReplies
-                        ? null
-                        : () => _loadReplies(comment),
-                    child: const Text('عرض المزيد من الردود'),
-                  ),
-                ),
             ],
           ],
-        ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Anime3rbReactionButton extends StatelessWidget {
+  const _Anime3rbReactionButton({
+    required this.icon,
+    required this.count,
+    required this.tooltip,
+    required this.onTap,
+    this.active = false,
+    this.busy = false,
+  });
+
+  final IconData icon;
+  final int count;
+  final String tooltip;
+  final VoidCallback onTap;
+  final bool active;
+  final bool busy;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final foreground = active ? colors.primary : colors.onSurfaceVariant;
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: busy ? null : onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 5),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (busy)
+                SizedBox(
+                  width: 17,
+                  height: 17,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: foreground,
+                  ),
+                )
+              else
+                Icon(icon, size: 19, color: foreground),
+              const SizedBox(width: 5),
+              Text(
+                '$count',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyMedium?.copyWith(color: foreground),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
