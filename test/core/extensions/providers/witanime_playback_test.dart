@@ -655,7 +655,7 @@ void main() {
       kind: 'download',
       watchUrl: watch,
       token: 'old',
-      label: 'MediaFire',
+      label: 'Mirror',
       tier: 'HD',
     );
     final calls = <String>[];
@@ -673,7 +673,7 @@ void main() {
           ),
           '/watch/sample/1/sources' => const WitanimeHttpResponse(
             statusCode: 200,
-            body: '{"players":{"hD":[{"label":"MediaFire","token":"a+b/c="}]}}',
+            body: '{"players":{"hD":[{"label":"Mirror","token":"a+b/c="}]}}',
           ),
           '/watch/stream-source/a+b%2Fc=' => WitanimeHttpResponse(
             statusCode: uri.pathSegments.last == 'a+b/c=' ? 200 : 404,
@@ -1723,6 +1723,115 @@ void main() {
       downloadSources.map((s) => s.source).toList(),
       ['mp4upload', 'gofile'],
     );
+  });
+
+  test('loadSources hides mediafire, exact videa, and workupload while keeping videas and other hosts', () async {
+    const watch = 'https://witanime.site/watch/sample/9';
+    final transport = _FakeWitanimeTransport((method, uri, _, _, _) async {
+      if (uri.path == '/watch/sample/9') {
+        return const WitanimeHttpResponse(
+          statusCode: 200,
+          body: '<meta name="csrf-token" content="csrf-hide">',
+        );
+      }
+      if (uri.path == '/watch/sample/9/sources') {
+        return WitanimeHttpResponse(
+          statusCode: 200,
+          body: jsonEncode({
+            'players': {
+              'FHD': [
+                {'label': 'hgcloud', 'token': 'tok-hg'},
+                {'label': 'videa', 'token': 'tok-videa'},
+                {'label': 'videas', 'token': 'tok-videas'},
+                {'label': 'rakufy', 'token': 'tok-rakufy'},
+                {'label': 'mp4upload', 'token': 'tok-mp4'},
+              ],
+            },
+            'downloads': {
+              'FHD': [
+                {'label': 'mediafire', 'token': 'tok-mf'},
+                {'label': 'MediaFire VIP', 'token': 'tok-mf-vip'},
+                {'label': 'workupload', 'token': 'tok-wu'},
+                {'label': 'gofile', 'token': 'tok-gf'},
+              ],
+            },
+            'versions': {
+              'dub': {
+                'players': {
+                  'HD': [
+                    {'label': 'Videa', 'token': 'tok-videa-dub'},
+                  ],
+                },
+                'downloads': {
+                  'HD': [
+                    {'label': 'MediaFire', 'token': 'tok-mf-dub'},
+                    {'label': 'WorkUpload', 'token': 'tok-wu-dub'},
+                  ],
+                },
+              },
+            },
+          }),
+        );
+      }
+      return const WitanimeHttpResponse(statusCode: 404, body: '');
+    });
+
+    final resolver = WitanimePlaybackResolver(transport);
+    final watchSources = await resolver.loadSources(watch, forDownload: false);
+    expect(
+      watchSources.map((s) => s.source).toList(),
+      ['hgcloud', 'videas', 'rakufy', 'mp4upload', 'gofile (download)'],
+    );
+
+    final downloadSources = await resolver.loadSources(watch, forDownload: true);
+    expect(
+      downloadSources.map((s) => s.source).toList(),
+      ['gofile', 'mp4upload'],
+    );
+  });
+
+  test('hgcloud handles dhcplay/hglink redirectors and rotated dmca/main mirrors', () async {
+    final transport = _FakeWitanimeTransport((method, uri, _, _, _) async {
+      if (uri.host == 'dhcplay.com' && uri.path == '/e/rot123') {
+        return const WitanimeHttpResponse(
+          statusCode: 200,
+          body: '<script src="/main.js?v=1.1.9"></script>',
+        );
+      }
+      if (uri.host == 'hanerix.com' && uri.path == '/e/rot123') {
+        return const WitanimeHttpResponse(statusCode: 522, body: '');
+      }
+      if (uri.host == 'vibuxer.com' && uri.path == '/e/rot123') {
+        return const WitanimeHttpResponse(statusCode: 404, body: '');
+      }
+      if (uri.host == 'audinifer.com' && uri.path == '/e/rot123') {
+        return const WitanimeHttpResponse(statusCode: 404, body: '');
+      }
+      if (uri.host == 'hgplaycdn.com' && uri.path == '/e/rot123') {
+        return const WitanimeHttpResponse(
+          statusCode: 200,
+          body: '<script>var links={"hls4":"https://cdn.hgplaycdn.com/stream/rot/master.m3u8"};</script>',
+        );
+      }
+      return const WitanimeHttpResponse(statusCode: 404, body: '');
+    });
+
+    final resolver = WitanimePlaybackResolver(transport);
+    const token = WitanimeSourceToken(
+      kind: 'stream',
+      watchUrl: 'https://witanime.site/watch/sample/9',
+      token: 'tok-hg',
+      label: 'hgcloud',
+      tier: 'FHD',
+    );
+    final streams = await resolver.resolveHostedLink(
+      token.watchUrl,
+      'https://dhcplay.com/e/rot123',
+      token,
+    );
+    expect(streams.single.url, 'https://cdn.hgplaycdn.com/stream/rot/master.m3u8');
+    expect(streams.single.headers?['Origin'], 'https://hgplaycdn.com');
+    expect(streams.single.headers?['Referer'], 'https://hgplaycdn.com/');
   });
 }
 

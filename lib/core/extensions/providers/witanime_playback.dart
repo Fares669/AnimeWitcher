@@ -195,13 +195,34 @@ class WitanimePlaybackResolver {
   };
 
   static const _tierOrder = <String>['4K', 'FHD', 'HD', 'SD'];
-  static const _hgcloudMirrors = <String>[
-    'vibuxer.com',
-    'hanerix.com',
-    'dintezuvio.com',
-    'cavanhabg.com',
-    'audinifer.com',
+  static const _hgcloudRedirectors = <String>[
+    'dhcplay.com',
+    'hglink.to',
   ];
+  static const _hgcloudMirrors = <String>[
+    'hanerix.com',
+    'vibuxer.com',
+    'audinifer.com',
+    'hgplaycdn.com',
+    'hglamioz.com',
+    'niramirus.com',
+    'playnixes.com',
+    'medixiru.com',
+  ];
+
+  static bool _matchesHostSuffix(String hostLower, String domain) =>
+      hostLower == domain || hostLower.endsWith('.$domain');
+
+  static bool _isHgRedirectorHost(String hostLower) =>
+      hostLower.contains('hgcloud.') ||
+      _hgcloudRedirectors.any((host) => _matchesHostSuffix(hostLower, host));
+
+  static bool _isHiddenServerLabel(String label) {
+    final lower = label.trim().toLowerCase();
+    return RegExp(r'\bvidea\b').hasMatch(lower) ||
+        lower.contains('mediafire') ||
+        lower.contains('workupload');
+  }
 
   static String qualityLabelForTier(String tier) {
     switch (tier.trim().toUpperCase()) {
@@ -559,7 +580,6 @@ class WitanimePlaybackResolver {
       return lower.contains('mp4upload') ||
           lower == 'ok' ||
           lower.contains('okru') ||
-          lower == 'videa' ||
           lower.contains('4shared') ||
           lower.contains('drive') ||
           lower.contains('dropbox') ||
@@ -576,11 +596,8 @@ class WitanimePlaybackResolver {
       if (lower.contains('pixeldrain')) return 2;
       if (lower.contains('4shared')) return 3;
       if (lower.contains('dropbox')) return 4;
-      if (lower == 'videa') return 5;
       if (lower == 'ok' || lower.contains('okru')) return 6;
       if (lower.contains('gofile')) return 7;
-      if (lower.contains('mediafire')) return 8;
-      if (lower.contains('workupload')) return 10;
       return 9;
     }
 
@@ -624,6 +641,7 @@ class WitanimePlaybackResolver {
               : rawEntry['name']?.toString().trim().isNotEmpty == true
               ? rawEntry['name'].toString().trim()
               : 'Server';
+          if (_isHiddenServerLabel(label)) continue;
           if (labelFilter != null && !labelFilter(label)) continue;
           final rawEntryVersion = rawEntry['version']?.toString().trim();
           final effectiveVersion =
@@ -1073,8 +1091,8 @@ class WitanimePlaybackResolver {
     if (host.contains('mail.ru')) {
       return _resolveMailRu(cleanLink, entry);
     }
-    if (host.contains('hgcloud.') ||
-        _hgcloudMirrors.any((mirror) => host == mirror || host.endsWith('.$mirror')) ||
+    if (_isHgRedirectorHost(host) ||
+        _hgcloudMirrors.any((mirror) => _matchesHostSuffix(host, mirror)) ||
         host.contains('streamhg') ||
         host.contains('earnvids')) {
       return _resolveHgcloud(episodeUrl, cleanLink, entry);
@@ -2494,7 +2512,7 @@ class WitanimePlaybackResolver {
             ? uri.pathSegments.last.split('.').first
             : '');
     final hostLower = uri.host.toLowerCase();
-    final isHgRedirector = hostLower.contains('hgcloud.');
+    final isHgRedirector = _isHgRedirectorHost(hostLower);
 
     final candidates = <({Uri uri, String op})>[];
     if (!isHgRedirector) {
