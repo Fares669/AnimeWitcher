@@ -2480,7 +2480,9 @@ class WitanimePlaybackResolver {
         }
       }
 
-      for (final keyName in const ['hls4', 'hls3', 'hls2', 'file']) {
+      // Prefer hls2 (plain MPEG-TS segments) before hls4 (PNG-wrapped .image
+      // segments that fail native demuxers) and hls3 (.txt CF-blocked fallback).
+      for (final keyName in const ['hls2', 'file', 'hls4', 'hls3']) {
         for (final match in RegExp(
           '''["']$keyName["']\\s*:\\s*["']([^"']+)["']''',
         ).allMatches(text)) {

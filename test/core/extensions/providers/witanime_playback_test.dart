@@ -1833,6 +1833,48 @@ void main() {
     expect(streams.single.headers?['Origin'], 'https://hgplaycdn.com');
     expect(streams.single.headers?['Referer'], 'https://hgplaycdn.com/');
   });
+
+  test('hgcloud prioritizes hls2 real TS playlist ahead of hls4 image-wrapped stream and hls3 txt', () async {
+    final transport = _FakeWitanimeTransport((method, uri, _, _, _) async {
+      if (uri.host == 'hgcloud.to' && uri.path == '/e/cml79y') {
+        return const WitanimeHttpResponse(
+          statusCode: 200,
+          body: '<script src="/main.js?v=1.1.9"></script>',
+        );
+      }
+      if (uri.host == 'hanerix.com' && uri.path == '/e/cml79y') {
+        return const WitanimeHttpResponse(
+          statusCode: 200,
+          body:
+              "<script>eval(function(p,a,c,k,e,d){return p}('b n={\"3\":\"4://5.6/3/7.8\",\"1\":\"/9/a/c.0\",\"2\":\"4://d.e/2/7.0?t=tok1\"};',15,15,'m3u8|hls4|hls2|hls3|https|cdn|cyou|master|txt|stream|tok|var|abc|edge|premilkyway.com'.split('|'),0,{}))</script>",
+        );
+      }
+      return const WitanimeHttpResponse(statusCode: 404, body: '');
+    });
+
+    final resolver = WitanimePlaybackResolver(transport);
+    const token = WitanimeSourceToken(
+      kind: 'stream',
+      watchUrl: 'https://witanime.site/watch/sample/9',
+      token: 'tok-hg-hls2',
+      label: 'hgcloud',
+      tier: 'FHD',
+    );
+    final streams = await resolver.resolveHostedLink(
+      token.watchUrl,
+      'https://hgcloud.to/e/cml79y',
+      token,
+    );
+    expect(
+      streams.first.url,
+      'https://edge.premilkyway.com/hls2/master.m3u8?t=tok1',
+    );
+    expect(streams.map((s) => s.url).toList(), [
+      'https://edge.premilkyway.com/hls2/master.m3u8?t=tok1',
+      'https://hanerix.com/stream/tok/abc.m3u8',
+      'https://cdn.cyou/hls3/master.txt',
+    ]);
+  });
 }
 
 class _Adapter implements HttpClientAdapter {
