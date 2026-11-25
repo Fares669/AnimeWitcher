@@ -18,6 +18,7 @@ import '../download_source_verification.dart';
 import '../persistent_parallel_download.dart';
 import '../../utils/local_file_io.dart';
 import '../../utils/download_resume.dart';
+import 'download_file_planner_v2.dart';
 import 'download_persistent_storage_v2.dart';
 import 'download_v2_diagnostics.dart';
 import 'download_v2_models.dart';
@@ -702,6 +703,21 @@ final class PackageBackgroundDownloaderGateway
           ? kDownloadV2SilentPackageGroup
           : kDownloadV2PackageGroup,
     );
+    if (Platform.isLinux && task is ParallelDownloadTask) {
+      final identity = parseDownloadTaskIdentityV2(task.taskId);
+      if (identity != null && identity.pageIndex == null) {
+        try {
+          await prepareLinuxPackageVideoParentDirectoryV2(
+            destinationPath: spec.destinationPath,
+            logicalId: identity.logicalId,
+            packageFilePath: () => task.filePath(),
+          );
+        } on Exception {
+          // Preparation is best-effort. Leave filesystem failure and retry
+          // classification to the same package transfer as before.
+        }
+      }
+    }
     final transfer = await _downloader.transfers.start(task);
     return _handleFor(transfer);
   }
