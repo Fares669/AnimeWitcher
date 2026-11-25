@@ -224,6 +224,101 @@ void main() {
     expect(visible.status, isNot(TaskStatus.canceled));
   });
 
+  test('projection reload reparses reused metadata after renewal and delete/re-add', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-memo-refresh-');
+    final store = InMemoryLogicalDownloadStoreV2();
+    final storage = _DownloadMetadataStorage()..reuseMetadataMap = true;
+    final gateway = _ReaddGateway();
+    final resolver = StaticSourceResolverV2();
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: resolver,
+    );
+    final container = ProviderContainer(
+      overrides: [
+        downloadManagerV2Provider.overrideWithValue(manager),
+        logicalDownloadStoreV2Provider.overrideWithValue(store),
+        storageServiceProvider.overrideWithValue(storage),
+      ],
+    );
+    final sub = container.listen(downloadsProvider, (_, _) {});
+    addTearDown(() async {
+      sub.close();
+      container.dispose();
+      await manager.dispose();
+      await temp.delete(recursive: true);
+    });
+    await container.read(downloadsProvider.future);
+    final id = logicalDownloadIdFor(
+      animeId: 'memo-refresh',
+      episodeKey: '1',
+      variantKey: '720p',
+    );
+    final request = DownloadStartRequestV2(
+      logicalId: id,
+      mediaId: 'memo-refresh',
+      unitKey: '1',
+      variantKey: '720p',
+      destinationPath: '${temp.path}/episode.mp4',
+      sourceDescriptor: const {'providerId': 'audit'},
+      allowPause: true,
+      retries: 0,
+      parallelChunks: 1,
+    );
+    Map<String, dynamic> metadata(String title) => {
+      'logicalId': id.value,
+      'item': MultimediaItem(
+        title: title,
+        url: 'https://example.invalid/media',
+        posterUrl: '',
+      ).toJson(),
+      'episode': 'not an episode map',
+      'taskSnapshot': 'not a chapter map',
+      'timestamp': 10,
+    };
+
+    Future<DownloadItem> waitForTitle(String title) async {
+      for (var i = 0; i < 150; i++) {
+        final rows = container.read(downloadsProvider).value;
+        if (rows?.length == 1 && rows!.single.item.title == title)
+          return rows.single;
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      fail('Expected one row titled $title');
+    }
+
+    storage.metadata['same-logical-first'] = metadata('Earlier alias');
+    final sameMap = metadata('Later alias');
+    storage.metadata['same-logical-last'] = sameMap;
+    final first = await manager.start(request);
+    final original = await waitForTitle('Later alias');
+    expect(original.id, first.taskId);
+    expect(original.episode, isNull);
+    expect(original.chapter, isNull);
+
+    // Same outer map and same alias entry object, but a new storage read after
+    // source renewal owns a new metadata snapshot.
+    (sameMap['item'] as Map)['title'] = 'Renewed title';
+    gateway.handles[first.taskId]!.expireSource();
+    final renewed = await waitForTitle('Renewed title');
+    expect(renewed.id, isNot(first.taskId));
+    expect(resolver.calls, greaterThanOrEqualTo(2));
+
+    // Direct metadata wins over aliases, even if its item is malformed.
+    storage.metadata[id.value] = {'logicalId': id.value, 'item': null};
+    await manager.restart(id);
+    await _waitForDownloadCount(container, 0);
+    await manager.delete(id);
+
+    // The same logical ID/initial task ID can be reused after delete.
+    storage.metadata[id.value] = metadata('Re-added item');
+    final fresh = await manager.start(request);
+    final readded = await waitForTitle('Re-added item');
+    expect(fresh.taskId, first.taskId);
+    expect(readded.id, fresh.taskId);
+  });
+
   test('does not construct the V2 manager for an empty projection', () {
     final container = ProviderContainer(
       overrides: [
@@ -346,12 +441,15 @@ Future<void> _waitForDownloadCount(ProviderContainer container, int expected) as
 
 final class _DownloadMetadataStorage extends MemoryStorageService {
   final Map<String, Map<String, dynamic>> metadata = {};
+  bool reuseMetadataMap = false;
   Future<void> Function()? beforeRead;
 
   @override
   Future<Map<String, Map<String, dynamic>>> getAllDownloadMetadata() async {
     await beforeRead?.call();
-    return Map<String, Map<String, dynamic>>.from(metadata);
+    return reuseMetadataMap
+        ? metadata
+        : Map<String, Map<String, dynamic>>.from(metadata);
   }
 
   @override
@@ -416,6 +514,16 @@ final class _ReaddHandle implements DownloadTransportHandle {
 
   @override
   Stream<DownloadTransportSnapshot> get snapshots => _changes.stream;
+
+  void expireSource() {
+    _current = DownloadTransportSnapshot(
+      taskId: taskId,
+      status: DownloadTransportStatus.failed,
+      progress: 0.25,
+      failureCategory: DownloadFailureCategory.sourceExpired,
+    );
+    _changes.add(_current);
+  }
 
   @override
   Future<bool> pause() async => true;

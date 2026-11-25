@@ -96,10 +96,13 @@ class _SearchResultSectionState extends ConsumerState<SearchResultSection> {
           delegate: SliverChildBuilderDelegate(
             (context, rIndex) {
               if (rIndex >= widget.results.length) {
-                return const AnimePosterShimmer();
+                return const RepaintBoundary(child: AnimePosterShimmer());
               }
               return _resultCard(widget.results[rIndex], rIndex);
             },
+            // MultimediaCard already owns a boundary; keep one for shimmers
+            // above without adding a second boundary to every real card.
+            addRepaintBoundaries: false,
             childCount:
                 widget.results.length +
                 (widget.isLoadingMore ? mobileColumns : 0),
@@ -128,10 +131,13 @@ class _SearchResultSectionState extends ConsumerState<SearchResultSection> {
           delegate: SliverChildBuilderDelegate(
             (context, rIndex) {
               if (rIndex >= widget.results.length) {
-                return const AnimePosterShimmer();
+                return const RepaintBoundary(child: AnimePosterShimmer());
               }
               return _resultCard(widget.results[rIndex], rIndex, compact: true);
             },
+            // MultimediaCard already owns a boundary; keep one for shimmers
+            // above without adding a second boundary to every real card.
+            addRepaintBoundaries: false,
             childCount:
                 widget.results.length +
                 (widget.isLoadingMore ? desktopColumns : 0),

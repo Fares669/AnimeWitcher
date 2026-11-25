@@ -321,6 +321,30 @@ CollapsedDownloads collapseDuplicateDownloads(List<DownloadItem> items) {
   );
 }
 
+// A presentation tick changes transport values, not the stored media JSON.
+final class _DownloadProjectionMetadata {
+  _DownloadProjectionMetadata(Map<String, dynamic> metadata)
+    : item = MultimediaItem.fromJson(
+        Map<String, dynamic>.from(metadata['item'] as Map),
+      ),
+      episode = metadata['episode'] is Map
+          ? Episode.fromJson(
+              Map<String, dynamic>.from(metadata['episode'] as Map),
+            )
+          : null,
+      chapter = MangaChapter.fromJson(
+        metadata['taskSnapshot'] is Map
+            ? Map<String, dynamic>.from(
+                metadata['taskSnapshot'] as Map,
+              )['chapter']
+            : null,
+      );
+
+  final MultimediaItem item;
+  final Episode? episode;
+  final MangaChapter? chapter;
+}
+
 @Riverpod(keepAlive: true)
 class DownloadsNotifier extends _$DownloadsNotifier {
   static const Duration _durableRefreshInterval = Duration(seconds: 30);
@@ -341,6 +365,9 @@ class DownloadsNotifier extends _$DownloadsNotifier {
   List<LogicalDownloadRecordV2> _records = const <LogicalDownloadRecordV2>[];
   Map<String, Map<String, dynamic>> _metadataByTaskId =
       const <String, Map<String, dynamic>>{};
+  Map<String, Map<String, dynamic>>? _metadataByLogicalId;
+  final _parsedMetadata =
+      Map<Map<String, dynamic>, _DownloadProjectionMetadata>.identity();
   StreamSubscription<List<LogicalDownloadRecordV2>>? _recordsSubscription;
   StreamSubscription<void>? _presentationSubscription;
   Timer? _durableRefreshTimer;
@@ -355,7 +382,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     final storage = ref.read(storageServiceProvider);
     // Completed rows are local. Transport recovery may wait for the network.
     _records = await store.all();
-    _metadataByTaskId = await storage.getAllDownloadMetadata();
+    _replaceMetadataSnapshot(await storage.getAllDownloadMetadata());
     if (!ref.mounted) return const <DownloadItem>[];
 
     _recordsSubscription = manager.records.listen(
@@ -416,14 +443,20 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     return _projectList();
   }
 
+  void _replaceMetadataSnapshot(Map<String, Map<String, dynamic>> metadata) {
+    _metadataByTaskId = metadata;
+    _metadataByLogicalId = null;
+    _parsedMetadata.clear();
+  }
+
   void _refreshPresentationState() {
     state = AsyncData(_projectList());
   }
 
   Future<void> _reloadMetadataAndRefresh() async {
-    _metadataByTaskId = await ref
-        .read(storageServiceProvider)
-        .getAllDownloadMetadata();
+    _replaceMetadataSnapshot(
+      await ref.read(storageServiceProvider).getAllDownloadMetadata(),
+    );
     if (!ref.mounted) return;
     _refreshPresentationState();
   }
@@ -439,7 +472,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       final metadata = await storage.getAllDownloadMetadata();
       if (!ref.mounted) return;
       _records = records;
-      _metadataByTaskId = metadata;
+      _replaceMetadataSnapshot(metadata);
       _refreshPresentationState();
     }();
     _durableReloadInFlight = task;
@@ -450,12 +483,10 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     });
   }
 
-  List<DownloadItem> _projectList() {
-    final manager = ref.read(downloadManagerV2Provider);
-    final metadataByTaskId = _metadataByTaskId;
+  Map<String, Map<String, dynamic>> _indexMetadataByLogicalId() {
     final metadataByLogicalId = <String, Map<String, dynamic>>{};
 
-    for (final metadata in metadataByTaskId.values) {
+    for (final metadata in _metadataByTaskId.values) {
       final logicalId = (metadata['logicalId'] as String?)?.trim();
       if (logicalId == null || logicalId.isEmpty) continue;
       final previous = metadataByLogicalId[logicalId];
@@ -465,6 +496,14 @@ class DownloadsNotifier extends _$DownloadsNotifier {
         metadataByLogicalId[logicalId] = metadata;
       }
     }
+    return metadataByLogicalId;
+  }
+
+  List<DownloadItem> _projectList() {
+    final manager = ref.read(downloadManagerV2Provider);
+    final metadataByTaskId = _metadataByTaskId;
+    final metadataByLogicalId = _metadataByLogicalId ??=
+        _indexMetadataByLogicalId();
 
     final items = <DownloadItem>[];
     for (final record in _records) {
@@ -484,18 +523,13 @@ class DownloadsNotifier extends _$DownloadsNotifier {
           metadataByTaskId[record.taskId];
       if (metadata == null || metadata['item'] is! Map) continue;
 
-      final item = MultimediaItem.fromJson(
-        Map<String, dynamic>.from(metadata['item'] as Map),
+      final parsed = _parsedMetadata.putIfAbsent(
+        metadata,
+        () => _DownloadProjectionMetadata(metadata),
       );
-      final episode = metadata['episode'] is Map
-          ? Episode.fromJson(
-              Map<String, dynamic>.from(metadata['episode'] as Map),
-            )
-          : null;
-      final taskSnapshot = metadata['taskSnapshot'] is Map
-          ? Map<String, dynamic>.from(metadata['taskSnapshot'] as Map)
-          : const <String, dynamic>{};
-      final chapter = MangaChapter.fromJson(taskSnapshot['chapter']);
+      final item = parsed.item;
+      final episode = parsed.episode;
+      final chapter = parsed.chapter;
       final trackingUrl = _trackingUrlFor(metadata, item, episode, chapter);
       final task = _presentationTaskFor(record, trackingUrl: trackingUrl);
       final projected = DownloadItem(

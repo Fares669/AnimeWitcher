@@ -863,11 +863,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       return _buildAllBody(context, state, topInset: topInset);
     }
 
-    final allResults = state.results.expand((entry) => entry.results).toList();
-    if (allResults.isEmpty && state.isLoading) {
+    final hasResults = state.results.any((entry) => entry.results.isNotEmpty);
+    if (!hasResults && state.isLoading) {
       return belowHeader(_buildLoadingIndicator(context));
     }
-    if (allResults.isEmpty && state.errorMessage != null) {
+    if (!hasResults && state.errorMessage != null) {
       return belowHeader(
         RecoverableNetworkState(
           onRetry: _retrySearch,
@@ -875,7 +875,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         ),
       );
     }
-    if (allResults.isEmpty) {
+    if (!hasResults) {
       return belowHeader(_buildEmptyState(context));
     }
 
