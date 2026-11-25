@@ -156,18 +156,14 @@ class _CompletedDownloadEpisodeCardState
   }
 
   HistoryItem? _historyItemForSeries() {
-    List<HistoryItem> history = const <HistoryItem>[];
     try {
       ref.watch(watchHistoryProvider);
-      history = historyForItem(ref.watch(historyRepositoryProvider), widget.item.item);
+      return ref.watch(historyRepositoryProvider).getWatchHistoryItem(
+        widget.item.item,
+      );
     } catch (_) {
       return null;
     }
-    for (final item in history) {
-      if (item.item.url == widget.item.item.url &&
-          sameDownloadProvider(item.item, widget.item.item)) return item;
-    }
-    return null;
   }
 
   @override

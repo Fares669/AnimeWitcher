@@ -165,12 +165,7 @@ class EpisodeCard extends HookConsumerWidget {
     final hasServerName = episodeTitle.isNotEmpty;
     final historyRepo = ref.watch(historyRepositoryProvider);
     ref.watch(watchHistoryProvider);
-    final historyItem = historyForItem(historyRepo, parentItem)
-        .firstWhereOrNull(
-          (h) =>
-              h.item.url == parentItem.url &&
-              sameDownloadProvider(h.item, parentItem),
-        );
+    final historyItem = historyRepo.getWatchHistoryItem(parentItem);
 
     final epPos = historyPositionForItem(
       historyRepo,

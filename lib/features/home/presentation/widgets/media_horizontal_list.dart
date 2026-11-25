@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 
 import 'package:flutter/material.dart';
@@ -49,6 +50,8 @@ class MediaHorizontalList extends StatefulWidget {
 class _MediaHorizontalListState extends State<MediaHorizontalList> {
   late ScrollController _scrollController;
   bool _isPortrait = true;
+  String? _aspectProbeUrl;
+  int _aspectProbeGeneration = 0;
 
   // Cache the aspect ratio for a given URL to prevent layout shifts
   // when the widget is destroyed and recreated during scrolling. Bounded
@@ -83,49 +86,43 @@ class _MediaHorizontalListState extends State<MediaHorizontalList> {
   void initState() {
     super.initState();
     _scrollController = ScrollController();
-
-    if (_shouldProbeAspectRatio) {
-      final url = widget.mediaList.first.posterImageUrl;
-      final cached = _lookupCached(url);
-      if (cached != null) {
-        _isPortrait = cached;
-      } else {
-        _checkAspectRatio();
-      }
-    }
+    _updateAspectProbe();
   }
 
   @override
   void didUpdateWidget(MediaHorizontalList oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!_shouldProbeAspectRatio) {
-      if (!_isPortrait) setState(() => _isPortrait = true);
-      return;
-    }
-    if (oldWidget.mediaList != widget.mediaList || oldWidget.forcePortrait) {
-      final url = widget.mediaList.first.posterImageUrl;
-      final cached = _lookupCached(url);
-      if (cached != null) {
-        if (_isPortrait != cached) {
-          setState(() => _isPortrait = cached);
-        }
-      } else {
-        _checkAspectRatio();
-      }
-    }
+    _updateAspectProbe();
   }
 
-  Future<void> _checkAspectRatio() async {
-    if (!_shouldProbeAspectRatio) return;
-    final url = widget.mediaList.first.posterImageUrl;
-    if (url.isEmpty) return;
-    final isPortrait = await ImageUtils.isImagePortrait(url);
-    _storeCached(url, isPortrait);
-    if (mounted && _isPortrait != isPortrait) {
-      setState(() {
-        _isPortrait = isPortrait;
-      });
+  void _updateAspectProbe() {
+    final firstUrl = _shouldProbeAspectRatio
+        ? widget.mediaList.first.posterImageUrl
+        : '';
+    final url = firstUrl.isEmpty ? null : firstUrl;
+    // Appending or replacing other items does not require a new decode probe.
+    if (_aspectProbeUrl == url) return;
+    _aspectProbeUrl = url;
+    final generation = ++_aspectProbeGeneration;
+    if (url == null) {
+      _isPortrait = true;
+      return;
     }
+    final cached = _lookupCached(url);
+    if (cached != null) {
+      _isPortrait = cached;
+      return;
+    }
+    unawaited(_checkAspectRatio(url, generation));
+  }
+
+  Future<void> _checkAspectRatio(String url, int generation) async {
+    final isPortrait = await ImageUtils.isImagePortrait(url);
+    // An older source can complete after a replacement or an A -> B -> A
+    // transition. Only the current probe can choose the rail layout.
+    if (!mounted || _aspectProbeGeneration != generation) return;
+    _storeCached(url, isPortrait);
+    if (_isPortrait != isPortrait) setState(() => _isPortrait = isPortrait);
   }
 
   @override

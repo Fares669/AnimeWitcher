@@ -6,6 +6,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../account/account_providers.dart';
 import '../account/animewitcher_account_service.dart';
 import '../domain/entity/multimedia_item.dart';
+import '../services/download_v2/download_v2_identity.dart';
 import 'storage_service.dart';
 
 part 'history_repository.g.dart';
@@ -84,11 +85,6 @@ class HistoryItem {
   }
 }
 
-List<HistoryItem> historyForItem(
-  HistoryRepository repository,
-  MultimediaItem item,
-) => repository.getWatchHistory();
-
 int historyPositionForItem(
   HistoryRepository repository,
   MultimediaItem item, {
@@ -134,6 +130,8 @@ HistoryRepository historyRepository(Ref ref) {
 class HistoryRepository {
   final StorageService _storageService;
   final AnimeWitcherAccountService _accountService;
+  List<Map<String, dynamic>>? _indexedHistorySnapshot;
+  Map<(String, String?), HistoryItem> _historyByItem = {};
 
   HistoryRepository(this._storageService, this._accountService);
 
@@ -331,6 +329,28 @@ class HistoryRepository {
   List<HistoryItem> getWatchHistory() {
     final rawItems = _storageService.getWatchHistory();
     return rawItems.map((map) => HistoryItem.fromMap(map)).toList();
+  }
+
+  // StorageService replaces the sorted snapshot after committing history
+  // mutations, including direct cloud writes that bypass this repository.
+  HistoryItem? getWatchHistoryItem(MultimediaItem item) {
+    final rows = _storageService.getWatchHistory();
+    if (!identical(rows, _indexedHistorySnapshot)) {
+      final byItem = <(String, String?), HistoryItem>{};
+      final scopes = <String?, String?>{};
+      for (final row in rows) {
+        final entry = HistoryItem.fromMap(row);
+        final provider = entry.item.provider;
+        final scope = scopes.putIfAbsent(
+          provider,
+          () => downloadProviderScopeV2(provider),
+        );
+        byItem.putIfAbsent((entry.item.url, scope), () => entry);
+      }
+      _historyByItem = byItem;
+      _indexedHistorySnapshot = rows;
+    }
+    return _historyByItem[(item.url, downloadProviderScopeV2(item.provider))];
   }
 
   int getPosition(String url) {

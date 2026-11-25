@@ -81,6 +81,8 @@ class _History implements HistoryRepository {
   @override
   List<HistoryItem> getWatchHistory() => const [];
   @override
+  HistoryItem? getWatchHistoryItem(MultimediaItem item) => null;
+  @override
   int getEpisodePosition(
     String url, {
     String? mainUrl,
@@ -349,6 +351,8 @@ void main() {
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
       container.dispose();
+      // The fallback poster cache can defer metadata cleanup for 10 seconds.
+      await tester.pump(const Duration(seconds: 10));
     }
   });
 

@@ -69,6 +69,8 @@ class _History implements HistoryRepository {
   @override
   List<HistoryItem> getWatchHistory() => const [];
   @override
+  HistoryItem? getWatchHistoryItem(MultimediaItem item) => null;
+  @override
   int getEpisodePosition(String url, {String? mainUrl, int? season, int? episode}) => position;
   @override
   int getEpisodeDuration(String url, {String? mainUrl, int? season, int? episode}) => duration;
