@@ -1,3 +1,5 @@
+import 'animewitcher_account_payload.dart';
+
 enum AnimeWitcherSignInMethod { email }
 
 enum AnimeWitcherProfileImageKind { avatar, cover }
@@ -51,7 +53,7 @@ class AnimeWitcherPrivacySettings {
       (key, value) => MapEntry(key.toString(), value),
     );
     bool read(String key, bool fallback) {
-      return _readBool(values[key], fallback);
+      return readAnimeWitcherPayloadBool(values[key], fallback);
     }
     return AnimeWitcherPrivacySettings(
       showFavoritesToUsers: read('show_fav_to_users', true),
@@ -285,17 +287,6 @@ AnimeWitcherSignInMethod _signInMethodFromJson(dynamic raw) {
 String? _optionalString(dynamic raw) {
   final value = raw?.toString().trim() ?? '';
   return value.isEmpty ? null : value;
-}
-
-bool _readBool(dynamic raw, bool fallback) {
-  if (raw is bool) return raw;
-  if (raw is num) return raw != 0;
-  if (raw is String) {
-    final normalized = raw.trim().toLowerCase();
-    if (normalized == 'true' || normalized == '1') return true;
-    if (normalized == 'false' || normalized == '0') return false;
-  }
-  return fallback;
 }
 
 List<String> _stringList(dynamic raw) {

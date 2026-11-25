@@ -44,4 +44,38 @@ void main() {
     expect(tester.getSize(find.byType(PosterPlate)), const Size(120, 180));
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('same hue reuses immutable decorations across builds', (
+    tester,
+  ) async {
+    Future<List<Decoration>> pumpPlate(String seed) async {
+      await tester.pumpWidget(
+        Center(
+          child: SizedBox(
+            width: 120,
+            height: 180,
+            child: PosterPlate(seed: seed),
+          ),
+        ),
+      );
+      return tester
+          .widgetList<DecoratedBox>(
+            find.descendant(
+              of: find.byType(PosterPlate),
+              matching: find.byType(DecoratedBox),
+            ),
+          )
+          .map((widget) => widget.decoration)
+          .toList();
+    }
+
+    final first = await pumpPlate('Frieren');
+    expect(first, hasLength(3));
+    final repeated = await pumpPlate('Frieren');
+    for (var i = 0; i < first.length; i++) {
+      expect(repeated[i], same(first[i]));
+    }
+    final different = await pumpPlate('Naruto');
+    expect(different[0], isNot(same(first[0])));
+  });
 }

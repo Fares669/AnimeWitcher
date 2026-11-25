@@ -1,10 +1,4 @@
-/// Rating an anime and reading its reviews, as two actions any part of the
-/// details page can offer.
-///
-/// The panel further down the page has carried both since it was the only
-/// place that offered them. The hero row offers them too now, and a second
-/// copy of "check the account, ask, save, and say what went wrong" is exactly
-/// the kind of thing that drifts apart, so both call these.
+/// Opens the shared rating dialog and saves the user's rating.
 library;
 
 import 'dart:ui' show ImageFilter;
@@ -14,15 +8,11 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../../../core/account/account_providers.dart';
 import '../../../../core/account/anime3rb_account_service.dart';
-import '../../../../core/account/anime3rb_comment_models.dart';
 import '../../../../core/account/animewitcher_account_models.dart';
-import '../../../../core/account/animewitcher_comment_models.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/extensions/providers/anime3rb_provider.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../../../core/storage/anime3rb_library_service.dart';
-import '../../../comments/presentation/anime3rb_comments_screen.dart';
-import '../../../comments/presentation/animewitcher_comments_screen.dart';
 import '../details_ratings.dart';
 import 'scale_rating_bar.dart';
 
@@ -110,56 +100,6 @@ Future<AnimeRatingOutcome> openAnimeRatingDialog(
     }
     return _unchanged;
   }
-}
-
-/// Opens the reviews for [item], unless they are closed.
-///
-/// The details payload says whether they are, and the account service is
-/// asked again in case that has changed since the page loaded; if it cannot
-/// be reached, the flag that came with the page stands.
-Future<void> openAnimeReviews(
-  BuildContext context,
-  WidgetRef ref, {
-  required MultimediaItem item,
-  required AnimeDetailsRatings ratings,
-}) async {
-  if (item.provider == Anime3rbProvider.id) {
-    final a3Target = Anime3rbCommentTarget.fromAnime(item);
-    if (a3Target == null || !context.mounted) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => Anime3rbCommentsScreen(target: a3Target),
-      ),
-    );
-    return;
-  }
-  final target = animeWitcherAnimeReviewTarget(item);
-  if (target == null) return;
-  if (ratings.reviewsClosed) {
-    _toast(ref, kReviewsClosedToast);
-    return;
-  }
-
-  final service = ref.read(animeWitcherAccountServiceProvider);
-  if (service.isSignedIn && target.animeId?.isNotEmpty == true) {
-    try {
-      final closed = await service.isAnimeReviewsClosed(target.animeId!);
-      if (!context.mounted) return;
-      if (closed) {
-        _toast(ref, kReviewsClosedToast);
-        return;
-      }
-    } catch (_) {
-      // Keep the local details flag as the fallback.
-    }
-  }
-
-  if (!context.mounted) return;
-  await Navigator.of(context).push(
-    MaterialPageRoute<void>(
-      builder: (_) => AnimeWitcherCommentsScreen(target: target),
-    ),
-  );
 }
 
 /// The dialog itself: ten stars, and clearing by choosing none.

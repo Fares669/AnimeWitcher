@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'comment_pager.dart';
+import 'comment_screen_messages.dart';
 import '../../../core/utils/relative_time.dart';
 
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
@@ -13,7 +14,6 @@ import 'package:animewitcher/core/account/animewitcher_account_models.dart';
 import 'package:animewitcher/core/account/animewitcher_comment_models.dart';
 import 'package:animewitcher/core/account/animewitcher_reply_mention.dart';
 import 'package:animewitcher/core/account/firestore_rest_client.dart';
-import 'package:animewitcher/core/services/notification_service.dart';
 
 import 'widgets/animewitcher_comment_sort_control.dart';
 import '../../../core/utils/avatar_image.dart';
@@ -28,13 +28,22 @@ class AnimeWitcherRepliesScreen extends ConsumerStatefulWidget {
   final AnimeWitcherComment parentComment;
   final bool showParent;
 
+  static Future<void> open(BuildContext context, AnimeWitcherComment comment) {
+    return Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => AnimeWitcherRepliesScreen(parentComment: comment),
+      ),
+    );
+  }
+
   @override
   ConsumerState<AnimeWitcherRepliesScreen> createState() =>
       _AnimeWitcherRepliesScreenState();
 }
 
 class _AnimeWitcherRepliesScreenState
-    extends ConsumerState<AnimeWitcherRepliesScreen> {
+    extends ConsumerState<AnimeWitcherRepliesScreen>
+    with CommentScreenMessages<AnimeWitcherRepliesScreen> {
   static const int _pageSize = 20;
 
   final TextEditingController _replyController = TextEditingController();
@@ -101,7 +110,7 @@ class _AnimeWitcherRepliesScreenState
     final future = _pager.loadMore(
       _fetchPage,
       onError: (error) {
-        if (mounted) _showMessage(_replyErrorText(error), isError: true);
+        if (mounted) showCommentMessage(_replyErrorText(error), isError: true);
       },
     );
     setState(() {});
@@ -113,7 +122,7 @@ class _AnimeWitcherRepliesScreenState
     final service = ref.read(animeWitcherAccountServiceProvider);
 
     if (!service.isSignedIn) {
-      _showMessage('يجب تسجيل الدخول', isInfo: true);
+      showCommentMessage('يجب تسجيل الدخول', isInfo: true);
       return;
     }
     if (reply.userId == service.snapshot.profile?.documentId) return;
@@ -126,7 +135,7 @@ class _AnimeWitcherRepliesScreenState
       if (index >= 0) setState(() => _pager.items[index] = updated);
     } catch (error) {
       if (mounted) {
-        _showMessage(_replyErrorText(error), isError: true);
+        showCommentMessage(_replyErrorText(error), isError: true);
       }
     } finally {
       if (mounted) setState(() => _pendingLikes.remove(reply.path));
@@ -147,11 +156,11 @@ class _AnimeWitcherRepliesScreenState
       if (!mounted) return;
       _replyController.clear();
       setState(() => _userTagId = null);
-      _showMessage('تم إرسال الرد.');
+      showCommentMessage('تم إرسال الرد.');
       await _loadInitial();
     } catch (error) {
       if (mounted) {
-        _showMessage(_replyErrorText(error), isError: true);
+        showCommentMessage(_replyErrorText(error), isError: true);
       }
     } finally {
       if (mounted) setState(() => _publishing = false);
@@ -172,7 +181,7 @@ class _AnimeWitcherRepliesScreenState
     final service = ref.read(animeWitcherAccountServiceProvider);
 
     if (!service.isSignedIn) {
-      _showMessage('يجب تسجيل الدخول', isInfo: true);
+      showCommentMessage('يجب تسجيل الدخول', isInfo: true);
       return;
     }
     if (widget.parentComment.repliesClosed) return;
@@ -188,7 +197,7 @@ class _AnimeWitcherRepliesScreenState
       case AnimeWitcherReplyMentionStatus.ownReply:
         return;
       case AnimeWitcherReplyMentionStatus.alreadyTagged:
-        _showMessage(animeWitcherReplyAlreadyTaggedMessage(), isInfo: true);
+        showCommentMessage(animeWitcherReplyAlreadyTaggedMessage(), isInfo: true);
         return;
       case AnimeWitcherReplyMentionStatus.applied:
         _replyController.value = TextEditingValue(
@@ -214,22 +223,6 @@ class _AnimeWitcherRepliesScreenState
       if (option.name == value) return option;
     }
     return _sort;
-  }
-
-  void _showMessage(
-    String message, {
-    bool isError = false,
-    bool isInfo = false,
-  }) {
-    if (!mounted) return;
-    final notifications = ref.read(notificationServiceProvider);
-    if (isError) {
-      notifications.showError(message);
-    } else if (isInfo) {
-      notifications.showInfo(message);
-    } else {
-      notifications.showSuccess(message);
-    }
   }
 
   @override

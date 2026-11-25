@@ -31,6 +31,25 @@ bool shellBackLeavesApp({
   required bool isDesktopPlatform,
 }) => isAtDefaultHome && !isDesktopPlatform;
 
+// Keep navigation independent of unrelated settings such as download limits.
+final _shellNavigationProvider = Provider((ref) {
+  final (:defaultHomeScreen, :taskbarOrder, :hiddenTaskbarItems) = ref.watch(
+    generalSettingsProvider.select(
+      (settings) => (
+        defaultHomeScreen: settings.defaultHomeScreen,
+        taskbarOrder: settings.taskbarOrder,
+        hiddenTaskbarItems: settings.hiddenTaskbarItems,
+      ),
+    ),
+  );
+  return (
+    defaultIndex:
+        taskbarDestinationForRoute(defaultHomeScreen)?.branchIndex ??
+        TaskbarDestination.home.branchIndex,
+    destinations: visibleTaskbarDestinations(taskbarOrder, hiddenTaskbarItems),
+  );
+});
+
 class AppScaffold extends ConsumerStatefulWidget {
   final StatefulNavigationShell navigationShell;
   const AppScaffold({super.key, required this.navigationShell});
@@ -58,7 +77,7 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
     await showFirstRunSetup(context);
   }
 
-  void _onItemTapped(int index, BuildContext context) {
+  void _onItemTapped(int index) {
     if (appleUsesPersistentLiquidGlassHeader) {
       applePersistentGlassHeaderController.setActiveBranch(index);
     }
@@ -80,11 +99,6 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
     return navigator == null || !navigator.canPop();
   }
 
-  int _getRouteIndex(String route) {
-    return taskbarDestinationForRoute(route)?.branchIndex ??
-        TaskbarDestination.home.branchIndex;
-  }
-
   @override
   Widget build(BuildContext context) {
     if (appleUsesPersistentLiquidGlassHeader) {
@@ -96,11 +110,8 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
       });
     }
 
-    final generalSettings = ref.watch(generalSettingsProvider);
-    final defaultIndex = _getRouteIndex(generalSettings.defaultHomeScreen);
-    final taskbarDestinations = visibleTaskbarDestinations(
-      generalSettings.taskbarOrder,
-      generalSettings.hiddenTaskbarItems,
+    final (:defaultIndex, destinations: taskbarDestinations) = ref.watch(
+      _shellNavigationProvider,
     );
     final isAtDefaultHome = widget.navigationShell.currentIndex == defaultIndex;
 
@@ -118,7 +129,7 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
     final mq = MediaQuery.of(context);
 
     void onDestination(TaskbarDestination destination) =>
-        _onItemTapped(destination.branchIndex, context);
+        _onItemTapped(destination.branchIndex);
     final currentIndex = widget.navigationShell.currentIndex;
     if (_previousBranchIndex != currentIndex) {
       _previousBranchIndex = currentIndex;

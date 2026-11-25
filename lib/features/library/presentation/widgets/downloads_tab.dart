@@ -102,6 +102,11 @@ Future<void> _removeMissingDownload(
   await ref.read(downloadsProvider.notifier).removeDownload(item);
 }
 
+bool _canPauseDownload(TaskStatus status) => switch (status) {
+  TaskStatus.running || TaskStatus.enqueued || TaskStatus.waitingToRetry => true,
+  _ => false,
+};
+
 class DownloadsTab extends ConsumerStatefulWidget {
   const DownloadsTab({super.key, this.headerPadding = EdgeInsets.zero});
 
@@ -170,10 +175,7 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
       } else {
         for (final item in items) {
           try {
-            if (action == 'pause' &&
-                (item.status == TaskStatus.running ||
-                    item.status == TaskStatus.enqueued ||
-                    item.status == TaskStatus.waitingToRetry)) {
+            if (action == 'pause' && _canPauseDownload(item.status)) {
               await notifier.pauseDownload(item.id);
             } else if (action == 'resume' && item.status == TaskStatus.paused) {
               await notifier.resumeDownload(item.id);
@@ -388,33 +390,21 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
           ? downloadsAsync.value ?? const <DownloadItem>[]
           : const <DownloadItem>[],
     ).visible;
-    final completed = visibleDownloads
-        .where((item) => !isActiveDownloadStatus(item.status))
-        .toList();
-    final active = visibleDownloads
-        .where((item) => isActiveDownloadStatus(item.status))
-        .toList();
+    final active = <DownloadItem>[];
+    final completed = <DownloadItem>[];
+    for (final item in visibleDownloads) {
+      (isActiveDownloadStatus(item.status) ? active : completed).add(item);
+    }
     final currentDownloads = _tabIndex == 0 ? active : completed;
     final selected = currentDownloads
         .where((item) => _selectedIds.contains(item.id))
         .toList();
     final currentSelectedIds = selected.map((item) => item.id).toSet();
-    final canPause = selected.any(
-      (item) =>
-          item.status == TaskStatus.running ||
-          item.status == TaskStatus.enqueued ||
-          item.status == TaskStatus.waitingToRetry,
-    );
+    final canPause = selected.any((item) => _canPauseDownload(item.status));
     final canResume = selected.any((item) => item.status == TaskStatus.paused);
-    final controllableActive = active
-        .where(
-          (item) =>
-              item.status == TaskStatus.running ||
-              item.status == TaskStatus.enqueued ||
-              item.status == TaskStatus.waitingToRetry ||
-              item.status == TaskStatus.paused,
-        )
-        .toList();
+    final controllableActive = active.where(
+      (item) => _canPauseDownload(item.status) || item.status == TaskStatus.paused,
+    ).toList();
     final allPaused =
         controllableActive.isNotEmpty &&
         controllableActive.every((item) => item.status == TaskStatus.paused);
@@ -1228,10 +1218,7 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
     )[item.task.taskId];
     final isDone = status == TaskStatus.complete;
     final isQueued = status == TaskStatus.enqueued;
-    final isWorking =
-        status == TaskStatus.running ||
-        status == TaskStatus.enqueued ||
-        status == TaskStatus.waitingToRetry;
+    final isWorking = _canPauseDownload(status);
     final isPaused = status == TaskStatus.paused;
     final isFailed =
         status == TaskStatus.failed || status == TaskStatus.notFound;

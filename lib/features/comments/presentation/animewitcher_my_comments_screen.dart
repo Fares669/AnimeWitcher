@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'comment_edit_dialog.dart';
 import 'comment_pager.dart';
+import 'comment_screen_messages.dart';
 import '../../../core/utils/relative_time.dart';
 import '../../../shared/widgets/confirm_dialog.dart';
 
@@ -16,7 +17,6 @@ import '../../../core/account/animewitcher_comment_models.dart';
 import '../../../core/account/animewitcher_sync_ids.dart';
 import '../../../core/account/firestore_rest_client.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
-import '../../../core/services/notification_service.dart';
 import '../../../core/router/app_router.dart';
 import 'animewitcher_replies_screen.dart';
 import 'widgets/animewitcher_comment_sort_control.dart';
@@ -36,7 +36,8 @@ class AnimeWitcherMyCommentsScreen extends ConsumerStatefulWidget {
 }
 
 class _AnimeWitcherMyCommentsScreenState
-    extends ConsumerState<AnimeWitcherMyCommentsScreen> {
+    extends ConsumerState<AnimeWitcherMyCommentsScreen>
+    with CommentScreenMessages<AnimeWitcherMyCommentsScreen> {
   int get _pageSize => widget.isReviews ? kAnimeWitcherReviewsPageSize : 20;
 
   bool get _isReviews => widget.isReviews;
@@ -103,7 +104,7 @@ class _AnimeWitcherMyCommentsScreenState
       _fetchPage,
       onError: (error) {
         if (_currentPager(pager)) {
-          _showMessage(_errorText(error), isError: true);
+          showCommentMessage(_errorText(error), isError: true);
         }
       },
     );
@@ -157,9 +158,9 @@ class _AnimeWitcherMyCommentsScreenState
           .updateOwnComment(comment, draft.text, spoiler: draft.spoiler);
       if (!_currentPager(pager)) return;
       _replaceComment(updated);
-      _showMessage(_editedMessage);
+      showCommentMessage(_editedMessage);
     } catch (error) {
-      if (_currentPager(pager)) _showMessage(_errorText(error), isError: true);
+      if (_currentPager(pager)) showCommentMessage(_errorText(error), isError: true);
     } finally {
       if (_currentPager(pager)) _setBusy(comment.path, false);
     }
@@ -184,9 +185,9 @@ class _AnimeWitcherMyCommentsScreenState
       setState(() {
         _pager.items.removeWhere((item) => item.path == comment.path);
       });
-      _showMessage('تم حذف التعليق.');
+      showCommentMessage('تم حذف التعليق.');
     } catch (error) {
-      if (_currentPager(pager)) _showMessage(_errorText(error), isError: true);
+      if (_currentPager(pager)) showCommentMessage(_errorText(error), isError: true);
     } finally {
       if (_currentPager(pager)) _setBusy(comment.path, false);
     }
@@ -211,21 +212,16 @@ class _AnimeWitcherMyCommentsScreenState
           .closeOwnCommentReplies(comment);
       if (!_currentPager(pager)) return;
       _replaceComment(updated);
-      _showMessage('تم منع الردود.');
+      showCommentMessage('تم منع الردود.');
     } catch (error) {
-      if (_currentPager(pager)) _showMessage(_errorText(error), isError: true);
+      if (_currentPager(pager)) showCommentMessage(_errorText(error), isError: true);
     } finally {
       if (_currentPager(pager)) _setBusy(comment.path, false);
     }
   }
 
-  Future<void> _openReplies(AnimeWitcherComment comment) async {
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => AnimeWitcherRepliesScreen(parentComment: comment),
-      ),
-    );
-  }
+  Future<void> _openReplies(AnimeWitcherComment comment) =>
+      AnimeWitcherRepliesScreen.open(context, comment);
 
   void _openAnime(AnimeWitcherComment comment) {
     final animeId = comment.animeId?.trim();
@@ -258,22 +254,6 @@ class _AnimeWitcherMyCommentsScreenState
         _busyComments.remove(path);
       }
     });
-  }
-
-  void _showMessage(
-    String message, {
-    bool isError = false,
-    bool isInfo = false,
-  }) {
-    if (!mounted) return;
-    final notifications = ref.read(notificationServiceProvider);
-    if (isError) {
-      notifications.showError(message);
-    } else if (isInfo) {
-      notifications.showInfo(message);
-    } else {
-      notifications.showSuccess(message);
-    }
   }
 
   String _sortTooltip() => _isReviews ? 'ترتيب المراجعات' : 'ترتيب التعليقات';

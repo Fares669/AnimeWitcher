@@ -14,6 +14,7 @@ import '../utils/digit_normalization.dart';
 import '../utils/episode_label.dart';
 import 'animewitcher_account_config.dart';
 import 'animewitcher_account_models.dart';
+import 'animewitcher_account_payload.dart';
 import 'animewitcher_character_models.dart';
 import 'animewitcher_comment_models.dart';
 import 'animewitcher_notification_models.dart';
@@ -239,7 +240,7 @@ class AnimeWitcherAccountService {
         email: _optionalString(user['email']),
         displayName: _optionalString(user['displayName']),
         photoUrl: _optionalString(user['photoUrl']),
-        providerIds: _providerIdsFromUser(user['providerUserInfo']),
+        providerIds: readFirebaseProviderIds(user['providerUserInfo']),
       );
       final resolvedProfile = await _resolveProfile(
         refreshedSession,
@@ -5073,17 +5074,6 @@ String? _originalEpisodeText(dynamic raw) =>
 String? _optionalString(dynamic raw) {
   final value = raw?.toString().trim() ?? '';
   return value.isEmpty ? null : value;
-}
-
-List<String> _providerIdsFromUser(dynamic raw) {
-  if (raw is! Iterable) return const <String>[];
-  final providers = <String>{};
-  for (final entry in raw) {
-    if (entry is! Map) continue;
-    final provider = _optionalString(entry['providerId']);
-    if (provider != null) providers.add(provider);
-  }
-  return providers.toList(growable: false);
 }
 
 String _firstString(Iterable<dynamic> values) {

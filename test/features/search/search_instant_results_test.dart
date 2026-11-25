@@ -99,6 +99,46 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+    'caps preview rows after excluding the top URL without capping counts',
+    (tester) async {
+      tester.view.physicalSize = const Size(1400, 1200);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final top = _item('First Choice');
+      final remainder = List.generate(9, (index) => _item('Entry $index'));
+      MultimediaItem? opened;
+      await tester.pumpWidget(
+        _app(
+          SearchInstantResults(
+            items: [top, top, ...remainder],
+            loading: false,
+            onOpen: (item) => opened = item,
+            onSeeAll: () {},
+          ),
+        ),
+      );
+
+      final seriesTab = find.byKey(const ValueKey('search-instant-tab-series'));
+      expect(
+        find.descendant(of: seriesTab, matching: find.text('مسلسلات  11')),
+        findsOneWidget,
+      );
+      await tester.tap(seriesTab);
+      await tester.pumpAndSettle();
+
+      Finder row(MultimediaItem item) =>
+          find.byKey(ValueKey('search-instant-row-${item.url}'));
+      expect(row(top), findsNothing);
+      for (final item in remainder.take(6)) {
+        expect(row(item), findsOneWidget);
+      }
+      expect(row(remainder[6]), findsNothing);
+      await tester.tap(row(remainder[5]));
+      expect(opened, remainder[5]);
+    },
+  );
+
   testWidgets('searching everything shows manga and characters too', (
     tester,
   ) async {

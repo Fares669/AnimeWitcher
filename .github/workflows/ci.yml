@@ -44,6 +44,15 @@ jobs:
       - name: Validate build configuration serialization
         run: python3 -m unittest discover -s test/tools -p 'test_*.py'
 
+      - name: Install Linux test prerequisites
+        # Flutter test builds native assets. cnativeapi resolves the GTK, X11
+        # and Xi headers via pkg-config; some tests also spawn cc or Ruby.
+        run: |
+          sudo apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30
+          sudo apt-get install -y --no-install-recommends \
+            clang build-essential pkg-config libgtk-3-dev libx11-dev libxi-dev ruby
+          pkg-config --print-errors --exists gtk+-3.0 x11 xi
+
       - name: Focused V2 tests
         # Keep the V2 architecture/reliability gate visible independently from
         # the repository-wide baseline so a known unrelated suite failure can

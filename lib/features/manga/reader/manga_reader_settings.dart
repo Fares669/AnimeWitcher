@@ -828,13 +828,8 @@ String mangaReaderPageLabel({
   final safeIndex = pageIndex.clamp(0, pageCount - 1).toInt();
   if (!doublePage) return '${safeIndex + 1}';
 
-  final spreads = mangaReaderPageSpreads(
-    pageCount: pageCount,
-    singleFirst: singleFirst,
-  );
-  for (final spread in spreads) {
-    if (!spread.contains(safeIndex)) continue;
-    return spread.map((index) => '${index + 1}').join('-');
-  }
-  return '${safeIndex + 1}';
+  final pairedStart = singleFirst ? 1 : 0;
+  if (safeIndex < pairedStart) return '1';
+  final first = safeIndex - (safeIndex - pairedStart) % 2;
+  return first + 1 < pageCount ? '${first + 1}-${first + 2}' : '${first + 1}';
 }

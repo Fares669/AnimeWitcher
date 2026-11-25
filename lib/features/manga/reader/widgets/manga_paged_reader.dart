@@ -59,7 +59,38 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
   bool _trailingAdvanceRequested = false;
   int _preloadGeneration = 0;
 
+  ({
+    int pageCount,
+    bool doublePage,
+    bool rtl,
+    bool singleFirst,
+    bool splitWidePages,
+    bool invertWidePages,
+    int widePageCount,
+  })? _spreadLayoutKey;
+  late List<List<_MangaPageUnit>> _cachedSpreads;
+
   List<List<_MangaPageUnit>> get _spreads {
+    // Navigation repaints the reader without changing how pages are grouped.
+    // Only the layout settings, page count or newly split pages can do that.
+    final key = (
+      pageCount: widget.pages.length,
+      doublePage: widget.doublePage,
+      rtl: widget.rtl,
+      singleFirst: widget.settings.doublePageSingleFirstPage,
+      splitWidePages: widget.settings.splitWidePages,
+      invertWidePages: widget.settings.dualPageInvert,
+      // _widePages only grows, so its count also records revisions.
+      widePageCount: _widePages.length,
+    );
+    if (_spreadLayoutKey != key) {
+      _cachedSpreads = _buildSpreads();
+      _spreadLayoutKey = key;
+    }
+    return _cachedSpreads;
+  }
+
+  List<List<_MangaPageUnit>> _buildSpreads() {
     if (!widget.doublePage) {
       final result = <List<_MangaPageUnit>>[];
       for (var index = 0; index < widget.pages.length; index++) {

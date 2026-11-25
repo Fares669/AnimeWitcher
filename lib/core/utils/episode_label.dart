@@ -4,54 +4,63 @@ import 'package:crypto/crypto.dart';
 
 import 'digit_normalization.dart';
 
-String _normalizeEpisodeLabel(String value) {
-  return normalizeLocalizedDigits(value.trim().toLowerCase())
-      .replaceAll(RegExp(r'\s+'), ' ');
-}
+final _episodeWhitespace = RegExp(r'\s+');
+final _rawEpisodeNumber = RegExp(r'^-?\d+(?:[.,٫]\d+)?$');
+final _arabicEpisodePlaceholder = RegExp(
+  r'^(?:ال)?حلق[ةه]\s*\d+(?:[.,٫]\d+)?(?:\s+(?:والأخيرة|والاخيرة))?$',
+);
+final _englishEpisodePlaceholder = RegExp(
+  r'^(?:episode|ep\.?)\s*\d+(?:[.,٫]\d+)?(?:\s+(?:final|last))?$',
+  caseSensitive: false,
+);
+final _unsignedEpisodeNumber = RegExp(r'^\d+(?:[.,٫]\d+)?$');
+final _arabicFinalSuffix = RegExp(r'(?:والأخيرة|والاخيرة)\s*$');
+final _englishFinalSuffix = RegExp(
+  r'(?:\(\s*)?(?:final|last)(?:\s*\))?\s*$',
+  caseSensitive: false,
+);
+final _standaloneEpisode = RegExp(
+  r'^(مترجم|مدبلج|مترجمة|مدبلجة|sub(?:bed)?|dub(?:bed)?)$',
+  caseSensitive: false,
+);
+
+String _normalizeEpisodeLabel(String value) =>
+    normalizeLocalizedDigits(value.trim().toLowerCase())
+        .replaceAll(_episodeWhitespace, ' ');
 
 /// Preserve a supplied numeric display value without changing episode identity.
 String? rawEpisodeNumberForDisplay(Object? value) {
   if (value is! String && value is! num) return null;
   final raw = value.toString();
-  final normalized = normalizeLocalizedDigits(raw.trim());
-  return RegExp(r'^-?\d+(?:[.,٫]\d+)?$').hasMatch(normalized) ? raw : null;
+  return _rawEpisodeNumber.hasMatch(normalizeLocalizedDigits(raw.trim()))
+      ? raw
+      : null;
 }
 
 /// True when [value] is only a generic episode placeholder such as
 /// "الحلقة 12", "حلقة 12 والأخيرة", or "Episode 3".
-bool isGenericEpisodeTitle(String? value) {
-  final title = _normalizeEpisodeLabel(value ?? '');
-  if (title.isEmpty) return true;
-  return RegExp(
-        r'^(?:ال)?حلق[ةه]\s*\d+(?:[.,٫]\d+)?(?:\s+(?:والأخيرة|والاخيرة))?$',
-      ).hasMatch(title) ||
-      RegExp(
-        r'^(?:episode|ep\.?)\s*\d+(?:[.,٫]\d+)?(?:\s+(?:final|last))?$',
-        caseSensitive: false,
-      ).hasMatch(title) ||
-      RegExp(r'^\d+(?:[.,٫]\d+)?$').hasMatch(title);
-}
+bool isGenericEpisodeTitle(String? value) =>
+    _isGenericTitle(_normalizeEpisodeLabel(value ?? ''));
+
+bool _isGenericTitle(String title) =>
+    title.isEmpty ||
+    _arabicEpisodePlaceholder.hasMatch(title) ||
+    _englishEpisodePlaceholder.hasMatch(title) ||
+    _unsignedEpisodeNumber.hasMatch(title);
 
 /// True when [value] ends with a final-episode suffix such as "والأخيرة".
-bool hasFinalEpisodeSuffix(String? value) {
-  final title = _normalizeEpisodeLabel(value ?? '');
-  if (title.isEmpty) return false;
-  return RegExp(r'(?:والأخيرة|والاخيرة)\s*$').hasMatch(title) ||
-      RegExp(
-        r'(?:\(\s*)?(?:final|last)(?:\s*\))?\s*$',
-        caseSensitive: false,
-      ).hasMatch(title);
-}
+bool hasFinalEpisodeSuffix(String? value) =>
+    _hasFinalSuffix(_normalizeEpisodeLabel(value ?? ''));
+
+bool _hasFinalSuffix(String title) =>
+    _arabicFinalSuffix.hasMatch(title) || _englishFinalSuffix.hasMatch(title);
 
 /// Movie/OVA catalog labels that AnimeWitcher shows instead of "حلقة N".
-bool isStandaloneEpisodeLabel(String? value) {
-  final title = _normalizeEpisodeLabel(value ?? '');
-  if (title.isEmpty || isGenericEpisodeTitle(title)) return false;
-  return RegExp(
-    r'^(مترجم|مدبلج|مترجمة|مدبلجة|sub(?:bed)?|dub(?:bed)?)$',
-    caseSensitive: false,
-  ).hasMatch(title);
-}
+bool isStandaloneEpisodeLabel(String? value) =>
+    _standaloneEpisode.hasMatch(_normalizeEpisodeLabel(value ?? ''));
+
+bool _isCatalogTitle(String title) =>
+    _standaloneEpisode.hasMatch(title) || _isGenericTitle(title);
 
 /// True when an episode row is a مترجم/مدبلج-style catalog entry.
 bool isStandaloneEpisodeEntry({String? serverName, String? name}) {
@@ -62,25 +71,21 @@ bool isStandaloneEpisodeEntry({String? serverName, String? name}) {
 bool isStandaloneEpisodeCatalog(
   Iterable<({String? serverName, String? name})> episodes,
 ) {
-  final list = episodes.toList(growable: false);
-  if (list.isEmpty) return false;
-  return list.every(
-    (episode) => isStandaloneEpisodeEntry(
-      serverName: episode.serverName,
-      name: episode.name,
-    ),
-  );
+  final rows = episodes.iterator;
+  if (!rows.moveNext()) return false;
+  do {
+    final row = rows.current;
+    if (!isStandaloneEpisodeEntry(serverName: row.serverName, name: row.name)) {
+      return false;
+    }
+  } while (rows.moveNext());
+  return true;
 }
 
 /// Real creative title only; empty when missing or generic/standalone labels.
 String realEpisodeTitle(String? title) {
   final value = title ?? '';
-  if (value.trim().isEmpty ||
-      isGenericEpisodeTitle(value) ||
-      isStandaloneEpisodeLabel(value)) {
-    return '';
-  }
-  return value;
+  return _isCatalogTitle(_normalizeEpisodeLabel(value)) ? '' : value;
 }
 
 /// How an episode is named, in the two lines the UI shows.
@@ -117,22 +122,24 @@ EpisodeLabel resolveEpisodeLabel({
   bool isFinal = false,
 }) {
   final rawTitle = title ?? '';
+  final normalizedTitle = _normalizeEpisodeLabel(rawTitle);
+  final isCatalogTitle = _isCatalogTitle(normalizedTitle);
   final server = serverName ?? '';
   // Without a server name, a placeholder or catalog title is still the row's
-  // identity — that is what downloads and history were saved under.
+  // identity: that is what downloads and history were saved under.
   final catalogLabel = server.trim().isNotEmpty
       ? server
-      : (isGenericEpisodeTitle(rawTitle) || isStandaloneEpisodeLabel(rawTitle))
+      : isCatalogTitle && normalizedTitle.isNotEmpty
       ? rawTitle
       : '';
 
   return EpisodeLabel(
-    primary: catalogLabel.trim().isNotEmpty
+    primary: catalogLabel.isNotEmpty
         ? catalogLabel
         : episode > 0
-        ? 'حلقة $episode${isFinal || hasFinalEpisodeSuffix(rawTitle) ? ' والأخيرة' : ''}'
+        ? 'حلقة $episode${isFinal || _hasFinalSuffix(normalizedTitle) ? ' والأخيرة' : ''}'
         : '',
-    secondary: realEpisodeTitle(rawTitle),
+    secondary: isCatalogTitle ? '' : rawTitle,
   );
 }
 

@@ -1,4 +1,5 @@
 import '../domain/entity/multimedia_item.dart';
+import 'animewitcher_account_payload.dart';
 import 'animewitcher_comment_models.dart';
 import 'firestore_rest_client.dart';
 
@@ -120,7 +121,7 @@ class AnimeWitcherSearchServiceSettings {
   factory AnimeWitcherSearchServiceSettings.fromFields(dynamic raw) {
     final fields = _map(raw);
     return AnimeWitcherSearchServiceSettings(
-      isSearchActive: _readBool(
+      isSearchActive: readAnimeWitcherPayloadBool(
         fields['is_search_active'] ?? fields['isSearchActive'],
         true,
       ),
@@ -425,17 +426,6 @@ int _positiveInt(dynamic raw) {
   final match = RegExp(r'\d+').firstMatch(_text(raw));
   final value = match == null ? 0 : int.tryParse(match.group(0)!) ?? 0;
   return value > 0 ? value : 0;
-}
-
-bool _readBool(dynamic raw, bool fallback) {
-  if (raw is bool) return raw;
-  if (raw is num) return raw != 0;
-  if (raw is String) {
-    final normalized = raw.trim().toLowerCase();
-    if (normalized == 'true' || normalized == '1') return true;
-    if (normalized == 'false' || normalized == '0') return false;
-  }
-  return fallback;
 }
 
 DateTime? _dateValue(dynamic raw) {

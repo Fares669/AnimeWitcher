@@ -85,53 +85,43 @@ static void find_margins_rgba(unsigned char* pixels, int w, int h, int* out_left
         return false;
     };
 
-    // Scan Top
-    int top = 0;
-    for (int y = 0; y < h; y++) {
-        int non_bg_count = 0;
+    // We need only enough non-background pixels to accept a row or column.
+    auto row_has_content = [&](int y) {
+        int remaining = w / 100 + 2;
         for (int x = 0; x < w; x++) {
-            if (!is_bg(x, y)) non_bg_count++;
+            if (!is_bg(x, y) && --remaining == 0) return true;
         }
-        if (non_bg_count > w / 100 + 1) {
+        return false;
+    };
+    auto column_has_content = [&](int x) {
+        int remaining = h / 100 + 2;
+        for (int y = 0; y < h; y++) {
+            if (!is_bg(x, y) && --remaining == 0) return true;
+        }
+        return false;
+    };
+
+    int top = 0, bottom = h, left = 0, right = w;
+    for (int y = 0; y < h; y++) {
+        if (row_has_content(y)) {
             top = y;
             break;
         }
     }
-
-    // Scan Bottom
-    int bottom = h;
     for (int y = h - 1; y >= 0; y--) {
-        int non_bg_count = 0;
-        for (int x = 0; x < w; x++) {
-            if (!is_bg(x, y)) non_bg_count++;
-        }
-        if (non_bg_count > w / 100 + 1) {
+        if (row_has_content(y)) {
             bottom = y + 1;
             break;
         }
     }
-
-    // Scan Left
-    int left = 0;
     for (int x = 0; x < w; x++) {
-        int non_bg_count = 0;
-        for (int y = 0; y < h; y++) {
-            if (!is_bg(x, y)) non_bg_count++;
-        }
-        if (non_bg_count > h / 100 + 1) {
+        if (column_has_content(x)) {
             left = x;
             break;
         }
     }
-
-    // Scan Right
-    int right = w;
     for (int x = w - 1; x >= 0; x--) {
-        int non_bg_count = 0;
-        for (int y = 0; y < h; y++) {
-            if (!is_bg(x, y)) non_bg_count++;
-        }
-        if (non_bg_count > h / 100 + 1) {
+        if (column_has_content(x)) {
             right = x + 1;
             break;
         }
@@ -162,7 +152,7 @@ struct BmpDecoderContext {
     bool is_top_down;
 };
 
-static BmpDecoderContext* init_bmp_decoder(const char* file_path, int* out_width, int* out_height) {
+static BmpDecoderContext* init_bmp_decoder(const char* file_path) {
     FILE* f = fopen(file_path, "rb");
     if (!f) return NULL;
 
@@ -195,14 +185,16 @@ static BmpDecoderContext* init_bmp_decoder(const char* file_path, int* out_width
     }
 
     BmpDecoderContext* ctx = (BmpDecoderContext*)malloc(sizeof(BmpDecoderContext));
+    if (!ctx) {
+        fclose(f);
+        return NULL;
+    }
     ctx->file = f;
     ctx->width = width;
     ctx->height = height;
     ctx->pixel_offset = pixel_offset;
     ctx->is_top_down = is_top_down;
 
-    *out_width = width;
-    *out_height = height;
     return ctx;
 }
 
@@ -319,45 +311,42 @@ struct ImageDecoderContext {
     };
 };
 
-static void perform_bmp_autocrop(ImageDecoderContext* ctx) {
-    int w = ctx->width;
-    int h = ctx->height;
-    int sample = 16;
-    int dest_w = w / sample;
-    int dest_h = h / sample;
+// All platform selectors try the same BMP fast path before their native codecs.
+static ImageDecoderContext* try_bmp_decoder(const char* file_path, bool crop_borders, int* out_width, int* out_height) {
+    BmpDecoderContext* bmp = init_bmp_decoder(file_path);
+    if (!bmp) return NULL;
 
-    if (dest_w <= 0 || dest_h <= 0) {
-        ctx->crop_left = 0;
-        ctx->crop_top = 0;
-        ctx->crop_width = w;
-        ctx->crop_height = h;
-        return;
+    ImageDecoderContext* ctx = (ImageDecoderContext*)malloc(sizeof(ImageDecoderContext));
+    if (!ctx) {
+        free_bmp_decoder(bmp);
+        return NULL;
     }
+    ctx->type = TYPE_BMP;
+    ctx->bmp_ctx = bmp;
+    ctx->width = ctx->crop_width = bmp->width;
+    ctx->height = ctx->crop_height = bmp->height;
+    ctx->crop_left = ctx->crop_top = 0;
 
-    unsigned char* temp_buf = (unsigned char*)malloc(dest_w * dest_h * 4);
-    if (!temp_buf) {
-        ctx->crop_left = 0;
-        ctx->crop_top = 0;
-        ctx->crop_width = w;
-        ctx->crop_height = h;
-        return;
+    const int sample = 16;
+    const int dest_w = ctx->width / sample;
+    const int dest_h = ctx->height / sample;
+    if (crop_borders && dest_w > 0 && dest_h > 0) {
+        unsigned char* temp_buf = (unsigned char*)malloc((size_t)dest_w * dest_h * 4);
+        if (temp_buf) {
+            if (decode_bmp_region(bmp, 0, 0, ctx->width, ctx->height, sample, temp_buf)) {
+                int left, top, right, bottom;
+                find_margins_rgba(temp_buf, dest_w, dest_h, &left, &top, &right, &bottom);
+                ctx->crop_left = left * sample;
+                ctx->crop_top = top * sample;
+                ctx->crop_width = (right - left) * sample;
+                ctx->crop_height = (bottom - top) * sample;
+            }
+            free(temp_buf);
+        }
     }
-
-    if (decode_bmp_region(ctx->bmp_ctx, 0, 0, w, h, sample, temp_buf)) {
-        int left = 0, top = 0, right = dest_w, bottom = dest_h;
-        find_margins_rgba(temp_buf, dest_w, dest_h, &left, &top, &right, &bottom);
-
-        ctx->crop_left = left * sample;
-        ctx->crop_top = top * sample;
-        ctx->crop_width = (right - left) * sample;
-        ctx->crop_height = (bottom - top) * sample;
-    } else {
-        ctx->crop_left = 0;
-        ctx->crop_top = 0;
-        ctx->crop_width = w;
-        ctx->crop_height = h;
-    }
-    free(temp_buf);
+    *out_width = ctx->crop_width;
+    *out_height = ctx->crop_height;
+    return ctx;
 }
 
 // ============================================================================
@@ -436,27 +425,7 @@ static void perform_apple_autocrop(ImageDecoderContext* ctx) {
 }
 
 ImageDecoderContext* init_decoder(const char* file_path, bool crop_borders, int* out_width, int* out_height) {
-    BmpDecoderContext* bmp = init_bmp_decoder(file_path, out_width, out_height);
-    if (bmp) {
-        ImageDecoderContext* ctx = (ImageDecoderContext*)malloc(sizeof(ImageDecoderContext));
-        ctx->type = TYPE_BMP;
-        ctx->width = *out_width;
-        ctx->height = *out_height;
-        ctx->bmp_ctx = bmp;
-        
-        if (crop_borders) {
-            perform_bmp_autocrop(ctx);
-        } else {
-            ctx->crop_left = 0;
-            ctx->crop_top = 0;
-            ctx->crop_width = ctx->width;
-            ctx->crop_height = ctx->height;
-        }
-
-        *out_width = ctx->crop_width;
-        *out_height = ctx->crop_height;
-        return ctx;
-    }
+    if (auto* bmp = try_bmp_decoder(file_path, crop_borders, out_width, out_height)) return bmp;
 
     CFStringRef path_str = CFStringCreateWithCString(NULL, file_path, kCFStringEncodingUTF8);
     if (!path_str) return NULL;
@@ -720,27 +689,7 @@ static void perform_android_autocrop(ImageDecoderContext* ctx) {
 }
 
 ImageDecoderContext* init_decoder(const char* file_path, bool crop_borders, int* out_width, int* out_height) {
-    BmpDecoderContext* bmp = init_bmp_decoder(file_path, out_width, out_height);
-    if (bmp) {
-        ImageDecoderContext* ctx = (ImageDecoderContext*)malloc(sizeof(ImageDecoderContext));
-        ctx->type = TYPE_BMP;
-        ctx->width = *out_width;
-        ctx->height = *out_height;
-        ctx->bmp_ctx = bmp;
-        
-        if (crop_borders) {
-            perform_bmp_autocrop(ctx);
-        } else {
-            ctx->crop_left = 0;
-            ctx->crop_top = 0;
-            ctx->crop_width = ctx->width;
-            ctx->crop_height = ctx->height;
-        }
-
-        *out_width = ctx->crop_width;
-        *out_height = ctx->crop_height;
-        return ctx;
-    }
+    if (auto* bmp = try_bmp_decoder(file_path, crop_borders, out_width, out_height)) return bmp;
 
     if (!load_imagedecoder_symbols()) {
         return NULL;
@@ -1019,27 +968,7 @@ static void perform_win_autocrop(ImageDecoderContext* ctx) {
 }
 
 ImageDecoderContext* init_decoder(const char* file_path, bool crop_borders, int* out_width, int* out_height) {
-    BmpDecoderContext* bmp = init_bmp_decoder(file_path, out_width, out_height);
-    if (bmp) {
-        ImageDecoderContext* ctx = (ImageDecoderContext*)malloc(sizeof(ImageDecoderContext));
-        ctx->type = TYPE_BMP;
-        ctx->width = *out_width;
-        ctx->height = *out_height;
-        ctx->bmp_ctx = bmp;
-        
-        if (crop_borders) {
-            perform_bmp_autocrop(ctx);
-        } else {
-            ctx->crop_left = 0;
-            ctx->crop_top = 0;
-            ctx->crop_width = ctx->width;
-            ctx->crop_height = ctx->height;
-        }
-
-        *out_width = ctx->crop_width;
-        *out_height = ctx->crop_height;
-        return ctx;
-    }
+    if (auto* bmp = try_bmp_decoder(file_path, crop_borders, out_width, out_height)) return bmp;
 
     HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
@@ -1760,24 +1689,7 @@ static void perform_linux_autocrop(ImageDecoderContext* ctx) {
 // Public API — init / decode_region / free
 // ---------------------------------------------------------------------------
 ImageDecoderContext* init_decoder(const char* file_path, bool crop_borders, int* out_width, int* out_height) {
-    // BMP is decoded natively without any external library
-    BmpDecoderContext* bmp = init_bmp_decoder(file_path, out_width, out_height);
-    if (bmp) {
-        ImageDecoderContext* ctx = (ImageDecoderContext*)malloc(sizeof(ImageDecoderContext));
-        ctx->type = TYPE_BMP;
-        ctx->width = *out_width;
-        ctx->height = *out_height;
-        ctx->bmp_ctx = bmp;
-        if (crop_borders) {
-            perform_bmp_autocrop(ctx);
-        } else {
-            ctx->crop_left = 0; ctx->crop_top = 0;
-            ctx->crop_width = ctx->width; ctx->crop_height = ctx->height;
-        }
-        *out_width  = ctx->crop_width;
-        *out_height = ctx->crop_height;
-        return ctx;
-    }
+    if (auto* bmp = try_bmp_decoder(file_path, crop_borders, out_width, out_height)) return bmp;
 
     // Try JPEG / PNG / AVIF via system libraries
     int w = 0, h = 0;

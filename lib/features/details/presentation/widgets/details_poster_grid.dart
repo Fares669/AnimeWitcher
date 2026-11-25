@@ -10,24 +10,9 @@ const int detailsExtraTabGridColumns = 3;
 const double detailsExtraTabCrossAxisSpacing = 12;
 const double detailsExtraTabMainAxisSpacing = 14;
 
-int detailsExtraTabCrossAxisCount(BuildContext context) {
-  return context.isHandsetLandscape
-      ? ResponsiveBreakpoints.handsetLandscapeAnimeColumns
-      : detailsExtraTabGridColumns;
-}
-
-/// How many cards the grid below actually lays across [width].
-///
-/// [detailsExtraTabCrossAxisCount] is three, which is not what these grids
-/// do: they hand [ResponsiveBreakpoints.animeGridDelegate] a maximum card
-/// width and let it decide. Measuring the body with three reserved two rows
-/// of wide, tall cards for what a desktop window renders as one row of narrow
-/// ones — a poster's height of black under every one of these sections.
-///
-/// The delegate answers in four ways, and so does this. The last of them
-/// divides the width the grid is actually given, not the window's: they are
-/// not the same number, and using the window here counted columns the grid
-/// had no room for.
+/// How many cards the grid lays across its actual [width], which can
+/// differ from the window width. Keep height measurement in step with
+/// [ResponsiveBreakpoints.animeGridDelegate].
 int detailsExtraTabRenderedColumns(BuildContext context, double width) {
   if (ResponsiveBreakpoints.isDesktopLandscape(context)) {
     return ResponsiveBreakpoints.desktopLandscapeColumnsForViewport(context);

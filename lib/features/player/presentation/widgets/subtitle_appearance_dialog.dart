@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -417,6 +418,11 @@ class SubtitleAppearanceDialog extends ConsumerStatefulWidget {
 
 class _SubtitleAppearanceDialogState
     extends ConsumerState<SubtitleAppearanceDialog> {
+  // The bundled preview background is 2560×1706.
+  static const _previewImageWidth = 2560;
+  static const _previewImageAspect = _previewImageWidth / 1706;
+  static const _previewDecodeStep = 512;
+
   late PlayerSettings _localSettings;
   bool _customFontLoading = false;
   bool _customFontLoaded = false;
@@ -608,10 +614,25 @@ class _SubtitleAppearanceDialogState
           final previewHeight = constraints.maxHeight < 600
               ? 100.0
               : (constraints.maxHeight < 900 ? 130.0 : 160.0);
+          // Cover is limited by either dimension. Decode enough physical
+          // pixels for both, with a few stable cache sizes while resizing.
+          final coverWidth = math.max(
+            constraints.maxWidth,
+            previewHeight * _previewImageAspect,
+          );
+          final requiredWidth =
+              coverWidth * MediaQuery.devicePixelRatioOf(context);
+          final cacheWidth =
+              requiredWidth <= _previewImageWidth - _previewDecodeStep
+              ? (requiredWidth / _previewDecodeStep).ceil() * _previewDecodeStep
+              : null;
 
           return Column(
             children: [
-              SizedBox(height: previewHeight, child: _buildPreviewPane()),
+              SizedBox(
+                height: previewHeight,
+                child: _buildPreviewPane(cacheWidth),
+              ),
               const Divider(color: HotstarPlayerStyle.divider, height: 1),
               Expanded(
                 child: SingleChildScrollView(
@@ -711,7 +732,7 @@ class _SubtitleAppearanceDialogState
     );
   }
 
-  Widget _buildPreviewPane() {
+  Widget _buildPreviewPane(int? cacheWidth) {
     String? fontFamily;
     if (_localSettings.subTypefaceFilePath != null && _customFontLoaded) {
       fontFamily = 'CustomSubtitleFont';
@@ -862,6 +883,8 @@ class _SubtitleAppearanceDialogState
         Image.asset(
           'assets/images/subtitles_preview_background.jpg',
           fit: BoxFit.cover,
+          cacheWidth: cacheWidth,
+          gaplessPlayback: true,
           width: double.infinity,
           height: double.infinity,
           errorBuilder: (context, error, stackTrace) {

@@ -54,22 +54,24 @@ class SearchInstantResults extends StatefulWidget {
   static bool isMovie(MultimediaItem item) =>
       item.contentType == MultimediaContentType.movie;
 
+  static final _seasonSuffix = RegExp(
+    r'\s+(season|part|s)\s*\d+.*$|\s+\d+(st|nd|rd|th)\s+season.*$',
+  );
+
   /// The shared name of a series: the title before a colon, or with a
   /// trailing season or part number taken off.
   static String seriesNameOf(String title) {
-    var name = title.toLowerCase().split(':').first.trim();
-    name = name.replaceAll(
-      RegExp(r'\s+(season|part|s)\s*\d+.*$|\s+\d+(st|nd|rd|th)\s+season.*$'),
-      '',
-    );
-    return name.trim();
+    final lowerTitle = title.toLowerCase();
+    final colon = lowerTitle.indexOf(':');
+    final head = colon == -1 ? lowerTitle : lowerTitle.substring(0, colon);
+    return head.trim().replaceAll(_seasonSuffix, '').trim();
   }
 
   /// Other entries of [top]'s series among [items]: sequels, prequels and
   /// films, by name, as the catalogue lists no relations in its search.
   static List<MultimediaItem> sameSeries(
     MultimediaItem top,
-    List<MultimediaItem> items,
+    Iterable<MultimediaItem> items,
   ) {
     final name = seriesNameOf(top.title);
     if (name.length < 3) return const <MultimediaItem>[];
@@ -92,12 +94,11 @@ class _SearchInstantResultsState extends State<SearchInstantResults> {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    final series = widget.items
-        .where((item) => !SearchInstantResults.isMovie(item))
-        .toList(growable: false);
-    final movies = widget.items
-        .where(SearchInstantResults.isMovie)
-        .toList(growable: false);
+    final series = <MultimediaItem>[];
+    final movies = <MultimediaItem>[];
+    for (final item in widget.items) {
+      (SearchInstantResults.isMovie(item) ? movies : series).add(item);
+    }
     final total =
         widget.items.length +
         widget.animation.length +
@@ -119,35 +120,37 @@ class _SearchInstantResultsState extends State<SearchInstantResults> {
       _ResultKind.characters => const <MultimediaItem>[],
     };
     final top = pool.isEmpty ? null : pool.first;
-    List<MultimediaItem> without(List<MultimediaItem> list) => top == null
-        ? list
-        : list.where((item) => item.url != top.url).toList(growable: false);
     final related = top == null
         ? const <MultimediaItem>[]
-        : SearchInstantResults.sameSeries(top, <MultimediaItem>[
-            ...widget.items,
-            ...widget.animation,
-          ]);
+        : SearchInstantResults.sameSeries(
+            top,
+            widget.items.followedBy(widget.animation),
+          );
 
-    Widget section(String english, String arabic, List<MultimediaItem> list) =>
+    final groups = _kind == _ResultKind.all
+        ? [
+            ('Series', 'مسلسلات', series),
+            ('Movies', 'أفلام', movies),
+            ('Animation', 'انميشن', widget.animation),
+            ('Manga', 'مانجا', widget.manga),
+          ]
+        : [('More', 'المزيد', pool)];
+    final sections = <Widget>[];
+    for (final (english, arabic, items) in groups) {
+      // Build at most the visible rows, after excluding duplicate top URLs.
+      final rows = items
+          .where((item) => item.url != top?.url)
+          .take(6)
+          .toList(growable: false);
+      if (rows.isEmpty) continue;
+      sections.add(
         _Section(
           title: appText(context, english: english, arabic: arabic),
-          items: list,
+          items: rows,
           onOpen: widget.onOpen,
-        );
-    final sections = <Widget>[
-      if (_kind == _ResultKind.all) ...[
-        if (without(series).isNotEmpty)
-          section('Series', 'مسلسلات', without(series)),
-        if (without(movies).isNotEmpty)
-          section('Movies', 'أفلام', without(movies)),
-        if (without(widget.animation).isNotEmpty)
-          section('Animation', 'انميشن', without(widget.animation)),
-        if (without(widget.manga).isNotEmpty)
-          section('Manga', 'مانجا', without(widget.manga)),
-      ] else if (_kind != _ResultKind.characters && without(pool).isNotEmpty)
-        section('More', 'المزيد', without(pool)),
-    ];
+        ),
+      );
+    }
     final showCharacters =
         widget.characters.isNotEmpty &&
         (_kind == _ResultKind.all || _kind == _ResultKind.characters);
@@ -642,7 +645,7 @@ class _Section extends StatelessWidget {
       children: [
         _Heading(text: title),
         const SizedBox(height: 8),
-        for (final item in items.take(6))
+        for (final item in items)
           InkWell(
             key: ValueKey<String>('search-instant-row-${item.url}'),
             borderRadius: BorderRadius.circular(12),
