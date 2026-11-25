@@ -159,17 +159,20 @@ class Library extends _$Library {
     kind,
   );
 
-  int? _cachedCategoryCount(LibraryMediaKind kind, LibraryCategory category) {
+  Map<String, int> _cachedCategoryCounts(LibraryMediaKind kind) {
     final owner = _accountUid;
-    if (owner == null || owner.isEmpty) return null;
+    if (owner == null || owner.isEmpty) return const <String, int>{};
     return ref
         .read(storageServiceProvider)
         .getCachedLibraryCounts(
           providerKey: 'native',
           accountKey: owner,
           mediaKindKey: kind.storageKey,
-        )[category.storageKey];
+        );
   }
+
+  int? _cachedCategoryCount(LibraryMediaKind kind, LibraryCategory category) =>
+      _cachedCategoryCounts(kind)[category.storageKey];
 
   Future<void> _saveCachedCategoryCounts(
     LibraryMediaKind kind,
@@ -314,26 +317,75 @@ class Library extends _$Library {
     );
   }
 
-  int? categoryCount(LibraryMediaKind kind, LibraryCategory category) {
+  int? categoryCount(LibraryMediaKind kind, LibraryCategory category) =>
+      _categoryCount(
+        kind,
+        category,
+        () => _localItems(kind, category).length,
+        () => _cachedCategoryCount(kind, category),
+      );
+
+  /// A synchronous desktop sidebar projection. Do not retain the local
+  /// snapshot or disk-cache reads across builds, writes, or account switches.
+  Map<LibraryMediaKind, Map<LibraryCategory, int?>> categoryCounts({
+    required bool witanimeAnime,
+  }) {
+    Map<String, ({int anime, int manga})>? local;
+    final cached = <LibraryMediaKind, Map<String, int>>{};
+    return {
+      for (final kind in LibraryMediaKind.values)
+        kind: {
+          for (final category in LibraryCategory.valuesForCatalog(
+            witanimeAnime: witanimeAnime && kind == LibraryMediaKind.anime,
+          ))
+            category: _categoryCount(
+              kind,
+              category,
+              () {
+                final counts = (local ??= ref
+                    .read(storageServiceProvider)
+                    .getLocalLibraryCounts())[category.storageKey];
+                return (kind == LibraryMediaKind.manga
+                        ? counts?.manga
+                        : counts?.anime) ??
+                    0;
+              },
+              () => cached.putIfAbsent(
+                kind,
+                () => _cachedCategoryCounts(kind),
+              )[category.storageKey],
+            ),
+        },
+    };
+  }
+
+  int? _categoryCount(
+    LibraryMediaKind kind,
+    LibraryCategory category,
+    int Function() getLocal,
+    int? Function() getCached,
+  ) {
     if (_useWitanimeShelf(kind) && isWitanimeSyncedCategory(category)) {
-      return ref.read(witanimeLibraryServiceProvider).countForCategory(category);
+      return ref
+          .read(witanimeLibraryServiceProvider)
+          .countForCategory(category);
     }
     if (_useAnime3rbShelf(kind)) {
-      return ref.read(anime3rbLibraryServiceProvider).countForCategory(category);
+      return ref
+          .read(anime3rbLibraryServiceProvider)
+          .countForCategory(category);
     }
     final confirmed = _knownTotal(kind, category);
     if (confirmed != null) return confirmed;
-    final localCount = _localItems(kind, category).length;
     if (!ref.read(animeWitcherAccountServiceProvider).isSignedIn) {
-      return localCount;
+      return getLocal();
     }
-    final cached = _cachedCategoryCount(kind, category);
-    if (cached != null) {
-      return cached == 0 && localCount > 0 ? localCount : cached;
-    }
-    if (localCount > 0) return localCount;
+    final cached = getCached();
+    if (cached != null && cached > 0) return cached;
+    final local = getLocal();
+    if (local > 0) return local;
     // Do not render an unqueried server shelf as a confirmed empty shelf.
-    return null;
+    return cached;
   }
 
   @override

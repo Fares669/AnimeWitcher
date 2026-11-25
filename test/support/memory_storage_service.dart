@@ -1,5 +1,7 @@
+import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/services/download_concurrency.dart';
 import 'package:animewitcher/core/services/download_parallel.dart';
+import 'package:animewitcher/core/storage/library_category.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 
 /// In-memory settings box for download-queue tests. Only settings getters
@@ -19,6 +21,20 @@ class MemoryStorageService extends StorageService {
     } else {
       settings[key] = value;
     }
+  }
+
+  @override
+  Map<String, ({int anime, int manga})> getLocalLibraryCounts() => {
+    for (final category in LibraryCategory.values)
+      category.storageKey: _countLibraryItems(category.storageKey),
+  };
+
+  ({int anime, int manga}) _countLibraryItems(String category) {
+    final items = getLibraryItems(category: category);
+    final manga = items
+        .where((item) => item.contentType == MultimediaContentType.manga)
+        .length;
+    return (anime: items.length - manga, manga: manga);
   }
 
   @override

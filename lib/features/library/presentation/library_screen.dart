@@ -102,7 +102,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
 
   Widget _buildWide(BuildContext context) {
     final libraryState = ref.watch(libraryProvider);
-    final witanimeActive = ref.watch(activeProviderProvider) is WitanimeProvider;
+    final witanimeActive =
+        ref.watch(activeProviderProvider) is WitanimeProvider;
     final history = ref.watch(watchHistoryProvider);
     final kind = libraryState.mediaKind;
     final category =
@@ -111,17 +112,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
             !isWitanimeSyncedCategory(libraryState.category)
         ? LibraryCategory.watching
         : libraryState.category;
-    final counts = <LibraryMediaKind, Map<LibraryCategory, int?>>{
-      for (final listKind in LibraryMediaKind.values)
-        listKind: <LibraryCategory, int?>{
-          for (final listCategory in LibraryCategory.valuesForCatalog(
-            witanimeAnime: witanimeActive && listKind == LibraryMediaKind.anime,
-          ))
-            listCategory: ref
-                .read(libraryProvider.notifier)
-                .categoryCount(listKind, listCategory),
-        },
-    };
+    final counts = ref
+        .read(libraryProvider.notifier)
+        .categoryCounts(witanimeAnime: witanimeActive);
     final recentCount = libraryRecentEntries(
       history,
       LibraryMediaKind.anime,

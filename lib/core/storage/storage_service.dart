@@ -523,6 +523,43 @@ class StorageService {
     return entries.map((e) => e.item).toList();
   }
 
+  /// Number of unique local cards by persisted shelf, without hydrating cards.
+  Map<String, ({int anime, int manga})> getLocalLibraryCounts() {
+    final counts = <String, ({int anime, int manga})>{};
+    final seenByCategory = <String, Set<String>>{};
+    for (final raw in _libraryBox.values) {
+      if (raw is! Map) continue;
+      final category = _storedLibraryCategory(raw);
+      final favorite = _storedLibraryFavorite(raw);
+      if (category == null && !favorite) continue;
+      final url = _canonicalMediaUrl((raw['url'] as String?) ?? '');
+      if (url.isEmpty) continue;
+      // getLibraryItems filters by shelf before deduplicating, and the
+      // caller splits kinds after. A cross-kind duplicate keeps the first
+      // row for that shelf, even when another shelf has a different winner.
+      final newPrimary =
+          category != null && (seenByCategory[category] ??= {}).add(url);
+      final newFavorite =
+          favorite && (seenByCategory['favorite'] ??= {}).add(url);
+      if (!newPrimary && !newFavorite) continue;
+      final isManga =
+          MultimediaItem.parseContentType(
+            (raw['type'] as String?) ?? (raw['contentType'] as String?),
+          ) ==
+          MultimediaContentType.manga;
+      void add(String key) {
+        final count = counts[key] ?? (anime: 0, manga: 0);
+        counts[key] = isManga
+            ? (anime: count.anime, manga: count.manga + 1)
+            : (anime: count.anime + 1, manga: count.manga);
+      }
+
+      if (newPrimary) add(category);
+      if (newFavorite) add('favorite');
+    }
+    return counts;
+  }
+
   Future<void> setSelectedLibraryCategory(String category) async {
     await _settingsBox.put(
       'library_selected_category',
