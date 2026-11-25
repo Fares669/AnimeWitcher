@@ -1049,6 +1049,7 @@ class _EpisodeThumbnail extends StatelessWidget {
               if (hasPoster)
                 ArtworkDecode(
                   paintedWidth: 104,
+                  sizeHighQualityToDisplay: true,
                   builder: (BuildContext context, int? decodeWidth) =>
                       CachedNetworkImage(
                         imageUrl: posterUrl!,

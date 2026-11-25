@@ -317,6 +317,7 @@ class _NextEpisodeOverlayState extends State<NextEpisodeOverlay>
             if (imageUrl != null)
               ArtworkDecode(
                 paintedWidth: cardWidth,
+                sizeHighQualityToDisplay: true,
                 builder: (BuildContext context, int? decodeWidth) =>
                     CachedNetworkImage(
                       imageUrl: imageUrl,

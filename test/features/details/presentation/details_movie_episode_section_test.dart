@@ -4,6 +4,7 @@ import 'package:animewitcher/core/services/download_v2/download_v2_provider.dart
 import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
+import 'package:animewitcher/core/utils/artwork_quality.dart';
 import 'package:animewitcher/features/details/presentation/details_controller.dart';
 import 'package:animewitcher/features/details/presentation/download_launcher.dart';
 import 'package:animewitcher/features/details/presentation/details_screen.dart';
@@ -19,6 +20,7 @@ import 'package:animewitcher/features/library/presentation/library_media_kind.da
 import 'package:animewitcher/features/library/presentation/library_provider.dart';
 import 'package:animewitcher/features/library/presentation/library_state.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -219,9 +221,13 @@ void main() {
       final previousMode = episodeViewMode.value;
       episodeViewMode.value = EpisodeViewMode.rail;
       addTearDown(() => episodeViewMode.value = previousMode);
+      final previousQuality = highQualityArtwork.value;
+      highQualityArtwork.value = true;
+      addTearDown(() => highQualityArtwork.value = previousQuality);
       final episode = Episode(
         name: 'القصة التي بدأت في المدينة الجديدة وما حدث بعدها',
         url: 'anime|rail-episode-1',
+        posterUrl: 'https://example.test/rail-episode.jpg',
         episode: 1,
       );
       final item = MultimediaItem(
@@ -273,6 +279,24 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byIcon(Icons.chat_bubble_outline_rounded), findsOneWidget);
         expect(tester.takeException(), isNull, reason: 'text scale $scale');
+        final thumbnail = find.descendant(
+          of: find.byType(EpisodeCard),
+          matching: find.byType(CachedNetworkImage),
+        );
+        expect(thumbnail, findsOneWidget);
+        final paintedWidth = tester.getSize(thumbnail).width;
+        final decodeWidth =
+            tester.widget<CachedNetworkImage>(thumbnail).memCacheWidth;
+        expect(paintedWidth, greaterThan(140));
+        expect(
+          decodeWidth,
+          artworkDisplayDecodeWidth(
+            paintedWidth: paintedWidth,
+            devicePixelRatio: 1.25,
+            highQuality: true,
+            sizeHighQualityToDisplay: true,
+          ),
+        );
         final focus = tester
             .widget<Focus>(
               find.byWidgetPredicate(
@@ -284,6 +308,8 @@ void main() {
             .focusNode!;
         focus.requestFocus();
         await tester.pumpAndSettle();
+        expect(tester.widget<CachedNetworkImage>(thumbnail).memCacheWidth,
+            decodeWidth);
         expect(
           tester.takeException(),
           isNull,

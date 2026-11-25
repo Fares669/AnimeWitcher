@@ -194,6 +194,7 @@ class DetailsDesktopHero extends ConsumerWidget {
 
         Widget backdropArtwork() => ArtworkDecode(
           paintedWidth: MediaQuery.sizeOf(context).width,
+          sizeHighQualityToDisplay: true,
           builder: (BuildContext context, int? decodeWidth) =>
               FallbackPosterImage(
                 imageUrl: backdrop,
@@ -518,6 +519,7 @@ class DetailsDesktopHero extends ConsumerWidget {
         ),
         child: ArtworkDecode(
           paintedWidth: posterWidth,
+          sizeHighQualityToDisplay: true,
           builder: (BuildContext context, int? decodeWidth) =>
               FallbackPosterImage(
                 imageUrl: posterUrl ?? '',

@@ -864,12 +864,14 @@ class EpisodeCard extends HookConsumerWidget {
         .colorScheme
         .surfaceContainerHighest;
 
-    Widget buildThumbnailImage() {
+    Widget buildThumbnailImage(double paintedWidth) {
       if (imageUrl == null || imageUrl.isEmpty) {
         return const ThumbnailErrorPlaceholder();
       }
       return ArtworkDecode(
-        paintedWidth: 140,
+        paintedWidth: paintedWidth,
+        sizeHighQualityToDisplay: true,
+        bucketStandardDecode: true,
         builder: (BuildContext context, int? decodeWidth) => CachedNetworkImage(
           imageUrl: imageUrl,
           fit: BoxFit.cover,
@@ -896,7 +898,11 @@ class EpisodeCard extends HookConsumerWidget {
             width: width ?? 140,
             child: AspectRatio(
               aspectRatio: _thumbnailAspectRatio,
-              child: buildThumbnailImage(),
+              child: LayoutBuilder(
+                builder: (_, constraints) => buildThumbnailImage(
+                  constraints.hasBoundedWidth ? constraints.maxWidth : 140.0,
+                ),
+              ),
             ),
           ),
         ),

@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
-/// Whether artwork is fetched and decoded at its largest available size.
+/// Whether artwork uses its high-quality source and display budget.
 ///
 /// Image widgets are leaves spread across every feature, so the switch lives in
 /// one listenable instead of being threaded through all of them. The app
@@ -30,19 +30,23 @@ void applyArtworkQuality(bool highQuality) {
 /// Hands [builder] the decode width for artwork painted [paintedWidth] logical
 /// pixels wide, and rebuilds when the quality switch flips.
 ///
-/// High quality passes null so the image decodes at source resolution; standard
-/// quality bounds the decode to the pixels actually painted, which is what
-/// keeps memory flat on low-RAM devices such as TV boxes.
+/// High quality keeps the full decode unless a fixed-size display opts into
+/// [sizeHighQualityToDisplay]. Such artwork gets physical-pixel headroom and
+/// shares nearby decode widths instead of caching an original for every card.
 class ArtworkDecode extends StatelessWidget {
   const ArtworkDecode({
     super.key,
     required this.paintedWidth,
     required this.builder,
+    this.sizeHighQualityToDisplay = false,
+    this.bucketStandardDecode = false,
   });
 
   /// Logical width the artwork is painted at — the viewport width for
   /// full-bleed banners, the card width for posters.
   final double paintedWidth;
+  final bool sizeHighQualityToDisplay;
+  final bool bucketStandardDecode;
 
   final Widget Function(BuildContext context, int? decodeWidth) builder;
 
@@ -50,15 +54,38 @@ class ArtworkDecode extends StatelessWidget {
   Widget build(BuildContext context) {
     return ValueListenableBuilder<bool>(
       valueListenable: highQualityArtwork,
-      builder: (context, highQuality, _) =>
-          builder(context, highQuality ? null : _decodeWidth(context)),
+      builder: (context, highQuality, _) => builder(
+        context,
+        artworkDisplayDecodeWidth(
+          paintedWidth: paintedWidth,
+          devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
+          highQuality: highQuality,
+          sizeHighQualityToDisplay: sizeHighQualityToDisplay,
+          bucketStandardDecode: bucketStandardDecode,
+        ),
+      ),
     );
   }
+}
 
-  int _decodeWidth(BuildContext context) {
-    final pixels = paintedWidth * MediaQuery.devicePixelRatioOf(context);
-    // The floor keeps tiny thumbnails legible. Decoding never upscales, so a
-    // width above the source resolution is simply ignored.
-    return pixels.ceil().clamp(160, 2048);
+int? artworkDisplayDecodeWidth({
+  required double paintedWidth,
+  required double devicePixelRatio,
+  required bool highQuality,
+  bool sizeHighQualityToDisplay = false,
+  bool bucketStandardDecode = false,
+}) {
+  final pixels = paintedWidth * devicePixelRatio;
+  if (!pixels.isFinite || pixels <= 0) return null;
+  if (highQuality) {
+    if (!sizeHighQualityToDisplay || pixels >= 1920) return null;
+    // Allow room for cover crops and card focus animations; use the source
+    // width for large/high-DPI presentations.
+    return ((pixels * 1.25 / 64).ceil() * 64).clamp(192, 2432);
   }
+  if (pixels >= 2048) return 2048;
+  final width = bucketStandardDecode
+      ? (pixels / 32).ceil() * 32
+      : pixels.ceil();
+  return width.clamp(160, 2048);
 }

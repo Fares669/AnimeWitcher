@@ -181,19 +181,19 @@ void main() {
     expect(title.textDirection, TextDirection.ltr);
   }, variant: TargetPlatformVariant.desktop());
 
-  testWidgets('high-quality desktop cards keep the original provider', (
+  testWidgets('high-quality desktop cards resize without changing the source or queue', (
     tester,
   ) async {
     _configure(tester, highQuality: true);
-    await _seedDecodedPoster(_url);
+    await _seedDecodedPoster(_url, width: 512);
     await tester.pumpWidget(_app(_card()));
 
     final poster = tester.widget<FallbackPosterImage>(
       find.byType(FallbackPosterImage),
     );
     expect(poster.queueStaticPosterDecode, isFalse);
-    expect(poster.memCacheWidth, isNull);
-    _expectImagePath(tester, queued: false, decodeWidth: null);
+    expect(poster.memCacheWidth, 512);
+    _expectImagePath(tester, queued: false, decodeWidth: 512);
   }, variant: TargetPlatformVariant.desktop());
 
   testWidgets(
@@ -230,13 +230,13 @@ void main() {
   ) async {
     _configure(tester);
     await _seedDecodedPoster(_url, width: 400);
-    await _seedDecodedPoster(_url);
+    await _seedDecodedPoster(_url, width: 512);
     await tester.pumpWidget(_app(_card()));
     _expectImagePath(tester, queued: true, decodeWidth: 400);
 
     highQualityArtwork.value = true;
     await tester.pump();
-    _expectImagePath(tester, queued: false, decodeWidth: null);
+    _expectImagePath(tester, queued: false, decodeWidth: 512);
 
     highQualityArtwork.value = false;
     await tester.pump();

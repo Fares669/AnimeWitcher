@@ -604,6 +604,7 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
             right: 0,
             child: ArtworkDecode(
               paintedWidth: MediaQuery.sizeOf(context).width,
+              sizeHighQualityToDisplay: true,
               builder: (BuildContext context, int? decodeWidth) =>
                   FallbackPosterImage(
                     imageUrl: imageUrl,
