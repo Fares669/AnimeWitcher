@@ -34,6 +34,10 @@ const Duration kParallelProgressPersistInterval = Duration(seconds: 2);
 /// does not consume the filesystem down to its last metadata blocks.
 const int kParallelAssemblyStorageReserveBytes = 8 * 1024 * 1024;
 
+// File.openRead uses 64 KiB blocks. Larger bounded reads cut asynchronous
+// file operations during assembly without buffering a complete range.
+const int _parallelAssemblyReadBytes = 256 * 1024;
+
 enum ParallelAssemblyFailureReason { insufficientStorage }
 
 class ParallelAssemblyFailure {
@@ -5320,14 +5324,28 @@ class PersistentParallelDownload {
           await _handleAssemblyStorageFailure(session, staging);
           return;
         }
-        await for (final bytes in file.openRead()) {
-          if (session.deleted) return;
-          if (assembledBytes + bytes.length > session.size) {
-            await _pause(session);
-            return;
+        var remainingPartBytes = part.size;
+        final input = await file.open();
+        try {
+          while (true) {
+            final bytes = await input.read(_parallelAssemblyReadBytes);
+            if (session.deleted) return;
+            if (bytes.isEmpty) break;
+            if (bytes.length > remainingPartBytes ||
+                assembledBytes + bytes.length > session.size) {
+              await _pause(session);
+              return;
+            }
+            await output!.writeFrom(bytes);
+            remainingPartBytes -= bytes.length;
+            assembledBytes += bytes.length;
           }
-          await output!.writeFrom(bytes);
-          assembledBytes += bytes.length;
+        } finally {
+          await input.close();
+        }
+        if (remainingPartBytes != 0) {
+          await _pause(session);
+          return;
         }
       }
       if (assembledBytes != session.size) {

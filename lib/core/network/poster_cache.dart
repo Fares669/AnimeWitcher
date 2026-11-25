@@ -1,8 +1,7 @@
-import 'dart:async';
-
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 
 import '../utils/artwork_host_fallback.dart';
+import 'poster_warm_queue.dart';
 
 /// Where posters are kept on disk.
 ///
@@ -18,37 +17,15 @@ final CacheManager posterCacheManager = CacheManager(
   ),
 );
 
-final Set<String> _warmed = <String>{};
+final _posterWarmQueue = PosterWarmQueue(
+  fetch: (url) async {
+    await posterCacheManager.getSingleFile(url);
+  },
+  // A blocked host can hold a download slot until its request times out.
+  isBlocked: (url) => malArtworkUnreachable.value && isMalArtworkUrl(url),
+);
 
-/// Downloads posters to disk before they are drawn — a row's worth as soon
-/// as its list arrives — so a card shows its picture from disk the moment it
-/// is built rather than starting the download then. A few at a time, each
-/// at most once per launch; failures are left for the card itself.
-void warmPosters(Iterable<String> urls, {int limit = 24}) {
-  final todo = <String>[];
-  for (final raw in urls) {
-    if (todo.length >= limit) break;
-    final url = raw.trim();
-    if (url.isEmpty || !url.startsWith('http')) continue;
-    // A blocked host never answers; asking it only holds a download slot
-    // for twenty seconds that every other poster then waits behind.
-    if (malArtworkUnreachable.value && isMalArtworkUrl(url)) continue;
-    if (_warmed.add(url)) todo.add(url);
-  }
-  if (todo.isEmpty) return;
-  var next = 0;
-  Future<void> worker() async {
-    while (next < todo.length) {
-      final url = todo[next++];
-      try {
-        await posterCacheManager.getSingleFile(url);
-      } catch (_) {
-        // The card tries again, and falls back if it must.
-      }
-    }
-  }
-
-  for (var i = 0; i < 6; i++) {
-    unawaited(worker());
-  }
-}
+/// Warms posters across rows without filling the shared download queue.
+/// Each accepted URL is attempted at most once; cards handle retries.
+void warmPosters(Iterable<String> urls, {int limit = 24}) =>
+    _posterWarmQueue.enqueue(urls, limit: limit);

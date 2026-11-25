@@ -1,7 +1,9 @@
 import 'dart:async';
 
-import 'package:flutter/widgets.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/widgets.dart';
+
+import '../network/poster_cache.dart';
 
 class ImageUtils {
   /// Resolves the image from the given URL and determines if it is portrait (height >= width).
@@ -10,8 +12,12 @@ class ImageUtils {
     if (url.isEmpty) return Future.value(true);
 
     final completer = Completer<bool>();
-    final stream = CachedNetworkImageProvider(url)
-        .resolve(const ImageConfiguration());
+    // The probe needs the original frame, but it can share its encoded file
+    // with the card and with the home rail's disk prefetch.
+    final stream = CachedNetworkImageProvider(
+      url,
+      cacheManager: posterCacheManager,
+    ).resolve(const ImageConfiguration());
 
     late final ImageStreamListener listener;
     listener = ImageStreamListener(

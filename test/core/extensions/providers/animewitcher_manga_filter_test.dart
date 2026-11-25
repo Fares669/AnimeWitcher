@@ -67,6 +67,40 @@ void main() {
     );
   });
 
+  test('noncanonical field types preserve fallback and rejection', () {
+    const filters = ProviderSearchFilters(
+      statuses: {'مستمر'},
+      years: {'2023'},
+      genres: {' اكشن '},
+    );
+    expect(
+      _matches(<String, Object?>{
+        'details': <Object?, Object?>{'state': ' مستمر ', 'year': 2023},
+        'tags': ['أكشن'],
+      }, filters),
+      isTrue,
+    );
+    expect(
+      _matches(<String, Object?>{
+        'details': {'status': 'مكتمل', 'state': 'مستمر', 'year': 2023},
+        'tags': ['أكشن'],
+      }, filters),
+      isFalse,
+    );
+    expect(
+      _matches(<String, Object?>{
+        'details': {'state': 'مستمر', 'year': 2023},
+      }, filters),
+      isFalse,
+    );
+    expect(
+      () => _matches(<String, Object?>{
+        'details': <Object?, Object?>{123: 'not a string key'},
+      }, filters),
+      throwsA(isA<TypeError>()),
+    );
+  });
+
   group('sorting', () {
     final hits = <Map<String, Object?>>[
       {
@@ -112,6 +146,53 @@ void main() {
         names(AnimeWitcherNativeProvider.sortMangaHits(hits, 'favorites')),
         ['Beta', 'alpha', 'Gamma'],
       );
+    });
+
+    test('cached sort keys do not change raw item identity or tie order', () {
+      final data = <Map<String, Object?>>[
+        for (var i = 0; i < 100; i++)
+          {
+            'manga_name': <String>['  beta  ', ' ALPHA ', 'أكشن'][i % 3],
+            'details': {
+              'year': <Object?>[2020, '2021', '0', null, 'bad'][i % 5],
+            },
+          },
+      ];
+      final inputBefore = List<Map<String, Object?>>.of(data);
+      String nameOf(Map<String, Object?> hit) =>
+          '${hit['manga_name']}'.trim().toLowerCase();
+      int? yearOf(Map<String, Object?> hit) {
+        final rawDetails = hit['details'] as Map;
+        final year = int.tryParse('${rawDetails['year'] ?? ''}');
+        return year == null || year <= 0 ? null : year;
+      }
+
+      for (final sort in ['name_asc', 'name_desc', 'year_asc', 'year_desc']) {
+        final expected = List<Map<String, Object?>>.of(data);
+        final ascending = sort.endsWith('_asc');
+        if (sort.startsWith('name_')) {
+          expected.sort(
+            (a, b) => ascending
+                ? nameOf(a).compareTo(nameOf(b))
+                : nameOf(b).compareTo(nameOf(a)),
+          );
+        } else {
+          expected.sort((a, b) {
+            final ya = yearOf(a), yb = yearOf(b);
+            if (ya == null) return yb == null ? 0 : 1;
+            if (yb == null) return -1;
+            return ascending ? ya.compareTo(yb) : yb.compareTo(ya);
+          });
+        }
+        final actual = AnimeWitcherNativeProvider.sortMangaHits(data, sort);
+        expect(
+          Iterable<int>.generate(data.length)
+              .every((i) => identical(actual[i], expected[i])),
+          isTrue,
+          reason: sort,
+        );
+      }
+      expect(data, orderedEquals(inputBefore));
     });
   });
 }

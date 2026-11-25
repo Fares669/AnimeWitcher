@@ -2734,52 +2734,18 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     );
   }
 
-  /// Spelling the catalog is not consistent about (ى for ي), so a genre
-  /// matches however it was typed in.
-  static String _looseArabic(String value) => value
-      .trim()
-      .replaceAll('ى', 'ي')
-      .replaceAll('أ', 'ا')
-      .replaceAll('إ', 'ا');
-
   /// Whether one raw manga record passes [filters]: any chosen status, type
   /// and year, and every chosen genre, as the anime filters combine them.
   @visibleForTesting
   static bool mangaHitMatchesFilters(
     Map<String, Object?> hit,
     ProviderSearchFilters filters,
-  ) {
-    final details = hit['details'] is Map
-        ? Map<String, Object?>.from(hit['details']! as Map)
-        : const <String, Object?>{};
-    bool anyOf(Set<String> wanted, Object? value) {
-      if (wanted.isEmpty) return true;
-      final have = _looseArabic('${value ?? ''}');
-      return wanted.any((w) => _looseArabic(w) == have);
-    }
-
-    if (!anyOf(filters.statuses, details['status'] ?? details['state'])) {
-      return false;
-    }
-    if (!anyOf(filters.types, hit['type'])) return false;
-    if (!anyOf(filters.years, details['year'])) return false;
-    if (filters.genres.isNotEmpty) {
-      final tags = hit['tags'] is List
-          ? (hit['tags']! as List).map((t) => _looseArabic('$t')).toSet()
-          : const <String>{};
-      for (final genre in filters.genres) {
-        if (!tags.contains(_looseArabic(genre))) return false;
-      }
-    }
-    return true;
-  }
+  ) => _MangaCatalogFilter(filters).matches(hit);
 
   /// Whole-catalog reads of the manga index, per search text, for the
   /// searches it cannot answer itself: a filter, or an order other than its
   /// own. Kept a few minutes, so paging through the results reads nothing.
-  final Map<String, ({DateTime at, List<Map<String, Object?>> hits})>
-  _mangaCatalogCache =
-      <String, ({DateTime at, List<Map<String, Object?>> hits})>{};
+  final _mangaCatalogCache = <String, _MangaCatalog>{};
 
   static const Duration _mangaCatalogTtl = Duration(minutes: 10);
 
@@ -2808,16 +2774,18 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     'mangalek_page_url',
   ];
 
-  Future<List<Map<String, Object?>>> _mangaCatalog(
+  Future<_MangaCatalog> _mangaCatalog(
     String query,
     String sort, {
     CancelToken? cancelToken,
   }) async {
     final key = query.trim().toLowerCase();
     final cached = _mangaCatalogCache[key];
-    if (cached != null &&
-        DateTime.now().difference(cached.at) < _mangaCatalogTtl) {
-      return cached.hits;
+    if (cached != null) {
+      if (DateTime.now().difference(cached.at) < _mangaCatalogTtl) {
+        return cached;
+      }
+      cached._prepared = null;
     }
     const batch = 1000;
     const maxPages = 5;
@@ -2845,8 +2813,9 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     if (_mangaCatalogCache.length >= 4) {
       _mangaCatalogCache.remove(_mangaCatalogCache.keys.first);
     }
-    _mangaCatalogCache[key] = (at: DateTime.now(), hits: hits);
-    return hits;
+    final catalog = _MangaCatalog(DateTime.now(), hits);
+    _mangaCatalogCache[key] = catalog;
+    return catalog;
   }
 
   /// Orders raw manga records by one of the search sorts. The index's own
@@ -2870,15 +2839,27 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
             .toLowerCase();
 
     final sorted = List<Map<String, Object?>>.of(hits);
+    if (sorted.length < 2) return sorted;
     switch (sort) {
-      case 'name_asc':
-        sorted.sort((a, b) => nameOf(a).compareTo(nameOf(b)));
-      case 'name_desc':
-        sorted.sort((a, b) => nameOf(b).compareTo(nameOf(a)));
+      case 'name_asc' || 'name_desc':
+        final ascending = sort == 'name_asc';
+        final names = Map<Map<String, Object?>, String>.identity();
+        for (final hit in sorted) {
+          names[hit] = nameOf(hit);
+        }
+        sorted.sort(
+          (a, b) => ascending
+              ? names[a]!.compareTo(names[b]!)
+              : names[b]!.compareTo(names[a]!),
+        );
       case 'year_asc' || 'year_desc':
         final ascending = sort == 'year_asc';
+        final years = Map<Map<String, Object?>, int?>.identity();
+        for (final hit in sorted) {
+          years[hit] = yearOf(hit);
+        }
         sorted.sort((a, b) {
-          final ya = yearOf(a), yb = yearOf(b);
+          final ya = years[a], yb = years[b];
           if (ya == null && yb == null) return 0;
           if (ya == null) return 1;
           if (yb == null) return -1;
@@ -2904,12 +2885,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       filters.sort,
       cancelToken: cancelToken,
     );
-    final matching = sortMangaHits(
-      catalog
-          .where((hit) => mangaHitMatchesFilters(hit, filters))
-          .toList(growable: false),
-      filters.sort,
-    );
+    final matching = catalog.matching(filters);
     final items = <MultimediaItem>[];
     final seen = <String>{};
     var position = consumed;
@@ -6281,6 +6257,81 @@ class _EpisodeRecord {
   final bool isFiller;
   final bool isFinal;
   final DubStatus dubStatus;
+}
+
+class _MangaCatalog {
+  _MangaCatalog(this.at, this._hits);
+
+  final DateTime at;
+  final List<Map<String, Object?>> _hits;
+  ({_MangaCatalogFilter filter, List<Map<String, Object?>> hits})? _prepared;
+
+  List<Map<String, Object?>> matching(ProviderSearchFilters filters) {
+    final filter = _MangaCatalogFilter(filters);
+    final previous = _prepared;
+    if (previous != null && previous.filter.sameAs(filter)) {
+      return previous.hits;
+    }
+    final hits = AnimeWitcherNativeProvider.sortMangaHits(
+      _hits.where(filter.matches).toList(growable: false),
+      filter.sort,
+    );
+    // Keep just the last view with its raw catalog, never a cache per filter.
+    _prepared = (filter: filter, hits: hits);
+    return hits;
+  }
+}
+
+class _MangaCatalogFilter {
+  _MangaCatalogFilter(ProviderSearchFilters filters)
+    : sort = filters.sort,
+      _statuses = filters.statuses.map(_looseArabic).toSet(),
+      _types = filters.types.map(_looseArabic).toSet(),
+      _years = filters.years.map(_looseArabic).toSet(),
+      _genres = filters.genres.map(_looseArabic).toSet();
+
+  final String sort;
+  final Set<String> _statuses;
+  final Set<String> _types;
+  final Set<String> _years;
+  final Set<String> _genres;
+
+  // Spelling in the catalog is not consistent (e.g. ى for ي).
+  static String _looseArabic(String value) => value
+      .trim()
+      .replaceAll('ى', 'ي')
+      .replaceAll('أ', 'ا')
+      .replaceAll('إ', 'ا');
+
+  bool sameAs(_MangaCatalogFilter other) =>
+      sort == other.sort &&
+      setEquals(_statuses, other._statuses) &&
+      setEquals(_types, other._types) &&
+      setEquals(_years, other._years) &&
+      setEquals(_genres, other._genres);
+
+  static bool _accepts(Set<String> wanted, Object? value) =>
+      wanted.isEmpty || wanted.contains(_looseArabic('${value ?? ''}'));
+
+  bool matches(Map<String, Object?> hit) {
+    final rawDetails = hit['details'];
+    final details = switch (rawDetails) {
+      Map<String, Object?> value => value,
+      Map<Object?, Object?> value => Map<String, Object?>.from(value),
+      _ => const <String, Object?>{},
+    };
+    if (!_accepts(_statuses, details['status'] ?? details['state']) ||
+        !_accepts(_types, hit['type']) ||
+        !_accepts(_years, details['year'])) {
+      return false;
+    }
+    if (_genres.isEmpty) return true;
+    final rawTags = hit['tags'];
+    final tags = rawTags is List
+        ? rawTags.map((tag) => _looseArabic('$tag')).toSet()
+        : const <String>{};
+    return _genres.every(tags.contains);
+  }
 }
 
 class _AnimeWitcherCharacterRef {

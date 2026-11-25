@@ -301,7 +301,21 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
     if (!mounted || size.width <= 0 || size.height <= 0) return;
     final previous = _imageSizes[index];
     if (previous == size) return;
-    setState(() => _imageSizes[index] = size);
+    _imageSizes[index] = size;
+    if (!widget.settings.splitWidePages || _doublePageActive) return;
+
+    // The image handles its own layout. Refresh the reader only if the old
+    // or new dimensions affect the split spread or its crop rectangles.
+    bool isSplit(Size? dimensions) =>
+        mangaContinuousPageSlices(
+          settings: widget.settings,
+          imageSize: dimensions,
+          isRtl: widget.reverse,
+          doublePageActive: false,
+          hasCustomPageBuilder: widget.pageBuilder != null,
+        ).length >
+        1;
+    if (isSplit(previous) || isSplit(size)) setState(() {});
   }
 
   Rect? _sourceRectFor(_ContinuousPagePart part) {
