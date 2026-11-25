@@ -756,19 +756,7 @@ class SettingsScreen extends ConsumerWidget {
         title: l10n.appData,
         children: [
           if (!kIsWeb)
-            SettingsTile(
-              icon: Icons.cleaning_services_rounded,
-              title: l10n.clearCache,
-              subtitle: ref
-                  .watch(cacheSizeProvider)
-                  .when(
-                    data: (bytes) =>
-                        '${l10n.clearCacheSubtitle} • ${_formatBytes(bytes)}',
-                    loading: () => l10n.calculating,
-                    error: (_, _) => l10n.clearCacheSubtitle,
-                  ),
-              onTap: () => showClearCacheDialog(context, ref),
-            ),
+            _ClearCacheTile(onTap: () => showClearCacheDialog(context, ref)),
           SettingsTile(
             icon: Icons.delete_forever_rounded,
             title: l10n.factoryReset,
@@ -850,6 +838,39 @@ class SettingsScreen extends ConsumerWidget {
         ],
       ),
     ];
+  }
+}
+
+class _ClearCacheTile extends ConsumerStatefulWidget {
+  const _ClearCacheTile({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  ConsumerState<_ClearCacheTile> createState() => _ClearCacheTileState();
+}
+
+class _ClearCacheTileState extends ConsumerState<_ClearCacheTile>
+    with AutomaticKeepAliveClientMixin<_ClearCacheTile> {
+  // Once reached, keep the cache size for this visit even if the App Data
+  // group scrolls away. Leaving Settings still releases the subscription.
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    final l10n = AppLocalizations.of(context)!;
+    return SettingsTile(
+      icon: Icons.cleaning_services_rounded,
+      title: l10n.clearCache,
+      subtitle: ref.watch(cacheSizeProvider).when(
+        data: (bytes) => '${l10n.clearCacheSubtitle} • ${_formatBytes(bytes)}',
+        loading: () => l10n.calculating,
+        error: (_, _) => l10n.clearCacheSubtitle,
+      ),
+      onTap: widget.onTap,
+    );
   }
 }
 
