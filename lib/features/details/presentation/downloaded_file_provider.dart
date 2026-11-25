@@ -140,14 +140,18 @@ class DownloadedFiles extends _$DownloadedFiles {
       // Share only this batch's read. The next batch sees completions, imports
       // and deletions immediately; playback resolution always reads afresh.
       final records = await ref.read(logicalDownloadStoreV2Provider).all();
+      final indexedRecords = _indexBatchCandidates(records, batch.values);
       await Future.wait(
         batch.entries.map((entry) async {
           final check = entry.value;
           try {
+            final key = check.episode?.url ?? check.item.url;
             final file = await _resolveFileForKey(
-              check.episode?.url ?? check.item.url,
+              key,
               providerId: check.item.provider,
-              sharedRecords: records,
+              sharedRecords: indexedRecords == null
+                  ? records
+                  : indexedRecords[key.trim()] ?? const [],
             );
             resolved[entry.key] = file;
           } catch (error, stack) {
@@ -182,6 +186,32 @@ class DownloadedFiles extends _$DownloadedFiles {
     _generation++;
     if (state[key] != null) state = {...state, key: null};
   }
+}
+
+// The snapshot and index exist only for this flush. Provider coercion and
+// variant choice remain in the original resolver, after selecting a unit.
+Map<String, List<LogicalDownloadRecordV2>>? _indexBatchCandidates(
+  List<LogicalDownloadRecordV2> records,
+  Iterable<_FileCheck> checks,
+) {
+  if (checks.length < 2 || records.length < 2) return null;
+
+  final requested = {
+    for (final check in checks) (check.episode?.url ?? check.item.url).trim(),
+  };
+  final buckets = <String, List<LogicalDownloadRecordV2>>{};
+  for (final record in records) {
+    if (record.mediaKind != DownloadMediaKind.videoEpisode ||
+        record.completedAtMillis == null) {
+      continue;
+    }
+    final unit = record.unitKey.trim();
+    if (requested.contains(unit)) (buckets[unit] ??= []).add(record);
+  }
+  return Map.unmodifiable({
+    for (final entry in buckets.entries)
+      entry.key: List<LogicalDownloadRecordV2>.unmodifiable(entry.value),
+  });
 }
 
 class _FileCheck {
