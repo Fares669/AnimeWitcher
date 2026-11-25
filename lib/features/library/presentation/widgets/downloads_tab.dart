@@ -1233,6 +1233,38 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
   TaskStatus get status => widget.status;
   DownloadProgressData? get progressData => widget.progressData;
 
+  (String, Color)? _posterInputs;
+  Widget? _posterWidget;
+
+  Widget _posterFor(String url, Color errorColor) {
+    final inputs = (url, errorColor);
+    final previous = _posterWidget;
+    if (previous != null && _posterInputs == inputs) return previous;
+    _posterInputs = inputs;
+    // Keep stable art out of transfer ticks. The mounted ArtworkDecode still
+    // handles quality and device-scale changes itself.
+    return _posterWidget = ClipRRect(
+      borderRadius: BorderRadius.circular(LayoutConstants.radiusMd),
+      child: ArtworkDecode(
+        paintedWidth: 80,
+        builder: (BuildContext context, int? decodeWidth) => CachedNetworkImage(
+          imageUrl: url,
+          width: 80,
+          height: 120,
+          fit: BoxFit.cover,
+          memCacheWidth: decodeWidth,
+          filterQuality: FilterQuality.medium,
+          errorWidget: (context, url, error) => Container(
+            width: 80,
+            height: 120,
+            color: errorColor,
+            child: const Icon(Icons.movie_outlined),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -1259,25 +1291,9 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
         ? item.chapter?.name
         : episodeLabel;
 
-    final poster = ClipRRect(
-      borderRadius: BorderRadius.circular(LayoutConstants.radiusMd),
-      child: ArtworkDecode(
-        paintedWidth: 80,
-        builder: (BuildContext context, int? decodeWidth) => CachedNetworkImage(
-          imageUrl: AppImageFallbacks.poster(item.item.posterUrl) ?? '',
-          width: 80,
-          height: 120,
-          fit: BoxFit.cover,
-          memCacheWidth: decodeWidth,
-          filterQuality: FilterQuality.medium,
-          errorWidget: (context, url, error) => Container(
-            width: 80,
-            height: 120,
-            color: theme.dividerColor,
-            child: const Icon(Icons.movie_outlined),
-          ),
-        ),
-      ),
+    final poster = _posterFor(
+      AppImageFallbacks.poster(item.item.posterUrl) ?? '',
+      theme.dividerColor,
     );
 
     final content = Row(
