@@ -462,4 +462,24 @@ void main() {
     expect(harness.settingsOpened, 1);
     expect(_menuShowing(tester), isFalse);
   });
+
+  testWidgets('the menu retains its panel while the page slides', (
+    tester,
+  ) async {
+    await _pump(tester);
+    final panel = find.byType(AppSideMenuPanel, skipOffstage: false);
+    await tester.tap(find.byKey(const ValueKey('app-side-menu-button')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 64));
+    await tester.pump(const Duration(milliseconds: 16));
+    final before = tester.widget<AppSideMenuPanel>(panel);
+    final offset = tester.getTopLeft(_page).dx;
+
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(tester.getTopLeft(_page).dx, greaterThan(offset));
+    expect(tester.widget<AppSideMenuPanel>(panel), same(before));
+
+    await tester.pumpAndSettle();
+    expect(_menuShowing(tester), isTrue);
+  });
 }

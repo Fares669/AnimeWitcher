@@ -690,7 +690,8 @@ class Anime3rbLibraryService extends ChangeNotifier {
     // Never hand out cached models: nested item collections remain independent
     // of both this read projection and the mutable merge/write path.
     return <MultimediaItem>[
-      for (final row in snapshot.shelves[category] ?? const [])
+      for (final row
+          in snapshot.shelves[category] ?? const <Map<String, dynamic>>[])
         MultimediaItem.fromJson(row),
     ];
   }

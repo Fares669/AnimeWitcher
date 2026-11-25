@@ -273,6 +273,20 @@ class _AppSideMenuShellState extends State<AppSideMenuShell>
             child: child,
           );
 
+          // The menu's content changes with the shell or its own providers,
+          // not with the animation. Keep it mounted while translating it.
+          final menuPanel = draggable(
+            child: AppSideMenuPanel(
+              destinations: widget.destinations,
+              currentBranchIndex: widget.currentBranchIndex,
+              entries: widget.entries,
+              onDestination: _pick,
+              onEntry: _entry,
+              onAccount: _account,
+              onClose: _close,
+            ),
+          );
+
           return ColoredBox(
             color: colors.surfaceContainerLow,
             child: AnimatedBuilder(
@@ -298,17 +312,7 @@ class _AppSideMenuShellState extends State<AppSideMenuShell>
                         offstage: t == 0,
                         child: Transform.translate(
                           offset: Offset(-(1 - t) * width * 0.3, 0),
-                          child: draggable(
-                            child: AppSideMenuPanel(
-                              destinations: widget.destinations,
-                              currentBranchIndex: widget.currentBranchIndex,
-                              entries: widget.entries,
-                              onDestination: _pick,
-                              onEntry: _entry,
-                              onAccount: _account,
-                              onClose: _close,
-                            ),
-                          ),
+                          child: menuPanel,
                         ),
                       ),
                     ),
