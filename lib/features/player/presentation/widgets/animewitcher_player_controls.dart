@@ -137,6 +137,7 @@ class AnimeWitcherPlayerControlsState
   };
   bool _touchHeldForSpeed = false;
   double? _speedBeforeTouchHold;
+  PlayerController? _touchSpeedController;
 
   late bool _isPlaying;
   late Duration _position;
@@ -146,6 +147,7 @@ class AnimeWitcherPlayerControlsState
 
   late final PlayerPlatformService _platformService;
   late final int _deviceControlSession;
+  late final PlayerGestureHandler _deviceGestureHandler;
   Offset? _tapPosition;
 
   /// Double taps are told apart by hand. A double-tap recognizer holds every
@@ -197,8 +199,8 @@ class AnimeWitcherPlayerControlsState
     _isIpad = Platform.isIOS && (deviceProfile?.isTablet ?? false);
 
     _platformService = widget.platformService;
-    _deviceControlSession = ref
-        .read(playerGestureHandlerProvider.notifier)
+    _deviceGestureHandler = ref.read(playerGestureHandlerProvider.notifier);
+    _deviceControlSession = _deviceGestureHandler
         .init(
           getSettings: () async =>
               await ref.read(playerSettingsProvider.future),
@@ -443,12 +445,18 @@ class AnimeWitcherPlayerControlsState
     widget.videoViewController?.mediaInfo.removeListener(_onVvMediaInfo);
     widget.videoViewController?.videoSize.removeListener(_updateOrientation);
     widget.videoViewController?.orientation.removeListener(_updateOrientation);
-    if (_touchHeldForSpeed) {
-      final previousSpeed = _speedBeforeTouchHold ?? 1.0;
+    final touchSpeedController = _touchSpeedController;
+    if (_touchHeldForSpeed &&
+        touchSpeedController != null &&
+        !touchSpeedController.isDisposed) {
       unawaited(
-        ref
-            .read(playerControllerProvider.notifier)
-            .setPlaybackSpeed(previousSpeed),
+        touchSpeedController
+            .setPlaybackSpeed(_speedBeforeTouchHold ?? 1.0)
+            .catchError((Object error) {
+              if (kDebugMode) {
+                debugPrint('Failed to restore playback speed: $error');
+              }
+            }),
       );
     }
     FocusManager.instance.removeListener(_onFocusChange);
@@ -456,10 +464,8 @@ class AnimeWitcherPlayerControlsState
       s.cancel();
     }
     _subscriptions.clear();
-    ref
-        .read(playerGestureHandlerProvider.notifier)
-        .detachDeviceControls(session: _deviceControlSession);
-    _syncPipSession(active: false);
+    // Use the handler that owns this session: WidgetRef is already unmounted.
+    _deviceGestureHandler.detachDeviceControls(session: _deviceControlSession);
     _pipSettingsSub?.close();
     _revertMessageSub?.close();
     _playFocusNode.dispose();
@@ -538,16 +544,16 @@ class AnimeWitcherPlayerControlsState
     return null;
   }
 
-  void _syncPipSession({bool active = true}) {
+  void _syncPipSession() {
     if (!Platform.isAndroid || _isTv) return;
     try {
       final settings =
           ref.read(playerSettingsProvider).asData?.value ??
           const PlayerSettings();
-      final size = active ? _videoSize() : null;
+      final size = _videoSize();
       unawaited(
         _platformService.updatePipSession(
-          active: active,
+          active: true,
           enabled: settings.showPip,
           isPlaying: _isPlaying,
           width: size?.$1,
@@ -673,9 +679,9 @@ class AnimeWitcherPlayerControlsState
     if (_touchHeldForSpeed) return;
     _touchHeldForSpeed = true;
     _speedBeforeTouchHold = ref.read(playerControllerProvider).playbackSpeed;
-    unawaited(
-      ref.read(playerControllerProvider.notifier).setPlaybackSpeed(2.0),
-    );
+    final controller = ref.read(playerControllerProvider.notifier);
+    _touchSpeedController = controller;
+    unawaited(controller.setPlaybackSpeed(2.0));
     ref
         .read(playerGestureHandlerProvider.notifier)
         .showToast("2.0x", LucideIcons200.fastForward);
@@ -686,6 +692,7 @@ class AnimeWitcherPlayerControlsState
     final previousSpeed = _speedBeforeTouchHold ?? 1.0;
     _touchHeldForSpeed = false;
     _speedBeforeTouchHold = null;
+    _touchSpeedController = null;
     unawaited(
       ref
           .read(playerControllerProvider.notifier)
