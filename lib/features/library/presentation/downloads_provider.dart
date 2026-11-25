@@ -215,6 +215,21 @@ List<List<DownloadItem>> groupDownloadsByEpisodeOrFile(
   List<DownloadItem> items,
 ) {
   if (items.isEmpty) return const [];
+  // Once every row has a logical ID, the legacy graph never looks at
+  // file/URL aliases. Insertion order is the first row of each bucket,
+  // exactly the same order the graph reports for those groups.
+  bool knownLogical(DownloadItem item) =>
+      item.logicalId?.trim().isNotEmpty == true;
+  if (knownLogical(items.first) &&
+      knownLogical(items.last) &&
+      items.every(knownLogical)) {
+    final logicalGroups = <String, List<DownloadItem>>{};
+    for (final item in items) {
+      logicalGroups.putIfAbsent(item.logicalId!.trim(), () => []).add(item);
+    }
+    return logicalGroups.values.toList();
+  }
+
   final parent = List<int>.generate(items.length, (i) => i);
 
   int find(int i) {
@@ -304,6 +319,15 @@ CollapsedDownloads collapseDuplicateDownloads(List<DownloadItem> items) {
     for (final extra in ranked.skip(1)) {
       if (extra.status == TaskStatus.complete) extraComplete.add(extra);
     }
+  }
+
+  // All groups were singletons and Task IDs are unique, so the
+  // first-occurrence-index sort cannot change the already-input order.
+  if (visible.length == items.length && keptIds.length == items.length) {
+    return CollapsedDownloads(
+      visible: visible,
+      extraCompleteRecords: extraComplete,
+    );
   }
 
   final originalIndex = <String, int>{};

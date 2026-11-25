@@ -11,6 +11,7 @@ import 'package:animewitcher/features/library/presentation/download_progress_v2_
 import 'package:animewitcher/core/services/notification_service.dart';
 import 'package:animewitcher/core/utils/download_cleanup.dart';
 import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
+import 'package:animewitcher/features/library/presentation/downloads_screen.dart';
 import 'package:animewitcher/features/library/presentation/widgets/downloads_tab.dart';
 import 'package:animewitcher/shared/widgets/underline_segment_tabs.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
@@ -251,16 +252,19 @@ Widget _downloadsApp(
   NotificationService? notificationService,
   _StubDownloadsNotifier? notifier,
   Map<String, DownloadProgressData>? progressData,
+  bool openDownloadsScreen = false,
 }) {
-  Widget home = Scaffold(
-    bottomNavigationBar: withTaskbar
-        ? const SizedBox(height: 80, child: ColoredBox(color: Colors.purple))
-        : null,
-    body: RepaintBoundary(
-      key: ValueKey('downloads-tab-root'),
-      child: DownloadsTab(),
-    ),
-  );
+  Widget home = openDownloadsScreen
+      ? const DownloadsScreen()
+      : Scaffold(
+          bottomNavigationBar: withTaskbar
+              ? const SizedBox(height: 80, child: ColoredBox(color: Colors.purple))
+              : null,
+          body: RepaintBoundary(
+            key: ValueKey('downloads-tab-root'),
+            child: DownloadsTab(),
+          ),
+        );
   if (shellDirection != null) {
     home = Directionality(textDirection: shellDirection, child: home);
   }
@@ -332,6 +336,183 @@ void main() {
     }
   });
   tearDownAll(() => _artworkFixtureRoot.delete(recursive: true));
+
+  test(
+    'logical singleton guard keeps row identity, aliases and legacy forks',
+    () {
+      final running = _item(
+        taskId: 'shared-running',
+        timestamp: 100,
+        status: TaskStatus.running,
+        logicalId: 'variant-1',
+      );
+      final paused = _item(
+        taskId: 'shared-paused',
+        timestamp: 100,
+        status: TaskStatus.paused,
+        logicalId: ' variant-2 ',
+      );
+      final input = <DownloadItem>[paused, running];
+      final singles = collapseDuplicateDownloads(input);
+      expect(singles.visible, orderedEquals(input));
+      expect(identical(singles.visible, input), isFalse);
+      expect(singles.extraCompleteRecords, isEmpty);
+
+      final complete = _item(
+        taskId: 'completed-duplicate',
+        timestamp: 200,
+        logicalId: ' variant-1 ',
+      );
+      final legacy = _item(taskId: 'legacy-row', timestamp: 50);
+      final ranked = collapseDuplicateDownloads([
+        paused,
+        complete,
+        legacy,
+        running,
+      ]);
+      expect(ranked.visible, orderedEquals([paused, legacy, running]));
+      expect(ranked.extraCompleteRecords, orderedEquals([complete]));
+    },
+  );
+
+  testWidgets('Downloads route keeps v2 variants and live controls in order', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(430, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await _prepareArtworkStorage(tester);
+    DownloadItem row(String id, TaskStatus status, double progress) =>
+        DownloadItem(
+          task: _task(taskId: id, filename: 'fixture-$id.mp4'),
+          status: status,
+          progress: progress,
+          item: _blackTorch(),
+          episode: _episode9(),
+          timestamp: 17,
+          logicalId: 'logical-$id',
+          activeConnections: 2,
+        );
+    final first = row('first-v2', TaskStatus.running, .40);
+    final second = row('second-v2', TaskStatus.enqueued, .20);
+    final archived = row('completed-v2', TaskStatus.complete, 1);
+    final notifier = _StubDownloadsNotifier([first, second, archived]);
+    await tester.pumpWidget(
+      _downloadsApp(
+        [],
+        notifier: notifier,
+        progressData: const {},
+        openDownloadsScreen: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+    final firstCard = find.byKey(const ValueKey('first-v2'));
+    final secondCard = find.byKey(const ValueKey('second-v2'));
+    expect(firstCard, findsOneWidget);
+    expect(secondCard, findsOneWidget);
+    expect(
+      tester.getCenter(firstCard).dy,
+      lessThan(tester.getCenter(secondCard).dy),
+    );
+    await tester.tap(find.byKey(const ValueKey('downloads-pause-resume-all')));
+    await tester.pumpAndSettle();
+    expect(notifier.pausedIds, ['first-v2', 'second-v2']);
+
+    final paused = row('first-v2', TaskStatus.paused, .75);
+    notifier.publish([
+      paused,
+      row('second-v2', TaskStatus.running, .50),
+      archived,
+    ]);
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(of: firstCard, matching: find.text('2×  75%')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: secondCard, matching: find.text('2×  50%')),
+      findsOneWidget,
+    );
+    final resume = find.descendant(
+      of: firstCard,
+      matching: find.widgetWithIcon(IconButton, Icons.play_arrow_rounded),
+    );
+    expect(resume, findsOneWidget);
+    await tester.tap(resume);
+    await tester.pumpAndSettle();
+    expect(notifier.resumedIds, ['first-v2']);
+
+    notifier.publish([
+      paused,
+      row('second-v2', TaskStatus.complete, 1),
+      archived,
+    ]);
+    await tester.pumpAndSettle();
+    expect(firstCard, findsOneWidget);
+    expect(secondCard, findsNothing);
+    await tester.tap(find.text('المكتملة'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Black Torch'));
+    await tester.pumpAndSettle();
+    await _awaitArtworkLookups(tester);
+    expect(secondCard, findsOneWidget);
+    expect(find.byKey(const ValueKey('completed-v2')), findsOneWidget);
+    expect(firstCard, findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Downloads route cancels only the selected same-URL variant', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(430, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final first = _item(
+      taskId: 'selected-v2',
+      timestamp: 7,
+      status: TaskStatus.running,
+      logicalId: 'variant-one',
+    );
+    final sibling = _item(
+      taskId: 'sibling-v2',
+      timestamp: 9,
+      status: TaskStatus.running,
+      logicalId: 'variant-two',
+    );
+    final notifier = _StubDownloadsNotifier(
+      [first, sibling],
+      remainingIdsAfterRemove: {'sibling-v2'},
+    );
+    await tester.pumpWidget(
+      _downloadsApp(
+        [],
+        notifier: notifier,
+        progressData: const {},
+        openDownloadsScreen: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+    final selected = find.byKey(const ValueKey('selected-v2'));
+    final other = find.byKey(const ValueKey('sibling-v2'));
+    expect(selected, findsOneWidget);
+    expect(other, findsOneWidget);
+    await tester.longPress(selected);
+    await tester.pumpAndSettle();
+    expect(find.text('1 محدد'), findsOneWidget);
+    final l10n = AppLocalizations.of(
+      tester.element(find.byType(DownloadsScreen)),
+    )!;
+    await tester.tap(find.widgetWithText(FilledButton, l10n.delete));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, l10n.delete).last);
+    await tester.pumpAndSettle();
+    expect(notifier.removedBatches, [
+      <String>['selected-v2'],
+    ]);
+    expect(selected, findsNothing);
+    expect(other, findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('connection badge follows active count instead of selected ceiling', (tester) async {
     DownloadItem row(int count) => _item(taskId: 'live-count', timestamp: 1,
