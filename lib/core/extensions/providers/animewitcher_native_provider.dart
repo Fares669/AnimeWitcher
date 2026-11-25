@@ -6431,6 +6431,7 @@ class _MangaCatalogFilter {
   final Set<String> _types;
   final Set<String> _years;
   final Set<String> _genres;
+  late final String? _singleGenre = _genres.length == 1 ? _genres.single : null;
 
   // Spelling in the catalog is not consistent (e.g. ى for ي).
   static String _looseArabic(String value) => value
@@ -6463,6 +6464,15 @@ class _MangaCatalogFilter {
     }
     if (_genres.isEmpty) return true;
     final rawTags = hit['tags'];
+    final wanted = _singleGenre;
+    if (wanted != null && rawTags is List<Object?>) {
+      // Keep normalizing every tag, without allocating a Set for one choice.
+      var found = false;
+      for (final tag in rawTags) {
+        if (_looseArabic('$tag') == wanted) found = true;
+      }
+      return found;
+    }
     final tags = rawTags is List
         ? rawTags.map((tag) => _looseArabic('$tag')).toSet()
         : const <String>{};

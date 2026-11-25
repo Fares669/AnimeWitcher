@@ -17,6 +17,19 @@ Map<String, Object?> _hit({
 bool _matches(Map<String, Object?> hit, ProviderSearchFilters filters) =>
     AnimeWitcherNativeProvider.mangaHitMatchesFilters(hit, filters);
 
+class _ObservedGenre {
+  _ObservedGenre(this.value, this.observed, {this.failure = false});
+  final String value;
+  final List<String> observed;
+  final bool failure;
+  @override
+  String toString() {
+    observed.add(value);
+    if (failure) throw StateError('Synthetic tag error');
+    return value;
+  }
+}
+
 void main() {
   test('no filters keeps everything', () {
     expect(_matches(_hit(), const ProviderSearchFilters()), isTrue);
@@ -100,6 +113,77 @@ void main() {
       throwsA(isA<TypeError>()),
     );
   });
+
+  test('one normalized genre preserves Arabic spelling and exact coercion', () {
+    final row = <String, Object?>{
+      'tags': <Object?>['  إكشن ', 'رومانسى', null, 42, '  '],
+    };
+    for (final selected in <Set<String>>[
+      {'اكشن'},
+      {'أكشن', 'إكشن'},
+      {'رومانسي'},
+      {'null'},
+      {'42'},
+      {''},
+      {'اكشن', 'رومانسي'},
+      <String>{},
+    ]) {
+      expect(
+        _matches(row, ProviderSearchFilters(genres: selected)),
+        isTrue,
+        reason: '$selected',
+      );
+    }
+    for (final selected in <Set<String>>[
+      {'غير معروف'},
+      {'أَكشن'},
+      {'رومانسي', 'غير معروف'},
+    ]) {
+      expect(
+        _matches(row, ProviderSearchFilters(genres: selected)),
+        isFalse,
+        reason: '$selected',
+      );
+    }
+    for (final malformed in <Object?>[
+      null,
+      'اكشن',
+      42,
+      {'اكشن': true},
+    ]) {
+      expect(
+        _matches({
+          'tags': malformed,
+        }, const ProviderSearchFilters(genres: {'اكشن'})),
+        isFalse,
+      );
+      expect(
+        _matches({
+          'tags': malformed,
+        }, const ProviderSearchFilters(sort: 'sort-not-known')),
+        isTrue,
+      );
+    }
+  });
+
+  test(
+    'single genre visits tags after a match without remembering raw lists',
+    () {
+      final observed = <String>[];
+      final tags = <Object?>[
+        _ObservedGenre('أكشن', observed),
+        _ObservedGenre('tail', observed, failure: true),
+      ];
+      final row = <String, Object?>{'tags': tags};
+      const filter = ProviderSearchFilters(genres: {'اكشن'});
+      expect(() => _matches(row, filter), throwsStateError);
+      expect(observed, ['أكشن', 'tail']);
+      tags[1] = 'دراما';
+      expect(_matches(row, filter), isTrue);
+      tags[0] = 'خيال';
+      expect(_matches(row, filter), isFalse);
+    },
+  );
 
   group('sorting', () {
     final hits = <Map<String, Object?>>[
