@@ -8,7 +8,6 @@ import '../../../../core/account/account_providers.dart';
 import '../../../../core/extensions/extension_manager.dart';
 import '../../../../core/extensions/providers/witanime_provider.dart';
 import '../../../../core/storage/library_category.dart';
-import '../../../../core/storage/library_repository.dart';
 import '../../../../core/storage/storage_service.dart';
 import '../../../../shared/widgets/app_search_field.dart';
 import '../../../../shared/widgets/app_side_menu.dart';
@@ -115,7 +114,6 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
   }
 
   List<MultimediaItem> _list(
-    LibraryRepository repository,
     LibraryMediaKind kind,
     LibraryCategory category,
   ) => _lists.putIfAbsent(
@@ -126,47 +124,39 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
     ),
   );
 
-  List<MultimediaItem> _entries(
+  Iterable<MultimediaItem> _entries(
     LibraryMediaKind kind,
-    LibraryRepository repository,
     List<HistoryItem> history, {
     required bool witanimeAnime,
-  }) {
+  }) sync* {
     final seen = <String>{};
-    final entries = <MultimediaItem>[];
     for (final category in LibraryCategory.valuesForCatalog(
       witanimeAnime: witanimeAnime,
     )) {
       if (!_prefs.shows(category)) continue;
-      for (final item in _list(repository, kind, category)) {
-        if (seen.add(item.url)) entries.add(item);
+      for (final item in _list(kind, category)) {
+        if (seen.add(item.url)) yield item;
       }
     }
     if (libraryKindHasRecent(kind) && _prefs.showsRecent()) {
       for (final entry in sortLibraryHistory(
-        libraryRecentFor(history, kind),
+        libraryRecentEntries(history, kind).toList()
+          ..sort((a, b) => b.timestamp.compareTo(a.timestamp)),
         _prefs.sort,
       )) {
-        if (seen.add(entry.item.url)) entries.add(entry.item);
+        if (seen.add(entry.item.url)) yield entry.item;
       }
     }
-    return entries;
   }
-
-  List<MultimediaItem> _matches(List<MultimediaItem> entries) => [
-    for (final item in entries)
-      if (libraryItemMatches(item, _query)) item,
-  ];
 
   List<_LibraryListTab> _listTabs(
     LibraryMediaKind kind,
-    LibraryRepository repository,
     List<HistoryItem> history, {
     required bool witanimeAnime,
   }) {
     final tabs = <_LibraryListTab>[];
     if (libraryKindHasRecent(kind) && _prefs.showsRecent()) {
-      final count = libraryRecentFor(history, kind).length;
+      final count = libraryRecentEntries(history, kind).length;
       if (!_prefs.hideEmpty || count > 0) {
         tabs.add((
           key: LibraryShelfPrefs.recentKey,
@@ -215,7 +205,6 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
   }
 
   Widget _listBody(
-    LibraryRepository repository,
     LibraryMediaKind kind,
     _LibraryListTab tab, {
     required bool isActive,
@@ -227,7 +216,7 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
       );
     }
     final category = tab.category!;
-    final items = _list(repository, kind, category);
+    final items = _list(kind, category);
     final page = ref
         .read(libraryProvider.notifier)
         .pageInfo(kind, category, loadedLocalCount: items.length);
@@ -273,7 +262,6 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
     final witanimeActive = ref.watch(activeProviderProvider) is WitanimeProvider;
     final dataRevision = ref.watch(accountDataRevisionProvider);
     final history = ref.watch(watchHistoryProvider);
-    final repository = ref.read(libraryRepositoryProvider);
     final colors = Theme.of(context).colorScheme;
 
     return ListenableBuilder(
@@ -315,7 +303,6 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
               ]
             : _listTabs(
                 kind!,
-                repository,
                 history,
                 witanimeAnime: witanimeAnime,
               );
@@ -346,13 +333,13 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
                     embedded: true,
                   );
                 } else if (searching) {
-                  final shown = _matches(
+                  final shown = filterLibraryTitles(
                     _entries(
                       kind!,
-                      repository,
                       history,
                       witanimeAnime: witanimeAnime,
                     ),
+                    _query,
                   );
                   body = shown.isEmpty
                       ? Center(
@@ -391,7 +378,6 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
                         for (final tab in tabs)
                           Builder(
                             builder: (_) => _listBody(
-                              repository,
                               kind!,
                               tab,
                               isActive: tab.key == selected?.key,

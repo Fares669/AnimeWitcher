@@ -1,6 +1,4 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
@@ -15,8 +13,6 @@ import 'package:animewitcher/shared/widgets/paged_rail.dart';
 
 import '../details_controller.dart';
 import '../../../library/presentation/downloads_provider.dart';
-
-import 'package:animewitcher/core/extensions/extension_manager.dart';
 
 import 'episode_card.dart';
 import 'episode_browse.dart';
@@ -315,127 +311,6 @@ class DetailsActionButtons extends HookConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [progressWidget, playBtn],
-    );
-  }
-}
-
-class SliverDetailsDesktopEpisodeGrid extends ConsumerWidget {
-  final MultimediaItem parentItem;
-  final String itemUrl;
-  final bool isMovie;
-
-  const SliverDetailsDesktopEpisodeGrid({
-    super.key,
-    required this.parentItem,
-    required this.itemUrl,
-    required this.isMovie,
-  });
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    if (isMovie) return const SliverToBoxAdapter(child: SizedBox.shrink());
-
-    final detailsState = ref.watch(detailsControllerProvider(itemUrl));
-    var episodes = detailsState.seasonMap[detailsState.selectedSeason] ?? [];
-
-    if (episodes.isEmpty) {
-      return const SliverToBoxAdapter(child: SizedBox.shrink());
-    }
-
-    // Apply Language Filter
-    if (_shouldFilterEpisodesByDub(detailsState, episodes)) {
-      episodes = episodes
-          .where((e) => e.dubStatus == detailsState.selectedDubStatus)
-          .toList();
-    }
-
-    // Episode list UI v2: show every filtered episode without range batching.
-    final displayedEpisodes = episodesInDisplayOrder(
-      episodes,
-      ascending: detailsState.isAscending,
-    );
-
-    return SliverMainAxisGroup(
-      slivers: [
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: LayoutConstants.spacingMd),
-            child: Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 8,
-              runSpacing: 12,
-              children: [
-                Text(
-                  AppLocalizations.of(context)!.episodes,
-                  style: Theme.of(context).textTheme.headlineSmall
-                      ?.copyWith(fontWeight: FontWeight.bold),
-                ),
-                DetailsEpisodeFilterBar(itemUrl: itemUrl),
-              ],
-            ),
-          ),
-        ),
-        SliverLayoutBuilder(
-          builder: (context, constraints) {
-            final double crossAxisExtent = constraints.crossAxisExtent;
-            final int crossAxisCount = (crossAxisExtent / 480).ceil().clamp(
-              1,
-              5,
-            );
-            final int rowCount = (displayedEpisodes.length / crossAxisCount)
-                .ceil();
-
-            return SliverList.separated(
-              itemCount: rowCount,
-              separatorBuilder: (_, _) => const SizedBox(height: 16),
-              itemBuilder: (context, rowIndex) {
-                final int startIndex = rowIndex * crossAxisCount;
-                final int endIndex = (startIndex + crossAxisCount).clamp(
-                  0,
-                  displayedEpisodes.length,
-                );
-                final rowEpisodes = displayedEpisodes.sublist(
-                  startIndex,
-                  endIndex,
-                );
-
-                if (crossAxisCount == 1) {
-                  return EpisodeCard(
-                    key: ValueKey(rowEpisodes.single.url),
-                    episode: rowEpisodes.single,
-                    parentItem: parentItem,
-                  );
-                }
-
-                return IntrinsicHeight(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      for (var i = 0; i < crossAxisCount; i++)
-                        Expanded(
-                          child: Padding(
-                            padding: EdgeInsets.only(
-                              left: i == 0 ? 0 : 8,
-                              right: i == crossAxisCount - 1 ? 0 : 8,
-                            ),
-                            child: i < rowEpisodes.length
-                                ? EpisodeCard(
-                                    key: ValueKey(rowEpisodes[i].url),
-                                    episode: rowEpisodes[i],
-                                    parentItem: parentItem,
-                                  )
-                                : const SizedBox.shrink(),
-                          ),
-                        ),
-                    ],
-                  ),
-                );
-              },
-            );
-          },
-        ),
-      ],
     );
   }
 }
@@ -807,113 +682,7 @@ class _LanguageButtonState extends State<_LanguageButton> {
   }
 }
 
-class DetailsChip extends StatelessWidget {
-  final String label;
-
-  const DetailsChip({super.key, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Theme.of(context).dividerColor),
-      ),
-      child: Text(
-        label,
-        style: Theme.of(context).textTheme.bodySmall
-            ?.copyWith(fontWeight: FontWeight.w500),
-      ),
-    );
-  }
-}
-
-class DetailsProviderChip extends ConsumerWidget {
-  final String providerName;
-
-  const DetailsProviderChip({super.key, required this.providerName});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    bool isDebug = false;
-    String displayName = providerName;
-    try {
-      final manager = ref.read(extensionManagerProvider.notifier);
-      final p = manager.getAllProviders().firstWhere(
-        (p) => p.packageName == providerName || p.name == providerName,
-      );
-      displayName = p.name;
-      if (p.isDebug) {
-        isDebug = true;
-      }
-    } catch (e) {
-      if (kDebugMode) debugPrint('DetailsProviderChip.build: $e');
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
-            Theme.of(context).colorScheme.primary.withValues(alpha: 0.05),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(
-          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
-          width: 0.5,
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.extension_rounded,
-            size: 14,
-            color: Theme.of(context).colorScheme.primary,
-          ),
-          const SizedBox(width: 4),
-          Text(
-            displayName.toUpperCase(),
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.primary,
-              fontSize: 11,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 0.5,
-            ),
-          ),
-          if (isDebug) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: Colors.redAccent.withValues(alpha: 0.9),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                appText(context, english: 'DEBUG', arabic: 'تصحيح'),
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 8,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-/// Non-sliver desktop episode grid for use inside [DetailsDesktopHero]'s
-/// [SingleChildScrollView]. Mirrors [SliverDetailsDesktopEpisodeGrid] but
-/// uses [LayoutBuilder] + [Column] instead of sliver equivalents.
+/// Desktop episode grid laid out inside the details page's scroll view.
 class DetailsDesktopEpisodeColumn extends ConsumerWidget {
   final MultimediaItem parentItem;
   final String itemUrl;

@@ -19,8 +19,6 @@ import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
 import 'core/storage/storage_service.dart';
 
-import 'package:dynamic_color/dynamic_color.dart';
-
 import 'core/utils/app_utils.dart';
 import 'core/utils/artwork_host_fallback.dart';
 import 'core/utils/window_controls_visibility.dart';
@@ -304,16 +302,13 @@ class _AppRootState extends State<AppRoot> {
     }
 
     if (!_initialized) {
-      return Directionality(
+      return const Directionality(
         textDirection: TextDirection.rtl,
-        child: DynamicColorBuilder(
-          builder: (lightDynamic, darkDynamic) {
-            const color = AppTheme.animeWitcherAccent;
-            return ColoredBox(
-              color: Colors.black,
-              child: Center(child: AppLoadingIndicator(color: color)),
-            );
-          },
+        child: ColoredBox(
+          color: Colors.black,
+          child: Center(
+            child: AppLoadingIndicator(color: AppTheme.animeWitcherAccent),
+          ),
         ),
       );
     }
@@ -490,11 +485,16 @@ class _MyAppState extends ConsumerState<MyApp>
     // Restore the AnimeWitcher session and reconcile account data without
     // blocking the first frame. Local library/history remain immediately
     // available while the async provider performs its merge in the background.
-    ref.watch(animeWitcherAccountControllerProvider);
+    // Keep the controller active, not the whole app reactive to its state.
+    ref.watch(animeWitcherAccountControllerProvider.notifier);
     final themeStyle = ref.watch(appThemeStyleProvider);
     final appRouter = ref.watch(appRouterProvider);
     final locale = ref.watch(localeProvider);
-    final profileAsync = ref.watch(deviceProfileProvider);
+    final isTv = ref.watch(
+      deviceProfileProvider.select(
+        (profile) => profile.asData?.value.isTv == true,
+      ),
+    );
 
     // Reactive Listener: Keeps UpdateController alive and handles the UI side-effect
     ref.listen<UpdateState>(updateControllerProvider, (previous, next) {
@@ -517,201 +517,194 @@ class _MyAppState extends ConsumerState<MyApp>
       }
     });
 
-    return DynamicColorBuilder(
-      builder: (_, _) {
-        final materialApp = MaterialApp.router(
-          scaffoldMessengerKey: ref
-              .read(notificationServiceProvider)
-              .messengerKey,
-          title: 'AnimeWitcher',
-          debugShowCheckedModeBanner: false,
-          scrollBehavior: const MaterialScrollBehavior().copyWith(
-            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-          ),
-          // The chosen theme decides both the mode and which dark theme is
-          // drawn; there is no longer a system-following choice.
-          themeMode: themeStyle.themeMode,
-          theme: AppTheme.createLightTheme(null),
-          darkTheme: AppTheme.darkThemeFor(themeStyle, null),
-          routerConfig: appRouter,
-          locale: locale,
-          localizationsDelegates: const [
-            AppLocalizations.delegate,
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
-          ],
-          supportedLocales: AppLocalizations.supportedLocales,
-          builder: (context, child) {
-            final mq = MediaQuery.of(context);
-            Widget result = child!;
+    final materialApp = MaterialApp.router(
+      scaffoldMessengerKey: ref.read(notificationServiceProvider).messengerKey,
+      title: 'AnimeWitcher',
+      debugShowCheckedModeBanner: false,
+      scrollBehavior: const MaterialScrollBehavior().copyWith(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      ),
+      // The chosen theme decides both the mode and which dark theme is
+      // drawn; there is no longer a system-following choice.
+      themeMode: themeStyle.themeMode,
+      theme: AppTheme.createLightTheme(null),
+      darkTheme: AppTheme.darkThemeFor(themeStyle, null),
+      routerConfig: appRouter,
+      locale: locale,
+      localizationsDelegates: const [
+        AppLocalizations.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: AppLocalizations.supportedLocales,
+      builder: (context, child) {
+        final mq = MediaQuery.of(context);
+        Widget result = child!;
 
-            // Phase 1: Density override for TV devices
-            // Android TV often reports inflated pixel density; we clamp to 1.0 for standard scaling.
-            final profile = profileAsync.asData?.value;
-            if (profile?.isTv == true) {
-              result = MediaQuery(
-                data: mq.copyWith(
-                  devicePixelRatio: 1.0,
-                  textScaler: TextScaler.noScaling,
-                ),
-                child: result,
-              );
-            }
-
-            if (!kIsWeb && (Platform.isWindows || Platform.isMacOS)) {
-              final isMac = Platform.isMacOS;
-              if (!isMac) {
-                result = Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    Positioned.fill(child: result),
-                    const Positioned(
-                      top: 0,
-                      left: 0,
-                      right: 0,
-                      child: CustomTitleBar(),
-                    ),
-                  ],
-                );
-              }
-            }
-
-            result = ApplePersistentGlassHeaderOverlay(child: result);
-            if (!kIsWeb && Platform.isIOS) {
-              result = _IosKeyboardEdgeSwipeDismiss(child: result);
-            }
-            return M3ToastOverlay(child: result);
-          },
-        );
-
-        Widget rootWidget = Focus(
-          autofocus: true,
-          onKeyEvent: (node, event) {
-            if (event is KeyDownEvent &&
-                event.logicalKey == LogicalKeyboardKey.f11) {
-              _toggleFullscreen();
-              return KeyEventResult.handled;
-            }
-            return KeyEventResult.ignored;
-          },
-          child: materialApp,
-        );
-
-        if (Platform.isMacOS) {
-          final alwaysOnTop = ref.watch(
-            generalSettingsProvider.select((s) => s.alwaysOnTop),
+        // Phase 1: Density override for TV devices
+        // Android TV often reports inflated pixel density; we clamp to 1.0 for standard scaling.
+        if (isTv) {
+          result = MediaQuery(
+            data: mq.copyWith(
+              devicePixelRatio: 1.0,
+              textScaler: TextScaler.noScaling,
+            ),
+            child: result,
           );
-          rootWidget = PlatformMenuBar(
+        }
+
+        if (!kIsWeb && (Platform.isWindows || Platform.isMacOS)) {
+          final isMac = Platform.isMacOS;
+          if (!isMac) {
+            result = Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Positioned.fill(child: result),
+                const Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: CustomTitleBar(),
+                ),
+              ],
+            );
+          }
+        }
+
+        result = ApplePersistentGlassHeaderOverlay(child: result);
+        if (!kIsWeb && Platform.isIOS) {
+          result = _IosKeyboardEdgeSwipeDismiss(child: result);
+        }
+        return M3ToastOverlay(child: result);
+      },
+    );
+
+    Widget rootWidget = Focus(
+      autofocus: true,
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent &&
+            event.logicalKey == LogicalKeyboardKey.f11) {
+          _toggleFullscreen();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: materialApp,
+    );
+
+    if (Platform.isMacOS) {
+      final alwaysOnTop = ref.watch(
+        generalSettingsProvider.select((s) => s.alwaysOnTop),
+      );
+      rootWidget = PlatformMenuBar(
+        menus: <PlatformMenuItem>[
+          PlatformMenu(
+            label: 'AnimeWitcher',
             menus: <PlatformMenuItem>[
-              PlatformMenu(
-                label: 'AnimeWitcher',
-                menus: <PlatformMenuItem>[
-                  if (PlatformProvidedMenuItem.hasMenu(
-                    PlatformProvidedMenuItemType.about,
-                  ))
-                    const PlatformProvidedMenuItem(
-                      type: PlatformProvidedMenuItemType.about,
-                    ),
-                  const PlatformProvidedMenuItem(
-                    type: PlatformProvidedMenuItemType.quit,
-                  ),
-                ],
+              if (PlatformProvidedMenuItem.hasMenu(
+                PlatformProvidedMenuItemType.about,
+              ))
+                const PlatformProvidedMenuItem(
+                  type: PlatformProvidedMenuItemType.about,
+                ),
+              const PlatformProvidedMenuItem(
+                type: PlatformProvidedMenuItemType.quit,
               ),
-              PlatformMenu(
-                label: 'تحرير',
-                menus: <PlatformMenuItem>[
-                  PlatformMenuItem(
-                    label: 'تراجع',
-                    shortcut: const SingleActivator(
-                      LogicalKeyboardKey.keyZ,
-                      meta: true,
-                    ),
-                    onSelected: () {},
-                  ),
-                  PlatformMenuItem(
-                    label: 'إعادة',
-                    shortcut: const SingleActivator(
-                      LogicalKeyboardKey.keyZ,
-                      meta: true,
-                      shift: true,
-                    ),
-                    onSelected: () {},
-                  ),
-                  PlatformMenuItemGroup(
-                    members: <PlatformMenuItem>[
-                      PlatformMenuItem(
-                        label: 'قص',
-                        shortcut: SingleActivator(
-                          LogicalKeyboardKey.keyX,
-                          meta: true,
-                        ),
-                        onSelected: null,
-                      ),
-                      PlatformMenuItem(
-                        label: 'نسخ',
-                        shortcut: SingleActivator(
-                          LogicalKeyboardKey.keyC,
-                          meta: true,
-                        ),
-                        onSelected: null,
-                      ),
-                      PlatformMenuItem(
-                        label: 'لصق',
-                        shortcut: SingleActivator(
-                          LogicalKeyboardKey.keyV,
-                          meta: true,
-                        ),
-                        onSelected: null,
-                      ),
-                      PlatformMenuItem(
-                        label: 'تحديد الكل',
-                        shortcut: SingleActivator(
-                          LogicalKeyboardKey.keyA,
-                          meta: true,
-                        ),
-                        onSelected: null,
-                      ),
-                    ],
-                  ),
-                ],
+            ],
+          ),
+          PlatformMenu(
+            label: 'تحرير',
+            menus: <PlatformMenuItem>[
+              PlatformMenuItem(
+                label: 'تراجع',
+                shortcut: const SingleActivator(
+                  LogicalKeyboardKey.keyZ,
+                  meta: true,
+                ),
+                onSelected: () {},
               ),
-              PlatformMenu(
-                label: 'نافذة',
-                menus: <PlatformMenuItem>[
-                  const PlatformProvidedMenuItem(
-                    type: PlatformProvidedMenuItemType.minimizeWindow,
-                  ),
-                  const PlatformProvidedMenuItem(
-                    type: PlatformProvidedMenuItemType.zoomWindow,
+              PlatformMenuItem(
+                label: 'إعادة',
+                shortcut: const SingleActivator(
+                  LogicalKeyboardKey.keyZ,
+                  meta: true,
+                  shift: true,
+                ),
+                onSelected: () {},
+              ),
+              PlatformMenuItemGroup(
+                members: <PlatformMenuItem>[
+                  PlatformMenuItem(
+                    label: 'قص',
+                    shortcut: SingleActivator(
+                      LogicalKeyboardKey.keyX,
+                      meta: true,
+                    ),
+                    onSelected: null,
                   ),
                   PlatformMenuItem(
-                    label: alwaysOnTop
-                        ? 'إلغاء البقاء في المقدمة'
-                        : 'البقاء في المقدمة',
-                    shortcut: const SingleActivator(
-                      LogicalKeyboardKey.keyT,
+                    label: 'نسخ',
+                    shortcut: SingleActivator(
+                      LogicalKeyboardKey.keyC,
                       meta: true,
-                      control: true,
                     ),
-                    onSelected: () async {
-                      final nextVal = !alwaysOnTop;
-                      await ref
-                          .read(generalSettingsProvider.notifier)
-                          .setAlwaysOnTop(nextVal);
-                      await windowManager.setAlwaysOnTop(nextVal);
-                    },
+                    onSelected: null,
+                  ),
+                  PlatformMenuItem(
+                    label: 'لصق',
+                    shortcut: SingleActivator(
+                      LogicalKeyboardKey.keyV,
+                      meta: true,
+                    ),
+                    onSelected: null,
+                  ),
+                  PlatformMenuItem(
+                    label: 'تحديد الكل',
+                    shortcut: SingleActivator(
+                      LogicalKeyboardKey.keyA,
+                      meta: true,
+                    ),
+                    onSelected: null,
                   ),
                 ],
               ),
             ],
-            child: rootWidget,
-          );
-        }
+          ),
+          PlatformMenu(
+            label: 'نافذة',
+            menus: <PlatformMenuItem>[
+              const PlatformProvidedMenuItem(
+                type: PlatformProvidedMenuItemType.minimizeWindow,
+              ),
+              const PlatformProvidedMenuItem(
+                type: PlatformProvidedMenuItemType.zoomWindow,
+              ),
+              PlatformMenuItem(
+                label: alwaysOnTop
+                    ? 'إلغاء البقاء في المقدمة'
+                    : 'البقاء في المقدمة',
+                shortcut: const SingleActivator(
+                  LogicalKeyboardKey.keyT,
+                  meta: true,
+                  control: true,
+                ),
+                onSelected: () async {
+                  final nextVal = !alwaysOnTop;
+                  await ref
+                      .read(generalSettingsProvider.notifier)
+                      .setAlwaysOnTop(nextVal);
+                  await windowManager.setAlwaysOnTop(nextVal);
+                },
+              ),
+            ],
+          ),
+        ],
+        child: rootWidget,
+      );
+    }
 
-        return rootWidget;
-      },
-    );
+    return rootWidget;
   }
 }
 

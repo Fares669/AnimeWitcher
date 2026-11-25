@@ -663,6 +663,51 @@ private func animeWitcherMenuImage(
   )?.withTintColor(tintColor, renderingMode: .alwaysOriginal)
 }
 
+private func actionHasMenu(_ action: [String: Any]) -> Bool {
+  let menuItems = action["menuItems"] as? [[String: Any]] ?? []
+  return !menuItems.isEmpty
+}
+
+private func actionTitle(_ action: [String: Any]) -> String? {
+  guard let raw = action["title"] as? String else { return nil }
+  let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+  return title.isEmpty ? nil : title
+}
+
+private func animeWitcherActionMenu(
+  _ action: [String: Any],
+  onSelect: @escaping (String) -> Void
+) -> UIMenu? {
+  guard #available(iOS 14.0, *) else { return nil }
+  let selectedValue = action["selectedValue"] as? String
+  let menuTint = animeWitcherUIColor(
+    action["menuTintColor"],
+    fallback: animeWitcherUIColor(action["color"], fallback: .label)
+  )
+  let rawItems = action["menuItems"] as? [[String: Any]] ?? []
+  guard !rawItems.isEmpty else { return nil }
+  let children: [UIAction] = rawItems.compactMap { menuItem in
+    guard let value = menuItem["value"] as? String,
+          let label = menuItem["label"] as? String else { return nil }
+    let isDestructive = menuItem["destructive"] as? Bool == true
+    let image = (menuItem["systemImage"] as? String).flatMap { name -> UIImage? in
+      if isDestructive { return UIImage(systemName: name) }
+      return animeWitcherMenuImage(named: name, tintColor: menuTint)
+    }
+    var attributes: UIMenuElement.Attributes = []
+    if isDestructive { attributes.insert(.destructive) }
+    return UIAction(
+      title: label,
+      image: image,
+      attributes: attributes,
+      state: value == selectedValue ? .on : .off
+    ) { _ in
+      onSelect(value)
+    }
+  }
+  return UIMenu(children: children)
+}
+
 private func animeWitcherConfigureGlassButton(
   _ button: UIButton,
   image: UIImage?,
@@ -957,17 +1002,6 @@ private final class ApplePersistentGlassHeaderNativeController: NSObject {
     }
   }
 
-  private func actionHasMenu(_ action: [String: Any]) -> Bool {
-    let menuItems = action["menuItems"] as? [[String: Any]] ?? []
-    return !menuItems.isEmpty
-  }
-
-  private func actionTitle(_ action: [String: Any]) -> String? {
-    guard let raw = action["title"] as? String else { return nil }
-    let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    return title.isEmpty ? nil : title
-  }
-
   private func actionTitleOnly(_ action: [String: Any]) -> Bool {
     action["titleOnly"] as? Bool == true && actionTitle(action) != nil
   }
@@ -979,37 +1013,9 @@ private final class ApplePersistentGlassHeaderNativeController: NSObject {
   }
 
   private func makeMenu(actionIndex: Int, action: [String: Any]) -> UIMenu? {
-    guard #available(iOS 14.0, *) else { return nil }
-    let selectedValue = action["selectedValue"] as? String
-    let menuTint = animeWitcherUIColor(
-      action["menuTintColor"],
-      fallback: animeWitcherUIColor(action["color"], fallback: .label)
-    )
-    let rawItems = action["menuItems"] as? [[String: Any]] ?? []
-    guard !rawItems.isEmpty else { return nil }
-    let children: [UIAction] = rawItems.compactMap { [weak self] menuItem in
-      guard let value = menuItem["value"] as? String,
-            let label = menuItem["label"] as? String else { return nil }
-      let isDestructive = menuItem["destructive"] as? Bool == true
-      let image = (menuItem["systemImage"] as? String).flatMap { name -> UIImage? in
-        if isDestructive { return UIImage(systemName: name) }
-        return animeWitcherMenuImage(named: name, tintColor: menuTint)
-      }
-      var attributes: UIMenuElement.Attributes = []
-      if isDestructive { attributes.insert(.destructive) }
-      return UIAction(
-        title: label,
-        image: image,
-        attributes: attributes,
-        state: value == selectedValue ? .on : .off
-      ) { _ in
-        self?.channel.invokeMethod(
-          "selected",
-          arguments: ["index": actionIndex, "value": value]
-        )
-      }
+    animeWitcherActionMenu(action) { [weak self] value in
+      self?.channel.invokeMethod("selected", arguments: ["index": actionIndex, "value": value])
     }
-    return UIMenu(children: children)
   }
 
   private func configureActionItem(
@@ -1716,53 +1722,10 @@ private final class AppleNativeToolbarPlatformView: NSObject, FlutterPlatformVie
     }
   }
 
-  private func makeMenu(
-    actionIndex: Int,
-    action: [String: Any]
-  ) -> UIMenu? {
-    guard #available(iOS 14.0, *) else { return nil }
-    let selectedValue = action["selectedValue"] as? String
-    let menuTint = animeWitcherUIColor(
-      action["menuTintColor"],
-      fallback: animeWitcherUIColor(action["color"], fallback: .label)
-    )
-    let rawItems = action["menuItems"] as? [[String: Any]] ?? []
-    guard !rawItems.isEmpty else { return nil }
-
-    let children: [UIAction] = rawItems.compactMap { [weak self] menuItem in
-      guard let value = menuItem["value"] as? String,
-            let label = menuItem["label"] as? String else { return nil }
-      let isDestructive = menuItem["destructive"] as? Bool == true
-      let image = (menuItem["systemImage"] as? String).flatMap { name -> UIImage? in
-        if isDestructive { return UIImage(systemName: name) }
-        return animeWitcherMenuImage(named: name, tintColor: menuTint)
-      }
-      var attributes: UIMenuElement.Attributes = []
-      if isDestructive { attributes.insert(.destructive) }
-      return UIAction(
-        title: label,
-        image: image,
-        attributes: attributes,
-        state: value == selectedValue ? .on : .off
-      ) { _ in
-        self?.channel.invokeMethod(
-          "selected",
-          arguments: ["index": actionIndex, "value": value]
-        )
-      }
+  private func makeMenu(actionIndex: Int, action: [String: Any]) -> UIMenu? {
+    animeWitcherActionMenu(action) { [weak self] value in
+      self?.channel.invokeMethod("selected", arguments: ["index": actionIndex, "value": value])
     }
-    return UIMenu(children: children)
-  }
-
-  private func actionHasMenu(_ action: [String: Any]) -> Bool {
-    let menuItems = action["menuItems"] as? [[String: Any]] ?? []
-    return !menuItems.isEmpty
-  }
-
-  private func actionTitle(_ action: [String: Any]) -> String? {
-    guard let raw = action["title"] as? String else { return nil }
-    let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    return title.isEmpty ? nil : title
   }
 
   private func actionKind(_ action: [String: Any]) -> Int {

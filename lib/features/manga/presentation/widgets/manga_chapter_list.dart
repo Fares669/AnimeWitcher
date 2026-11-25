@@ -741,10 +741,11 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     final inRange = rangeIndex == null
         ? null
         : ranges[rangeIndex].map((c) => c.id).toSet();
+    final matchesQuery = mangaChapterMatcher(_query);
     final chapters = ordered
         .where((chapter) {
           if (inRange != null && !inRange.contains(chapter.id)) return false;
-          if (!mangaChapterMatchesQuery(chapter, _query)) return false;
+          if (!matchesQuery(chapter)) return false;
           return switch (_filter) {
             MangaChapterFilter.all => true,
             MangaChapterFilter.unread =>

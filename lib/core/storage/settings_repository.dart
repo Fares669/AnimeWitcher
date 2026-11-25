@@ -141,14 +141,6 @@ class SettingsRepository {
 
   DateTime? malArtworkProbedAt() => _storageService.malArtworkProbedAt();
 
-  Future<void> setWelcomeDialogSeen(bool seen) async {
-    await _storageService.setWelcomeDialogSeen(seen);
-  }
-
-  bool hasSeenWelcomeDialog() {
-    return _storageService.hasSeenWelcomeDialog();
-  }
-
   Future<void> setPlayerSetting(String key, dynamic value) async {
     await _storageService.setPlayerSetting(key, value);
   }

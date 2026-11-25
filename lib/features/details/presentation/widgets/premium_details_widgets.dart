@@ -1,19 +1,13 @@
 import 'dart:async';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
-import 'package:animewitcher/core/utils/artwork_quality.dart';
-import 'package:animewitcher/shared/widgets/cards_wrapper.dart';
-import 'package:animewitcher/shared/widgets/paged_rail.dart';
+import 'package:animewitcher/core/utils/digit_normalization.dart';
 import 'package:animewitcher/shared/widgets/shimmer_placeholder.dart';
-import 'package:url_launcher/url_launcher.dart';
-import 'package:animewitcher/shared/widgets/multimedia_card.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import 'countdown_unit_visibility.dart';
 import 'details_ratings_row.dart';
-import '../../../../core/utils/avatar_image.dart';
 
 String _detailsText(
   BuildContext context, {
@@ -31,20 +25,6 @@ class MetadataBar extends ConsumerWidget {
     final value = raw.toString().trim();
     if (value.isEmpty || value.toLowerCase() == 'null') return null;
     return value;
-  }
-
-  String _normalizeDigits(String value) {
-    const arabic = '٠١٢٣٤٥٦٧٨٩';
-    const eastern = '۰۱۲۳۴۵۶۷۸۹';
-    return value
-        .replaceAllMapped(
-          RegExp(r'[٠-٩]'),
-          (match) => '${arabic.indexOf(match.group(0)!)}',
-        )
-        .replaceAllMapped(
-          RegExp(r'[۰-۹]'),
-          (match) => '${eastern.indexOf(match.group(0)!)}',
-        );
   }
 
   String _statusLabel(BuildContext context, Map<String, String> data) {
@@ -89,7 +69,7 @@ class MetadataBar extends ConsumerWidget {
     ]) {
       if (candidate == null) continue;
 
-      final normalized = _normalizeDigits(candidate.toLowerCase());
+      final normalized = normalizeLocalizedDigits(candidate.toLowerCase());
       if (normalized == 'undefined' ||
           normalized == 'undefined عام 0' ||
           normalized == 'undefined year 0' ||
@@ -102,7 +82,7 @@ class MetadataBar extends ConsumerWidget {
 
     var year = _clean(data['awYear']) ?? item.year?.toString();
     if (year != null) {
-      final normalizedYear = _normalizeDigits(year);
+      final normalizedYear = normalizeLocalizedDigits(year);
       final match = RegExp(r'(?:19|20)[0-9]{2}').firstMatch(normalizedYear);
       if (match != null) {
         year = match.group(0);
@@ -116,7 +96,7 @@ class MetadataBar extends ConsumerWidget {
 
     season = season.replaceAll('عام ', '').trim();
     final embeddedYear = RegExp(r'(?:19|20)[0-9]{2}')
-        .firstMatch(_normalizeDigits(season))
+        .firstMatch(normalizeLocalizedDigits(season))
         ?.group(0);
     final displayYear = year ?? embeddedYear;
 
@@ -146,7 +126,7 @@ class MetadataBar extends ConsumerWidget {
   int? _episodeCount(Map<String, String> data) {
     final raw = _clean(data['awEpisodes']);
     if (raw == null) return null;
-    final normalized = _normalizeDigits(raw);
+    final normalized = normalizeLocalizedDigits(raw);
     final match = RegExp(r'[0-9]+').firstMatch(normalized);
     final count = match == null ? null : int.tryParse(match.group(0)!);
     if (count == null || count <= 0) return null;
@@ -455,332 +435,6 @@ class _NextAiringWidgetState extends State<NextAiringWidget> {
             _buildCountdownRow(context),
         ],
       ),
-    );
-  }
-}
-
-class CastCarousel extends StatelessWidget {
-  final List<Actor> cast;
-  final void Function(Actor actor)? onActorTap;
-  final VoidCallback? onShowMore;
-
-  const CastCarousel({
-    super.key,
-    required this.cast,
-    this.onActorTap,
-    this.onShowMore,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final extra = onShowMore == null ? 0 : 1;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8.0),
-          child: Text(
-            _detailsText(context, english: 'Cast', arabic: 'طاقم الشخصيات'),
-            style: Theme.of(context).textTheme.titleLarge
-                ?.copyWith(fontWeight: FontWeight.bold),
-          ),
-        ),
-        SizedBox(
-          height: 160,
-          child: PagedRail(
-            // 80 (cast card) + 16 (separator in [separatorBuilder]) = 96 stride.
-            itemExtent: 96,
-            itemCount: cast.length + extra,
-            separatorBuilder: (_, _) => const SizedBox(width: 16),
-            itemBuilder: (context, index) {
-              if (index >= cast.length) {
-                return SizedBox(
-                  width: 80,
-                  child: InkWell(
-                    onTap: onShowMore,
-                    borderRadius: BorderRadius.circular(40),
-                    child: Column(
-                      children: [
-                        CircleAvatar(
-                          radius: 35,
-                          backgroundColor: Theme.of(context).colorScheme.primary
-                              .withValues(alpha: 0.16),
-                          child: Icon(
-                            Icons.more_horiz_rounded,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          _detailsText(
-                            context,
-                            english: 'More',
-                            arabic: 'المزيد',
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(fontWeight: FontWeight.bold),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              }
-              final actor = cast[index];
-              final content = Column(
-                children: [
-                  CircleAvatar(
-                    radius: 35,
-                    backgroundImage: avatarImage(
-                      context,
-                      actor.image,
-                      radius: 35,
-                    ),
-                    child: actor.image == null
-                        ? const Icon(Icons.person)
-                        : null,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    actor.name,
-                    textDirection: TextDirection.ltr,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.bodySmall
-                        ?.copyWith(fontWeight: FontWeight.bold),
-                  ),
-                  if (actor.role != null)
-                    Text(
-                      actor.role!,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.labelSmall
-                          ?.copyWith(color: Theme.of(context).hintColor),
-                    ),
-                ],
-              );
-              return SizedBox(
-                width: 80,
-                child: onActorTap == null
-                    ? content
-                    : InkWell(
-                        onTap: () => onActorTap!(actor),
-                        borderRadius: BorderRadius.circular(12),
-                        child: content,
-                      ),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class TrailersSection extends StatelessWidget {
-  final List<Trailer> trailers;
-  const TrailersSection({super.key, required this.trailers});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8.0),
-          child: Text(
-            _detailsText(
-              context,
-              english: 'Trailers & Extras',
-              arabic: 'العرض الدعائي',
-            ),
-            style: Theme.of(context).textTheme.titleLarge
-                ?.copyWith(fontWeight: FontWeight.bold),
-          ),
-        ),
-        SizedBox(
-          height: 160,
-          child: PagedRail(
-            // 240 (trailer card) + 16 (separator in [separatorBuilder]) = 256
-            // stride so the snap unit matches the on-screen card+gap pitch.
-            itemExtent: 256,
-            itemCount: trailers.length,
-            separatorBuilder: (_, _) => const SizedBox(width: 16),
-            itemBuilder: (context, index) {
-              final trailer = trailers[index];
-              return CardsWrapper(
-                onTap: () async {
-                  final uri = Uri.tryParse(trailer.url);
-                  if (uri != null) {
-                    await launchUrl(uri, mode: LaunchMode.externalApplication);
-                  }
-                },
-                child: Container(
-                  width: 240,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    color: Theme.of(context).colorScheme.surfaceContainer,
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      _YoutubeThumbnail(
-                        videoId: _extractYoutubeId(trailer.url),
-                      ),
-                      Container(
-                        color: Colors.black26,
-                        child: const Center(
-                          child: Icon(
-                            Icons.play_circle_fill_rounded,
-                            color: Colors.white,
-                            size: 48,
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        bottom: 8,
-                        left: 8,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.black87,
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            _detailsText(
-                              context,
-                              english: 'Trailer',
-                              arabic: 'إعلان',
-                            ),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  String _extractYoutubeId(String url) {
-    // Simple extraction for common patterns
-    if (url.contains("v=")) return url.split("v=")[1].split("&")[0];
-    if (url.contains("be/")) return url.split("be/")[1].split("?")[0];
-    return "";
-  }
-}
-
-/// Trailer still at the best resolution YouTube has for the video.
-///
-/// `maxresdefault` only exists for HD uploads, so each size falls back to the
-/// next one down instead of showing the placeholder icon.
-class _YoutubeThumbnail extends StatelessWidget {
-  const _YoutubeThumbnail({required this.videoId});
-
-  static const List<String> _sizes = <String>[
-    'maxresdefault',
-    'sddefault',
-    'hqdefault',
-    'mqdefault',
-  ];
-
-  final String videoId;
-
-  @override
-  Widget build(BuildContext context) => _buildSize(0);
-
-  Widget _buildSize(int index) {
-    if (videoId.isEmpty || index >= _sizes.length) {
-      return const Center(child: Icon(Icons.movie_rounded));
-    }
-    return ArtworkDecode(
-      paintedWidth: 240,
-      builder: (BuildContext context, int? decodeWidth) => CachedNetworkImage(
-        imageUrl: 'https://img.youtube.com/vi/$videoId/${_sizes[index]}.jpg',
-        fit: BoxFit.cover,
-        memCacheWidth: decodeWidth,
-        filterQuality: FilterQuality.medium,
-        errorWidget: (_, _, _) => _buildSize(index + 1),
-      ),
-    );
-  }
-}
-
-class RecommendationsCarousel extends StatelessWidget {
-  final List<MultimediaItem> items;
-  final void Function(MultimediaItem) onItemTap;
-  final String? title;
-  final bool showRelationBadge;
-
-  const RecommendationsCarousel({
-    super.key,
-    required this.items,
-    required this.onItemTap,
-    this.title,
-    this.showRelationBadge = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cardWidth = MultimediaCardLayout.cardWidth(context, isPortrait: true);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8.0),
-          child: Text(
-            title ??
-                _detailsText(
-                  context,
-                  english: 'More Like This',
-                  arabic: 'المزيد مثل هذا',
-                ),
-            style: Theme.of(context).textTheme.titleLarge
-                ?.copyWith(fontWeight: FontWeight.bold),
-          ),
-        ),
-        SizedBox(
-          height: MultimediaCardLayout.listHeight(cardWidth, isPortrait: true),
-          child: Directionality(
-            textDirection: TextDirection.rtl,
-            child: PagedRail(
-              // cardWidth + 12 (separator from [separatorBuilder]); the rail
-              // is rendered RTL so swiping right advances to the next card.
-              itemExtent: cardWidth + 12,
-              itemCount: items.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 12),
-              itemBuilder: (context, index) {
-                final item = items[index];
-                return MultimediaCard.fromItem(
-                  key: ValueKey('${title ?? 'more-like-this'}-rail-$index'),
-                  item: item,
-                  heroTag: heroTagWithUrl('related', item, index),
-                  showRelationBadge: showRelationBadge,
-                  onTap: () => onItemTap(item),
-                );
-              },
-            ),
-          ),
-        ),
-      ],
     );
   }
 }

@@ -440,17 +440,17 @@ class _PlayerEpisodesPanelState extends ConsumerState<PlayerEpisodesPanel> {
     ref.watch(accountDataRevisionProvider);
     final episodeWatchRepo = ref.watch(episodeWatchRepositoryProvider);
 
-    final seasons = episodes.map((e) => e.season).toSet().toList()..sort();
+    final bySeason = episodes.groupListsBy((episode) => episode.season);
+    final seasons = bySeason.keys.toList()..sort();
     final multiSeason = seasons.length > 1;
 
     final rows = <Widget>[];
     var anchorAssigned = false;
     for (final season in seasons) {
-      final seasonEps = episodes.where((e) => e.season == season).toList();
       if (multiSeason) {
         rows.add(_PanelSubheader(title: l10n.seasonWithNumber(season)));
       }
-      for (final ep in seasonEps) {
+      for (final ep in bySeason[season]!) {
         final isCurrent = ep.url == currentUrl;
         final isAnchor = isCurrent && !anchorAssigned;
         if (isAnchor) anchorAssigned = true;

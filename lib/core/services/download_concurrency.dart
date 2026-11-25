@@ -74,10 +74,6 @@ Future<int> applyDownloadQueueSettings({
 bool isQueueWaitingMetadata(Map<String, dynamic>? metadata) =>
     metadata?[kDownloadQueueWaitingMetadataKey] == true;
 
-/// True when the user paused this episode (not a parked failure).
-bool isUserPausedMetadata(Map<String, dynamic>? metadata) =>
-    metadata?[kDownloadUserPausedMetadataKey] == true;
-
 double downloadMetadataProgress(Map<String, dynamic>? metadata) {
   final value = metadata?[kDownloadLastProgressMetadataKey];
   if (value is num) {
@@ -789,22 +785,6 @@ bool isNativeWaitingSnapshotWaiter({
 }) {
   if (userPaused) return false;
   return queueWaiting;
-}
-
-/// Plugin `allTasks` / `taskForId` membership: HQ waiter or URLSession task.
-bool isLiveNativeDownloadStatus(TaskStatus status) {
-  switch (status) {
-    case TaskStatus.running:
-    case TaskStatus.enqueued:
-    case TaskStatus.waitingToRetry:
-      return true;
-    case TaskStatus.paused:
-    case TaskStatus.complete:
-    case TaskStatus.canceled:
-    case TaskStatus.failed:
-    case TaskStatus.notFound:
-      return false;
-  }
 }
 
 class LiveNativeDownload {

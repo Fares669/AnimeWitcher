@@ -327,9 +327,6 @@ class MoreSidebarHeader extends StatelessWidget {
 String moreHeadingSetup(BuildContext context) =>
     appText(context, english: 'ACCOUNT', arabic: 'الحساب');
 
-String moreHeadingWatching(BuildContext context) =>
-    appText(context, english: 'WATCHING', arabic: 'المشاهدة');
-
 String moreHeadingBrowse(BuildContext context) =>
     appText(context, english: 'BROWSE', arabic: 'التصفح');
 

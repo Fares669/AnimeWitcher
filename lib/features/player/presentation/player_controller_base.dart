@@ -1564,108 +1564,67 @@ class PlayerController extends Notifier<PlayerState> {
         _lastSavedPosition = Duration(milliseconds: posMs);
       }
 
-      if (!_suppressNextEpisodeDetection &&
-          (_item.contentType == MultimediaContentType.series ||
-              _item.contentType == MultimediaContentType.anime)) {
-        final remainingSecs = (durationMs - posMs) / 1000;
-
-        // Show next episode overlay if within last 15 seconds or video ended.
-        // It persists until the user dismisses it or loads a new episode.
-        if (remainingSecs <= 15.0) {
-          final currentEp = _episode ?? _resolveCurrentEpisode();
-          List<Episode>? episodes = _item.episodes;
-          if (isSeries &&
-              currentEp != null &&
-              currentEp.dubStatus != DubStatus.none) {
-            episodes = episodes
-                ?.where((e) => e.dubStatus == currentEp.dubStatus)
-                .toList();
-          }
-
-          int? currentIndex;
-          if (currentEp != null) {
-            currentIndex = episodes?.indexWhere((e) => e.url == currentEp.url);
-          } else {
-            currentIndex = episodes?.indexWhere((e) => e.url == _videoUrl);
-          }
-          if (currentIndex != null &&
-              currentIndex != -1 &&
-              episodes != null &&
-              currentIndex < episodes.length - 1) {
-            final next = episodes[currentIndex + 1];
-            if (!_userDismissedOverlay && !state.showNextEpisodeOverlay) {
-              state = state.copyWith(
-                showNextEpisodeOverlay: true,
-                nextEpisodeTitle: next.name,
-                nextEpisodePosterUrl: _episodeArtwork(next),
-                nextEpisodeRating: next.rating,
-                nextEpisodeNumber: next.episode,
-                nextEpisodeSeason: next.season,
-                nextEpisodeRuntime: next.runtime,
-                nextEpisodeDescription: next.description,
-                nextEpisodeIsFinal: next.isFinal,
-                nextEpisodeServerName: next.serverName,
-              );
-            }
-            // After the card, never before it: a prefetch that throws must
-            // not be able to take the next-episode prompt down with it.
-            _warmNextEpisodeSources(next);
-            // Ensure it persists if video completes and resets position
-            _isNextEpisodeOverlayForced = true;
-          }
-          return;
-        }
-
-        if (remainingSecs > 15.0) {
-          if (state.showNextEpisodeOverlay && !_isNextEpisodeOverlayForced) {
-            state = state.copyWith(showNextEpisodeOverlay: false);
-          }
-        }
-      }
+      _updateNextEpisodeOverlay(durationMs - posMs);
     });
   }
 
-  void forceNextEpisodeOverlay() {
-    if (_item.contentType != MultimediaContentType.series &&
-        _item.contentType != MultimediaContentType.anime) {
+  // Both playback engines trigger the same card in the final 15 seconds.
+  void _updateNextEpisodeOverlay(int remainingMs) {
+    if (_suppressNextEpisodeDetection ||
+        (_item.contentType != MultimediaContentType.series &&
+            _item.contentType != MultimediaContentType.anime)) {
       return;
     }
-    if (_userDismissedOverlay) return;
-
-    final currentEp = _episode ?? _resolveCurrentEpisode();
-    List<Episode>? episodes = _item.episodes;
-    if (isSeries &&
-        currentEp != null &&
-        currentEp.dubStatus != DubStatus.none) {
-      episodes = episodes
-          ?.where((e) => e.dubStatus == currentEp.dubStatus)
-          .toList();
+    if (remainingMs > 15000) {
+      if (state.showNextEpisodeOverlay && !_isNextEpisodeOverlayForced) {
+        state = state.copyWith(showNextEpisodeOverlay: false);
+      }
+      return;
     }
-
-    int? currentIndex;
-    if (currentEp != null) {
-      currentIndex = episodes?.indexWhere((e) => e.url == currentEp.url);
-    } else {
-      currentIndex = episodes?.indexWhere((e) => e.url == _videoUrl);
+    final next = _episodeAfterCurrentForOverlay();
+    if (next == null) return;
+    if (!_userDismissedOverlay && !state.showNextEpisodeOverlay) {
+      _showNextEpisodeOverlay(next, description: next.description);
     }
+    // Always warm after publishing the card, never before.
+    _warmNextEpisodeSources(next);
+    _isNextEpisodeOverlayForced = true;
+  }
 
-    if (currentIndex != null &&
-        currentIndex != -1 &&
-        episodes != null &&
-        currentIndex < episodes.length - 1) {
-      final next = episodes[currentIndex + 1];
+  Episode? _episodeAfterCurrentForOverlay() {
+    final active = currentEpisode;
+    return episodeAtOffsetInVariant(
+      _item.episodes,
+      currentUrl: active?.url ?? _videoUrl,
+      variant: isSeries ? active?.dubStatus ?? DubStatus.none : DubStatus.none,
+    );
+  }
+
+  void _showNextEpisodeOverlay(Episode next, {String? description}) {
+    state = state.copyWith(
+      showNextEpisodeOverlay: true,
+      nextEpisodeTitle: next.name,
+      nextEpisodePosterUrl: _episodeArtwork(next),
+      nextEpisodeRating: next.rating,
+      nextEpisodeNumber: next.episode,
+      nextEpisodeSeason: next.season,
+      nextEpisodeRuntime: next.runtime,
+      nextEpisodeDescription: description,
+      nextEpisodeIsFinal: next.isFinal,
+      nextEpisodeServerName: next.serverName,
+    );
+  }
+
+  void forceNextEpisodeOverlay() {
+    if (_userDismissedOverlay ||
+        (_item.contentType != MultimediaContentType.series &&
+            _item.contentType != MultimediaContentType.anime)) {
+      return;
+    }
+    final next = _episodeAfterCurrentForOverlay();
+    if (next != null) {
       _isNextEpisodeOverlayForced = true;
-      state = state.copyWith(
-        showNextEpisodeOverlay: true,
-        nextEpisodeTitle: next.name,
-        nextEpisodePosterUrl: _episodeArtwork(next),
-        nextEpisodeRating: next.rating,
-        nextEpisodeNumber: next.episode,
-        nextEpisodeSeason: next.season,
-        nextEpisodeRuntime: next.runtime,
-        nextEpisodeIsFinal: next.isFinal,
-        nextEpisodeServerName: next.serverName,
-      );
+      _showNextEpisodeOverlay(next);
     }
   }
 
@@ -2419,67 +2378,7 @@ class PlayerController extends Notifier<PlayerState> {
         _lastSavedPosition = pos;
       }
 
-      // Next Episode Detection (Series only, trigger 15s before end)
-      if (!_suppressNextEpisodeDetection &&
-          (_item.contentType == MultimediaContentType.series ||
-              _item.contentType == MultimediaContentType.anime)) {
-        final durationMs = duration.inMilliseconds;
-        final posMs = pos.inMilliseconds;
-        final remainingSecs = (durationMs - posMs) / 1000;
-
-        // Show next episode overlay if within last 15 seconds or video ended.
-        // It persists until the user dismisses it or loads a new episode.
-        if (remainingSecs <= 15.0) {
-          final currentEp = _episode ?? _resolveCurrentEpisode();
-          List<Episode>? episodes = _item.episodes;
-          if (isSeries &&
-              currentEp != null &&
-              currentEp.dubStatus != DubStatus.none) {
-            episodes = episodes
-                ?.where((e) => e.dubStatus == currentEp.dubStatus)
-                .toList();
-          }
-
-          int? currentIndex;
-          if (currentEp != null) {
-            currentIndex = episodes?.indexWhere((e) => e.url == currentEp.url);
-          } else {
-            currentIndex = episodes?.indexWhere((e) => e.url == _videoUrl);
-          }
-          if (currentIndex != null &&
-              currentIndex != -1 &&
-              episodes != null &&
-              currentIndex < episodes.length - 1) {
-            final next = episodes[currentIndex + 1];
-            if (!_userDismissedOverlay && !state.showNextEpisodeOverlay) {
-              state = state.copyWith(
-                showNextEpisodeOverlay: true,
-                nextEpisodeTitle: next.name,
-                nextEpisodePosterUrl: _episodeArtwork(next),
-                nextEpisodeRating: next.rating,
-                nextEpisodeNumber: next.episode,
-                nextEpisodeSeason: next.season,
-                nextEpisodeRuntime: next.runtime,
-                nextEpisodeDescription: next.description,
-                nextEpisodeIsFinal: next.isFinal,
-                nextEpisodeServerName: next.serverName,
-              );
-            }
-            // After the card, never before it: a prefetch that throws must
-            // not be able to take the next-episode prompt down with it.
-            _warmNextEpisodeSources(next);
-            // Ensure it persists if video completes and resets position
-            _isNextEpisodeOverlayForced = true;
-          }
-          return;
-        }
-
-        if (remainingSecs > 15.0) {
-          if (state.showNextEpisodeOverlay && !_isNextEpisodeOverlayForced) {
-            state = state.copyWith(showNextEpisodeOverlay: false);
-          }
-        }
-      }
+      _updateNextEpisodeOverlay(duration.inMilliseconds - pos.inMilliseconds);
     });
   }
 

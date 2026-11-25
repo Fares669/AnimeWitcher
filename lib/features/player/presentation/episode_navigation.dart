@@ -11,26 +11,14 @@ Episode? adjacentEpisode({
   required String currentEpisodeUrl,
   required int offset,
 }) {
-  if (episodes == null || episodes.isEmpty || offset == 0) return null;
-
-  final sequence =
-      currentEpisode != null && currentEpisode.dubStatus != DubStatus.none
-      ? episodes
-            .where((episode) => episode.dubStatus == currentEpisode.dubStatus)
-            .toList(growable: false)
-      : episodes;
-  final currentUrl = currentEpisode?.url ?? currentEpisodeUrl;
-  if (currentUrl.isEmpty) return null;
-  final currentIndex = sequence.indexWhere(
-    (episode) => episode.url == currentUrl,
+  final url = currentEpisode?.url ?? currentEpisodeUrl;
+  if (url.isEmpty) return null;
+  return episodeAtOffsetInVariant(
+    episodes,
+    currentUrl: url,
+    variant: currentEpisode?.dubStatus ?? DubStatus.none,
+    offset: offset,
   );
-  final adjacentIndex = currentIndex + offset;
-  if (currentIndex < 0 ||
-      adjacentIndex < 0 ||
-      adjacentIndex >= sequence.length) {
-    return null;
-  }
-  return sequence[adjacentIndex];
 }
 
 /// The next episode that carries story, skipping any the provider marked
@@ -44,14 +32,39 @@ Episode? nextStoryEpisode({
   required Episode? currentEpisode,
   required String currentEpisodeUrl,
 }) {
-  for (var offset = 1; ; offset++) {
-    final candidate = adjacentEpisode(
-      episodes: episodes,
-      currentEpisode: currentEpisode,
-      currentEpisodeUrl: currentEpisodeUrl,
-      offset: offset,
-    );
-    if (candidate == null) return null;
-    if (!candidate.isFiller) return candidate;
+  final url = currentEpisode?.url ?? currentEpisodeUrl;
+  if (url.isEmpty) return null;
+  return episodeAtOffsetInVariant(
+    episodes,
+    currentUrl: url,
+    variant: currentEpisode?.dubStatus ?? DubStatus.none,
+    skipFiller: true,
+  );
+}
+
+/// Finds a neighbor without allocating a filtered episode list. The first URL
+/// in the requested variant anchors the search even if that row is filler.
+Episode? episodeAtOffsetInVariant(
+  List<Episode>? episodes, {
+  required String currentUrl,
+  required DubStatus variant,
+  int offset = 1,
+  bool skipFiller = false,
+}) {
+  if (episodes == null || offset == 0) return null;
+  bool inVariant(Episode row) =>
+      variant == DubStatus.none || row.dubStatus == variant;
+  final current = episodes.indexWhere(
+    (row) => row.url == currentUrl && inVariant(row),
+  );
+  if (current < 0) return null;
+
+  final step = offset > 0 ? 1 : -1;
+  for (var i = current + step; i >= 0 && i < episodes.length; i += step) {
+    final row = episodes[i];
+    if (!inVariant(row) || (skipFiller && row.isFiller)) continue;
+    offset -= step;
+    if (offset == 0) return row;
   }
+  return null;
 }

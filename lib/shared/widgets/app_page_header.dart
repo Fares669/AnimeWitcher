@@ -251,21 +251,16 @@ class _RenderProgressiveHeaderBlur extends RenderProxyBox {
     required Offset origin,
   }) {
     final dpr = _devicePixelRatio;
-    final values = <double>[
-      _maxSigma * dpr,
-      _falloff,
-      axis,
-      origin.dx * dpr,
-      origin.dy * dpr,
-      size.width * dpr,
-      size.height * dpr,
-    ];
-
-    // Float slots 0 and 1 are uSize; Flutter supplies those for image-filter
-    // shaders. Our uniforms start at slot 2.
-    for (var i = 0; i < values.length; i++) {
-      shader.setFloat(i + 2, values[i]);
-    }
+    // Flutter supplies uSize in slots 0–1. Write our uniforms directly so
+    // neither shader pass allocates a temporary list during paint.
+    shader
+      ..setFloat(2, _maxSigma * dpr)
+      ..setFloat(3, _falloff)
+      ..setFloat(4, axis)
+      ..setFloat(5, origin.dx * dpr)
+      ..setFloat(6, origin.dy * dpr)
+      ..setFloat(7, size.width * dpr)
+      ..setFloat(8, size.height * dpr);
   }
 }
 

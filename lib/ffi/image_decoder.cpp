@@ -1693,36 +1693,22 @@ static unsigned char* decode_avif_rgba(const char* file_path, int* out_w, int* o
 // init_decoder() give a specific "you're missing libX-dev" message rather
 // than a generic one, no matter which combination of libjpeg/libpng/libavif
 // was found at configure time.
-static int linux_is_jpeg(const char* file_path) {
-    FILE* f = fopen(file_path, "rb");
-    if (!f) return 0;
-    unsigned char magic[2] = {0, 0};
-    fread(magic, 1, 2, f);
-    fclose(f);
-    return (magic[0] == 0xFF && magic[1] == 0xD8);
-}
+struct LinuxImageSignatures {
+    bool jpeg, png, avif;
+};
 
-static int linux_is_png(const char* file_path) {
+static LinuxImageSignatures linux_image_signatures(const char* file_path) {
     FILE* f = fopen(file_path, "rb");
-    if (!f) return 0;
-    unsigned char magic[8] = {0};
-    size_t n = fread(magic, 1, 8, f);
+    if (!f) return {};
+    unsigned char header[12];
+    const size_t n = fread(header, 1, sizeof(header), f);
     fclose(f);
-    return (n == 8 && memcmp(magic, "\x89PNG\r\n\x1a\n", 8) == 0);
-}
-
-static int linux_is_avif(const char* file_path) {
-    FILE* f = fopen(file_path, "rb");
-    if (!f) return 0;
-    unsigned char header[12] = {0};
-    size_t n = fread(header, 1, 12, f);
-    fclose(f);
-    if (n != 12) return 0;
-
-    // ISOBMFF: bytes 4-7 must be "ftyp"; the major brand (bytes 8-11) tells us
-    // whether this is an AVIF still image ("avif") or AVIF image sequence ("avis").
-    if (memcmp(header + 4, "ftyp", 4) != 0) return 0;
-    return (memcmp(header + 8, "avif", 4) == 0 || memcmp(header + 8, "avis", 4) == 0);
+    return {
+        n >= 2 && header[0] == 0xFF && header[1] == 0xD8,
+        n >= 8 && memcmp(header, "\x89PNG\r\n\x1a\n", 8) == 0,
+        n >= 12 && memcmp(header + 4, "ftyp", 4) == 0 &&
+            (memcmp(header + 8, "avif", 4) == 0 || memcmp(header + 8, "avis", 4) == 0),
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -1800,44 +1786,42 @@ ImageDecoderContext* init_decoder(const char* file_path, bool crop_borders, int*
     // Sniffing is unconditional (cheap header check, no library dependency),
     // so we know the file's actual format even if we can't decode it — this
     // is what lets the error path below name the specific missing package.
-    int is_jpeg = linux_is_jpeg(file_path);
-    int is_png  = linux_is_png(file_path);
-    int is_avif = linux_is_avif(file_path);
+    const auto format = linux_image_signatures(file_path);
 
 #ifdef HAVE_LIBJPEG
-    if (!rgba && is_jpeg) {
+    if (!rgba && format.jpeg) {
         rgba = decode_jpeg_rgba(file_path, &w, &h);
     }
 #endif
 
 #ifdef HAVE_LIBPNG
-    if (!rgba && is_png) {
+    if (!rgba && format.png) {
         rgba = decode_png_rgba(file_path, &w, &h);
     }
 #endif
 
 #ifdef HAVE_LIBAVIF
-    if (!rgba && is_avif) {
+    if (!rgba && format.avif) {
         rgba = decode_avif_rgba(file_path, &w, &h);
     }
 #endif
 
     if (!rgba) {
-        if (is_jpeg) {
+        if (format.jpeg) {
 #ifdef HAVE_LIBJPEG
             printf("ImageDecoder: Failed to decode JPEG file (it may be corrupt or truncated): %s\n", file_path);
 #else
             printf("ImageDecoder: JPEG file detected, but libjpeg support was not compiled in."
                    " Install libjpeg-dev, then rebuild the app to enable JPEG support.\n");
 #endif
-        } else if (is_png) {
+        } else if (format.png) {
 #ifdef HAVE_LIBPNG
             printf("ImageDecoder: Failed to decode PNG file (it may be corrupt or truncated): %s\n", file_path);
 #else
             printf("ImageDecoder: PNG file detected, but libpng support was not compiled in."
                    " Install libpng-dev, then rebuild the app to enable PNG support.\n");
 #endif
-        } else if (is_avif) {
+        } else if (format.avif) {
 #ifdef HAVE_LIBAVIF
             printf("ImageDecoder: Failed to decode AVIF file (it may be corrupt or use an unsupported profile): %s\n", file_path);
 #else

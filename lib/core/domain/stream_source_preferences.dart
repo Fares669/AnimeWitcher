@@ -22,58 +22,43 @@ const List<String> defaultStreamQualityPriority = <String>[
 /// Video URLs and qualities are only resolved after the user chooses a server.
 List<StreamResult> commonBatchStreamServers(
   List<List<StreamResult>> episodeSources,
-) {
-  if (episodeSources.isEmpty) return const <StreamResult>[];
-  final shared = episodeSources
-      .skip(1)
-      .map(
-        (sources) => sources
-            .where((source) => source.url.trim().isNotEmpty)
-            .map(
-              (source) =>
-                  streamServerPreferenceKey(source.source).toLowerCase(),
-            )
-            .toSet(),
-      )
-      .toList();
-  final seen = <String>{};
-  return episodeSources.first
-      .where((source) {
-        final key = streamServerPreferenceKey(source.source).toLowerCase();
-        return source.url.trim().isNotEmpty &&
-            key.isNotEmpty &&
-            seen.add(key) &&
-            shared.every((keys) => keys.contains(key));
-      })
-      .toList(growable: false);
-}
+) => _commonBatchOptions<String>(episodeSources, (source) {
+  if (source.url.trim().isEmpty) return null;
+  final key = streamServerPreferenceKey(source.source).toLowerCase();
+  return key.isEmpty ? null : key;
+});
 
 /// A pair is offered for a batch only if *every* episode provides it.
 /// Keep the first episode's original source for the existing picker UI.
 List<StreamResult> commonBatchStreamSources(
   List<List<StreamResult>> episodeSources,
+) => _commonBatchOptions<(String, String)>(episodeSources, (source) {
+  final key = batchStreamSourceKey(source);
+  return key.$2.isEmpty ? null : key;
+});
+
+List<StreamResult> _commonBatchOptions<K extends Object>(
+  List<List<StreamResult>> episodes,
+  K? Function(StreamResult source) keyOf,
 ) {
-  if (episodeSources.isEmpty) return const <StreamResult>[];
-  final shared = episodeSources
-      .skip(1)
-      .map(
-        (sources) => sources
-            .where(
-              (source) => batchStreamSourceKey(source).$2.trim().isNotEmpty,
-            )
-            .map(batchStreamSourceKey)
-            .toSet(),
-      )
-      .toList();
-  final seen = <(String, String)>{};
-  return episodeSources.first
-      .where((source) {
-        final key = batchStreamSourceKey(source);
-        return key.$2.trim().isNotEmpty &&
-            seen.add(key) &&
-            shared.every((keys) => keys.contains(key));
-      })
-      .toList(growable: false);
+  if (episodes.isEmpty) return const <StreamResult>[];
+
+  // Keep first-episode order and the first representative of each option.
+  final common = <K, StreamResult>{};
+  for (final source in episodes.first) {
+    final key = keyOf(source);
+    if (key != null) common.putIfAbsent(key, () => source);
+  }
+  for (final episode in episodes.skip(1)) {
+    if (common.isEmpty) break;
+    final available = <K>{};
+    for (final source in episode) {
+      final key = keyOf(source);
+      if (key != null) available.add(key);
+    }
+    common.removeWhere((key, _) => !available.contains(key));
+  }
+  return common.values.toList(growable: false);
 }
 
 (String, String) batchStreamSourceKey(StreamResult source) => (

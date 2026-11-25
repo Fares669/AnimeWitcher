@@ -86,14 +86,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     });
     _controller.addListener(_onTextChanged);
     _resultsScrollController.addListener(_onResultsScroll);
-    // The filter provider outlives this screen, so reopening search resets it
-    // to the content tab. Deferred by a frame because initState runs while
-    // the tree is building, and Riverpod rejects writes during a build.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      ref.read(searchFilterProvider.notifier).set(SearchFilter.content);
-    });
-
     _focusNode.onKeyEvent = (node, event) {
       if (event is KeyDownEvent) {
         // Esc closes the results panel, as in Harbor.
@@ -281,7 +273,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     if (pickedDomain != null) _selectSearchDomain(pickedDomain!);
     _resetResultsScrollPosition();
     ref.read(searchProviderFiltersProvider.notifier).set(selected);
-    ref.read(searchFilterProvider.notifier).set(SearchFilter.content);
   }
 
   void _removeSearchFilter(String group, String value) {
@@ -308,7 +299,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
     if (identical(updated, current)) return;
     ref.read(searchProviderFiltersProvider.notifier).set(updated);
-    ref.read(searchFilterProvider.notifier).set(SearchFilter.content);
   }
 
   void _setSearchSort(String value) {
@@ -318,7 +308,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     ref
         .read(searchProviderFiltersProvider.notifier)
         .set(current.copyWith(sort: value));
-    ref.read(searchFilterProvider.notifier).set(SearchFilter.content);
   }
 
   List<AppleNativeMenuItem> _searchSortMenuItems(BuildContext context) {

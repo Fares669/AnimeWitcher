@@ -1,14 +1,10 @@
+final _localizedDigits = RegExp('[٠-٩۰-۹]');
+
 /// Replaces Arabic-Indic and Eastern Arabic-Indic digits with ASCII digits.
 String normalizeLocalizedDigits(String value) {
-  const arabicIndic = '٠١٢٣٤٥٦٧٨٩';
-  const easternArabicIndic = '۰۱۲۳۴۵۶۷۸۹';
-  return value
-      .replaceAllMapped(
-        RegExp(r'[٠-٩]'),
-        (match) => '${arabicIndic.indexOf(match.group(0)!)}',
-      )
-      .replaceAllMapped(
-        RegExp(r'[۰-۹]'),
-        (match) => '${easternArabicIndic.indexOf(match.group(0)!)}',
-      );
+  return value.replaceAllMapped(_localizedDigits, (match) {
+    final code = value.codeUnitAt(match.start);
+    final zero = code < 0x06f0 ? 0x0660 : 0x06f0;
+    return String.fromCharCode(0x30 + code - zero);
+  });
 }

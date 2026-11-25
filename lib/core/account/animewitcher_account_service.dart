@@ -10,6 +10,7 @@ import '../storage/library_category.dart';
 import '../storage/secure_token_storage.dart';
 import '../storage/storage_service.dart';
 import '../utils/artwork_host_fallback.dart';
+import '../utils/digit_normalization.dart';
 import '../utils/episode_label.dart';
 import 'animewitcher_account_config.dart';
 import 'animewitcher_account_models.dart';
@@ -5149,15 +5150,7 @@ int? _cloudEpisodeNumber(Map<String, dynamic> fields) {
   for (final raw in <dynamic>[fields['episode_id'], fields['episode_name']]) {
     final label = _optionalString(raw);
     if (label == null) continue;
-    final normalized = label
-        .replaceAllMapped(
-          RegExp(r'[٠-٩]'),
-          (match) => '${'٠١٢٣٤٥٦٧٨٩'.indexOf(match.group(0)!)}',
-        )
-        .replaceAllMapped(
-          RegExp(r'[۰-۹]'),
-          (match) => '${'۰۱۲۳۴۵۶۷۸۹'.indexOf(match.group(0)!)}',
-        );
+    final normalized = normalizeLocalizedDigits(label);
     final match = RegExp(r'\d+').firstMatch(normalized);
     final value = match == null ? null : int.tryParse(match.group(0)!);
     if (value != null && value > 0) return value;

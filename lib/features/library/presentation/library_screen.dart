@@ -122,7 +122,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                 .categoryCount(listKind, listCategory),
         },
     };
-    final recentCount = libraryRecentFor(
+    final recentCount = libraryRecentEntries(
       history,
       LibraryMediaKind.anime,
     ).length;

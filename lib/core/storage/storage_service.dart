@@ -872,63 +872,6 @@ class StorageService {
     }
   }
 
-  // --- Onboarding ---
-  //
-  // Windows ships as a plain extracted folder rather than an installer that
-  // clears per-user app data, so the Hive-backed flag would survive a
-  // "reinstall" (delete-and-re-extract) and the dialog would never show
-  // again for a fresh copy. A marker file next to the executable tracks
-  // this instead: it disappears whenever the install folder is replaced.
-  Future<void> setWelcomeDialogSeen(bool seen) async {
-    await _settingsBox.put('welcome_dialog_seen', seen);
-    if (Platform.isWindows) {
-      await _writeWindowsWelcomeMarker(seen);
-    }
-  }
-
-  bool hasSeenWelcomeDialog() {
-    if (Platform.isWindows) {
-      final marker = _readWindowsWelcomeMarker();
-      if (marker != null) return marker;
-    }
-    return (_settingsBox.get('welcome_dialog_seen', defaultValue: false)
-            as bool?) ??
-        false;
-  }
-
-  File? _windowsWelcomeMarkerFile() {
-    try {
-      final exeDir = p.dirname(Platform.resolvedExecutable);
-      return File(p.join(exeDir, '.welcome_shown'));
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<void> _writeWindowsWelcomeMarker(bool seen) async {
-    final file = _windowsWelcomeMarkerFile();
-    if (file == null) return;
-    try {
-      if (seen) {
-        await file.writeAsString('1');
-      } else if (await file.exists()) {
-        await file.delete();
-      }
-    } catch (_) {}
-  }
-
-  /// Returns null (fall back to the Hive flag) if the marker file's
-  /// presence can't be determined, e.g. an unwritable install location.
-  bool? _readWindowsWelcomeMarker() {
-    final file = _windowsWelcomeMarkerFile();
-    if (file == null) return null;
-    try {
-      return file.existsSync();
-    } catch (_) {
-      return null;
-    }
-  }
-
   // --- Player Settings ---
   Future<void> setPlayerSetting(String key, dynamic value) async {
     await _settingsBox.put(key, value);

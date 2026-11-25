@@ -9,7 +9,6 @@ import '../../../../core/storage/secure_token_storage.dart';
 import '../../../../core/services/external_player_service.dart';
 import '../../../../core/navigation/taskbar_destination.dart';
 import '../../../../core/storage/settings_repository.dart';
-import '../../../../core/theme/theme_provider.dart';
 import '../../../../core/utils/app_utils.dart';
 import '../../../../core/utils/factory_reset.dart';
 import '../player_settings_provider.dart';
@@ -574,73 +573,6 @@ void showReadaheadDialog(BuildContext context, WidgetRef ref, int current) {
   );
 }
 
-/// Shows a dialog for subtitle size + background settings.
-void showSubtitleDialog(
-  BuildContext context,
-  WidgetRef ref,
-  PlayerSettings settings,
-) {
-  final l10n = AppLocalizations.of(context)!;
-  double size = settings.subtitleSize;
-  bool showBackground = settings.subtitleBackgroundColor != 0;
-
-  showGlassDialog<void>(
-    context: context,
-    builder: (ctx) => StatefulBuilder(
-      builder: (context, setState) {
-        return AlertDialog(
-          surfaceTintColor: Colors.transparent,
-          title: Text(l10n.subtitleSettings),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(l10n.size(size.toInt())),
-                CustomSlider(
-                  value: size,
-                  min: 10,
-                  max: 80,
-                  divisions: 70,
-                  step: 1.0,
-                  onChanged: (v) => setState(() => size = v),
-                ),
-                const SizedBox(height: 8),
-                SwitchListTile(
-                  title: Text(l10n.background),
-                  value: showBackground,
-                  onChanged: (v) => setState(() => showBackground = v),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop<void>(ctx),
-              child: Text(
-                l10n.cancel,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-            CustomButton(
-              isPrimary: true,
-              onPressed: () {
-                final bg = showBackground ? 0x99000000 : 0x00000000;
-                ref
-                    .read(playerSettingsProvider.notifier)
-                    .setSubtitleSettings(size, settings.subtitleColor, bg);
-                Navigator.pop<void>(ctx);
-              },
-              child: Text(l10n.save),
-            ),
-          ],
-        );
-      },
-    ),
-  );
-}
-
 /// Shows a dialog to pick the default player (internal or external).
 void showDefaultPlayerDialog(
   BuildContext context,
@@ -692,55 +624,6 @@ void showDefaultPlayerDialog(
                   },
                 );
               }),
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop<void>(context),
-          child: Text(
-            l10n.cancel,
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
-/// Shows a dialog to pick the app theme mode.
-void showThemeDialog(
-  BuildContext context,
-  WidgetRef ref,
-  ThemeMode currentTheme,
-) {
-  final l10n = AppLocalizations.of(context)!;
-  showGlassDialog<void>(
-    context: context,
-    builder: (context) => AlertDialog(
-      surfaceTintColor: Colors.transparent,
-      title: Text(l10n.chooseTheme),
-      content: RadioGroup<AppThemeStyle>(
-        groupValue: ref.read(appThemeStyleProvider),
-        onChanged: (val) {
-          if (val == null) return;
-          ref.read(appThemeStyleProvider.notifier).select(val);
-          Navigator.pop<void>(context);
-        },
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // No system entry: with more than one dark theme, the system's
-              // light-or-dark answer no longer picks one.
-              for (final style in AppThemeStyle.values)
-                RadioListTile<AppThemeStyle>(
-                  value: style,
-                  title: Text(style.label()),
-                ),
             ],
           ),
         ),
