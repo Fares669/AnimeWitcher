@@ -104,7 +104,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     final libraryState = ref.watch(libraryProvider);
     final witanimeActive =
         ref.watch(activeProviderProvider) is WitanimeProvider;
-    final history = ref.watch(watchHistoryProvider);
     final kind = libraryState.mediaKind;
     final category =
         witanimeActive &&
@@ -115,10 +114,12 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     final counts = ref
         .read(libraryProvider.notifier)
         .categoryCounts(witanimeAnime: witanimeActive);
-    final recentCount = libraryRecentEntries(
-      history,
-      LibraryMediaKind.anime,
-    ).length;
+    final recentCount = ref.watch(
+      watchHistoryProvider.select(
+        (history) =>
+            libraryRecentEntries(history, LibraryMediaKind.anime).length,
+      ),
+    );
     final title = _characters
         ? libraryCharactersLabel(context)
         : _recent
