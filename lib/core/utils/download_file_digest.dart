@@ -12,21 +12,29 @@ const _enableRust = bool.fromEnvironment('ANIMEWITCHER_RUST_DOWNLOAD_SHA256');
 )
 external int _rustFileDigest(Pointer<Utf8> path, Pointer<Uint8> output);
 
-/// Keeps the existing streaming digest on every default or unsupported build.
+/// Hashes off the caller's isolate so Dart's SHA-256 work cannot occupy the
+/// Flutter UI isolate while the coordinator is waiting to publish the file.
 Future<String> downloadFileDigest(File file) async {
-  if (_enableRust && Abi.current() == Abi.linuxX64) {
-    final path = file.path;
-    if (!path.contains('\u0000')) {
-      try {
-        final result = await Isolate.run(() => _tryRustFileDigest(path));
-        if (result != null) return result;
-      } on IsolateSpawnException {
-        // A worker could not be started; the streaming path remains available.
-      }
-    }
+  final useRust = _enableRust && Abi.current() == Abi.linuxX64;
+  try {
+    return await Isolate.run(() => _digestOnWorker(file, useRust));
+  } on IsolateSpawnException {
+    // Preserve publication and the original Dart error behavior if the
+    // runtime cannot start a worker.
+    return _streamDigest(file);
   }
-  return (await sha256.bind(file.openRead()).first).toString();
 }
+
+Future<String> _digestOnWorker(File file, bool useRust) async {
+  if (useRust && !file.path.contains('\u0000')) {
+    final result = _tryRustFileDigest(file.path);
+    if (result != null) return result;
+  }
+  return _streamDigest(file);
+}
+
+Future<String> _streamDigest(File file) async =>
+    (await sha256.bind(file.openRead()).first).toString();
 
 String? _tryRustFileDigest(String path) {
   return using((arena) {

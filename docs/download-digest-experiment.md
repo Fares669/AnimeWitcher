@@ -6,7 +6,10 @@ checkpoint. A digest mismatch still blocks publication and recovery. This
 experiment replaces only the complete-file digest, not range handling,
 storage checks, cancellation, checkpoint format, or publication.
 
-The default on every platform remains Dart's streaming `package:crypto` path.
+The default remains Dart's streaming `package:crypto` implementation. The
+coordinator runs this digest in a worker isolate rather than doing the SHA-256
+work on the caller isolate. If the runtime cannot start a worker, it uses the
+original streaming path on the caller.
 On an **opt-in Linux x64 host and target**, the build can bundle a pinned
 RustCrypto SHA-256 library. The file is still streamed in bounded chunks. The
 Rust call runs in a worker isolate, passes no episode buffer through FFI, and
@@ -72,4 +75,16 @@ pairs, median assembly was **1.52 s with Dart and 0.61 s with Rust**; the
 digest phase was 977 ms and 55 ms respectively. All runs published identical
 bytes, wrote the same independent checkpoint digest, and verified which
 implementation actually ran. The download phase itself did not improve.
-This is Linux x64 loopback evidence, not a mobile or CDN measurement.
+This is Linux x64 loopback evidence using the app's durable coordinator
+directly. In the shipping app, range-supported episode downloads on iOS use
+that coordinator; other platforms use the download package's transport.
+The fixture does not imply that a normal Linux download uses this Rust asset,
+and the timings are not mobile or CDN measurements.
+
+For responsiveness we also compared the two Dart scheduling paths using the
+same 64 MiB coordinator fixture, four runs per path. The median of the
+per-run 95th-percentile gaps in a 16 ms main-isolate timer was 16.9 ms during
+the digest on the caller and 16.1 ms on the digest worker. No digest-phase gap
+exceeded 50 ms in either setup. This tests event-loop scheduling, not rendered
+frames; it did not reproduce a phone UI freeze. The file contents, publication
+hash, and recovery checks are unchanged.
