@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
@@ -30,6 +31,7 @@ import 'package:animewitcher/features/library/presentation/library_provider.dart
 import 'package:animewitcher/features/library/presentation/library_state.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -272,6 +274,107 @@ Future<void> _tapProjection(WidgetTester tester, Finder button) async {
 }
 
 void main() {
+  testWidgets(
+    'portrait episode selection keeps its still but quality still updates',
+    (tester) async {
+      tester.view.physicalSize = const Size(780, 1688);
+      tester.view.devicePixelRatio = 2;
+      final previousQuality = highQualityArtwork.value;
+      highQualityArtwork.value = true;
+      addTearDown(tester.view.reset);
+      addTearDown(() {
+        highQualityArtwork.value = previousQuality;
+        imageCache
+          ..clear()
+          ..clearLiveImages();
+      });
+      const url = 'https://example.test/episode-stability-still.jpg';
+      final recorder = ui.PictureRecorder();
+      ui.Canvas(recorder).drawColor(const Color(0xff526c86), ui.BlendMode.src);
+      final picture = recorder.endRecording();
+      final image = picture.toImageSync(96, 54);
+      picture.dispose();
+      for (final width in [384, 288]) {
+        final key = await ResizeImage.resizeIfNeeded(
+          width,
+          null,
+          const CachedNetworkImageProvider(url),
+        ).obtainKey(ImageConfiguration.empty);
+        imageCache.putIfAbsent(
+          key,
+          () => OneFrameImageStreamCompleter(
+            SynchronousFuture(ImageInfo(image: image.clone())),
+          ),
+        );
+      }
+      image.dispose();
+
+      final episode = Episode(
+        name: 'Episode 1',
+        url: 'episode://stable',
+        episode: 1,
+        posterUrl: url,
+      );
+      final item = MultimediaItem(
+        title: 'Episode art fixture',
+        url: 'https://example.test/episode-stability-title',
+        posterUrl: '',
+        episodes: [episode],
+      );
+      final provider = detailsControllerProvider(item.url);
+      final container = ProviderContainer(
+        overrides: [
+          storageServiceProvider.overrideWithValue(_Storage()),
+          downloadsProvider.overrideWith(_EmptyDownloads.new),
+          logicalDownloadStoreV2Provider.overrideWithValue(
+            InMemoryLogicalDownloadStoreV2(),
+          ),
+          provider.overrideWith(() => _ReadyDetailsController(item)),
+        ],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            locale: const Locale('ar'),
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: Scaffold(
+              body: Center(
+                child: EpisodeCard(
+                  episode: episode,
+                  parentItem: item,
+                  plain: true,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final art = find.byType(CachedNetworkImage);
+      final prior = tester.widget<CachedNetworkImage>(art);
+      expect(prior.memCacheWidth, 384);
+      await tester.longPress(find.byType(EpisodeCard));
+      await tester.pumpAndSettle();
+      expect(container.read(provider).selectedEpisodeKeys, hasLength(1));
+      expect(find.byIcon(Icons.check_circle_rounded), findsOneWidget);
+      expect(tester.widget<CachedNetworkImage>(art), same(prior));
+
+      highQualityArtwork.value = false;
+      await tester.pumpAndSettle();
+      expect(tester.widget<CachedNetworkImage>(art).memCacheWidth, 288);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      // Let the dependency's delayed cache housekeeping finish off-screen.
+      await tester.pump(const Duration(seconds: 11));
+      expect(tester.takeException(), isNull);
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.android),
+  );
+
   for (final wide in [false, true]) {
     testWidgets(
       'Details episode projection preserves selection, range and filters on '

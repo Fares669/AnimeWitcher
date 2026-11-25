@@ -858,6 +858,12 @@ class EpisodeCard extends HookConsumerWidget {
     final placeholderColor = Theme.of(context)
         .colorScheme
         .surfaceContainerHighest;
+    final isEpisodeStill = episodePosterUrl != null;
+    final reusePortraitArtwork =
+        plain &&
+        !vertical &&
+        ResponsiveBreakpoints.isHandset(context) &&
+        !context.isHandsetLandscape;
 
     Widget buildThumbnailImage(double paintedWidth) {
       if (imageUrl == null || imageUrl.isEmpty) {
@@ -878,12 +884,18 @@ class EpisodeCard extends HookConsumerWidget {
           fadeOutDuration: Duration.zero,
           useOldImageOnUrlChange: true,
           placeholder: (_, _) => ColoredBox(color: placeholderColor),
-          errorWidget: (_, _, _) => episodePosterUrl != null
+          errorWidget: (_, _, _) => isEpisodeStill
               ? ColoredBox(color: placeholderColor)
               : const ThumbnailErrorPlaceholder(),
         ),
       );
     }
+
+    Widget buildArtwork() => LayoutBuilder(
+      builder: (_, constraints) => buildThumbnailImage(
+        constraints.hasBoundedWidth ? constraints.maxWidth : 140.0,
+      ),
+    );
 
     return Stack(
       children: [
@@ -893,11 +905,18 @@ class EpisodeCard extends HookConsumerWidget {
             width: width ?? 140,
             child: AspectRatio(
               aspectRatio: _thumbnailAspectRatio,
-              child: LayoutBuilder(
-                builder: (_, constraints) => buildThumbnailImage(
-                  constraints.hasBoundedWidth ? constraints.maxWidth : 140.0,
-                ),
-              ),
+              // The still needn't rebuild with badges or selection. Reuse
+              // the LayoutBuilder, not dimensions or an image: changes to the
+              // actual constraints, DPR or artwork quality still propagate.
+              child: reusePortraitArtwork
+                  ? HookBuilder(
+                      builder: (_) => useMemoized(buildArtwork, [
+                        imageUrl,
+                        isEpisodeStill,
+                        placeholderColor,
+                      ]),
+                    )
+                  : buildArtwork(),
             ),
           ),
         ),
