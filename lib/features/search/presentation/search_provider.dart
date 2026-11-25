@@ -677,6 +677,11 @@ class SearchSuggestionController extends _$SearchSuggestionController {
         final animation = await animationFuture;
         final mangaItems = await mangaFuture;
         final characters = await charactersFuture;
+        // A committed search or newer query may have invalidated this reply.
+        // Do not walk either suggestion projection for an abandoned result.
+        if (!ref.mounted || generation != _generation || state.query != query) {
+          return;
+        }
         final results = switch (domain) {
           SearchDomain.animation => animation,
           SearchDomain.manga => mangaItems,
