@@ -179,10 +179,8 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
     // _scrollOffset frozen at a stale value; when the user scrolled back
     // up, syncing the offset on visibility-change caused a visible snap
     // (VisibilityDetector throttles, so the catch-up frame lands after
-    // the user has already scrolled past it). The rebuild cost here is
-    // negligible — Transform/RenderTransform reuses its RenderObject, the
-    // CachedNetworkImage is cache-hit, and the whole carousel page is
-    // wrapped in a RepaintBoundary so off-screen rebuilds don't ripple.
+    // the user has already scrolled past it). The scroll listener moves
+    // stable slide layers rather than rebuilding artwork and text.
     if (widget.scrollController!.hasClients) {
       _scrollOffset.value = widget.scrollController!.offset;
     }
@@ -394,18 +392,16 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
         if (_isTransitioning && _previousSlide != null)
           AnimatedBuilder(
             animation: _transitionAnimation,
-            builder: (context, _) {
+            child: _buildSlideForIndex(
+              height,
+              _previousSlide!,
+              isDesktop: isDesktop,
+            ),
+            builder: (context, slide) {
               final t = _transitionAnimation.value;
               return Opacity(
                 opacity: 1.0 - t,
-                child: Transform.scale(
-                  scale: 1.0 + 0.2 * t,
-                  child: _buildSlideForIndex(
-                    height,
-                    _previousSlide!,
-                    isDesktop: isDesktop,
-                  ),
-                ),
+                child: Transform.scale(scale: 1.0 + 0.2 * t, child: slide),
               );
             },
           ),
@@ -414,18 +410,16 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
         _isTransitioning
             ? AnimatedBuilder(
                 animation: _transitionAnimation,
-                builder: (context, _) {
+                child: _buildSlideForIndex(
+                  height,
+                  _currentSlide,
+                  isDesktop: isDesktop,
+                ),
+                builder: (context, slide) {
                   final t = _transitionAnimation.value;
                   return Opacity(
                     opacity: t,
-                    child: Transform.scale(
-                      scale: 0.8 + 0.2 * t,
-                      child: _buildSlideForIndex(
-                        height,
-                        _currentSlide,
-                        isDesktop: isDesktop,
-                      ),
-                    ),
+                    child: Transform.scale(scale: 0.8 + 0.2 * t, child: slide),
                   );
                 },
               )
@@ -501,28 +495,16 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
       },
       borderRadius: BorderRadius.zero,
       child: RepaintBoundary(
-        child: ValueListenableBuilder<double>(
-          valueListenable: _scrollOffset,
-          builder: (context, scrollOffset, child) {
-            final parallaxOffset = scrollOffset * 0.1;
-            final contentOffset = -scrollOffset * 0.2;
-            final opacity = (1.0 - (scrollOffset / (height * 0.5))).clamp(
-              0.0,
-              1.0,
-            );
-
-            return _buildSlideBase(
-              context: context,
-              movie: movie,
-              height: height,
-              isDesktop: isDesktop,
-              parallaxOffset: parallaxOffset,
-              contentOffset: contentOffset,
-              opacity: opacity,
-              scaffoldColor: scaffoldColor,
-              theme: theme,
-            );
-          },
+        child: Builder(
+          builder: (context) => _buildSlideBase(
+            context: context,
+            movie: movie,
+            height: height,
+            isDesktop: isDesktop,
+            parallax: true,
+            scaffoldColor: scaffoldColor,
+            theme: theme,
+          ),
         ),
       ),
     );
@@ -550,9 +532,7 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
         movie: movie,
         height: height,
         isDesktop: isDesktop,
-        parallaxOffset: 0,
-        contentOffset: 0,
-        opacity: 1.0,
+        parallax: false,
         scaffoldColor: theme.scaffoldBackgroundColor,
         theme: theme,
       ),
@@ -564,9 +544,7 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
     required MultimediaItem movie,
     required double height,
     required bool isDesktop,
-    required double parallaxOffset,
-    required double contentOffset,
-    required double opacity,
+    required bool parallax,
     required Color scaffoldColor,
     required ThemeData theme,
   }) {
@@ -592,126 +570,128 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
         size.height > size.width;
     final bleed = isPortraitPhone ? 0.0 : 60.0;
 
-    return ClipRect(
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // 1. Background Image
-          Positioned(
-            top: -bleed + parallaxOffset,
-            bottom: -bleed - parallaxOffset,
-            left: 0,
-            right: 0,
-            child: ArtworkDecode(
-              paintedWidth: MediaQuery.sizeOf(context).width,
-              sizeHighQualityToDisplay: true,
-              builder: (BuildContext context, int? decodeWidth) =>
-                  FallbackPosterImage(
-                    imageUrl: imageUrl,
-                    // This frame is a banner; a poster looked up for it would
-                    // be the wrong shape.
-                    preferBanner: true,
-                    malId: movie.artworkLookupMalId,
-                    title: movie.artworkLookupTitle,
-                    fit: BoxFit.cover,
-                    memCacheWidth: decodeWidth,
-                    filterQuality: FilterQuality.medium,
-                    placeholder: (context) => Container(
-                      color: theme.colorScheme.surfaceContainerHighest,
-                    ),
-                    errorWidget: (context) => ThumbnailErrorPlaceholder(
-                      label: title,
-                      isBackdrop: true,
-                    ),
-                  ),
-            ),
-          ),
-
-          // 2. Parallax Gradients
-          Positioned(
-            top: -bleed + parallaxOffset,
-            bottom: -bleed - parallaxOffset,
-            left: 0,
-            right: 0,
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: isDesktop
-                      ? [
-                          Colors.black.withValues(alpha: 0.2),
-                          Colors.transparent,
-                          Colors.black.withValues(alpha: 0.45),
-                          Colors.black.withValues(alpha: 0.75),
-                        ]
-                      : [
-                          Colors.black.withValues(alpha: 0.3),
-                          Colors.transparent,
-                          Colors.black.withValues(alpha: 0.4),
-                          Colors.black.withValues(alpha: 0.8),
-                        ],
-                  stops: isDesktop
-                      ? const [0.0, 0.35, 0.75, 1.0]
-                      : const [0.0, 0.4, 0.6, 1.0],
-                ),
-              ),
-            ),
-          ),
-
-          // 2.5. Fixed Bottom Feather (eased page transition scrim)
-          Positioned(
-            bottom: -1,
-            left: 0,
-            right: 0,
-            height: 120,
-            child: IgnorePointer(
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      scaffoldColor.withValues(alpha: 0.0),
-                      scaffoldColor.withValues(alpha: 0.15),
-                      scaffoldColor.withValues(alpha: 0.45),
-                      scaffoldColor.withValues(alpha: 0.8),
-                      scaffoldColor,
-                    ],
-                    stops: const [0.0, 0.5, 0.75, 0.9, 1.0],
-                  ),
-                ),
-              ),
-            ),
-          ),
-
-          // 3. Content
-          Positioned(
-            left: 24,
-            right: 24,
-            bottom: 48,
-            child: Transform.translate(
-              offset: Offset(0, contentOffset),
-              child: opacity >= 0.999
-                  ? _buildCarouselContent(
-                      isDesktop: isDesktop,
-                      movie: movie,
-                      theme: theme,
-                      context: context,
-                    )
-                  : Opacity(
-                      opacity: opacity,
-                      child: _buildCarouselContent(
-                        isDesktop: isDesktop,
-                        movie: movie,
-                        theme: theme,
-                        context: context,
-                      ),
-                    ),
-            ),
-          ),
-        ],
+    // The layers themselves do not change when the parent scrolls. Keeping
+    // these widget instances avoids rebuilding providers and rich text on
+    // every offset; inherited changes still run the outer build normally.
+    final artwork = ArtworkDecode(
+      paintedWidth: size.width,
+      sizeHighQualityToDisplay: true,
+      builder: (BuildContext context, int? decodeWidth) => FallbackPosterImage(
+        imageUrl: imageUrl,
+        // This frame is a banner; a poster looked up for it would
+        // be the wrong shape.
+        preferBanner: true,
+        malId: movie.artworkLookupMalId,
+        title: movie.artworkLookupTitle,
+        fit: BoxFit.cover,
+        memCacheWidth: decodeWidth,
+        filterQuality: FilterQuality.medium,
+        placeholder: (context) =>
+            Container(color: theme.colorScheme.surfaceContainerHighest),
+        errorWidget: (context) =>
+            ThumbnailErrorPlaceholder(label: title, isBackdrop: true),
       ),
+    );
+    final gradient = Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: isDesktop
+              ? [
+                  Colors.black.withValues(alpha: 0.2),
+                  Colors.transparent,
+                  Colors.black.withValues(alpha: 0.45),
+                  Colors.black.withValues(alpha: 0.75),
+                ]
+              : [
+                  Colors.black.withValues(alpha: 0.3),
+                  Colors.transparent,
+                  Colors.black.withValues(alpha: 0.4),
+                  Colors.black.withValues(alpha: 0.8),
+                ],
+          stops: isDesktop
+              ? const [0.0, 0.35, 0.75, 1.0]
+              : const [0.0, 0.4, 0.6, 1.0],
+        ),
+      ),
+    );
+    final feather = Positioned(
+      bottom: -1,
+      left: 0,
+      right: 0,
+      height: 120,
+      child: IgnorePointer(
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                scaffoldColor.withValues(alpha: 0.0),
+                scaffoldColor.withValues(alpha: 0.15),
+                scaffoldColor.withValues(alpha: 0.45),
+                scaffoldColor.withValues(alpha: 0.8),
+                scaffoldColor,
+              ],
+              stops: const [0.0, 0.5, 0.75, 0.9, 1.0],
+            ),
+          ),
+        ),
+      ),
+    );
+    final content = _buildCarouselContent(
+      isDesktop: isDesktop,
+      movie: movie,
+      theme: theme,
+      context: context,
+    );
+
+    Widget placeLayers(double scrollOffset) {
+      final parallaxOffset = scrollOffset * 0.1;
+      final contentOffset = -scrollOffset * 0.2;
+      final opacity = parallax
+          ? (1.0 - (scrollOffset / (height * 0.5))).clamp(0.0, 1.0)
+          : 1.0;
+      return ClipRect(
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Positioned(
+              top: -bleed + parallaxOffset,
+              bottom: -bleed - parallaxOffset,
+              left: 0,
+              right: 0,
+              child: artwork,
+            ),
+            Positioned(
+              top: -bleed + parallaxOffset,
+              bottom: -bleed - parallaxOffset,
+              left: 0,
+              right: 0,
+              child: gradient,
+            ),
+            feather,
+            Positioned(
+              left: 24,
+              right: 24,
+              bottom: 48,
+              child: Transform.translate(
+                offset: Offset(0, contentOffset),
+                child: opacity >= 0.999
+                    ? content
+                    : Opacity(opacity: opacity, child: content),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (!parallax) return placeLayers(0);
+    return ValueListenableBuilder<double>(
+      valueListenable: _scrollOffset,
+      builder: (context, scrollOffset, _) => placeLayers(scrollOffset),
     );
   }
 
