@@ -27,18 +27,94 @@ import 'package:animewitcher/core/utils/responsive_breakpoints.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/core/utils/localized_text.dart';
 
-bool _shouldFilterEpisodesByDub(
-  DetailsState detailsState,
-  List<Episode> episodes,
-) {
-  if (detailsState.isMovie ||
-      detailsState.selectedDubStatus == DubStatus.none) {
-    return false;
+class _EpisodePresentation {
+  _EpisodePresentation({
+    required List<Episode> episodes,
+    required bool ascending,
+    required bool isMovie,
+    required this.selectedDubStatus,
+  }) {
+    final standalone =
+        !isMovie &&
+        isStandaloneEpisodeCatalog(
+          episodes.map(
+            (episode) => (serverName: episode.serverName, name: episode.name),
+          ),
+        );
+    showLanguageToggle =
+        !isMovie &&
+        !standalone &&
+        episodes.any((episode) => episode.dubStatus == DubStatus.dubbed) &&
+        episodes.any((episode) => episode.dubStatus == DubStatus.subbed);
+    final filter =
+        !isMovie && !standalone && selectedDubStatus != DubStatus.none;
+    ordered = episodesInDisplayOrder(
+      filter
+          ? episodes.where((episode) => episode.dubStatus == selectedDubStatus)
+          : episodes,
+      ascending: ascending,
+    );
   }
-  return !isStandaloneEpisodeCatalog([
-    for (final episode in episodes)
-      (serverName: episode.serverName, name: episode.name),
-  ]);
+
+  final DubStatus selectedDubStatus;
+  late final bool showLanguageToggle;
+  late final List<Episode> ordered;
+  late final List<List<Episode>> ranges = episodeRangesApply(ordered.length)
+      ? episodeRanges(ordered)
+      : const <List<Episode>>[];
+}
+
+bool _sameEpisodeRows(List<Episode> first, List<Episode> second) {
+  if (identical(first, second)) return true;
+  if (first.length != second.length) return false;
+  for (var i = 0; i < first.length; i++) {
+    if (!identical(first[i], second[i])) return false;
+  }
+  return true;
+}
+
+/// The controller may publish a fresh list of the same rows when watched
+/// state changes. Reuse the static projection in that case, never the live
+/// watch/download decisions. The controller replaces published season lists
+/// rather than mutating them, and new row objects invalidate the memo.
+_EpisodePresentation _useEpisodePresentation(
+  List<Episode> episodes,
+  DetailsState details,
+) {
+  final memo =
+      useRef<
+        ({
+          List<Episode> source,
+          (bool, bool, DubStatus) options,
+          _EpisodePresentation projection,
+        })?
+      >(null);
+  final options = (
+    details.isAscending,
+    details.isMovie,
+    details.selectedDubStatus,
+  );
+  final previous = memo.value;
+  if (previous != null &&
+      previous.options == options &&
+      _sameEpisodeRows(previous.source, episodes)) {
+    if (!identical(previous.source, episodes)) {
+      memo.value = (
+        source: episodes,
+        options: options,
+        projection: previous.projection,
+      );
+    }
+    return previous.projection;
+  }
+  final projection = _EpisodePresentation(
+    episodes: episodes,
+    ascending: details.isAscending,
+    isMovie: details.isMovie,
+    selectedDubStatus: details.selectedDubStatus,
+  );
+  memo.value = (source: episodes, options: options, projection: projection);
+  return projection;
 }
 
 /// What the play button should say for [itemUrl] right now.
@@ -367,7 +443,7 @@ class SliverEpisodeCardGrid extends StatelessWidget {
   }
 }
 
-class SliverDetailsEpisodeList extends ConsumerWidget {
+class SliverDetailsEpisodeList extends HookConsumerWidget {
   final MultimediaItem parentItem;
   final String itemUrl;
   final bool isMovie;
@@ -402,28 +478,16 @@ class SliverDetailsEpisodeList extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (isMovie) return const SliverToBoxAdapter(child: SizedBox.shrink());
-
-    final detailsState = ref.watch(detailsControllerProvider(itemUrl));
-    var episodes = detailsState.seasonMap[detailsState.selectedSeason] ?? [];
-
-    if (episodes.isEmpty) {
+    final detailsState = isMovie
+        ? const DetailsState()
+        : ref.watch(detailsControllerProvider(itemUrl));
+    final episodes =
+        detailsState.seasonMap[detailsState.selectedSeason] ??
+        const <Episode>[];
+    final presentation = _useEpisodePresentation(episodes, detailsState);
+    if (isMovie || episodes.isEmpty) {
       return const SliverToBoxAdapter(child: SizedBox.shrink());
     }
-
-    // Apply Language Filter
-    if (_shouldFilterEpisodesByDub(detailsState, episodes)) {
-      episodes = episodes
-          .where((e) => e.dubStatus == detailsState.selectedDubStatus)
-          .toList();
-    }
-
-    final orderedEpisodes = episodesInDisplayOrder(
-      episodes,
-      ascending: detailsState.isAscending,
-    );
-    // Read the way the episode cards read them, so the filter agrees with
-    // what each card says.
     ref.watch(episodeWatchRevisionProvider);
     final watchRepository = ref.watch(episodeWatchRepositoryProvider);
     final downloads =
@@ -434,13 +498,14 @@ class SliverDetailsEpisodeList extends ConsumerWidget {
       builder: (context, _) {
         final displayedEpisodes = browseEpisodesFor(
           parentItem: parentItem,
-          ordered: orderedEpisodes,
+          ordered: presentation.ordered,
+          ranges: presentation.ranges,
           watchRepository: watchRepository,
           downloads: downloads,
         );
         return _buildSliverEpisodes(
           context,
-          allEpisodes: orderedEpisodes,
+          presentation: presentation,
           displayedEpisodes: displayedEpisodes,
           details: detailsState.item ?? detailsState.details.asData?.value,
         );
@@ -450,7 +515,7 @@ class SliverDetailsEpisodeList extends ConsumerWidget {
 
   Widget _buildSliverEpisodes(
     BuildContext context, {
-    required List<Episode> allEpisodes,
+    required _EpisodePresentation presentation,
     required List<Episode> displayedEpisodes,
     required MultimediaItem? details,
   }) {
@@ -466,8 +531,13 @@ class SliverDetailsEpisodeList extends ConsumerWidget {
                     bottom: LayoutConstants.spacingMd,
                   ),
                   child: EpisodeBrowseBar(
-                    episodes: allEpisodes,
-                    leading: DetailsEpisodeFilterBar(itemUrl: itemUrl),
+                    episodes: presentation.ordered,
+                    ranges: presentation.ranges,
+                    leading: DetailsEpisodeFilterBar(
+                      itemUrl: itemUrl,
+                      visible: presentation.showLanguageToggle,
+                      selected: presentation.selectedDubStatus,
+                    ),
                     trailing: DetailsEpisodeSortButton(itemUrl: itemUrl),
                   ),
                 ),
@@ -515,27 +585,22 @@ class SliverDetailsEpisodeList extends ConsumerWidget {
 class DetailsEpisodeFilterBar extends ConsumerWidget {
   final String itemUrl;
 
-  const DetailsEpisodeFilterBar({super.key, required this.itemUrl});
+  const DetailsEpisodeFilterBar({
+    super.key,
+    required this.itemUrl,
+    required this.visible,
+    required this.selected,
+  });
+
+  final bool visible;
+  final DubStatus selected;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final detailsState = ref.watch(detailsControllerProvider(itemUrl));
-    final allEpisodes =
-        detailsState.seasonMap[detailsState.selectedSeason] ?? [];
-
-    final isStandaloneCatalog = isStandaloneEpisodeCatalog([
-      for (final episode in allEpisodes)
-        (serverName: episode.serverName, name: episode.name),
-    ]);
-    final hasDub = allEpisodes.any((e) => e.dubStatus == DubStatus.dubbed);
-    final hasSub = allEpisodes.any((e) => e.dubStatus == DubStatus.subbed);
-    final showLanguageToggle =
-        !detailsState.isMovie && !isStandaloneCatalog && hasDub && hasSub;
-    if (!showLanguageToggle) return const SizedBox.shrink();
-
+    if (!visible) return const SizedBox.shrink();
     return SizedBox(
       height: 40,
-      child: _buildLanguageToggle(context, ref, detailsState.selectedDubStatus),
+      child: _buildLanguageToggle(context, ref, selected),
     );
   }
 
@@ -683,7 +748,7 @@ class _LanguageButtonState extends State<_LanguageButton> {
 }
 
 /// Desktop episode grid laid out inside the details page's scroll view.
-class DetailsDesktopEpisodeColumn extends ConsumerWidget {
+class DetailsDesktopEpisodeColumn extends HookConsumerWidget {
   final MultimediaItem parentItem;
   final String itemUrl;
   final bool isMovie;
@@ -745,25 +810,14 @@ class DetailsDesktopEpisodeColumn extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (isMovie) return const SizedBox.shrink();
-
-    final detailsState = ref.watch(detailsControllerProvider(itemUrl));
-    var episodes = detailsState.seasonMap[detailsState.selectedSeason] ?? [];
-
-    if (episodes.isEmpty) return const SizedBox.shrink();
-
-    if (_shouldFilterEpisodesByDub(detailsState, episodes)) {
-      episodes = episodes
-          .where(
-            (episode) => episode.dubStatus == detailsState.selectedDubStatus,
-          )
-          .toList(growable: false);
-    }
-
-    final orderedEpisodes = episodesInDisplayOrder(
-      episodes,
-      ascending: detailsState.isAscending,
-    );
+    final detailsState = isMovie
+        ? const DetailsState()
+        : ref.watch(detailsControllerProvider(itemUrl));
+    final episodes =
+        detailsState.seasonMap[detailsState.selectedSeason] ??
+        const <Episode>[];
+    final presentation = _useEpisodePresentation(episodes, detailsState);
+    if (isMovie || episodes.isEmpty) return const SizedBox.shrink();
     ref.watch(episodeWatchRevisionProvider);
     final watchRepository = ref.watch(episodeWatchRepositoryProvider);
     final downloads =
@@ -778,26 +832,24 @@ class DetailsDesktopEpisodeColumn extends ConsumerWidget {
         final query = episodeSearchQuery.value;
         final browsed = browseEpisodesFor(
           parentItem: parentItem,
-          ordered: orderedEpisodes,
+          ordered: presentation.ordered,
+          ranges: presentation.ranges,
           watchRepository: watchRepository,
           downloads: downloads,
         );
-        final displayedEpisodes = query.trim().isEmpty
+        final search = EpisodeSearchQuery(query);
+        final displayedEpisodes = search.isEmpty
             ? browsed
             : browsed
                   .where(
-                    (episode) => episodeMatchesQuery(
-                      number: episode.episode,
-                      name: episode.name,
-                      query: query,
-                    ),
+                    (episode) => search.matches(episode.episode, episode.name),
                   )
                   .toList(growable: false);
         return _buildEpisodesSection(
           context,
           displayedEpisodes,
           query,
-          allEpisodes: orderedEpisodes,
+          presentation: presentation,
           details: detailsState.item ?? detailsState.details.asData?.value,
         );
       },
@@ -808,7 +860,7 @@ class DetailsDesktopEpisodeColumn extends ConsumerWidget {
     BuildContext context,
     List<Episode> displayedEpisodes,
     String query, {
-    required List<Episode> allEpisodes,
+    required _EpisodePresentation presentation,
     required MultimediaItem? details,
   }) {
     return Column(
@@ -829,8 +881,13 @@ class DetailsDesktopEpisodeColumn extends ConsumerWidget {
         Padding(
           padding: const EdgeInsets.only(bottom: LayoutConstants.spacingMd),
           child: EpisodeBrowseBar(
-            episodes: allEpisodes,
-            leading: DetailsEpisodeFilterBar(itemUrl: itemUrl),
+            episodes: presentation.ordered,
+            ranges: presentation.ranges,
+            leading: DetailsEpisodeFilterBar(
+              itemUrl: itemUrl,
+              visible: presentation.showLanguageToggle,
+              selected: presentation.selectedDubStatus,
+            ),
             trailing: DetailsEpisodeSortButton(itemUrl: itemUrl),
           ),
         ),

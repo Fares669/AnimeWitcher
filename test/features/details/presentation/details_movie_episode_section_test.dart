@@ -1,3 +1,12 @@
+import 'dart:io';
+
+import 'package:animewitcher/core/providers/episode_sort_provider.dart';
+import 'package:animewitcher/core/storage/episode_watch_repository.dart';
+import 'package:animewitcher/features/details/presentation/downloaded_file_provider.dart';
+import 'package:animewitcher/features/details/presentation/widgets/episode_browse.dart';
+import 'package:animewitcher/features/details/presentation/widgets/episode_search.dart';
+import 'package:animewitcher/features/library/presentation/history_provider.dart';
+import 'package:background_downloader/background_downloader.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/account/animewitcher_comment_models.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_provider.dart';
@@ -134,7 +143,304 @@ final class _ReadyDetailsController extends DetailsController {
   Future<void> loadEpisodesOnDemand({bool forceReload = false}) async {}
 }
 
+final class _ProjectionDownloads extends DownloadsNotifier {
+  @override
+  Future<List<DownloadItem>> build() async => const [];
+  void publish(List<DownloadItem> items) => state = AsyncData(items);
+}
+
+final class _ProjectionFiles extends DownloadedFiles {
+  @override
+  Map<String, File?> build() => {};
+  @override
+  Future<void> checkFile(MultimediaItem item, {Episode? episode}) async {}
+}
+
+final class _ProjectionHistory extends WatchHistory {
+  @override
+  List<HistoryItem> build() => const [];
+}
+
+final class _ProjectionSort extends EpisodeSortAscendingNotifier {
+  @override
+  bool build() => true;
+  @override
+  void setAscending(bool value) => state = value;
+}
+
+final class _ProjectionWatch extends Fake implements EpisodeWatchRepository {
+  final watched = <String>{};
+  @override
+  bool isWatched(String mainUrl, Episode episode) =>
+      watched.contains(episode.url);
+  @override
+  bool? getExplicitState(String mainUrl, Episode episode) =>
+      watched.contains(episode.url) ? true : null;
+}
+
+final class _ProjectionDetails extends _ReadyDetailsController {
+  _ProjectionDetails(super.item);
+  @override
+  DetailsState build(String itemUrl) =>
+      super.build(itemUrl).copyWith(selectedDubStatus: DubStatus.subbed);
+  void publish(List<Episode> episodes) => state = state.copyWith(
+    episodes: AsyncData(episodes),
+    seasonMap: {1: episodes},
+  );
+}
+
+MultimediaItem _projectionItem() => MultimediaItem(
+  title: 'مختبر الحلقات',
+  url: 'https://example.test/episode-projection',
+  posterUrl: '',
+  contentType: MultimediaContentType.anime,
+  episodes: [
+    for (var i = 0; i <= 104; i++) ...[
+      Episode(
+        name: i == 0
+            ? 'الحلقة الخاصة'
+            : i == 104
+            ? 'Magic Café'
+            : 'البداية $i',
+        serverName: i == 0 ? 'الفيلم' : 'الحلقة $i',
+        url: 'https://example.test/sub/$i',
+        season: 1,
+        episode: i,
+        dubStatus: DubStatus.subbed,
+      ),
+      if (i % 20 == 0)
+        Episode(
+          name: 'مدبلج وحلقة $i',
+          url: 'https://example.test/dub/$i',
+          season: 1,
+          episode: i,
+          dubStatus: DubStatus.dubbed,
+        ),
+    ],
+  ],
+);
+
+List<int> _shownProjection(WidgetTester tester) {
+  final grid = find.byType(SliverEpisodeCardGrid);
+  if (grid.evaluate().isNotEmpty) {
+    // The handset sliver only mounts the rows within reach of its viewport.
+    // Check the order it passes to the lazy builder, then interact with a
+    // real visible card below to assert selection wiring.
+    EpisodeCard card(Widget child) => switch (child) {
+      FadeTransition(child: final inner) => card(inner!),
+      SlideTransition(child: final inner) => card(inner!),
+      final EpisodeCard episodeCard => episodeCard,
+      _ => throw StateError('Unexpected Details row widget'),
+    };
+    return tester
+        .widget<SliverEpisodeCardGrid>(grid)
+        .children
+        .map((child) => card(child).episode.episode)
+        .toList();
+  }
+  return tester
+      .widgetList<EpisodeCard>(find.byType(EpisodeCard))
+      .map((card) => card.episode.episode)
+      .toList();
+}
+
+Finder _projectionKey(String value) => find.byKey(ValueKey(value));
+
+Finder _projectionScrollView() => find.descendant(
+  of: find.byKey(const PageStorageKey<String>('desktop-details-info-tab')),
+  matching: find.byType(Scrollable),
+).first;
+
+Future<void> _positionProjection(
+  WidgetTester tester,
+  Finder target,
+) async {
+  expect(target, findsOneWidget);
+  if (target.hitTestable().evaluate().isEmpty) {
+    // The actual Details chrome floats above the scroll view. Aligning at
+    // zero puts the control behind it instead of making it tappable.
+    await Scrollable.ensureVisible(tester.element(target), alignment: 0.35);
+    await tester.pumpAndSettle();
+  }
+  expect(target.hitTestable(), findsOneWidget);
+}
+
+Future<void> _tapProjection(WidgetTester tester, Finder button) async {
+  await _positionProjection(tester, button);
+  await tester.tap(button.hitTestable());
+  await tester.pumpAndSettle();
+}
+
 void main() {
+  for (final wide in [false, true]) {
+    testWidgets(
+      'Details episode projection preserves selection, range and filters on '
+      '${wide ? 'wide' : 'phone'}',
+      (tester) async {
+        tester.view.physicalSize = wide
+            ? const Size(1360, 1050)
+            : const Size(430, 1000);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        addTearDown(resetEpisodeBrowse);
+        addTearDown(() => episodeViewMode.value = EpisodeViewMode.list);
+        addTearDown(() => episodeSearchQuery.value = '');
+
+        final item = _projectionItem();
+        final details = _ProjectionDetails(item);
+        final watch = _ProjectionWatch();
+        final downloads = _ProjectionDownloads();
+        final container = ProviderContainer(
+          overrides: [
+            storageServiceProvider.overrideWithValue(_Storage()),
+            detailsControllerProvider(item.url).overrideWith(() => details),
+            libraryProvider.overrideWith(_EmptyLibrary.new),
+            watchHistoryProvider.overrideWith(_ProjectionHistory.new),
+            episodeWatchRepositoryProvider.overrideWithValue(watch),
+            logicalDownloadStoreV2Provider.overrideWithValue(
+              InMemoryLogicalDownloadStoreV2(),
+            ),
+            downloadsProvider.overrideWith(() => downloads),
+            downloadedFilesProvider.overrideWith(_ProjectionFiles.new),
+            episodeSortAscendingProvider.overrideWith(_ProjectionSort.new),
+          ],
+        );
+        addTearDown(container.dispose);
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(
+              locale: const Locale('ar'),
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              theme: ThemeData.dark(),
+              home: DetailsScreen(item: item),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await _tapProjection(tester, _projectionKey('details-episodes-toggle'));
+        await _tapProjection(tester, _projectionKey('episode-range-menu'));
+        await _tapProjection(tester, _projectionKey('episode-range-1'));
+        expect(find.text('الحلقات 100–104'), findsOneWidget);
+        expect(_shownProjection(tester), [100, 101, 102, 103, 104]);
+
+        await _tapProjection(tester, _projectionKey('episode-sort-toggle'));
+        expect(_shownProjection(tester), [104, 103, 102, 101, 100]);
+
+        final first = item.episodes!.singleWhere((e) => e.episode == 104);
+        final card = find.byKey(ValueKey(first.url));
+        await _positionProjection(tester, card);
+        await tester.longPress(card.hitTestable());
+        await tester.pumpAndSettle();
+        expect(
+          container
+              .read(detailsControllerProvider(item.url))
+              .selectedEpisodeKeys,
+          isNotEmpty,
+        );
+        expect(find.text('تم تحديد 1'), findsOneWidget);
+        if (!wide && card.evaluate().isEmpty) {
+          // The phone lazily mounts rows. The new selection bar reduces the
+          // viewport, so scroll as a viewer would with selection still open.
+          await tester.scrollUntilVisible(
+            card,
+            100,
+            scrollable: _projectionScrollView(),
+            maxScrolls: 8,
+          );
+          await tester.pumpAndSettle();
+        }
+        expect(_shownProjection(tester), [104, 103, 102, 101, 100]);
+        details.clearEpisodeSelection();
+        await tester.pumpAndSettle();
+
+        if (wide) {
+          await _tapProjection(tester, find.byIcon(Icons.search_rounded).last);
+          await tester.enterText(find.byType(TextField).last, '١٠');
+          await tester.pumpAndSettle();
+          expect(_shownProjection(tester), [104, 103, 102, 101, 100]);
+          await _tapProjection(
+            tester,
+            find.byIcon(Icons.grid_view_rounded).last,
+          );
+          expect(episodeViewMode.value, EpisodeViewMode.grid);
+          expect(_shownProjection(tester), [104, 103, 102, 101, 100]);
+          await tester.enterText(find.byType(TextField).last, 'cAfÉ');
+          await tester.pumpAndSettle();
+          expect(_shownProjection(tester), [104]);
+
+          final rows = List<Episode>.of(item.episodes!);
+          rows[rows.indexOf(first)] = first.copyWith(name: 'Magic ending');
+          details.publish(rows);
+          await tester.pumpAndSettle();
+          expect(_shownProjection(tester), isEmpty);
+          await tester.enterText(find.byType(TextField).last, 'ENDING');
+          await tester.pumpAndSettle();
+          expect(_shownProjection(tester), [104]);
+        }
+
+        final unwatchedChip = _projectionKey('episode-filter-unwatched');
+        if (!wide && unwatchedChip.evaluate().isEmpty) {
+          await tester.scrollUntilVisible(
+            unwatchedChip,
+            -100,
+            scrollable: _projectionScrollView(),
+            maxScrolls: 8,
+          );
+          await tester.pumpAndSettle();
+        }
+        await _tapProjection(tester, unwatchedChip);
+        watch.watched.add(first.url);
+        final current = container
+            .read(detailsControllerProvider(item.url))
+            .seasonMap[1]!;
+        details.publish(List<Episode>.of(current));
+        container.read(episodeWatchRevisionProvider.notifier).bump();
+        await tester.pumpAndSettle();
+        expect(_shownProjection(tester), wide ? isEmpty : [103, 102, 101, 100]);
+
+        await _tapProjection(
+          tester,
+          _projectionKey('episode-filter-downloaded'),
+        );
+        expect(_shownProjection(tester), isEmpty);
+        DownloadItem row(TaskStatus status) => DownloadItem(
+          item: item,
+          episode: first,
+          task: DownloadTask(
+            taskId: 'fixture-download',
+            url: 'https://example.test/video.mp4',
+            filename: 'fixture.mp4',
+            metaData: first.url,
+          ),
+          status: status,
+          progress: 1,
+          timestamp: 0,
+        );
+        downloads.publish([row(TaskStatus.running)]);
+        await tester.pumpAndSettle();
+        expect(_shownProjection(tester), isEmpty);
+        downloads.publish([row(TaskStatus.complete)]);
+        await tester.pumpAndSettle();
+        expect(_shownProjection(tester), [104]);
+
+        if (wide) {
+          await tester.enterText(find.byType(TextField).last, '');
+          await tester.pumpAndSettle();
+        }
+        await _tapProjection(tester, _projectionKey('episode-filter-all'));
+        final l10n = AppLocalizations.of(
+          tester.element(find.byType(DetailsScreen)),
+        )!;
+        await _tapProjection(tester, find.text(l10n.dub).first);
+        expect(_shownProjection(tester), [100, 80, 60, 40, 20, 0]);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
+
   testWidgets(
     'episode selection bar downloads the selected episodes as a batch',
     (tester) async {

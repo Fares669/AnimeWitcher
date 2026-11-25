@@ -35,14 +35,25 @@ bool episodeMatchesQuery({
   required int number,
   required String name,
   required String query,
-}) {
-  final needle = normalizeDigits(query).trim();
-  if (needle.isEmpty) return true;
+}) => EpisodeSearchQuery(query).matches(number, name);
 
-  if (RegExp(r'^\d+$').hasMatch(needle)) {
-    return number.toString().startsWith(needle);
+/// A normalized query shared by every row scanned for one search.
+class EpisodeSearchQuery {
+  EpisodeSearchQuery(String query)
+    : _needle = normalizeDigits(query).trim().toLowerCase();
+
+  static final _digits = RegExp(r'^\d+$');
+  final String _needle;
+  late final bool _numberPrefix = _digits.hasMatch(_needle);
+
+  bool get isEmpty => _needle.isEmpty;
+
+  bool matches(int number, String name) {
+    if (isEmpty) return true;
+    return _numberPrefix
+        ? number.toString().startsWith(_needle)
+        : name.toLowerCase().contains(_needle);
   }
-  return name.toLowerCase().contains(needle.toLowerCase());
 }
 
 /// A glyph that opens into a field, and closes again when left empty.

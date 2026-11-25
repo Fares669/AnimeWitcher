@@ -61,15 +61,16 @@ String episodeRangeLabel(List<Episode> range) {
 List<Episode> browseEpisodes({
   required List<Episode> ordered,
   required int? rangeIndex,
+  List<List<Episode>>? ranges,
   required EpisodeListFilter filter,
   required bool Function(Episode) isWatched,
   required bool Function(Episode) isDownloaded,
 }) {
   Set<String>? inRange;
   if (rangeIndex != null && episodeRangesApply(ordered.length)) {
-    final ranges = episodeRanges(ordered);
-    if (rangeIndex >= 0 && rangeIndex < ranges.length) {
-      inRange = {for (final episode in ranges[rangeIndex]) episode.url};
+    final blocks = ranges ?? episodeRanges(ordered);
+    if (rangeIndex >= 0 && rangeIndex < blocks.length) {
+      inRange = {for (final episode in blocks[rangeIndex]) episode.url};
     }
   }
   return <Episode>[
@@ -95,6 +96,7 @@ final Listenable episodeBrowseListenable = Listenable.merge(<Listenable>[
 List<Episode> browseEpisodesFor({
   required MultimediaItem parentItem,
   required List<Episode> ordered,
+  required List<List<Episode>> ranges,
   required EpisodeWatchRepository watchRepository,
   required List<DownloadItem> downloads,
 }) {
@@ -104,8 +106,10 @@ List<Episode> browseEpisodesFor({
   return browseEpisodes(
     ordered: ordered,
     rangeIndex: rangeIndex,
+    ranges: ranges,
     filter: filter,
-    isWatched: (episode) => episodeIsWatchedFor(watchRepository, parentItem, episode),
+    isWatched: (episode) =>
+        episodeIsWatchedFor(watchRepository, parentItem, episode),
     isDownloaded: (episode) =>
         completedEpisodeDownload(downloads, parentItem, episode) != null,
   );
@@ -117,12 +121,14 @@ class EpisodeBrowseBar extends StatelessWidget {
   const EpisodeBrowseBar({
     super.key,
     required this.episodes,
+    this.ranges,
     this.leading,
     this.trailing,
   });
 
   /// Every episode of the season, before any block or filter.
   final List<Episode> episodes;
+  final List<List<Episode>>? ranges;
   final Widget? leading;
   final Widget? trailing;
 
@@ -130,9 +136,11 @@ class EpisodeBrowseBar extends StatelessWidget {
   Widget build(BuildContext context) {
     String t(String en, String ar) => ar;
     final colors = Theme.of(context).colorScheme;
-    final ranges = episodeRangesApply(episodes.length)
-        ? episodeRanges(episodes)
-        : const <List<Episode>>[];
+    final ranges =
+        this.ranges ??
+        (episodeRangesApply(episodes.length)
+            ? episodeRanges(episodes)
+            : const <List<Episode>>[]);
 
     return ListenableBuilder(
       listenable: episodeBrowseListenable,
