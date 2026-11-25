@@ -2170,8 +2170,8 @@ class AnimeWitcherPlayerControlsState
         excluding: !chromeVisible,
         child: IgnorePointer(
           ignoring: !chromeVisible,
-          child: AnimatedOpacity(
-            opacity: chromeVisible ? 1.0 : 0.0,
+          child: PlayerChromeFade(
+            visible: chromeVisible,
             duration: _animDuration,
             child: Column(
               children: [

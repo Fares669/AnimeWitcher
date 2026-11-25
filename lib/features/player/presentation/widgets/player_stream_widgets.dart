@@ -18,8 +18,64 @@ import '../../../skip/data/skip_service.dart';
 
 import 'package:animewitcher/core/utils/localized_text.dart';
 
-/// A self-contained progress bar widget that uses StreamBuilder to avoid
-/// rebuilding the parent widget on every position update.
+/// Fades the controls and stops their progress paints after they disappear.
+class PlayerChromeFade extends StatefulWidget {
+  const PlayerChromeFade({
+    super.key,
+    required this.visible,
+    required this.duration,
+    required this.child,
+  });
+
+  final bool visible;
+  final Duration duration;
+  final Widget child;
+
+  @override
+  State<PlayerChromeFade> createState() => _PlayerChromeFadeState();
+}
+
+class _PlayerChromeFadeState extends State<PlayerChromeFade> {
+  late bool _updateTimeline = widget.visible;
+
+  @override
+  void didUpdateWidget(PlayerChromeFade oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.visible) _updateTimeline = true;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedOpacity(
+      opacity: widget.visible ? 1.0 : 0.0,
+      duration: widget.duration,
+      onEnd: () {
+        if (!widget.visible && _updateTimeline) {
+          setState(() => _updateTimeline = false);
+        }
+      },
+      child: _PlayerTimelineVisibility(
+        updatesEnabled: _updateTimeline,
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+class _PlayerTimelineVisibility extends InheritedWidget {
+  const _PlayerTimelineVisibility({
+    required this.updatesEnabled,
+    required super.child,
+  });
+
+  final bool updatesEnabled;
+
+  @override
+  bool updateShouldNotify(_PlayerTimelineVisibility oldWidget) =>
+      updatesEnabled != oldWidget.updatesEnabled;
+}
+
+/// The timeline handles clock-only updates without rebuilding the controls.
 class PlayerProgressBar extends ConsumerStatefulWidget {
   final Player player;
   final vv.VideoController? videoViewController;
@@ -56,17 +112,10 @@ class _PlayerProgressBarState extends ConsumerState<PlayerProgressBar> {
   static const double _sliderTrackInset = 24;
   ProviderSubscription<int>? _streamIndexSub;
 
-  // ValueNotifiers so position/duration updates don't setState the whole widget.
-  final _vvPositionNotifier = ValueNotifier<int>(0);
-  final _vvDurationNotifier = ValueNotifier<int>(0);
-
   @override
   void initState() {
     super.initState();
     _scrubFocusNode = widget.focusNode ?? FocusNode(debugLabel: 'scrubber');
-    widget.videoViewController?.position.addListener(_onVvPosition);
-    widget.videoViewController?.mediaInfo.addListener(_onVvMediaInfo);
-    _syncVideoViewProgress();
     _watchStreamChanges();
   }
 
@@ -85,38 +134,8 @@ class _PlayerProgressBarState extends ConsumerState<PlayerProgressBar> {
   }
 
   @override
-  void didUpdateWidget(PlayerProgressBar old) {
-    super.didUpdateWidget(old);
-    if (old.videoViewController != widget.videoViewController) {
-      old.videoViewController?.position.removeListener(_onVvPosition);
-      old.videoViewController?.mediaInfo.removeListener(_onVvMediaInfo);
-      widget.videoViewController?.position.addListener(_onVvPosition);
-      widget.videoViewController?.mediaInfo.addListener(_onVvMediaInfo);
-      _syncVideoViewProgress();
-    }
-  }
-
-  void _syncVideoViewProgress() {
-    _onVvPosition();
-    _onVvMediaInfo();
-  }
-
-  void _onVvPosition() {
-    _vvPositionNotifier.value = widget.videoViewController?.position.value ?? 0;
-  }
-
-  void _onVvMediaInfo() {
-    _vvDurationNotifier.value =
-        widget.videoViewController?.mediaInfo.value?.duration ?? 0;
-  }
-
-  @override
   void dispose() {
-    widget.videoViewController?.position.removeListener(_onVvPosition);
-    widget.videoViewController?.mediaInfo.removeListener(_onVvMediaInfo);
     _streamIndexSub?.close();
-    _vvPositionNotifier.dispose();
-    _vvDurationNotifier.dispose();
     if (widget.focusNode == null) {
       _scrubFocusNode.dispose();
     }
@@ -249,101 +268,39 @@ class _PlayerProgressBarState extends ConsumerState<PlayerProgressBar> {
     _scrubFocusNode.canRequestFocus = widget.isTv && canSeek;
     _scrubFocusNode.skipTraversal = !(widget.isTv && canSeek);
 
-    if (useExoPlayer && widget.videoViewController != null) {
-      return _buildVideoViewBar(canSeek: canSeek, skipSegments: skipSegments);
-    }
-    return _buildMediaKitBar(canSeek: canSeek, skipSegments: skipSegments);
-  }
-
-  Widget _buildVideoViewBar({
-    required bool canSeek,
-    required List<SkipSegment> skipSegments,
-  }) {
+    final videoViewController = useExoPlayer
+        ? widget.videoViewController
+        : null;
     final isLive = ref.watch(playerControllerProvider.select((s) => s.isLive));
 
-    return ValueListenableBuilder<int>(
-      valueListenable: _vvDurationNotifier,
-      builder: (context, durationMs, _) {
-        return ValueListenableBuilder<int>(
-          valueListenable: _vvPositionNotifier,
-          builder: (context, positionMs, _) {
-            final durationMsD = durationMs.toDouble();
-            final positionMsD = positionMs.toDouble();
-            final displayValue = _dragValue ?? positionMsD;
-            final displayDuration = Duration(
-              milliseconds: (_dragValue ?? positionMsD).toInt(),
-            );
-            final duration = Duration(milliseconds: durationMs);
-
-            return _buildRow(
-              duration: duration,
-              durationMs: durationMsD,
-              displayValue: displayValue,
-              displayDuration: displayDuration,
-              bufferRatio: 0.0,
-              canSeek: canSeek,
-              onSeekEnd: (val) => ref
-                  .read(playerControllerProvider.notifier)
-                  .seekTo(Duration(milliseconds: val.toInt())),
-              isLive: isLive,
-              skipSegments: skipSegments,
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildMediaKitBar({
-    required bool canSeek,
-    required List<SkipSegment> skipSegments,
-  }) {
-    final isLive = ref.watch(playerControllerProvider.select((s) => s.isLive));
-
-    return StreamBuilder<Duration>(
-      stream: widget.player.stream.duration,
-      initialData: widget.player.state.duration,
-      builder: (context, durationSnapshot) {
-        final duration = durationSnapshot.data ?? Duration.zero;
+    return _ProgressClock(
+      // Keep the existing reset of backend-local gestures on engine switches,
+      // but never remount the track on a visibility-only transition.
+      key: ValueKey(videoViewController != null),
+      player: widget.player,
+      videoViewController: videoViewController,
+      builder: (context, duration, position, buffer) {
         final durationMs = duration.inMilliseconds.toDouble();
+        final displayValue = _dragValue ?? position.inMilliseconds.toDouble();
+        final displayDuration = _dragValue != null
+            ? Duration(milliseconds: _dragValue!.toInt())
+            : position;
+        final bufferRatio = durationMs > 0
+            ? (buffer.inMilliseconds / durationMs).clamp(0.0, 1.0)
+            : 0.0;
 
-        return StreamBuilder<Duration>(
-          stream: widget.player.stream.position,
-          initialData: widget.player.state.position,
-          builder: (context, positionSnapshot) {
-            final position = positionSnapshot.data ?? Duration.zero;
-            final positionMs = position.inMilliseconds.toDouble();
-            final displayValue = _dragValue ?? positionMs;
-            final displayDuration = _dragValue != null
-                ? Duration(milliseconds: _dragValue!.toInt())
-                : position;
-
-            return StreamBuilder<Duration>(
-              stream: widget.player.stream.buffer,
-              initialData: widget.player.state.buffer,
-              builder: (context, bufferSnapshot) {
-                final buffer = bufferSnapshot.data ?? Duration.zero;
-                final bufferMs = buffer.inMilliseconds.toDouble();
-                final bufferRatio = durationMs > 0
-                    ? (bufferMs / durationMs).clamp(0.0, 1.0)
-                    : 0.0;
-
-                return _buildRow(
-                  duration: duration,
-                  durationMs: durationMs,
-                  displayValue: displayValue,
-                  displayDuration: displayDuration,
-                  bufferRatio: bufferRatio,
-                  canSeek: canSeek,
-                  onSeekEnd: (val) => ref
-                      .read(playerControllerProvider.notifier)
-                      .seekTo(Duration(milliseconds: val.toInt())),
-                  isLive: isLive,
-                  skipSegments: skipSegments,
-                );
-              },
-            );
-          },
+        return _buildRow(
+          duration: duration,
+          durationMs: durationMs,
+          displayValue: displayValue,
+          displayDuration: displayDuration,
+          bufferRatio: bufferRatio,
+          canSeek: canSeek,
+          onSeekEnd: (value) => ref
+              .read(playerControllerProvider.notifier)
+              .seekTo(Duration(milliseconds: value.toInt())),
+          isLive: isLive,
+          skipSegments: skipSegments,
         );
       },
     );
@@ -421,6 +378,133 @@ class _PlayerProgressBarState extends ConsumerState<PlayerProgressBar> {
             }
           : null,
     );
+  }
+}
+
+/// Keeps the latest clock snapshot even when the chrome is transparent, so
+/// showing it again never waits for a new backend event (e.g. paused playback).
+/// Only this builder is dirtied by clock events; gesture and provider state
+/// stay mounted, and other playback listeners are independent.
+class _ProgressClock extends StatefulWidget {
+  const _ProgressClock({
+    super.key,
+    required this.player,
+    required this.videoViewController,
+    required this.builder,
+  });
+
+  final Player player;
+  final vv.VideoController? videoViewController;
+  final Widget Function(
+    BuildContext context,
+    Duration duration,
+    Duration position,
+    Duration buffer,
+  )
+  builder;
+
+  @override
+  State<_ProgressClock> createState() => _ProgressClockState();
+}
+
+class _ProgressClockState extends State<_ProgressClock> {
+  final _subscriptions = <StreamSubscription<Duration>>[];
+  Duration _duration = Duration.zero;
+  Duration _position = Duration.zero;
+  Duration _buffer = Duration.zero;
+  bool _updatesEnabled = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _attach();
+  }
+
+  @override
+  void didUpdateWidget(_ProgressClock oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.videoViewController != widget.videoViewController ||
+        (widget.videoViewController == null &&
+            oldWidget.player != widget.player)) {
+      _detach(oldWidget);
+      _attach();
+    }
+  }
+
+  void _attach() {
+    final controller = widget.videoViewController;
+    if (controller != null) {
+      _position = Duration(milliseconds: controller.position.value);
+      _duration = Duration(
+        milliseconds: controller.mediaInfo.value?.duration ?? 0,
+      );
+      _buffer = Duration.zero;
+      controller.position.addListener(_onVideoViewUpdate);
+      controller.mediaInfo.addListener(_onVideoViewUpdate);
+      return;
+    }
+
+    final state = widget.player.state;
+    _position = state.position;
+    _duration = state.duration;
+    _buffer = state.buffer;
+    final stream = widget.player.stream;
+    _listen(stream.position, (value) => _position = value);
+    _listen(stream.duration, (value) => _duration = value);
+    _listen(stream.buffer, (value) => _buffer = value);
+  }
+
+  void _listen(Stream<Duration> stream, ValueChanged<Duration> save) {
+    void receive(Duration value) {
+      save(value);
+      if (_updatesEnabled) setState(() {});
+    }
+
+    _subscriptions.add(
+      stream.listen(
+        receive,
+        onError: (Object _, StackTrace _) {
+          receive(Duration.zero);
+        },
+      ),
+    );
+  }
+
+  void _onVideoViewUpdate() {
+    final controller = widget.videoViewController!;
+    final position = Duration(milliseconds: controller.position.value);
+    final duration = Duration(
+      milliseconds: controller.mediaInfo.value?.duration ?? 0,
+    );
+    if (position == _position && duration == _duration) return;
+    _position = position;
+    _duration = duration;
+    if (_updatesEnabled) setState(() {});
+  }
+
+  void _detach(_ProgressClock oldWidget) {
+    oldWidget.videoViewController?.position.removeListener(_onVideoViewUpdate);
+    oldWidget.videoViewController?.mediaInfo.removeListener(_onVideoViewUpdate);
+    for (final subscription in _subscriptions) {
+      unawaited(subscription.cancel());
+    }
+    _subscriptions.clear();
+  }
+
+  @override
+  void dispose() {
+    _detach(widget);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    _updatesEnabled =
+        context
+            .dependOnInheritedWidgetOfExactType<_PlayerTimelineVisibility>()
+            ?.updatesEnabled ??
+        true;
+    return widget.builder(context, _duration, _position, _buffer);
   }
 }
 
