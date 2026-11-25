@@ -22,9 +22,18 @@ class ArtworkFallbackService {
   final Dio _dio;
   final StorageService _storage;
 
-  ArtworkFallbackService(this._dio, this._storage) {
+  ArtworkFallbackService(Dio dio, StorageService storage)
+    : this._owned(dio, storage, null);
+
+  ArtworkFallbackService._owned(
+    this._dio,
+    this._storage,
+    this._retainIdPosterLookup,
+  ) {
     _restore();
   }
+
+  final void Function() Function()? _retainIdPosterLookup;
 
   /// A screen paints its cards over several frames, so lookups are collected
   /// briefly and sent together rather than one request per card. AniList
@@ -155,6 +164,11 @@ class ArtworkFallbackService {
   // --------------------------------------------------------------- batching
 
   final Map<int, Completer<String?>> _pendingIds = <int, Completer<String?>>{};
+  // A queued request moves out of _pendingIds at flush, but card remounts
+  // must still be able to join it until the entire lookup has settled.
+  final _activeIdPosters =
+      <int, ({Completer<String?> completer, void Function()? release})>{};
+  bool _posterOwnerDisposed = false;
   final Map<int, Completer<String?>> _pendingBanners =
       <int, Completer<String?>>{};
   final Map<String, Completer<String?>> _pendingTitles =
@@ -163,19 +177,56 @@ class ArtworkFallbackService {
   Timer? _flushTimer;
 
   Future<String?> posterFor(int malId) {
-    if (malId <= 0) return Future<String?>.value();
+    if (malId <= 0 || _posterOwnerDisposed) return Future<String?>.value();
     if (_cache.containsKey(malId)) {
       final value = _cache.remove(malId);
       _cache[malId] = value; // LRU touch
       return Future<String?>.value(value);
     }
-    final queued = _pendingIds[malId];
-    if (queued != null) return queued.future;
+    final active = _activeIdPosters[malId];
+    if (active != null) return active.completer.future;
 
     final completer = Completer<String?>();
+    _activeIdPosters[malId] = (
+      completer: completer,
+      release: _retainIdPosterLookup?.call(),
+    );
     _pendingIds[malId] = completer;
     _scheduleFlush();
     return completer.future;
+  }
+
+  void _completeIdPoster(
+    int id,
+    Completer<String?> completer,
+    String? url, {
+    required bool answered,
+  }) {
+    final active = _activeIdPosters[id];
+    // A replaced provider cannot publish a hit or a miss after its disposal.
+    if (active == null || !identical(active.completer, completer)) return;
+    _activeIdPosters.remove(id);
+    if (url != null || answered) {
+      _remember(id, url);
+      _markDirty(url);
+    }
+    completer.complete(url);
+    active.release?.call();
+  }
+
+  void _disposeIdPosters() {
+    _posterOwnerDisposed = true;
+    final abandoned = _activeIdPosters.values.toList();
+    _activeIdPosters.clear();
+    _pendingIds.clear();
+    if (_pendingBanners.isEmpty && _pendingTitles.isEmpty) {
+      _flushTimer?.cancel();
+      _flushTimer = null;
+    }
+    for (final request in abandoned) {
+      request.completer.complete(null);
+    }
+    // Riverpod clears this generation's links as part of disposal.
   }
 
   /// The wide artwork for [malId], the way Harbor resolves one: whatever
@@ -287,6 +338,8 @@ class ArtworkFallbackService {
       answered = false;
     }
 
+    if (_posterOwnerDisposed && bannerWaiting.isEmpty) return;
+
     // AniList did not know these; AniZip and Kitsu are the last places worth
     // asking, and only for the handful that are still missing.
     final missing = ids.where((id) => !found.containsKey(id)).toList();
@@ -322,17 +375,9 @@ class ArtworkFallbackService {
     }
     for (final id in ids) {
       final url = found[id];
-      if (waiting.containsKey(id)) {
-        // A miss is only worth remembering when something actually said no.
-        // Recording one after a failed request turns a moment without a
-        // connection into "this anime has no artwork" for the rest of the
-        // session — fifty titles at a time, since that is the batch — and
-        // nothing ever looks again.
-        if (url != null || answered) {
-          _remember(id, url);
-          _markDirty(url);
-        }
-        waiting[id]?.complete(url);
+      if (waiting[id] case final poster?) {
+        // A transport failure is not a "no artwork" answer.
+        _completeIdPoster(id, poster, url, answered: answered);
       }
       if (bannerWaiting.containsKey(id)) {
         final banner = banners[id];
@@ -696,8 +741,12 @@ class ArtworkFallbackService {
 
 @riverpod
 ArtworkFallbackService artworkFallbackService(Ref ref) {
-  return ArtworkFallbackService(
+  final service = ArtworkFallbackService._owned(
     ref.watch(dioClientProvider),
     ref.watch(storageServiceProvider),
+    // Cards use ref.read; hold the service only while this lookup is joinable.
+    () => ref.keepAlive().close,
   );
+  ref.onDispose(service._disposeIdPosters);
+  return service;
 }
