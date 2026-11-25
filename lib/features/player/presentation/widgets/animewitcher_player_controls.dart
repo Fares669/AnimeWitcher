@@ -1466,8 +1466,12 @@ class AnimeWitcherPlayerControlsState
     final skipSegments = ref.watch(
       playerControllerProvider.select((s) => s.skipSegments),
     );
-    final uiPhase = ref.watch(
-      playerControllerProvider.select((s) => s.uiPhase),
+    // Keep each blocking startup/error update, but let the buffering
+    // indicator own nonblocking phase updates without rebuilding all chrome.
+    final blockingPhase = ref.watch(
+      playerControllerProvider.select(
+        (s) => s.uiPhase.fullscreenBlocking ? s.uiPhase : null,
+      ),
     );
     final showSeekButtons =
         ref.watch(
@@ -1485,7 +1489,7 @@ class AnimeWitcherPlayerControlsState
 
     if (_isInPip || isSmallWindow) return const SizedBox.shrink();
 
-    if (uiPhase.fullscreenBlocking) {
+    if (blockingPhase != null) {
       return _buildLoadingUI(title: title, episodeLabel: episodeLabel);
     }
 
