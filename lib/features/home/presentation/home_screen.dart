@@ -363,11 +363,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     MapEntry<String, List<MultimediaItem>> entry, {
     String? title,
   }) {
-    warmPosters(entry.value.take(12).map((item) => item.posterUrl));
     return MediaHorizontalList(
       key: ValueKey((provider.packageName, entry.key)),
       title: title ?? entry.key,
       mediaList: entry.value,
+      warmProviderPosters: true,
       category: ViewAllCategory.providerContent,
       loadViewAllPage: (offset) => provider.getHomeSectionPage(
         entry.key,

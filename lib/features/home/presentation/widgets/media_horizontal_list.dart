@@ -3,6 +3,7 @@ import 'dart:collection';
 
 import 'package:flutter/material.dart';
 
+import '../../../../core/network/poster_cache.dart';
 import '../../../../core/router/app_router.dart';
 import '../../../../core/utils/layout_constants.dart';
 import '../../../../shared/widgets/paged_rail.dart';
@@ -27,6 +28,7 @@ class MediaHorizontalList extends StatefulWidget {
   final bool initialViewAllHasMore;
   final bool showWhenEmpty;
   final bool forcePortrait;
+  final bool warmProviderPosters;
 
   const MediaHorizontalList({
     super.key,
@@ -41,6 +43,7 @@ class MediaHorizontalList extends StatefulWidget {
     this.initialViewAllHasMore = true,
     this.showWhenEmpty = false,
     this.forcePortrait = false,
+    this.warmProviderPosters = false,
   });
 
   @override
@@ -52,6 +55,7 @@ class _MediaHorizontalListState extends State<MediaHorizontalList> {
   bool _isPortrait = true;
   String? _aspectProbeUrl;
   int _aspectProbeGeneration = 0;
+  bool _posterWarmScheduled = false;
 
   // Cache the aspect ratio for a given URL to prevent layout shifts
   // when the widget is destroyed and recreated during scrolling. Bounded
@@ -87,12 +91,31 @@ class _MediaHorizontalListState extends State<MediaHorizontalList> {
     super.initState();
     _scrollController = ScrollController();
     _updateAspectProbe();
+    _schedulePosterWarm();
   }
 
   @override
   void didUpdateWidget(MediaHorizontalList oldWidget) {
     super.didUpdateWidget(oldWidget);
     _updateAspectProbe();
+    _schedulePosterWarm();
+  }
+
+  void _schedulePosterWarm() {
+    if (!widget.warmProviderPosters ||
+        widget.mediaList.isEmpty ||
+        _posterWarmScheduled) {
+      return;
+    }
+    _posterWarmScheduled = true;
+    // The sliver mounts rails near the viewport. Let their cards start
+    // normal image resolution before submitting speculative warm work.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _posterWarmScheduled = false;
+      if (!widget.warmProviderPosters) return;
+      warmPosters(widget.mediaList.take(12).map((item) => item.posterUrl));
+    });
   }
 
   void _updateAspectProbe() {
