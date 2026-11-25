@@ -864,7 +864,6 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final l10n = AppLocalizations.of(context)!;
     final firstItem = items.first;
     final selecting = widget.selectedIds.isNotEmpty;
     final anySelected = items.any(
@@ -873,29 +872,7 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
     final allSelected = items.every(
       (item) => widget.selectedIds.contains(item.id),
     );
-    final episodeSortAscending = ref.watch(episodeSortAscendingProvider);
     final isManga = firstItem.mediaKind == DownloadMediaKind.mangaChapter;
-
-    final orderedItems = isManga
-        ? (List<DownloadItem>.from(items)..sort((a, b) {
-            final an = a.chapter?.number;
-            final bn = b.chapter?.number;
-            if (an != null && bn != null) {
-              final compare = an.compareTo(bn);
-              if (compare != 0) {
-                return episodeSortAscending ? compare : -compare;
-              }
-            }
-            final compare = (a.chapter?.name ?? '').compareTo(
-              b.chapter?.name ?? '',
-            );
-            return episodeSortAscending ? compare : -compare;
-          }))
-        : episodeItemsInDisplayOrder(
-            items,
-            episodeOf: (item) => item.episode,
-            ascending: episodeSortAscending,
-          );
 
     return Card(
       margin: EdgeInsets.zero,
@@ -1031,79 +1008,126 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
             ],
           ),
         ),
-        children: orderedItems.asMap().entries.map((entry) {
-          final download = entry.value;
-          final isLast = entry.key == orderedItems.length - 1;
-
-          return Column(
-            children: [
-              if (entry.key == 0)
-                Divider(
-                  height: 1,
-                  color: theme.dividerColor.withValues(alpha: 0.4),
-                ),
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: LayoutConstants.spacingMd,
-                  vertical: LayoutConstants.spacingSm,
-                ),
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onLongPress: () => widget.onToggleSelection(download),
-                  child: isManga
-                      ? CompletedDownloadChapterCard(
-                          key: ValueKey(download.id),
-                          item: download,
-                          selecting: selecting,
-                          selected: widget.selectedIds.contains(download.id),
-                          onOpen: () => widget.selectedIds.isNotEmpty
-                              ? widget.onToggleSelection(download)
-                              : _openMangaChapter(
-                                  context,
-                                  download,
-                                  orderedItems,
-                                ),
-                          onDelete: () => widget.selectedIds.isNotEmpty
-                              ? widget.onToggleSelection(download)
-                              : unawaited(
-                                  confirmAndRemoveDownload(
-                                    context,
-                                    ref,
-                                    download,
-                                  ),
-                                ),
-                        )
-                      : CompletedDownloadEpisodeCard(
-                          key: ValueKey(download.id),
-                          item: download,
-                          selecting: selecting,
-                          selected: widget.selectedIds.contains(download.id),
-                          onPlay: () => widget.selectedIds.isNotEmpty
-                              ? widget.onToggleSelection(download)
-                              : _playLocalFile(context, ref, download, l10n),
-                          onDelete: () => widget.selectedIds.isNotEmpty
-                              ? widget.onToggleSelection(download)
-                              : unawaited(
-                                  confirmAndRemoveDownload(
-                                    context,
-                                    ref,
-                                    download,
-                                  ),
-                                ),
-                        ),
-                ),
-              ),
-              if (!isLast)
-                Divider(
-                  height: 1,
-                  indent: LayoutConstants.spacingMd,
-                  endIndent: LayoutConstants.spacingMd,
-                  color: theme.dividerColor.withValues(alpha: 0.4),
-                ),
-            ],
-          );
-        }).toList(),
+        children: [
+          Consumer(
+            builder: (context, ref, _) => _buildDownloadRows(
+              context,
+              ref,
+              isManga: isManga,
+              selecting: selecting,
+            ),
+          ),
+        ],
       ),
+    );
+  }
+
+  // ExpansionTile does not mount this consumer while the group is closed.
+  // Avoid sorting and building every completed row just to show its header.
+  Widget _buildDownloadRows(
+    BuildContext context,
+    WidgetRef ref, {
+    required bool isManga,
+    required bool selecting,
+  }) {
+    final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context)!;
+    final episodeSortAscending = ref.watch(episodeSortAscendingProvider);
+
+    final orderedItems = isManga
+        ? (List<DownloadItem>.from(items)..sort((a, b) {
+            final an = a.chapter?.number;
+            final bn = b.chapter?.number;
+            if (an != null && bn != null) {
+              final compare = an.compareTo(bn);
+              if (compare != 0) {
+                return episodeSortAscending ? compare : -compare;
+              }
+            }
+            final compare = (a.chapter?.name ?? '').compareTo(
+              b.chapter?.name ?? '',
+            );
+            return episodeSortAscending ? compare : -compare;
+          }))
+        : episodeItemsInDisplayOrder(
+            items,
+            episodeOf: (item) => item.episode,
+            ascending: episodeSortAscending,
+          );
+
+    return Column(
+      children: orderedItems.asMap().entries.map((entry) {
+        final download = entry.value;
+        final isLast = entry.key == orderedItems.length - 1;
+
+        return Column(
+          children: [
+            if (entry.key == 0)
+              Divider(
+                height: 1,
+                color: theme.dividerColor.withValues(alpha: 0.4),
+              ),
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: LayoutConstants.spacingMd,
+                vertical: LayoutConstants.spacingSm,
+              ),
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onLongPress: () => widget.onToggleSelection(download),
+                child: isManga
+                    ? CompletedDownloadChapterCard(
+                        key: ValueKey(download.id),
+                        item: download,
+                        selecting: selecting,
+                        selected: widget.selectedIds.contains(download.id),
+                        onOpen: () => widget.selectedIds.isNotEmpty
+                            ? widget.onToggleSelection(download)
+                            : _openMangaChapter(
+                                context,
+                                download,
+                                orderedItems,
+                              ),
+                        onDelete: () => widget.selectedIds.isNotEmpty
+                            ? widget.onToggleSelection(download)
+                            : unawaited(
+                                confirmAndRemoveDownload(
+                                  context,
+                                  ref,
+                                  download,
+                                ),
+                              ),
+                      )
+                    : CompletedDownloadEpisodeCard(
+                        key: ValueKey(download.id),
+                        item: download,
+                        selecting: selecting,
+                        selected: widget.selectedIds.contains(download.id),
+                        onPlay: () => widget.selectedIds.isNotEmpty
+                            ? widget.onToggleSelection(download)
+                            : _playLocalFile(context, ref, download, l10n),
+                        onDelete: () => widget.selectedIds.isNotEmpty
+                            ? widget.onToggleSelection(download)
+                            : unawaited(
+                                confirmAndRemoveDownload(
+                                  context,
+                                  ref,
+                                  download,
+                                ),
+                              ),
+                      ),
+              ),
+            ),
+            if (!isLast)
+              Divider(
+                height: 1,
+                indent: LayoutConstants.spacingMd,
+                endIndent: LayoutConstants.spacingMd,
+                color: theme.dividerColor.withValues(alpha: 0.4),
+              ),
+          ],
+        );
+      }).toList(),
     );
   }
 

@@ -227,12 +227,16 @@ class _StubDownloadsNotifier extends DownloadsNotifier {
 }
 
 class _StubEpisodeSortAscendingNotifier extends EpisodeSortAscendingNotifier {
-  _StubEpisodeSortAscendingNotifier(this._value);
+  _StubEpisodeSortAscendingNotifier(this._value, this._onRead);
 
   final bool _value;
+  final void Function()? _onRead;
 
   @override
-  bool build() => _value;
+  bool build() {
+    _onRead?.call();
+    return _value;
+  }
 }
 
 Widget _downloadsApp(
@@ -241,6 +245,7 @@ Widget _downloadsApp(
   bool withTaskbar = false,
   TextDirection? shellDirection,
   bool episodeSortAscending = true,
+  void Function()? onReadEpisodeSort,
   Object? resumeError,
   Object? retryError,
   NotificationService? notificationService,
@@ -275,7 +280,10 @@ Widget _downloadsApp(
       if (notificationService != null)
         notificationServiceProvider.overrideWithValue(notificationService),
       episodeSortAscendingProvider.overrideWith(
-        () => _StubEpisodeSortAscendingNotifier(episodeSortAscending),
+        () => _StubEpisodeSortAscendingNotifier(
+          episodeSortAscending,
+          onReadEpisodeSort,
+        ),
       ),
     ],
     child: MaterialApp(
@@ -1681,7 +1689,7 @@ void main() {
     }
   });
 
-  testWidgets('completed episodes follow the details-page sort direction', (
+  testWidgets('completed groups only sort once opened and keep the details-page direction', (
     tester,
   ) async {
     await _prepareArtworkStorage(tester);
@@ -1712,19 +1720,23 @@ void main() {
       timestamp: timestamp,
     );
 
+    var sortReads = 0;
     await tester.pumpWidget(
       _downloadsApp([
         episode(10, 300),
         episode(12, 200),
         episode(11, 100),
-      ], episodeSortAscending: false),
+      ], episodeSortAscending: false, onReadEpisodeSort: () => sortReads++),
     );
     await tester.pump();
     await tester.tap(find.text('المكتملة'));
     await tester.pumpAndSettle();
+    expect(find.text('Scrambled'), findsOneWidget);
+    expect(sortReads, 0, reason: 'the completed group has not been expanded');
     await tester.tap(find.text('Scrambled'));
     await tester.pumpAndSettle();
     await _awaitArtworkLookups(tester);
+    expect(sortReads, 1);
 
     final episode12Y = tester.getTopLeft(find.text('الحلقة 12')).dy;
     final episode11Y = tester.getTopLeft(find.text('الحلقة 11')).dy;
