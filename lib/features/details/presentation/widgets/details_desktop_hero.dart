@@ -1,6 +1,7 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' show Bidi;
@@ -192,41 +193,49 @@ class DetailsDesktopHero extends ConsumerWidget {
             ? 150.0
             : 200.0;
 
+        final artworkMalId = displayItem.artworkLookupMalId;
+        final artworkTitle = displayItem.artworkLookupTitle;
+        final artworkLabel = displayItem.title;
+        final artworkIsManga = manga;
+        final artworkWidth = viewport.width;
+        final artworkPlaceholder = theme.colorScheme.surfaceContainerHighest;
+        final artworkErrorPoster =
+            (providedBannerUrl != null || artworkIsManga) &&
+                providedBannerUrl != posterUrl
+            ? posterUrl
+            : null;
+
         Widget backdropArtwork() => ArtworkDecode(
-          paintedWidth: MediaQuery.sizeOf(context).width,
+          paintedWidth: artworkWidth,
           sizeHighQualityToDisplay: true,
           builder: (BuildContext context, int? decodeWidth) =>
               FallbackPosterImage(
                 imageUrl: backdrop,
                 preferBanner: true,
-                manga: manga,
-                malId: displayItem.artworkLookupMalId,
-                title: displayItem.artworkLookupTitle,
+                manga: artworkIsManga,
+                malId: artworkMalId,
+                title: artworkTitle,
                 fit: BoxFit.cover,
                 alignment: Alignment.topCenter,
                 memCacheWidth: decodeWidth,
                 filterQuality: FilterQuality.medium,
-                placeholder: (_) => ColoredBox(
-                  color: theme.colorScheme.surfaceContainerHighest,
-                ),
+                placeholder: (_) => ColoredBox(color: artworkPlaceholder),
                 errorWidget: (_) {
-                  if ((providedBannerUrl != null || manga) &&
-                      posterUrl != null &&
-                      providedBannerUrl != posterUrl) {
+                  if (artworkErrorPoster != null) {
                     return CachedNetworkImage(
-                      imageUrl: posterUrl,
+                      imageUrl: artworkErrorPoster,
                       fit: BoxFit.cover,
                       alignment: Alignment.topCenter,
                       memCacheWidth: decodeWidth,
                       filterQuality: FilterQuality.medium,
                       errorWidget: (_, _, _) => ThumbnailErrorPlaceholder(
-                        label: displayItem.title,
+                        label: artworkLabel,
                         isBackdrop: true,
                       ),
                     );
                   }
                   return ThumbnailErrorPlaceholder(
-                    label: displayItem.title,
+                    label: artworkLabel,
                     isBackdrop: true,
                   );
                 },
@@ -276,7 +285,20 @@ class DetailsDesktopHero extends ConsumerWidget {
                     top: 0,
                     right: 0,
                     bottom: 3 - pictureRunOn,
-                    child: backdropArtwork(),
+                    // Episode selection and library updates rebuild the page,
+                    // but do not change what the banner has to load.
+                    child: HookBuilder(
+                      builder: (_) => useMemoized(backdropArtwork, [
+                        backdrop,
+                        artworkMalId,
+                        artworkTitle,
+                        artworkLabel,
+                        artworkIsManga,
+                        artworkWidth,
+                        artworkPlaceholder,
+                        artworkErrorPoster,
+                      ]),
+                    ),
                   ),
 
                 // The picture goes to ground before the page's own
