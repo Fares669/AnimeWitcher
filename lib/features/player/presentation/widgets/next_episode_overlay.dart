@@ -652,7 +652,6 @@ class _PlayNowButton extends StatefulWidget {
 
 class _PlayNowButtonState extends State<_PlayNowButton>
     with SingleTickerProviderStateMixin {
-  FocusNode? _focusNode;
   bool _isFocused = false;
   bool _isHovered = false;
   late AnimationController _shineController;
@@ -668,18 +667,11 @@ class _PlayNowButtonState extends State<_PlayNowButton>
       vsync: this,
       duration: const Duration(milliseconds: 1000),
     );
-    if (widget.isTv) {
-      _focusNode = widget.focusNode ?? FocusNode();
-      _focusNode!.addListener(() {
-        if (mounted) setState(() => _isFocused = _focusNode!.hasFocus);
-      });
-    }
   }
 
   @override
   void dispose() {
     _shineController.dispose();
-    if (widget.focusNode == null) _focusNode?.dispose();
     super.dispose();
   }
 
@@ -808,7 +800,12 @@ class _PlayNowButtonState extends State<_PlayNowButton>
 
     if (widget.isTv) {
       return Focus(
-        focusNode: _focusNode,
+        focusNode: widget.focusNode,
+        onFocusChange: (focused) {
+          if (mounted && focused != _isFocused) {
+            setState(() => _isFocused = focused);
+          }
+        },
         autofocus: true,
         onKeyEvent: (node, event) {
           if (event is! KeyDownEvent) return KeyEventResult.ignored;
@@ -850,29 +847,11 @@ class _CancelButton extends StatefulWidget {
 }
 
 class _CancelButtonState extends State<_CancelButton> {
-  FocusNode? _focusNode;
   bool _isFocused = false;
   bool _isHovered = false;
 
   bool get _isActive => _isFocused || _isHovered;
   static const double _skew = -0.21;
-
-  @override
-  void initState() {
-    super.initState();
-    if (widget.isTv) {
-      _focusNode = widget.focusNode ?? FocusNode();
-      _focusNode!.addListener(() {
-        if (mounted) setState(() => _isFocused = _focusNode!.hasFocus);
-      });
-    }
-  }
-
-  @override
-  void dispose() {
-    if (widget.focusNode == null) _focusNode?.dispose();
-    super.dispose();
-  }
 
   void _onHover(bool hovering) {
     if (!mounted) return;
@@ -998,7 +977,12 @@ class _CancelButtonState extends State<_CancelButton> {
 
     if (widget.isTv) {
       return Focus(
-        focusNode: _focusNode,
+        focusNode: widget.focusNode,
+        onFocusChange: (focused) {
+          if (mounted && focused != _isFocused) {
+            setState(() => _isFocused = focused);
+          }
+        },
         onKeyEvent: (node, event) {
           if (event is! KeyDownEvent) return KeyEventResult.ignored;
           final key = event.logicalKey;
