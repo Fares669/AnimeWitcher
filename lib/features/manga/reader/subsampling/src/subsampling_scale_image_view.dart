@@ -729,7 +729,7 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
     }
 
     // 4. General path: resolution via ImageStream
-    final completer = Completer<ui.Image>();
+    final completer = Completer<ImageInfo>();
 
     final stream = provider.resolve(ImageConfiguration.empty);
     _activeImageStream = stream;
@@ -737,7 +737,9 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
     final listener = ImageStreamListener(
       (ImageInfo info, bool _) {
         if (!completer.isCompleted) {
-          completer.complete(info.image);
+          completer.complete(info);
+        } else {
+          info.dispose();
         }
       },
       onError: (Object e, StackTrace? st) {
@@ -755,8 +757,11 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
     _activeImageStreamListener = listener;
     stream.addListener(listener);
 
+    ImageInfo? ownedFrame;
     try {
-      final ui.Image loadedImage = await completer.future;
+      final frame = await completer.future;
+      ownedFrame = frame;
+      final loadedImage = frame.image;
       _cancelImageStream();
 
       if (!mounted) return;
@@ -805,6 +810,10 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
           if (mounted) widget.onError?.call(e.toString());
         });
       }
+    } finally {
+      // The first listener clone outlives the subscription during PNG
+      // encoding. Release it on every exit, even if disk IO failed.
+      ownedFrame?.dispose();
     }
   }
 

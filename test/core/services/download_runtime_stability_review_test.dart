@@ -130,7 +130,9 @@ void main() {
         expect(source, contains("raw['generation'] != session.generation"));
         expect(source, contains("raw['expectedBytes'] != session.size"));
         expect(source, contains("'sha256': sha256Digest"));
-        expect(source, contains('sha256.bind(file.openRead()).first'));
+        expect(source, contains('_fileDigest(File file) => downloadFileDigest(file)'));
+        final digestSource = File('lib/core/utils/download_file_digest.dart').readAsStringSync();
+        expect(digestSource, contains('sha256.bind(file.openRead()).first'));
         expect(source, contains('await _fileDigest(target) == ready.sha256Digest'));
         expect(source, contains('!session.publicationOwnershipKnown'));
 

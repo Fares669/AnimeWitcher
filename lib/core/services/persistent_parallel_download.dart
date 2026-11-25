@@ -5,7 +5,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
-import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
 import 'download_connection_governor.dart';
@@ -14,6 +13,7 @@ import 'download_parallel.dart';
 import 'download_retry_policy.dart';
 import 'download_source_verification.dart';
 import 'download_telemetry.dart';
+import '../utils/download_file_digest.dart';
 import '../utils/download_resume.dart';
 import '../utils/local_file_io.dart';
 
@@ -5035,8 +5035,7 @@ class PersistentParallelDownload {
     await _parkForStorageFailure(session);
   }
 
-  Future<String> _fileDigest(File file) async =>
-      (await sha256.bind(file.openRead()).first).toString();
+  Future<String> _fileDigest(File file) => downloadFileDigest(file);
 
   Future<bool> _ownedPublicationSource(
     _ParallelSession session,

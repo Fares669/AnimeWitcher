@@ -65,6 +65,24 @@ jobs:
         # never sent to an external service by the test suite.
         run: flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
 
+      - name: Validate opt-in Rust download digest on Linux x64
+        shell: bash
+        run: |
+          cargo test --locked --manifest-path native/download_sha256/Cargo.toml
+          cp pubspec.yaml "$RUNNER_TEMP/animewitcher-default-pubspec.yaml"
+          trap 'cp "$RUNNER_TEMP/animewitcher-default-pubspec.yaml" pubspec.yaml' EXIT
+          cat >> pubspec.yaml <<'YAML'
+
+          hooks:
+            user_defines:
+              animewitcher:
+                rust_download_sha256: true
+          YAML
+          flutter pub get --enforce-lockfile
+          flutter test --no-pub test/core/utils/download_file_digest_test.dart \
+            --dart-define=ANIMEWITCHER_RUST_DOWNLOAD_SHA256=true \
+            --dart-define=ANIMEWITCHER_EXPECT_RUST_DOWNLOAD_SHA256=true
+
   android-v2-build:
     if: >-
       github.event.head_commit.message != 'chore: purge obsolete workflow history'

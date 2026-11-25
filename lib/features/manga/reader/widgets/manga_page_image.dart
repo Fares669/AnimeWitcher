@@ -153,10 +153,13 @@ class _MangaPageImageState extends State<MangaPageImage>
     final ImageProvider<Object> provider = _imageProvider;
     final stream = provider.resolve(createLocalImageConfiguration(context));
     final listener = ImageStreamListener((info, _) {
-      final size = Size(
-        info.image.width.toDouble(),
-        info.image.height.toDouble(),
-      );
+      final Size size;
+      try {
+        size = Size(info.image.width.toDouble(), info.image.height.toDouble());
+      } finally {
+        // Only dimensions are needed, including on repeated animated frames.
+        info.dispose();
+      }
       if (!mounted || size == _imageSize) return;
       setState(() => _imageSize = size);
       widget.onImageSize?.call(size);

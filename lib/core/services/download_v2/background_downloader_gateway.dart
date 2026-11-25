@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:crypto/crypto.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter/services.dart'
+    show MethodChannel, MissingPluginException, PlatformException;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -1638,6 +1640,25 @@ Future<bool> promoteCompletedDownloadFileV2(
   }
 }
 
+bool _equalPrefixChunk(Uint8List local, List<int> chunk, int offset) {
+  var index = 0;
+  // The HTTP and file paths already yield bytes. Compare wide views without
+  // copying, leaving short tails and non-typed lists to the original loop.
+  if (chunk is Uint8List && local.length >= 8) {
+    final a = ByteData.sublistView(local);
+    final b = ByteData.sublistView(chunk, offset, offset + local.length);
+    for (; index + 8 <= local.length; index += 8) {
+      if (a.getUint64(index, Endian.host) != b.getUint64(index, Endian.host)) {
+        return false;
+      }
+    }
+  }
+  for (; index < local.length; index++) {
+    if (local[index] != chunk[offset + index]) return false;
+  }
+  return true;
+}
+
 /// Verifies saved range bytes against the current authorized identity response.
 /// False requires contradictory source evidence; an unavailable probe throws.
 /// [verificationTimeout] bounds inactivity, including connection/headers. Only
@@ -1803,9 +1824,7 @@ Future<({bool matches, String? validator})> verifySavedRangeSourceV2(
         final local = await saved.read(end - offset);
         checkInterrupted();
         if (local.length != end - offset) throw localFileFailure;
-        for (var index = 0; index < local.length; index++) {
-          if (local[index] != chunk[offset + index]) return rejected;
-        }
+        if (!_equalPrefixChunk(local, chunk, offset)) return rejected;
         verifiedBytes += local.length;
         renewInactivity();
         offset = end;
