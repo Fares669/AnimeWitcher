@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:animewitcher/core/utils/responsive_breakpoints.dart';
+import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/utils/layout_constants.dart';
 
 import 'package:animewitcher/features/home/presentation/widgets/continue_watching_card.dart';
@@ -64,6 +65,9 @@ class _ContinueWatchingSectionState
                 hoverColor: Colors.red.withValues(alpha: 0.15),
                 onTap: () {
                   final l10n = AppLocalizations.of(context)!;
+                  final providerId = ref
+                      .read(activeProviderProvider)
+                      ?.packageName;
                   showDialog<void>(
                     context: context,
                     builder: (context) => AlertDialog(
@@ -78,7 +82,7 @@ class _ContinueWatchingSectionState
                           onPressed: () {
                             ref
                                 .read(continueWatchingProvider.notifier)
-                                .clearAll();
+                                .clearAllFor(providerId);
                             Navigator.pop(context);
                             ref
                                 .read(notificationServiceProvider)

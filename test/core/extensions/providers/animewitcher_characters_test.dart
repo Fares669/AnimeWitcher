@@ -30,8 +30,7 @@ Map<String, dynamic> _searchServiceDocument({
   String error = 'البحث متوقف حاليا',
 }) {
   return <String, dynamic>{
-    'name':
-        'projects/animewitcher-1c66d/databases/(default)/documents/Settings/search_service',
+    'name': 'projects/animewitcher-1c66d/databases/(default)/documents/Settings/search_service',
     'fields': <String, dynamic>{
       'browseApiKey': <String, dynamic>{'stringValue': browseKey},
       'is_search_active': <String, dynamic>{'booleanValue': active},
@@ -43,8 +42,7 @@ Map<String, dynamic> _searchServiceDocument({
 
 Map<String, dynamic> _constantsDocument() {
   return <String, dynamic>{
-    'name':
-        'projects/animewitcher-1c66d/databases/(default)/documents/Settings/constants',
+    'name': 'projects/animewitcher-1c66d/databases/(default)/documents/Settings/constants',
     'fields': <String, dynamic>{
       'search_settings': <String, dynamic>{
         'mapValue': <String, dynamic>{
@@ -60,8 +58,7 @@ Map<String, dynamic> _constantsDocument() {
 
 Map<String, dynamic> _characterDocument() {
   return <String, dynamic>{
-    'name':
-        'projects/animewitcher-1c66d/databases/(default)/documents/characters_list/417',
+    'name': 'projects/animewitcher-1c66d/databases/(default)/documents/characters_list/417',
     'fields': <String, dynamic>{
       'likes': <String, dynamic>{'integerValue': '42'},
       'data': <String, dynamic>{
@@ -79,8 +76,7 @@ Map<String, dynamic> _characterDocument() {
                     'mapValue': <String, dynamic>{
                       'fields': <String, dynamic>{
                         'image_url': <String, dynamic>{
-                          'stringValue':
-                              'https://cdn.myanimelist.net/images/characters/8/l.jpg',
+                          'stringValue': 'https://cdn.myanimelist.net/images/characters/8/l.jpg',
                         },
                       },
                     },
@@ -139,8 +135,7 @@ Map<String, dynamic> _algoliaHits() {
       <String, dynamic>{
         'objectID': '417',
         'name': 'Lelouch Lamperouge',
-        'main_picture':
-            'https://cdn.myanimelist.net/images/characters/8/l.jpg',
+        'main_picture': 'https://cdn.myanimelist.net/images/characters/8/l.jpg',
         'likes': 12,
       },
     ],
@@ -172,22 +167,22 @@ Map<String, dynamic> _animeListHit({
 
 const Map<String, Map<String, dynamic>> _animeListByMalId =
     <String, Map<String, dynamic>>{
-  '1575': <String, dynamic>{
-    'id': 'code-geass',
-    'title': 'Code Geass',
-    'integer': false,
-  },
-  '13759': <String, dynamic>{
-    'id': 'akito',
-    'title': 'Code Geass: Akito the Exiled',
-    'integer': true,
-  },
-  '16498': <String, dynamic>{
-    'id': 'Attack on Titan S01',
-    'title': 'هجوم العمالقة',
-    'integer': false,
-  },
-};
+      '1575': <String, dynamic>{
+        'id': 'code-geass',
+        'title': 'Code Geass',
+        'integer': false,
+      },
+      '13759': <String, dynamic>{
+        'id': 'akito',
+        'title': 'Code Geass: Akito the Exiled',
+        'integer': true,
+      },
+      '16498': <String, dynamic>{
+        'id': 'Attack on Titan S01',
+        'title': 'هجوم العمالقة',
+        'integer': false,
+      },
+    };
 
 List<String> _malIdsFromQuery(Map<String, dynamic> query) {
   final where = Map<String, dynamic>.from(query['where'] as Map? ?? const {});
@@ -246,8 +241,9 @@ List<String> _malIdsFromQuery(Map<String, dynamic> query) {
   if (collection == 'anime_list') {
     final filter = Map<String, dynamic>.from(
       Map<String, dynamic>.from(
-        query['where'] as Map? ?? const {},
-      )['fieldFilter'] as Map? ??
+                query['where'] as Map? ?? const {},
+              )['fieldFilter']
+              as Map? ??
           const {},
     );
     if (filter['op'] == 'EQUAL') {
@@ -329,52 +325,66 @@ _RecordedDio _stubDio({
 }
 
 void main() {
-  test('character catalog browses the characters index with the browse key',
-      () async {
+  test(
+    'character catalog browses the characters index with the browse key',
+    () async {
+      final stub = _stubDio();
+      final page = await _provider(stub.dio).getCharactersPage();
+
+      expect(page.items, hasLength(1));
+      expect(page.items.single.id, '417');
+      expect(page.items.single.name, 'Lelouch Lamperouge');
+      expect(page.hasMore, isTrue);
+
+      final browse = stub.requests.singleWhere(
+        (request) => request.uri.host.contains('algolia.net'),
+      );
+      expect(browse.method, 'GET');
+      expect(browse.uri.path, endsWith('/indexes/characters/browse'));
+      expect(browse.uri.host, startsWith('testappid-dsn.algolia.net'));
+      expect(browse.headers['X-Algolia-API-Key'], 'browse-key');
+      final params = browse.uri.queryParameters;
+      expect(params['hitsPerPage'], '20');
+      expect(params['page'], '0');
+      expect(params['attributesToRetrieve'], contains('main_picture'));
+      expect(params['attributesToRetrieve'], contains('objectID'));
+    },
+  );
+
+  test('generic character search adapts native character hits', () async {
     final stub = _stubDio();
-    final page = await _provider(stub.dio).getCharactersPage();
+    final page = await _provider(stub.dio).searchCharacterPage('lelouch');
 
     expect(page.items, hasLength(1));
     expect(page.items.single.id, '417');
     expect(page.items.single.name, 'Lelouch Lamperouge');
-    expect(page.hasMore, isTrue);
-
-    final browse = stub.requests.singleWhere(
-      (request) => request.uri.host.contains('algolia.net'),
-    );
-    expect(browse.method, 'GET');
-    expect(browse.uri.path, endsWith('/indexes/characters/browse'));
-    expect(browse.uri.host, startsWith('testappid-dsn.algolia.net'));
-    expect(browse.headers['X-Algolia-API-Key'], 'browse-key');
-    final params = browse.uri.queryParameters;
-    expect(params['hitsPerPage'], '20');
-    expect(params['page'], '0');
-    expect(params['attributesToRetrieve'], contains('main_picture'));
-    expect(params['attributesToRetrieve'], contains('objectID'));
+    expect(page.items.single.image, isNotEmpty);
+    expect(page.hasMore, isFalse);
   });
 
-  test('typed character search uses prefs keys and GET browse at 500 hits', () async {
-    final stub = _stubDio();
-    await _provider(stub.dio).searchCharacters('lelouch');
+  test(
+    'typed character search uses prefs keys and GET browse at 500 hits',
+    () async {
+      final stub = _stubDio();
+      await _provider(stub.dio).searchCharacters('lelouch');
 
-    final search = stub.requests.singleWhere(
-      (request) =>
-          request.uri.host.contains('algolia.net') &&
-          request.uri.path.endsWith('/indexes/characters/browse') &&
-          request.headers['X-Algolia-API-Key'] == 'search-key',
-    );
-    expect(search.method, 'GET');
-    expect(search.uri.host, startsWith('searchapp-dsn.algolia.net'));
-    expect(search.headers['X-Algolia-API-Key'], 'search-key');
-    final params = search.uri.queryParameters;
-    expect(params['query'], 'lelouch');
-    expect(params['hitsPerPage'], '500');
-  });
+      final search = stub.requests.singleWhere(
+        (request) =>
+            request.uri.host.contains('algolia.net') &&
+            request.uri.path.endsWith('/indexes/characters/browse') &&
+            request.headers['X-Algolia-API-Key'] == 'search-key',
+      );
+      expect(search.method, 'GET');
+      expect(search.uri.host, startsWith('searchapp-dsn.algolia.net'));
+      expect(search.headers['X-Algolia-API-Key'], 'search-key');
+      final params = search.uri.queryParameters;
+      expect(params['query'], 'lelouch');
+      expect(params['hitsPerPage'], '500');
+    },
+  );
 
   test('inactive search service surfaces error_message', () async {
-    final stub = _stubDio(
-      searchService: _searchServiceDocument(active: false),
-    );
+    final stub = _stubDio(searchService: _searchServiceDocument(active: false));
     await expectLater(
       _provider(stub.dio).getCharactersPage(),
       throwsA(
@@ -386,63 +396,69 @@ void main() {
       ),
     );
     expect(
-      stub.requests.where((request) => request.uri.host.contains('algolia.net')),
+      stub.requests.where(
+        (request) => request.uri.host.contains('algolia.net'),
+      ),
       isEmpty,
     );
   });
 
-  test('character details parse data.anime mal_ids from the REST document',
-      () async {
-    final stub = _stubDio();
-    final document = await _provider(stub.dio).getCharacterDocument('417');
+  test(
+    'character details parse data.anime mal_ids from the REST document',
+    () async {
+      final stub = _stubDio();
+      final document = await _provider(stub.dio).getCharacterDocument('417');
 
-    expect(document, isNotNull);
-    expect(document!.likes, 42);
-    expect(
-      document.url,
-      'https://myanimelist.net/character/417/Lelouch_Lamperouge',
-    );
-    expect(document.animes, hasLength(2));
-    expect(document.animes.first.malId, '1575');
-    expect(document.animes.last.malId, '13759');
-    expect(
-      stub.requests.any(
-        (request) => request.uri.path.contains('characters_list/417'),
-      ),
-      isTrue,
-    );
-  });
-
-  test('anime cast queries Main/Supporting under anime_list/{id}/characters',
-      () async {
-    final stub = _stubDio();
-    final cast = await _provider(stub.dio).getCast(
-      'https://animewitcher.com/watch/code-geass',
-    );
-
-    expect(cast, isNotEmpty);
-    expect(cast.first.id, '417');
-    expect(cast.first.likes, 42);
-    expect(
-      cast.map((actor) => actor.role),
-      containsAll(<String>['شخصية رئيسية', 'شخصية ثانوية']),
-    );
-    expect(cast.map((actor) => actor.role), isNot(contains('شخصية مساندة')));
-    final queries = stub.requests.where(
-      (request) => request.uri.path.contains('anime_list/code-geass:runQuery'),
-    );
-    expect(queries.length, greaterThanOrEqualTo(2));
-    for (final request in queries) {
-      final payload = Map<String, dynamic>.from(request.data as Map);
-      final query = Map<String, dynamic>.from(
-        payload['structuredQuery'] as Map,
+      expect(document, isNotNull);
+      expect(document!.likes, 42);
+      expect(
+        document.url,
+        'https://myanimelist.net/character/417/Lelouch_Lamperouge',
       );
-      expect(query['from'], <Map<String, dynamic>>[
-        <String, dynamic>{'collectionId': 'characters'},
-      ]);
-      expect(query['limit'], animeWitcherAnimeCastStripFetchLimit);
-    }
-  });
+      expect(document.animes, hasLength(2));
+      expect(document.animes.first.malId, '1575');
+      expect(document.animes.last.malId, '13759');
+      expect(
+        stub.requests.any(
+          (request) => request.uri.path.contains('characters_list/417'),
+        ),
+        isTrue,
+      );
+    },
+  );
+
+  test(
+    'anime cast queries Main/Supporting under anime_list/{id}/characters',
+    () async {
+      final stub = _stubDio();
+      final cast = await _provider(stub.dio)
+          .getCast('https://animewitcher.com/watch/code-geass');
+
+      expect(cast, isNotEmpty);
+      expect(cast.first.id, '417');
+      expect(cast.first.likes, 42);
+      expect(
+        cast.map((actor) => actor.role),
+        containsAll(<String>['شخصية رئيسية', 'شخصية ثانوية']),
+      );
+      expect(cast.map((actor) => actor.role), isNot(contains('شخصية مساندة')));
+      final queries = stub.requests.where(
+        (request) =>
+            request.uri.path.contains('anime_list/code-geass:runQuery'),
+      );
+      expect(queries.length, greaterThanOrEqualTo(2));
+      for (final request in queries) {
+        final payload = Map<String, dynamic>.from(request.data as Map);
+        final query = Map<String, dynamic>.from(
+          payload['structuredQuery'] as Map,
+        );
+        expect(query['from'], <Map<String, dynamic>>[
+          <String, dynamic>{'collectionId': 'characters'},
+        ]);
+        expect(query['limit'], animeWitcherAnimeCastStripFetchLimit);
+      }
+    },
+  );
 
   test('Eren-shaped integer mal_id resolves a catalog title via IN', () async {
     final stub = _stubDio();
@@ -498,21 +514,15 @@ void main() {
     expect(filter['field'], <String, dynamic>{'fieldPath': 'mal_id'});
     expect(filter['op'], 'IN');
     expect(filter['op'], isNot('EQUAL'));
-    expect(
-      _malIdsFromQuery(query),
-      <String>['1575', '13759'],
-    );
-    expect(
-      filter['value'],
-      <String, dynamic>{
-        'arrayValue': <String, dynamic>{
-          'values': <Map<String, dynamic>>[
-            <String, dynamic>{'stringValue': '1575'},
-            <String, dynamic>{'stringValue': '13759'},
-          ],
-        },
+    expect(_malIdsFromQuery(query), <String>['1575', '13759']);
+    expect(filter['value'], <String, dynamic>{
+      'arrayValue': <String, dynamic>{
+        'values': <Map<String, dynamic>>[
+          <String, dynamic>{'stringValue': '1575'},
+          <String, dynamic>{'stringValue': '13759'},
+        ],
       },
-    );
+    });
   });
 
   test('character animes batch mal_id IN queries by tens', () async {
@@ -568,10 +578,7 @@ void main() {
       final filter = Map<String, dynamic>.from(
         (query['where'] as Map)['fieldFilter'] as Map,
       );
-      expect(
-        filter['value'],
-        <String, dynamic>{'stringValue': 'Main'},
-      );
+      expect(filter['value'], <String, dynamic>{'stringValue': 'Main'});
     }
   });
 }

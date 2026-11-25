@@ -22,12 +22,13 @@ class LibrarySideList extends StatelessWidget {
     required this.onSelect,
     required this.prefs,
     required this.onFilter,
+    this.witanimeAnime = false,
   });
 
   final LibraryMediaKind kind;
   final LibraryCategory category;
   final bool recentSelected;
-  final Map<LibraryMediaKind, Map<LibraryCategory, int>> counts;
+  final Map<LibraryMediaKind, Map<LibraryCategory, int?>> counts;
   final int recentCount;
   final VoidCallback onRecent;
 
@@ -45,6 +46,9 @@ class LibrarySideList extends StatelessWidget {
 
   /// Opens the filter, from the button beside the first heading.
   final VoidCallback onFilter;
+
+  /// When true, anime shelves show only Witanime-supported lists.
+  final bool witanimeAnime;
 
   @override
   Widget build(BuildContext context) {
@@ -73,8 +77,8 @@ class LibrarySideList extends StatelessWidget {
       ),
     );
     final special = recentSelected || charactersSelected;
-    bool shown(bool listShown, int count, bool selected) =>
-        selected || (listShown && (count > 0 || !prefs.hideEmpty));
+    bool shown(bool listShown, int? count, bool selected) =>
+        selected || (listShown && (count != 0 || !prefs.hideEmpty));
 
     return ListView(
       key: const ValueKey<String>('library-side-list'),
@@ -102,10 +106,13 @@ class LibrarySideList extends StatelessWidget {
               selected: recentSelected,
               onTap: onRecent,
             ),
-          for (final listCategory in LibraryCategory.values)
+          for (final listCategory in LibraryCategory.valuesForCatalog(
+            witanimeAnime:
+                witanimeAnime && listKind == LibraryMediaKind.anime,
+          ))
             if (shown(
               prefs.shows(listCategory),
-              counts[listKind]?[listCategory] ?? 0,
+              counts[listKind]?[listCategory],
               !special && listKind == kind && listCategory == category,
             ))
               LibrarySideRow(
@@ -114,7 +121,7 @@ class LibrarySideList extends StatelessWidget {
                 ),
                 icon: libraryCategoryIcon(listCategory),
                 label: libraryCategoryLabel(context, listCategory, listKind),
-                count: counts[listKind]?[listCategory] ?? 0,
+                count: counts[listKind]?[listCategory],
                 selected:
                     !special && listKind == kind && listCategory == category,
                 onTap: () => onSelect(listKind, listCategory),

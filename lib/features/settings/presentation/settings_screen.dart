@@ -4,12 +4,16 @@ import 'package:flutter/material.dart';
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 
 import 'widgets/download_log_dialog.dart';
+import '../../../shared/widgets/account_avatar_button.dart';
 
 import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../core/extensions/base_provider.dart';
+import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/layout_constants.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../core/providers/device_info_provider.dart';
@@ -34,6 +38,7 @@ import 'package:animewitcher/core/utils/localized_text.dart';
 import '../../../core/navigation/app_layout_style.dart';
 import '../../details/presentation/widgets/details_seasons_bar.dart';
 import '../../details/presentation/widgets/seasons_bar_style_picker.dart';
+import '../../home/presentation/latest_episodes_provider.dart';
 import '../../../shared/widgets/app_layout_picker.dart';
 import '../../player/data/anime4k.dart';
 import 'widgets/anime4k_dialog.dart';
@@ -119,6 +124,9 @@ class SettingsScreen extends ConsumerWidget {
     final versionAsync = ref.watch(appVersionProvider);
     final generalSettings = ref.watch(generalSettingsProvider);
     final animeDataSettings = ref.watch(animeDataSourceSettingsProvider);
+    final activeCatalog = ref.watch(activeProviderProvider);
+    final installedProviders = ref.watch(extensionManagerProvider);
+    final latestEpisodes = ref.watch(latestEpisodesSettingsProvider);
 
     final playerSettings =
         ref.watch(playerSettingsProvider).asData?.value ??
@@ -146,6 +154,68 @@ class SettingsScreen extends ConsumerWidget {
                   ref.read(appThemeStyleProvider.notifier).select(style),
             ),
           ),
+          SettingsTile(
+            key: const ValueKey('settings-witcher-account'),
+            icon: Icons.account_circle_outlined,
+            title: 'حساب AnimeWitcher',
+            onTap: () => openAccountScreen(context),
+          ),
+          SettingsTile(
+            key: const ValueKey('settings-active-anime-provider'),
+            icon: Icons.video_library_outlined,
+            title: 'مصدر الأنمي النشط',
+            subtitle:
+                activeCatalog != null &&
+                    activeCatalog is! AnimeWitcherNativeProvider
+                ? '${activeCatalog.name} · المانجا على AnimeWitcher'
+                : '${activeCatalog?.name ?? 'AnimeWitcher'} (${installedProviders.length} مزوّد)',
+            trailing: installedProviders.length > 1
+                ? const SizedBox.shrink()
+                : null,
+            below: installedProviders.length > 1
+                ? SettingsChoices<AnimeWitcherProvider>(
+                    values: installedProviders,
+                    selected: activeCatalog ?? installedProviders.first,
+                    label: (p) => p.name,
+                    onSelected: (p) =>
+                        ref.read(activeProviderProvider.notifier).set(p),
+                  )
+                : null,
+            onTap: installedProviders.length <= 1
+                ? null
+                : () async {
+                    final currentIndex = installedProviders.indexWhere(
+                      (p) => p.packageName == activeCatalog?.packageName,
+                    );
+                    final next =
+                        installedProviders[(currentIndex + 1) %
+                            installedProviders.length];
+                    await ref.read(activeProviderProvider.notifier).set(next);
+                  },
+          ),
+          ...installedProviders
+              .where(
+                (source) => source.supportedTypes.contains(ProviderType.anime),
+              )
+              .map((source) {
+                final id = source.packageName;
+                final active = id == activeCatalog?.packageName;
+                final enabled = active || latestEpisodes.contains(id);
+                Future<void> toggle(bool value) => ref
+                    .read(latestEpisodesSettingsProvider.notifier)
+                    .setEnabled(id, value);
+                return SettingsTile(
+                  key: ValueKey('settings-latest-episodes-$id'),
+                  icon: Icons.new_releases_outlined,
+                  title: 'أحدث الحلقات (${source.name})',
+                  subtitle: active ? 'المصدر النشط' : null,
+                  trailing: Switch(
+                    value: enabled,
+                    onChanged: active ? null : toggle,
+                  ),
+                  onTap: active ? null : () => toggle(!enabled),
+                );
+              }),
           SettingsTile(
             icon: Icons.view_carousel_rounded,
             title: 'شريط المواسم',

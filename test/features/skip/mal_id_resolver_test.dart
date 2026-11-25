@@ -1,4 +1,5 @@
 import 'package:animewitcher/features/skip/data/mal_id_resolver.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -252,6 +253,85 @@ void main() {
 
     test('leaves a clean title alone', () {
       expect(MalIdResolver.normalizeTitle('  Frieren  '), 'Frieren');
+    });
+  });
+
+  group('resolveForItem and AniDB fallback', () {
+    test('prefers direct malId, then resolves anidbId via ani.zip, then alternative title', () async {
+      final requestedPaths = <String>[];
+      final dio = Dio();
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            requestedPaths.add('${options.uri.host}${options.path}?${options.queryParameters}');
+            if (options.uri.host == 'api.ani.zip' &&
+                options.queryParameters['anidb_id'] == 69) {
+              handler.resolve(
+                Response<Map<String, dynamic>>(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: <String, dynamic>{
+                    'mappings': <String, dynamic>{'mal_id': 21},
+                  },
+                ),
+              );
+              return;
+            }
+            if (options.uri.host == 'graphql.anilist.co') {
+              final search = (options.data as Map)['variables']['search'];
+              handler.resolve(
+                Response<Map<String, dynamic>>(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: <String, dynamic>{
+                    'data': <String, dynamic>{
+                      'Media': search == 'Overgeared'
+                          ? <String, dynamic>{'idMal': 59999}
+                          : null,
+                    },
+                  },
+                ),
+              );
+              return;
+            }
+            handler.resolve(
+              Response<Map<String, dynamic>>(
+                requestOptions: options,
+                statusCode: 200,
+                data: <String, dynamic>{'data': <dynamic>[]},
+              ),
+            );
+          },
+        ),
+      );
+
+      final resolver = MalIdResolver(dio);
+
+      expect(
+        await resolver.resolveForItem(
+          syncData: const {'malId': '21', 'anidbId': '69'},
+          title: 'ون بيس',
+        ),
+        21,
+      );
+      expect(requestedPaths, isEmpty);
+
+      expect(
+        await resolver.resolveForItem(
+          syncData: const {'anidbId': '69'},
+          title: 'ون بيس',
+        ),
+        21,
+      );
+      expect(requestedPaths.single, contains('anidb_id: 69'));
+
+      expect(
+        await resolver.resolveForItem(
+          title: 'العنوان العربي غير المعروف',
+          alternativeTitles: const ['Overgeared'],
+        ),
+        59999,
+      );
     });
   });
 }

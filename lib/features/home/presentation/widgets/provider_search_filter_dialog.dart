@@ -67,11 +67,18 @@ class _ProviderSearchFilterDialogState
   late Set<String> _statuses;
   late Set<String> _types;
   late Set<String> _ageRatings;
+  late Set<String> _countries;
   late Set<String> _years;
   late Set<String> _seasons;
   late Set<String> _genres;
+  late Set<String> _studios;
+  late Set<String> _sources;
+  late Set<String> _versions;
+  late Set<String> _tags;
   String? _category;
   bool _allYears = false;
+  bool _allTags = false;
+  final Map<String, bool> _expandedChipGroups = <String, bool>{};
   final Map<String, Future<ProviderSearchFilterOptions>> _optionsByCategory =
       {};
 
@@ -85,9 +92,14 @@ class _ProviderSearchFilterDialogState
     _statuses = {...widget.initialValue.statuses};
     _types = {...widget.initialValue.types};
     _ageRatings = {...widget.initialValue.ageRatings};
+    _countries = {...widget.initialValue.countries};
     _years = {...widget.initialValue.years};
     _seasons = {...widget.initialValue.seasons};
     _genres = {...widget.initialValue.genres};
+    _studios = {...widget.initialValue.studios};
+    _sources = {...widget.initialValue.sources};
+    _versions = {...widget.initialValue.versions};
+    _tags = {...widget.initialValue.tags};
     _category = widget.category;
     if (_category != null) {
       _optionsByCategory[_category!] = Future.value(widget.options);
@@ -113,9 +125,23 @@ class _ProviderSearchFilterDialogState
     Navigator.of(context).pop(_value);
   }
 
-  void _toggle(Set<String> target, String value) {
+  void _toggle(Set<String> target, String value, {bool single = false}) {
     setState(() {
-      if (!target.add(value)) target.remove(value);
+      if (target.remove(value)) return;
+      if (single) target.clear();
+      target.add(value);
+    });
+  }
+
+  void _toggleCountry(String value) {
+    setState(() {
+      if (_countries.contains(value)) {
+        _countries.clear();
+      } else {
+        _countries
+          ..clear()
+          ..add(value);
+      }
     });
   }
 
@@ -136,9 +162,14 @@ class _ProviderSearchFilterDialogState
       _statuses.clear();
       _types.clear();
       _ageRatings.clear();
+      _countries.clear();
       _years.clear();
       _seasons.clear();
       _genres.clear();
+      _studios.clear();
+      _sources.clear();
+      _versions.clear();
+      _tags.clear();
     });
   }
 
@@ -156,9 +187,14 @@ class _ProviderSearchFilterDialogState
       statuses: keep(_statuses, options?.statuses),
       types: keep(_types, options?.types),
       ageRatings: keep(_ageRatings, options?.ageRatings),
+      countries: keep(_countries, options?.countries),
       years: keep(_years, options?.years),
       seasons: keep(_seasons, options?.seasons),
       genres: keep(_genres, options?.genres),
+      tags: keep(_tags, options?.tags),
+      studios: keep(_studios, options?.studios),
+      sources: keep(_sources, options?.sources),
+      versions: keep(_versions, options?.versions),
       sort: widget.initialValue.sort,
     );
   }
@@ -322,7 +358,8 @@ class _ProviderSearchFilterDialogState
           child: _ChipWrap(
             values: options.statuses,
             selected: _statuses,
-            onToggle: (value) => _toggle(_statuses, value),
+            onToggle: (value) =>
+                _toggle(_statuses, value, single: options.singleSelection),
           ),
         ),
       if (options.types.isNotEmpty)
@@ -332,7 +369,8 @@ class _ProviderSearchFilterDialogState
           child: _ChipWrap(
             values: options.types,
             selected: _types,
-            onToggle: (value) => _toggle(_types, value),
+            onToggle: (value) =>
+                _toggle(_types, value, single: options.singleSelection),
           ),
         ),
       if (options.seasons.isNotEmpty)
@@ -348,6 +386,16 @@ class _ProviderSearchFilterDialogState
             onToggle: _toggleSeason,
           ),
         ),
+      if (options.countries.isNotEmpty)
+        _FilterCard(
+          key: const ValueKey<String>('filterCard-country'),
+          title: _t('Country of origin', 'بلد المنشأ'),
+          child: _ChipWrap(
+            values: options.countries,
+            selected: _countries,
+            onToggle: _toggleCountry,
+          ),
+        ),
       if (options.ageRatings.isNotEmpty)
         _FilterCard(
           key: const ValueKey<String>('filterCard-age'),
@@ -361,7 +409,9 @@ class _ProviderSearchFilterDialogState
     ];
     final viewport = MediaQuery.sizeOf(context);
     final yearsPerRow =
-        appLayoutsAvailable(context) || viewport.width > viewport.height ? 10 : 5;
+        appLayoutsAvailable(context) || viewport.width > viewport.height
+        ? 10
+        : 5;
     final years = _allYears
         ? options.years
         : options.years.take(yearsPerRow).toList(growable: false);
@@ -371,6 +421,11 @@ class _ProviderSearchFilterDialogState
       for (final year in _years)
         if (!years.contains(year) && options.years.contains(year)) year,
     ];
+
+    final shownTags = <String>{
+      ...(_allTags ? options.tags : options.tags.take(24)),
+      ..._tags.where(options.tags.contains),
+    }.toList(growable: false);
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -430,7 +485,11 @@ class _ProviderSearchFilterDialogState
                         values: shownYears,
                         selected: _years,
                         columns: yearsPerRow,
-                        onToggle: (value) => _toggle(_years, value),
+                        onToggle: (value) => _toggle(
+                          _years,
+                          value,
+                          single: options.singleSelection,
+                        ),
                       ),
                     ),
                     if (options.years.length > yearsPerRow)
@@ -455,6 +514,23 @@ class _ProviderSearchFilterDialogState
                 ),
               ),
             ],
+            for (final (key, title, values, selected) in [
+              ('studio', 'الاستوديو', options.studios, _studios),
+              ('source', 'المصدر', options.sources, _sources),
+              ('version', 'النسخة', options.versions, _versions),
+            ])
+              if (values.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                _buildExpandableChipCard(
+                  cardKey: key,
+                  title: title,
+                  values: values,
+                  selected: selected,
+                  previewCount: 8,
+                  single: true,
+                  moreLabel: _t('Show all', 'عرض الكل'),
+                ),
+              ],
             if (options.genres.isNotEmpty) ...[
               const SizedBox(height: 8),
               _FilterCard(
@@ -468,9 +544,94 @@ class _ProviderSearchFilterDialogState
                 ),
               ),
             ],
+            if (options.tags.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _FilterCard(
+                key: const ValueKey<String>('filterCard-tags'),
+                title: _t('Tags', 'الوسوم'),
+                multiple: true,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _ChipWrap(
+                      values: shownTags,
+                      selected: _tags,
+                      onToggle: (value) => _toggle(_tags, value),
+                    ),
+                    if (options.tags.length > 24)
+                      TextButton(
+                        key: const ValueKey<String>('filter-tags-more'),
+                        onPressed: () => setState(() => _allTags = !_allTags),
+                        child: Text(
+                          _allTags
+                              ? _t('Show less', 'عرض أقل')
+                              : _t('Show more', 'عرض المزيد'),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
           ],
         );
       },
+    );
+  }
+
+  Widget _buildExpandableChipCard({
+    required String cardKey,
+    required String title,
+    required List<String> values,
+    required Set<String> selected,
+    required int previewCount,
+    bool single = false,
+    String? moreLabel,
+  }) {
+    final expanded = _expandedChipGroups[cardKey] ?? false;
+    final shown = <String>{
+      ...(expanded ? values : values.take(previewCount)),
+      ...selected.where(values.contains),
+    }.toList(growable: false);
+    return _FilterCard(
+      key: ValueKey<String>('filterCard-$cardKey'),
+      title: title,
+      multiple: !single,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AnimatedSize(
+            duration: const Duration(milliseconds: 240),
+            reverseDuration: const Duration(milliseconds: 190),
+            curve: Curves.easeOutCubic,
+            alignment: AlignmentDirectional.topStart,
+            clipBehavior: Clip.hardEdge,
+            child: _ChipWrap(
+              values: shown,
+              selected: selected,
+              onToggle: (value) => _toggle(selected, value, single: single),
+            ),
+          ),
+          if (values.length > previewCount)
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton(
+                key: ValueKey<String>('filter-$cardKey-more'),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  minimumSize: const Size(0, 34),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                onPressed: () =>
+                    setState(() => _expandedChipGroups[cardKey] = !expanded),
+                child: Text(
+                  expanded
+                      ? _t('Show less', 'عرض أقل')
+                      : (moreLabel ?? _t('Show more', 'عرض المزيد')),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 

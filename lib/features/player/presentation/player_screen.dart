@@ -7,7 +7,7 @@ import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:window_manager/window_manager.dart';
+import 'package:window_manager/legacy.dart';
 import 'package:media_kit/media_kit.dart' hide PlayerState;
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:video_view/video_view.dart' as vv;
@@ -51,6 +51,7 @@ class PlayerScreen extends ConsumerStatefulWidget {
   final String? progressUrl;
   final Episode? episode;
   final StreamResult? selectedSource;
+  final Future<List<StreamResult>>? sourceResolution;
 
   const PlayerScreen({
     super.key,
@@ -59,6 +60,7 @@ class PlayerScreen extends ConsumerStatefulWidget {
     this.progressUrl,
     this.episode,
     this.selectedSource,
+    this.sourceResolution,
   });
 
   @override
@@ -244,6 +246,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         progressUrl: widget.progressUrl,
         episode: widget.episode,
         selectedSource: widget.selectedSource,
+        sourceResolution: widget.sourceResolution,
         videoViewController: _videoViewController,
         localPlaybackReady: localPlaybackReady,
       );

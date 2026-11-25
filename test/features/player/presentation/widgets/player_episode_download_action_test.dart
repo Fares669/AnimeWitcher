@@ -36,28 +36,35 @@ final _show = MultimediaItem(
 );
 final _savedFile = File('/saved/episode-nine.mp4');
 
-DownloadItem _download({TaskStatus status = TaskStatus.complete}) =>
-    DownloadItem(
-      task: DownloadTask(
-        taskId: 'episode-nine-task',
-        url: 'https://cdn.test/9.mp4',
-        filename: '9.mp4',
-      ),
-      item: _show,
-      episode: _episode,
-      logicalId: 'episode-nine-logical',
-      trackingUrl: _episode.url,
-      destinationPath: _savedFile.path,
-      status: status,
-      progress: status == TaskStatus.complete ? 1 : 0.4,
-      timestamp: 1,
-    );
+DownloadItem _download({
+  TaskStatus status = TaskStatus.complete,
+  MultimediaItem? item,
+  Episode? episode,
+  String taskId = 'episode-nine-task',
+  String? logicalId = 'episode-nine-logical',
+  double? progress,
+}) => DownloadItem(
+  task: DownloadTask(
+    taskId: taskId,
+    url: 'https://cdn.test/9.mp4',
+    filename: '9.mp4',
+  ),
+  item: item ?? _show,
+  episode: episode ?? _episode,
+  logicalId: logicalId,
+  trackingUrl: (episode ?? _episode).url,
+  destinationPath: _savedFile.path,
+  status: status,
+  progress: progress ?? (status == TaskStatus.complete ? 1 : 0.4),
+  timestamp: 1,
+);
 
 class _Downloads extends DownloadsNotifier {
   _Downloads(this.items, {this.error});
   final List<DownloadItem> items;
   final Object? error;
   final removed = <DownloadItem>[];
+  final pausedTaskIds = <String>[];
 
   @override
   Future<List<DownloadItem>> build() async => items;
@@ -70,6 +77,11 @@ class _Downloads extends DownloadsNotifier {
       state.requireValue.where((d) => d.id != item.id).toList(),
     );
   }
+
+  @override
+  Future<void> pauseDownload(String taskId) async {
+    pausedTaskIds.add(taskId);
+  }
 }
 
 class _Files extends DownloadedFiles {
@@ -78,12 +90,16 @@ class _Files extends DownloadedFiles {
   final bool cacheOnly;
   Object? checkError;
   Completer<void>? pendingCheck;
+  final checkedItems = <MultimediaItem>[];
 
   @override
-  Map<String, File?> build() => {_episode.url: cached ? _savedFile : null};
+  Map<String, File?> build() => {
+    downloadedFileKey(_show, episode: _episode): cached ? _savedFile : null,
+  };
 
   @override
   Future<void> checkFile(MultimediaItem item, {Episode? episode}) async {
+    checkedItems.add(item);
     await pendingCheck?.future;
     if (checkError != null) throw checkError!;
     final completed = completedEpisodeDownload(
@@ -92,9 +108,9 @@ class _Files extends DownloadedFiles {
       episode!,
     );
     state = {
-      episode.url: cached && (completed != null || cacheOnly)
-          ? _savedFile
-          : null,
+      ...state,
+      downloadedFileKey(item, episode: episode):
+          cached && (completed != null || cacheOnly) ? _savedFile : null,
     };
   }
 }
@@ -110,6 +126,22 @@ class _Details extends DetailsController {
 }
 
 class _History extends Fake implements HistoryRepository {
+  @override
+  int positionForItem(
+    MultimediaItem item, {
+    String? episodeUrl,
+    int? season,
+    int? episode,
+  }) => 0;
+
+  @override
+  int durationForItem(
+    MultimediaItem item, {
+    String? episodeUrl,
+    int? season,
+    int? episode,
+  }) => 0;
+
   @override
   int getEpisodePosition(
     String url, {
@@ -130,11 +162,15 @@ class _History extends Fake implements HistoryRepository {
 class _Watch extends Fake implements EpisodeWatchRepository {
   @override
   bool isWatched(String mainUrl, Episode episode) => false;
+
+  @override
+  bool isWatchedFor(MultimediaItem item, Episode episode) => false;
 }
 
 class _Launcher extends DownloadLauncher {
   _Launcher(super.ref);
   final launched = <String>[];
+  final sourceItems = <MultimediaItem>[];
 
   @override
   Future<void> launch(
@@ -142,7 +178,10 @@ class _Launcher extends DownloadLauncher {
     MultimediaItem item, {
     String? episodeUrl,
     Episode? episode,
-  }) async => launched.add(episodeUrl!);
+  }) async {
+    launched.add(episodeUrl!);
+    sourceItems.add(item);
+  }
 }
 
 Future<ProviderContainer> _pumpPanel(
@@ -151,6 +190,9 @@ Future<ProviderContainer> _pumpPanel(
   bool cached = true,
   _Files? files,
   NotificationService? notifications,
+  MultimediaItem? item,
+  Map<String, DownloadProgressData>? progress,
+  ValueNotifier<MultimediaItem>? selectedItem,
 }) async {
   final container = ProviderContainer(
     overrides: [
@@ -158,17 +200,22 @@ Future<ProviderContainer> _pumpPanel(
       downloadedFilesProvider.overrideWith(() => files ?? _Files(cached)),
       playerControllerProvider.overrideWith(_Player.new),
       detailsControllerProvider(_show.url).overrideWith(_Details.new),
+      if (item != null && item.url != _show.url)
+        detailsControllerProvider(item.url).overrideWith(_Details.new),
       historyRepositoryProvider.overrideWithValue(_History()),
       episodeWatchRepositoryProvider.overrideWithValue(_Watch()),
       downloadLauncherProvider.overrideWith((ref) => _Launcher(ref)),
-      downloadProgressProvider.overrideWithValue({
-        if (downloads.items.isNotEmpty)
-          'episode-nine-logical': DownloadProgressData(
-            taskId: downloads.items.single.id,
-            progress: 0.4,
-            status: downloads.items.single.status,
-          ),
-      }),
+      downloadProgressProvider.overrideWithValue(
+        progress ??
+            {
+              if (downloads.items.isNotEmpty)
+                'episode-nine-logical': DownloadProgressData(
+                  taskId: downloads.items.single.id,
+                  progress: 0.4,
+                  status: downloads.items.single.status,
+                ),
+            },
+      ),
       if (notifications != null)
         notificationServiceProvider.overrideWithValue(notifications),
     ],
@@ -188,7 +235,13 @@ Future<ProviderContainer> _pumpPanel(
             alignment: Alignment.centerRight,
             child: SizedBox(
               width: 430,
-              child: PlayerEpisodesPanel(item: _show, onClose: () {}),
+              child: selectedItem == null
+                  ? PlayerEpisodesPanel(item: item ?? _show, onClose: () {})
+                  : ValueListenableBuilder<MultimediaItem>(
+                      valueListenable: selectedItem,
+                      builder: (context, selected, _) =>
+                          PlayerEpisodesPanel(item: selected, onClose: () {}),
+                    ),
             ),
           ),
         ),
@@ -200,6 +253,128 @@ Future<ProviderContainer> _pumpPanel(
 }
 
 void main() {
+  testWidgets(
+    'queued download opens by logical ID before first progress snapshot',
+    (tester) async {
+      final otherShow = _show.copyWith(url: '${_show.url}/other');
+      final otherTask = _download(item: otherShow, status: TaskStatus.running);
+      final queued = _download(
+        status: TaskStatus.enqueued,
+        taskId: 'episode-queued-task',
+        logicalId: 'episode-queued-logical',
+        progress: 0,
+      );
+      final downloads = _Downloads([otherTask, queued]);
+      await _pumpPanel(
+        tester,
+        downloads: downloads,
+        cached: false,
+        progress: {
+          _episode.url: DownloadProgressData(
+            taskId: otherTask.id,
+            progress: 0.4,
+            status: otherTask.status,
+          ),
+        },
+      );
+
+      expect(find.text('0%'), findsOneWidget);
+      await tester.tap(find.byType(EpisodeActionChip));
+      await tester.pump();
+
+      expect(find.byType(DownloadProgressDialog), findsOneWidget);
+      expect(
+        tester
+            .widget<DownloadProgressDialog>(find.byType(DownloadProgressDialog))
+            .trackingUrl,
+        'episode-queued-logical',
+      );
+      expect(find.text('40%'), findsNothing);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.byType(Dialog), findsOneWidget);
+      expect(find.byType(DownloadProgressDialog), findsOneWidget);
+      final l10n = AppLocalizations.of(
+        tester.element(find.byType(DownloadProgressDialog)),
+      )!;
+      await tester.tap(find.text(l10n.pause));
+      await tester.pump();
+      expect(downloads.pausedTaskIds, ['episode-queued-task']);
+    },
+  );
+
+  testWidgets(
+    'stale logical progress opens controls for the active task only',
+    (tester) async {
+      final task = _download(
+        status: TaskStatus.running,
+        logicalId: 'episode-logical',
+        taskId: 'episode-current-task',
+        progress: 0.65,
+      );
+      final downloads = _Downloads([task]);
+      await _pumpPanel(
+        tester,
+        downloads: downloads,
+        cached: false,
+        progress: {
+          'episode-logical': const DownloadProgressData(
+            taskId: 'old-unrelated-task',
+            progress: 0.4,
+            status: TaskStatus.running,
+          ),
+        },
+      );
+
+      expect(find.text('65%'), findsOneWidget);
+      expect(find.text('40%'), findsNothing);
+      await tester.tap(find.byType(EpisodeActionChip));
+      await tester.pump();
+      expect(find.byType(DownloadProgressDialog), findsOneWidget);
+      expect(
+        tester
+            .widget<DownloadProgressDialog>(find.byType(DownloadProgressDialog))
+            .trackingUrl,
+        'episode-logical',
+      );
+      expect(find.text('65%'), findsWidgets);
+      expect(find.text('40%'), findsNothing);
+      final l10n = AppLocalizations.of(
+        tester.element(find.byType(DownloadProgressDialog)),
+      )!;
+      await tester.tap(find.text(l10n.pause));
+      await tester.pump();
+      expect(downloads.pausedTaskIds, ['episode-current-task']);
+    },
+  );
+
+  testWidgets('episode URLs shared within one provider respect the show', (
+    tester,
+  ) async {
+    final otherShow = MultimediaItem(
+      title: 'Another anime',
+      url: '${_show.url}/other',
+      posterUrl: '',
+      contentType: MultimediaContentType.anime,
+      episodes: [_episode],
+    );
+    final container = await _pumpPanel(
+      tester,
+      item: otherShow,
+      downloads: _Downloads([_download(status: TaskStatus.running)]),
+      cached: false,
+    );
+
+    expect(find.byIcon(Icons.save_alt_rounded), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.save_alt_rounded));
+    await tester.pump();
+    expect(
+      (container.read(
+        downloadLauncherProvider,
+      ) as _Launcher).sourceItems.single,
+      same(otherShow),
+    );
+  });
+
   for (final cached in [true, false]) {
     testWidgets('completed episode shows delete with cached file $cached', (
       tester,

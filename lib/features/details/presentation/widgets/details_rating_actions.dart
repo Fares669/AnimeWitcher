@@ -13,10 +13,15 @@ import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../../../core/account/account_providers.dart';
+import '../../../../core/account/anime3rb_account_service.dart';
+import '../../../../core/account/anime3rb_comment_models.dart';
 import '../../../../core/account/animewitcher_account_models.dart';
 import '../../../../core/account/animewitcher_comment_models.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
+import '../../../../core/extensions/providers/anime3rb_provider.dart';
 import '../../../../core/services/notification_service.dart';
+import '../../../../core/storage/anime3rb_library_service.dart';
+import '../../../comments/presentation/anime3rb_comments_screen.dart';
 import '../../../comments/presentation/animewitcher_comments_screen.dart';
 import '../details_ratings.dart';
 import 'scale_rating_bar.dart';
@@ -49,8 +54,33 @@ Future<AnimeRatingOutcome> openAnimeRatingDialog(
   BuildContext context,
   WidgetRef ref, {
   required AnimeDetailsRatings ratings,
+  MultimediaItem? item,
   int initialRating = 0,
 }) async {
+  if ((ratings.isAnime3rb || item?.provider == Anime3rbProvider.id) &&
+      item != null) {
+    final a3Account = ref.read(anime3rbAccountServiceProvider);
+    if (!a3Account.isSignedIn) {
+      _toast(ref, 'سجّل الدخول إلى حساب Anime3rb أولًا للتقييم.');
+      return _unchanged;
+    }
+    if (!ratings.canRate) return _unchanged;
+    final selected = await showAnimeRatingDialog(
+      context,
+      initialRating: initialRating,
+    );
+    if (selected == null) return _unchanged;
+    try {
+      final saved = await ref
+          .read(anime3rbLibraryServiceProvider)
+          .setUserRating(item, selected == 0 ? null : selected);
+      return (changed: true, rating: saved);
+    } catch (error) {
+      _toast(ref, error.toString(), info: false);
+      return _unchanged;
+    }
+  }
+
   final service = ref.read(animeWitcherAccountServiceProvider);
   if (!service.isSignedIn) {
     _toast(ref, kRateLoginRequiredToast);
@@ -93,15 +123,27 @@ Future<void> openAnimeReviews(
   required MultimediaItem item,
   required AnimeDetailsRatings ratings,
 }) async {
+  if (item.provider == Anime3rbProvider.id) {
+    final a3Target = Anime3rbCommentTarget.fromAnime(item);
+    if (a3Target == null || !context.mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => Anime3rbCommentsScreen(target: a3Target),
+      ),
+    );
+    return;
+  }
+  final target = animeWitcherAnimeReviewTarget(item);
+  if (target == null) return;
   if (ratings.reviewsClosed) {
     _toast(ref, kReviewsClosedToast);
     return;
   }
 
   final service = ref.read(animeWitcherAccountServiceProvider);
-  if (service.isSignedIn && ratings.animeId.isNotEmpty) {
+  if (service.isSignedIn && target.animeId?.isNotEmpty == true) {
     try {
-      final closed = await service.isAnimeReviewsClosed(ratings.animeId);
+      final closed = await service.isAnimeReviewsClosed(target.animeId!);
       if (!context.mounted) return;
       if (closed) {
         _toast(ref, kReviewsClosedToast);
@@ -112,8 +154,7 @@ Future<void> openAnimeReviews(
     }
   }
 
-  final target = animeWitcherAnimeReviewTarget(item);
-  if (target == null || !context.mounted) return;
+  if (!context.mounted) return;
   await Navigator.of(context).push(
     MaterialPageRoute<void>(
       builder: (_) => AnimeWitcherCommentsScreen(target: target),
@@ -196,17 +237,15 @@ Widget _ratingDialogBody(
         Text(
           'قيّم',
           textAlign: TextAlign.center,
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+          style: Theme.of(context).textTheme.titleMedium
+              ?.copyWith(fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 10),
         Text(
           '$rating /10',
           textAlign: TextAlign.center,
-          style: Theme.of(
-            context,
-          ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+          style: Theme.of(context).textTheme.headlineSmall
+              ?.copyWith(fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 12),
         FittedBox(

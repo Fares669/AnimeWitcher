@@ -1,5 +1,8 @@
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
+import 'package:animewitcher/core/account/account_providers.dart';
+import 'package:animewitcher/core/account/animewitcher_account_service.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
+import 'package:animewitcher/core/storage/secure_token_storage.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/details/presentation/details_controller.dart';
 import 'package:animewitcher/features/details/presentation/details_screen.dart';
@@ -29,10 +32,47 @@ final class _EmptyLibrary extends Library {
       const LibraryEmpty(LibraryCategory.favorite, LibraryMediaKind.anime);
 
   @override
-  bool isFavorite(String url) => false;
+  bool isFavorite(String url, {String? providerId}) => false;
 
   @override
-  LibraryCategory? itemCategory(String url) => null;
+  LibraryCategory? itemCategory(
+    String url, {
+    String? providerId,
+    bool manga = false,
+  }) => null;
+
+  @override
+  Future<void> setFavorite(
+    MultimediaItem item,
+    bool favorite, {
+    LibraryMembership? membership,
+  }) async {}
+}
+
+final class _MembershipAccount extends AnimeWitcherAccountService {
+  _MembershipAccount(_Storage storage)
+    : super(storage: storage, secureStorage: SecureTokenStorage(storage));
+
+  LibraryMembership membership = (
+    category: LibraryCategory.continueLater,
+    favorite: true,
+  );
+  int reads = 0;
+
+  @override
+  bool get isSignedIn => true;
+
+  @override
+  String get accountUid => 'test-account';
+
+  @override
+  Future<LibraryMembership?> fetchAnimeLibraryMembership(String url) async {
+    reads++;
+    return membership;
+  }
+
+  @override
+  Future<int?> loadAnimeUserRating(String animeId) async => null;
 }
 
 final class _NoEpisodeDetailsController extends DetailsController {
@@ -63,6 +103,69 @@ final class _NoEpisodeDetailsController extends DetailsController {
 }
 
 void main() {
+  testWidgets(
+    'details reload server membership on reopen and update the heart immediately',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(590, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final storage = _Storage();
+      final account = _MembershipAccount(storage);
+      final item = MultimediaItem(
+        title: 'Anime',
+        url: 'https://animewitcher.com/watch/anime',
+        posterUrl: '',
+        contentType: MultimediaContentType.anime,
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            storageServiceProvider.overrideWithValue(storage),
+            animeWitcherAccountServiceProvider.overrideWithValue(account),
+            libraryProvider.overrideWith(_EmptyLibrary.new),
+            detailsControllerProvider(item.url)
+                .overrideWith(() => _NoEpisodeDetailsController(item)),
+          ],
+          child: MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            theme: ThemeData.dark(),
+            home: Builder(
+              builder: (context) => Scaffold(
+                body: TextButton(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => DetailsScreen(item: item),
+                    ),
+                  ),
+                  child: const Text('Open anime'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open anime'));
+      await tester.pumpAndSettle();
+      expect(find.text('أكملها لاحقًا'), findsOneWidget);
+      expect(find.byIcon(Icons.favorite_rounded), findsOneWidget);
+      await tester.tap(find.byIcon(Icons.favorite_rounded));
+      await tester.pumpAndSettle();
+      expect(find.byIcon(Icons.favorite_border_rounded), findsOneWidget);
+
+      Navigator.of(tester.element(find.byType(DetailsScreen))).pop();
+      await tester.pumpAndSettle();
+      account.membership = (
+        category: LibraryCategory.completed,
+        favorite: true,
+      );
+      await tester.tap(find.text('Open anime'));
+      await tester.pumpAndSettle();
+      expect(account.reads, 2);
+      expect(find.text('تمت مشاهدته'), findsOneWidget);
+      expect(find.byIcon(Icons.favorite_rounded), findsOneWidget);
+    },
+  );
+
   testWidgets('seasons stay visible when an anime has no episodes yet', (
     tester,
   ) async {
@@ -94,9 +197,8 @@ void main() {
         overrides: [
           storageServiceProvider.overrideWithValue(_Storage()),
           libraryProvider.overrideWith(_EmptyLibrary.new),
-          detailsControllerProvider(upcomingSeason.url).overrideWith(
-            () => _NoEpisodeDetailsController(upcomingSeason),
-          ),
+          detailsControllerProvider(upcomingSeason.url)
+              .overrideWith(() => _NoEpisodeDetailsController(upcomingSeason)),
         ],
         child: MaterialApp(
           localizationsDelegates: AppLocalizations.localizationsDelegates,

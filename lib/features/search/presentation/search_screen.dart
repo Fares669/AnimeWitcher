@@ -199,39 +199,27 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     setState(() => _isLoadingProviderFilters = true);
     ProviderSearchFilters? selected;
     SearchDomain? pickedDomain;
+    final animeProvider = ref.read(activeProviderProvider);
+    final initialDomain = ref.read(searchDomainProvider);
     try {
-      final provider = providers.first;
       // All, anime, animation, manga and characters are the sheet's main
       // categories; only the ones that can be filtered bring their tabs.
-      Future<ProviderSearchFilterOptions> optionsFor(SearchDomain domain) {
-        if (!domain.capabilities.showFilter) {
-          return Future.value(const ProviderSearchFilterOptions());
-        }
-        return switch (domain) {
-          SearchDomain.anime => provider.getSearchFilterOptions(),
-          // The anime filters, less the tag every animation result has.
-          SearchDomain.animation => provider.getSearchFilterOptions().then(
-            (options) => ProviderSearchFilterOptions(
-              statuses: options.statuses,
-              types: options.types,
-              ageRatings: options.ageRatings,
-              years: options.years,
-              seasons: options.seasons,
-              genres: options.genres
-                  .where((genre) => genre != 'انميشن')
-                  .toList(growable: false),
-            ),
-          ),
-          SearchDomain.manga => provider.getMangaSearchFilterOptions(),
-          SearchDomain.all || SearchDomain.characters => Future.value(
-            const ProviderSearchFilterOptions(),
-          ),
-        };
-      }
+      Future<ProviderSearchFilterOptions> optionsFor(SearchDomain domain) =>
+          searchFilterOptionsFor(
+            domain,
+            animeProvider,
+            searchCatalogProvider(domain, providers),
+          );
 
-      final domain = ref.read(searchDomainProvider);
-      final options = await optionsFor(domain);
-      if (!mounted) return;
+      final options = await optionsFor(initialDomain);
+      if (!mounted ||
+          searchFilterRequestIsStale(
+            initialDomain,
+            animeProvider?.packageName,
+            ref.read(activeProviderProvider)?.packageName,
+          )) {
+        return;
+      }
 
       // Use the exact same filter surface as the Home page so both entry
       // points have identical tabs, spacing, selection behavior, and glass.
@@ -262,7 +250,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               },
             ),
         ],
-        category: domain.name,
+        category: initialDomain.name,
         optionsFor: (name) => optionsFor(SearchDomain.values.byName(name)),
         onCategoryApplied: (name) =>
             pickedDomain = SearchDomain.values.byName(name),
@@ -280,7 +268,16 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       if (mounted) setState(() => _isLoadingProviderFilters = false);
     }
 
-    if (!mounted || selected == null) return;
+    final appliedDomain = pickedDomain ?? initialDomain;
+    if (!mounted ||
+        selected == null ||
+        searchFilterRequestIsStale(
+          appliedDomain,
+          animeProvider?.packageName,
+          ref.read(activeProviderProvider)?.packageName,
+        )) {
+      return;
+    }
     if (pickedDomain != null) _selectSearchDomain(pickedDomain!);
     _resetResultsScrollPosition();
     ref.read(searchProviderFiltersProvider.notifier).set(selected);
@@ -294,6 +291,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         statuses: {...current.statuses}..remove(value),
       ),
       'types' => current.copyWith(types: {...current.types}..remove(value)),
+      'countries' => current.copyWith(
+        countries: {...current.countries}..remove(value),
+      ),
       'ageRatings' => current.copyWith(
         ageRatings: {...current.ageRatings}..remove(value),
       ),
@@ -302,6 +302,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         seasons: {...current.seasons}..remove(value),
       ),
       'genres' => current.copyWith(genres: {...current.genres}..remove(value)),
+      'tags' => current.copyWith(tags: {...current.tags}..remove(value)),
       _ => current,
     };
 
@@ -310,14 +311,13 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     ref.read(searchFilterProvider.notifier).set(SearchFilter.content);
   }
 
-  void _applySearchSort(String selected) {
+  void _setSearchSort(String value) {
     final current = ref.read(searchProviderFiltersProvider);
-    if (selected == current.sort) return;
-
+    if (value == current.sort) return;
     _resetResultsScrollPosition();
     ref
         .read(searchProviderFiltersProvider.notifier)
-        .set(current.copyWith(sort: selected));
+        .set(current.copyWith(sort: value));
     ref.read(searchFilterProvider.notifier).set(SearchFilter.content);
   }
 
@@ -332,6 +332,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         ),
     ];
   }
+
+  String _sortLabel(BuildContext context, String value) =>
+      SearchSortOption.fromValue(value).label(context);
+
+  IconData _sortMenuIcon(String value) =>
+      _searchSortFallbackIcon(SearchSortOption.fromValue(value));
+
+  String _sortMenuSystemImage(String value) =>
+      _searchSortSystemImage(SearchSortOption.fromValue(value));
 
   String _searchSortSystemImage(SearchSortOption option) {
     return switch (option) {
@@ -434,8 +443,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               right: 0,
               child: SizedBox(
                 height:
-                    _floatingHeaderExtent +
-                    MediaQuery.paddingOf(context).top,
+                    _floatingHeaderExtent + MediaQuery.paddingOf(context).top,
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
@@ -443,41 +451,37 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     Align(
                       alignment: Alignment.bottomCenter,
                       child: SearchHeaderBar(
-                    textController: _controller,
-                    searchFocusNode: _focusNode,
-                    clearButtonFocusNode: _clearButtonFocusNode,
-                    isCompact: false,
-                    onShowFilters: _showSearchFilters,
-                    onSortSelected: _applySearchSort,
-                    sortValue: ref.watch(searchProviderFiltersProvider).sort,
-                    sortItems: _searchSortMenuItems(context),
-                    sortIcon: _searchSortFallbackIcon(
-                      SearchSortOption.fromValue(
-                        ref.watch(searchProviderFiltersProvider).sort,
-                      ),
-                    ),
-                    sortSystemImage: _searchSortSystemImage(
-                      SearchSortOption.fromValue(
-                        ref.watch(searchProviderFiltersProvider).sort,
-                      ),
-                    ),
-                    sortTooltip:
-                        '${appText(context, english: 'Sort by', arabic: 'الترتيب حسب')}: '
-                        '${SearchSortOption.fromValue(ref.watch(searchProviderFiltersProvider).sort).label(context)}',
-                    activeFilterCount: domainCapabilities.showFilter
-                        ? ref.watch(searchProviderFiltersProvider).count
-                        : 0,
-                    isFilterLoading: _isLoadingProviderFilters,
-                    showSort: domainCapabilities.showSort,
-                    // Always there: the filter sheet is also where the category is
-                    // picked, anime or manga, so every category needs a way in.
-                    showFilter: true,
-                    onSubmitted: _submitSearch,
+                        textController: _controller,
+                        searchFocusNode: _focusNode,
+                        clearButtonFocusNode: _clearButtonFocusNode,
+                        isCompact: false,
+                        onShowFilters: _showSearchFilters,
+                        onSortSelected: _setSearchSort,
+                        sortValue: ref
+                            .watch(searchProviderFiltersProvider)
+                            .sort,
+                        sortItems: _searchSortMenuItems(context),
+                        sortIcon: _sortMenuIcon(
+                          ref.watch(searchProviderFiltersProvider).sort,
+                        ),
+                        sortSystemImage: _sortMenuSystemImage(
+                          ref.watch(searchProviderFiltersProvider).sort,
+                        ),
+                        sortTooltip:
+                            '${appText(context, english: 'Sort by', arabic: 'الترتيب حسب')}: '
+                            '${_sortLabel(context, ref.watch(searchProviderFiltersProvider).sort)}',
+                        activeFilterCount: domainCapabilities.showFilter
+                            ? ref.watch(searchProviderFiltersProvider).count
+                            : 0,
+                        isFilterLoading: _isLoadingProviderFilters,
+                        showSort: domainCapabilities.showSort,
+                        // Always there: the filter sheet is also where the category is
+                        // picked, anime or manga, so every category needs a way in.
+                        showFilter: true,
+                        onSubmitted: _submitSearch,
                         onChanged: (val) {
                           ref
-                              .read(
-                                searchSuggestionControllerProvider.notifier,
-                              )
+                              .read(searchSuggestionControllerProvider.notifier)
                               .onQueryChanged(val);
                         },
                       ),
@@ -502,7 +506,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
   Widget _buildMobileSearchActionGroup(BuildContext context) {
     final activeFilters = ref.watch(searchProviderFiltersProvider);
-    final sortOption = SearchSortOption.fromValue(activeFilters.sort);
     final domain = ref.watch(searchDomainProvider);
     final capabilities = domain.capabilities;
 
@@ -514,11 +517,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       isFilterLoading: _isLoadingProviderFilters,
       sortValue: activeFilters.sort,
       sortItems: _searchSortMenuItems(context),
-      onSortSelected: _applySearchSort,
-      sortIcon: _searchSortFallbackIcon(sortOption),
-      sortSystemImage: _searchSortSystemImage(sortOption),
+      onSortSelected: _setSearchSort,
+      sortIcon: _sortMenuIcon(activeFilters.sort),
+      sortSystemImage: _sortMenuSystemImage(activeFilters.sort),
       sortTooltip:
-          '${appText(context, english: 'Sort by', arabic: 'الترتيب حسب')}: ${sortOption.label(context)}',
+          '${appText(context, english: 'Sort by', arabic: 'الترتيب حسب')}: ${_sortLabel(context, activeFilters.sort)}',
       filterTooltip: appText(context, english: 'Filters', arabic: 'الفلاتر'),
       // Match the library filter's theme accent.
       tintColor: Theme.of(context).colorScheme.primary,
@@ -1022,7 +1025,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
   Widget _characterGrid(
     BuildContext context,
-    List<AnimeWitcherCharacterHit> characters, {
+    List<Actor> characters, {
     required bool loadingMore,
   }) {
     return SliverPadding(
@@ -1057,20 +1060,28 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               return const AnimePosterShimmer();
             }
             final character = characters[index];
+            final characterId = character.id?.trim() ?? '';
             return CharacterPosterCard(
-              key: ValueKey('search-character-${character.id}'),
-              character: character,
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => CharacterDetailsScreen(
-                      characterId: character.id,
-                      initialName: character.name,
-                      initialImageUrl: character.imageUrl,
-                    ),
-                  ),
-                );
-              },
+              key: ValueKey('search-character-$characterId'),
+              character: AnimeWitcherCharacterHit(
+                id: characterId,
+                name: character.name,
+                imageUrl: character.image,
+                likes: character.likes,
+              ),
+              onTap: characterId.isEmpty
+                  ? () {}
+                  : () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => CharacterDetailsScreen(
+                            characterId: characterId,
+                            initialName: character.name,
+                            initialImageUrl: character.image,
+                          ),
+                        ),
+                      );
+                    },
             );
           },
           childCount:
@@ -1136,9 +1147,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       onOpenCharacter: (character) => Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => CharacterDetailsScreen(
-            characterId: character.id,
+            characterId: character.id?.trim() ?? '',
             initialName: character.name,
-            initialImageUrl: character.imageUrl,
+            initialImageUrl: character.image,
           ),
         ),
       ),
@@ -1230,9 +1241,11 @@ class _ActiveSearchFilterChips extends StatelessWidget {
 
   List<(String, String)> get _items => [
     ...filters.genres.map((value) => ('genres', value)),
+    ...filters.tags.map((value) => ('tags', value)),
     ...filters.years.map((value) => ('years', value)),
     ...filters.seasons.map((value) => ('seasons', value)),
     ...filters.ageRatings.map((value) => ('ageRatings', value)),
+    ...filters.countries.map((value) => ('countries', value)),
     ...filters.types.map((value) => ('types', value)),
     ...filters.statuses.map((value) => ('statuses', value)),
   ];
@@ -1361,5 +1374,3 @@ class _AllSearchHeading extends StatelessWidget {
     );
   }
 }
-
-

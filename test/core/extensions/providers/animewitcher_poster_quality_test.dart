@@ -179,6 +179,28 @@ Iterable<RequestOptions> _batchGets(List<RequestOptions> requests) =>
     requests.where((r) => r.uri.toString().contains('documents:batchGet'));
 
 void main() {
+  test(
+    'native latest home preview uses the configured episode section',
+    () async {
+      const title = 'آخر الحلقات';
+      final stub = _stubDio(
+        _recentAlgoliaHit(),
+        homeSections: _recentHomeSectionsDocument(title: title),
+      );
+      final provider = _provider(stub.dio, highQuality: false);
+      final preview = await provider.getLatestHomeEpisodes();
+
+      expect(preview?.key, title);
+      expect(preview?.value.single.episodeBadge, 'حلقة 1100');
+      expect(preview?.value.single.provider, provider.packageName);
+      final request = stub.requests.singleWhere(
+        (request) => request.uri.host.contains('algolia.net'),
+      );
+      expect(request.uri.path, contains('/recent/'));
+      expect(_algoliaQueryParams(request)['hitsPerPage'], '10');
+    },
+  );
+
   test('latest episode badge retains the exact API episode name', () async {
     const episodeName = '  الحلقة ٠٠٢.٥ &amp; <special>  ';
     final stub = _stubDio(

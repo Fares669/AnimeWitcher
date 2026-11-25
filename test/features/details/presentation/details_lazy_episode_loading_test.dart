@@ -12,12 +12,33 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/memory_storage_service.dart';
 
+final class _Storage extends MemoryStorageService {
+  @override
+  int getEpisodePosition(
+    String epUrl, {
+    String? mainUrl,
+    int? season,
+    int? episode,
+  }) => 0;
+
+  @override
+  int getEpisodeDuration(
+    String epUrl, {
+    String? mainUrl,
+    int? season,
+    int? episode,
+  }) => 0;
+}
+
 final class _Provider extends AnimeWitcherProvider {
+  _Provider([this.packageName = 'test.anime', this.inlineEpisodes]);
+
+  final List<Episode>? inlineEpisodes;
   int detailsCalls = 0;
   int episodeCalls = 0;
 
   @override
-  String get packageName => 'test.anime';
+  final String packageName;
 
   @override
   String get name => 'Test Anime';
@@ -55,6 +76,7 @@ final class _Provider extends AnimeWitcherProvider {
       posterUrl: '',
       contentType: MultimediaContentType.anime,
       provider: packageName,
+      episodes: inlineEpisodes,
     );
   }
 
@@ -68,6 +90,7 @@ final class _Provider extends AnimeWitcherProvider {
         season: 1,
         episode: 1,
       ),
+      Episode(name: 'Episode 2', url: 'episode://2', season: 1, episode: 2),
     ];
   }
 
@@ -109,6 +132,8 @@ Future<void> _flush() async {
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   test('movie details also defer episodes until explicitly opened', () async {
     final provider = _Provider();
     final container = ProviderContainer(
@@ -116,7 +141,7 @@ void main() {
         extensionManagerProvider.overrideWith(() => _Manager(provider)),
         activeProviderProvider.overrideWithValue(provider),
         episodeSortAscendingProvider.overrideWith(() => _AscendingSort()),
-        storageServiceProvider.overrideWithValue(MemoryStorageService()),
+        storageServiceProvider.overrideWithValue(_Storage()),
         downloadsProvider.overrideWith(() => _EmptyDownloads()),
         watchHistoryProvider.overrideWith(() => _EmptyHistory()),
       ],
@@ -156,7 +181,7 @@ void main() {
         extensionManagerProvider.overrideWith(() => _Manager(provider)),
         activeProviderProvider.overrideWithValue(provider),
         episodeSortAscendingProvider.overrideWith(() => _AscendingSort()),
-        storageServiceProvider.overrideWithValue(MemoryStorageService()),
+        storageServiceProvider.overrideWithValue(_Storage()),
         downloadsProvider.overrideWith(() => _EmptyDownloads()),
         watchHistoryProvider.overrideWith(() => _EmptyHistory()),
       ],
@@ -192,5 +217,98 @@ void main() {
 
     await controller.loadEpisodesOnDemand();
     expect(provider.episodeCalls, 1);
+  });
+
+  test(
+    'details and episodes use the item source instead of the active catalog',
+    () async {
+      final active = _Provider('test.current');
+      final source = _Provider();
+      final container = ProviderContainer(
+        overrides: [
+          extensionManagerProvider.overrideWith(() => _Manager(source)),
+          activeProviderProvider.overrideWithValue(active),
+          episodeSortAscendingProvider.overrideWith(() => _AscendingSort()),
+          storageServiceProvider.overrideWithValue(_Storage()),
+          downloadsProvider.overrideWith(() => _EmptyDownloads()),
+          watchHistoryProvider.overrideWith(() => _EmptyHistory()),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      final item = MultimediaItem(
+        title: 'Saved Anime',
+        url: 'https://example.test/anime/saved',
+        posterUrl: '',
+        contentType: MultimediaContentType.anime,
+        provider: source.packageName,
+      );
+      final details = detailsControllerProvider(item.url);
+      addTearDown(container.listen(details, (_, _) {}).close);
+      final controller = container.read(details.notifier);
+
+      await controller.loadDetails(item);
+      await _flush();
+      await controller.loadLinkedEpisode('episode://2');
+
+      expect(source.detailsCalls, 1);
+      expect(source.episodeCalls, 1);
+      expect(container.read(details).episodes.hasError, isFalse);
+      expect(container.read(details).targetEpisode?.url, 'episode://2');
+      expect(active.detailsCalls, 0);
+      expect(active.episodeCalls, 0);
+
+      final unavailable = item.copyWith(
+        url: 'https://example.test/anime/unavailable',
+        provider: 'test.unavailable',
+      );
+      final unavailableDetails = detailsControllerProvider(unavailable.url);
+      addTearDown(container.listen(unavailableDetails, (_, _) {}).close);
+      final unavailableController = container.read(unavailableDetails.notifier);
+      await unavailableController.loadDetails(unavailable);
+      await unavailableController.refreshDetails();
+      expect(container.read(unavailableDetails).details.hasError, isTrue);
+      expect(active.detailsCalls, 0);
+      expect(source.detailsCalls, 1);
+    },
+  );
+
+  test('inline episodes on single-fetch providers populate immediately without a second fetch', () async {
+    final provider = _Provider('anime3rb', [
+      Episode(name: 'Episode 1', url: 'https://anime3rb.com/episode/naruto/1', season: 1, episode: 1),
+    ]);
+    final container = ProviderContainer(
+      overrides: [
+        extensionManagerProvider.overrideWith(() => _Manager(provider)),
+        activeProviderProvider.overrideWithValue(provider),
+        episodeSortAscendingProvider.overrideWith(() => _AscendingSort()),
+        storageServiceProvider.overrideWithValue(_Storage()),
+        downloadsProvider.overrideWith(() => _EmptyDownloads()),
+        watchHistoryProvider.overrideWith(() => _EmptyHistory()),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    const url = 'https://anime3rb.com/titles/naruto';
+    final item = MultimediaItem(
+      title: 'Naruto',
+      url: url,
+      posterUrl: '',
+      contentType: MultimediaContentType.anime,
+      provider: provider.packageName,
+    );
+    final details = detailsControllerProvider(url);
+    addTearDown(container.listen(details, (_, _) {}).close);
+    final controller = container.read(details.notifier);
+
+    await controller.loadDetails(item);
+    await _flush();
+
+    expect(provider.detailsCalls, 1);
+    expect(provider.episodeCalls, 0);
+    expect(container.read(details).episodes.asData?.value, hasLength(1));
+
+    await controller.loadEpisodesOnDemand();
+    expect(provider.episodeCalls, 0);
   });
 }

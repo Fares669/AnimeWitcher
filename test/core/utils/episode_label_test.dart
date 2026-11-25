@@ -329,6 +329,37 @@ void main() {
     });
   });
 
+  test('player header combines distinct episode number and title', () {
+    expect(
+      formatPlayerEpisodeLabel(
+        episode: 1,
+        serverName: 'الحلقة 1',
+        title: 'كانان سهل',
+      ),
+      'الحلقة 1 : كانان سهل',
+    );
+    expect(
+      formatPlayerEpisodeLabel(
+        episode: 1,
+        serverName: 'الحلقة 1',
+        title: 'Episode 1',
+      ),
+      'الحلقة 1',
+    );
+    expect(
+      formatPlayerEpisodeLabel(
+        episode: 0,
+        serverName: 'الحلقة الخاصة',
+        title: 'الحلقة الخاصة',
+      ),
+      'الحلقة الخاصة',
+    );
+    expect(
+      formatPlayerEpisodeLabel(episode: 0, serverName: 'مدبلج'),
+      'مدبلج',
+    );
+  });
+
   group('formatEpisodeLabel', () {
     test('formats Arabic episode with title', () {
       expect(

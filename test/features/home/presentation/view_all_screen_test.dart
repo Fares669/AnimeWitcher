@@ -29,6 +29,133 @@ MultimediaItem _item(String title, String id) {
 }
 
 void main() {
+  testWidgets('changing the View All source ignores an earlier pending page', (
+    tester,
+  ) async {
+    final oldPage = Completer<ProviderMediaPage>();
+    final oldOffsets = <int>[];
+    final newOffsets = <int>[];
+
+    Future<ProviderMediaPage> loadOld(int offset) {
+      oldOffsets.add(offset);
+      return oldPage.future;
+    }
+
+    Future<ProviderMediaPage> loadNew(int offset) async {
+      newOffsets.add(offset);
+      return _page([_item('New provider title', 'new')]);
+    }
+
+    Widget source(Future<ProviderMediaPage> Function(int) loader) =>
+        MaterialApp(
+          home: ViewAllScreen(
+            title: 'Anime catalogue',
+            initialMediaList: const [],
+            category: ViewAllCategory.providerContent,
+            loadPage: loader,
+            forcePortrait: true,
+          ),
+        );
+
+    await tester.pumpWidget(source(loadOld));
+    await tester.pump();
+    expect(oldOffsets, [0]);
+
+    await tester.pumpWidget(source(loadNew));
+    await tester.pumpAndSettle();
+    expect(newOffsets, [0]);
+    expect(find.text('New provider title'), findsWidgets);
+
+    oldPage.complete(_page([_item('Stale provider title', 'old')]));
+    await tester.pumpAndSettle();
+    expect(find.text('Stale provider title'), findsNothing);
+    expect(find.text('New provider title'), findsWidgets);
+  });
+
+  testWidgets('changing the View All source ignores an earlier page failure', (
+    tester,
+  ) async {
+    final oldPage = Completer<ProviderMediaPage>();
+    Future<ProviderMediaPage> oldLoader(int _) => oldPage.future;
+    Future<ProviderMediaPage> newLoader(int _) async =>
+        _page([_item('Current provider title', 'current')]);
+
+    Widget source(Future<ProviderMediaPage> Function(int) loader) =>
+        MaterialApp(
+          home: ViewAllScreen(
+            title: 'Anime catalogue',
+            initialMediaList: const [],
+            category: ViewAllCategory.providerContent,
+            loadPage: loader,
+            forcePortrait: true,
+          ),
+        );
+
+    await tester.pumpWidget(source(oldLoader));
+    await tester.pump();
+
+    await tester.pumpWidget(source(newLoader));
+    await tester.pumpAndSettle();
+    oldPage.completeError(StateError('Old provider is unavailable'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Current provider title'), findsWidgets);
+    expect(find.text('تعذر تحميل النتائج.'), findsNothing);
+    expect(find.text('إعادة المحاولة'), findsNothing);
+  });
+
+  testWidgets('rapid A-B-A switches keep only the latest View All page', (
+    tester,
+  ) async {
+    final firstA = Completer<ProviderMediaPage>();
+    final pendingB = Completer<ProviderMediaPage>();
+    final offsets = <String>[];
+
+    Future<ProviderMediaPage> loadFirstA(int offset) {
+      offsets.add('A-old:$offset');
+      return firstA.future;
+    }
+
+    Future<ProviderMediaPage> loadB(int offset) {
+      offsets.add('B:$offset');
+      return pendingB.future;
+    }
+
+    Future<ProviderMediaPage> loadLatestA(int offset) async {
+      offsets.add('A-new:$offset');
+      return _page([_item('Latest A title', 'latest-a')]);
+    }
+
+    Widget source(Future<ProviderMediaPage> Function(int) loader) =>
+        MaterialApp(
+          home: ViewAllScreen(
+            title: 'Anime catalogue',
+            initialMediaList: const [],
+            category: ViewAllCategory.providerContent,
+            loadPage: loader,
+            forcePortrait: true,
+          ),
+        );
+
+    await tester.pumpWidget(source(loadFirstA));
+    await tester.pump();
+    await tester.pumpWidget(source(loadB));
+    await tester.pump();
+    await tester.pumpWidget(source(loadLatestA));
+    await tester.pumpAndSettle();
+
+    expect(offsets, ['A-old:0', 'B:0', 'A-new:0']);
+    expect(find.text('Latest A title'), findsWidgets);
+
+    pendingB.complete(_page([_item('Stale B title', 'stale-b')]));
+    firstA.complete(_page([_item('Stale A title', 'stale-a')]));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Latest A title'), findsWidgets);
+    expect(find.text('Stale B title'), findsNothing);
+    expect(find.text('Stale A title'), findsNothing);
+  });
+
   Future<void> pumpSeeded(
     WidgetTester tester,
     Future<ProviderMediaPage> Function(int) load,

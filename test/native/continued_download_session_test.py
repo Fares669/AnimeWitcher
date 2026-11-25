@@ -131,7 +131,7 @@ with tempfile.TemporaryDirectory(prefix='continued-download-session-') as direct
         invocation = f"require {json.dumps(str(patch))}; patch_background_downloader_continued_session(ARGV[0])"
         # Reject unsupported dependencies before touching any plugin source.
         original_version = (temp / 'pubspec.yaml').read_text()
-        (temp / 'pubspec.yaml').write_text(original_version.replace('version: 9.6.5', 'version: 9.7.0'))
+        (temp / 'pubspec.yaml').write_text(re.sub(r'^version:.*$', 'version: 9.7.0', original_version, flags=re.M))
         original = {p.name: p.read_bytes() for p in (temp / relative).glob('*.swift')}
         rejected = subprocess.run(['ruby', '-e', invocation, str(temp)], capture_output=True)
         assert rejected.returncode != 0

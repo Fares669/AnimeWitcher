@@ -110,7 +110,6 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
       ),
     );
   }
-
 }
 
 class _ActionIcon extends StatelessWidget {
@@ -221,4 +220,3 @@ class SearchFilterBadge extends StatelessWidget {
     );
   }
 }
-

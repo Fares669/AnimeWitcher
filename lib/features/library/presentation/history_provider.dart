@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:animewitcher/core/account/account_providers.dart';
+import 'package:animewitcher/core/account/anime3rb_account_service.dart';
+import 'package:animewitcher/core/extensions/providers/anime3rb_provider.dart';
 
 import '../../../../core/storage/history_repository.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
@@ -40,6 +44,9 @@ class WatchHistory extends _$WatchHistory {
     await repository.removeFromHistory(url);
     refresh();
   }
+
+  Future<void> removeForItem(MultimediaItem item) =>
+      removeFromHistory(item.url);
 
   Future<void> updateHistoryItemTimestampAndPosition(
     HistoryItem item,
@@ -102,8 +109,17 @@ class ContinueWatchingNotifier extends Notifier<List<HistoryItem>> {
     refresh();
   }
 
+  Future<void> clearAllFor(String? providerId) => clearAll();
+
   Future<void> remove(String url) async {
     await ref.read(historyRepositoryProvider).removeContinueWatching(url);
+    refresh();
+  }
+
+  Future<void> removeForItem(MultimediaItem item) => remove(item.url);
+
+  Future<void> completeForItem(MultimediaItem item) async {
+    await ref.read(historyRepositoryProvider).completeItemFor(item);
     refresh();
   }
 
@@ -135,6 +151,20 @@ class ContinueWatchingNotifier extends Notifier<List<HistoryItem>> {
           episodeServerNumber: episodeServerNumber,
           episodePosterUrl: episodePosterUrl,
         );
+    if (item.provider == Anime3rbProvider.id &&
+        episode != null &&
+        episode > 0 &&
+        ref.read(anime3rbAccountServiceProvider).isSignedIn) {
+      final progressPct = duration > 0 ? (position / duration) * 100.0 : 0.0;
+      unawaited(
+        ref.read(anime3rbAccountServiceProvider).recordEpisodeProgress(
+          animeUrl: item.url,
+          episodeNumber: episode,
+          timeSeconds: position / 1000.0,
+          progressPercent: progressPct,
+        ),
+      );
+    }
     refresh();
   }
 }

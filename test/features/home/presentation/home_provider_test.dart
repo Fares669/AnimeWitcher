@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
@@ -68,18 +70,174 @@ class _FakeHomeSource extends AnimeWitcherProvider {
   }
 }
 
+class _EmptyManager extends ExtensionManager {
+  @override
+  List<AnimeWitcherProvider> build() => [];
+}
+
+class _DeferredHomeSource extends _FakeHomeSource {
+  final home = Completer<Map<String, List<MultimediaItem>>>();
+
+  @override
+  Future<Map<String, List<MultimediaItem>>> getHome() => home.future;
+}
+
+class _DeferredNewsSource extends _FakeHomeSource {
+  final news = Completer<ProviderNewsPage>();
+
+  @override
+  String get packageName => 'fake.deferred.news';
+
+  @override
+  Future<ProviderNewsPage> getHomeNewsPage({int offset = 0, int limit = 10}) =>
+      news.future;
+}
+
+class _SwitchableActiveProvider extends ActiveProvider {
+  _SwitchableActiveProvider(this.initial);
+  final AnimeWitcherProvider initial;
+
+  @override
+  AnimeWitcherProvider? build() => initial;
+
+  @override
+  Future<void> set(AnimeWitcherProvider? provider) async => state = provider;
+}
+
 Future<void> _flush() async {
   await Future<void>.delayed(Duration.zero);
   await Future<void>.delayed(Duration.zero);
 }
 
 void main() {
+  test('a news response after home disposal is ignored', () async {
+    final source = _DeferredNewsSource();
+    final container = ProviderContainer(
+      overrides: [
+        activeProviderProvider.overrideWithValue(source),
+        extensionManagerProvider.overrideWith(_EmptyManager.new),
+      ],
+    );
+    container.listen<HomeState>(homeDataProvider, (_, _) {});
+    await _flush();
+    expect(container.read(homeDataProvider), isA<HomeSuccess>());
+    container.dispose();
+
+    source.news.complete(
+      const ProviderNewsPage(items: [], nextOffset: 0, hasMore: false),
+    );
+    await _flush();
+  });
+
+  for (final unavailable in [false, true]) {
+    test(
+      'old provider news cannot replace the current home (unavailable=$unavailable)',
+      () async {
+        final source = _DeferredNewsSource();
+        final container = ProviderContainer(
+          overrides: [
+            activeProviderProvider.overrideWith(
+              () => _SwitchableActiveProvider(source),
+            ),
+            extensionManagerProvider.overrideWith(_EmptyManager.new),
+          ],
+        );
+        addTearDown(container.dispose);
+        container.listen<HomeState>(homeDataProvider, (_, _) {});
+        await _flush();
+        expect(container.read(homeDataProvider), isA<HomeSuccess>());
+
+        await container
+            .read(activeProviderProvider.notifier)
+            .set(unavailable ? null : _FakeHomeSource());
+        await _flush();
+        final current = container.read(homeDataProvider);
+        expect(
+          current,
+          unavailable ? isA<HomeNoProvider>() : isA<HomeSuccess>(),
+        );
+        source.news.complete(
+          const ProviderNewsPage(
+            items: [
+              NewsItem(id: 'old', title: 'Old provider news', imageUrl: ''),
+            ],
+            nextOffset: 1,
+            hasMore: false,
+          ),
+        );
+        await _flush();
+        expect(container.read(homeDataProvider), same(current));
+      },
+    );
+  }
+
+  for (final failure in [false, true]) {
+    test(
+      'home response after disposal is ignored (failure=$failure)',
+      () async {
+        final source = _DeferredHomeSource();
+        final container = ProviderContainer(
+          overrides: [
+            activeProviderProvider.overrideWith(
+              () => _SwitchableActiveProvider(source),
+            ),
+            extensionManagerProvider.overrideWith(_EmptyManager.new),
+          ],
+        );
+        container.listen<HomeState>(homeDataProvider, (_, _) {});
+        await _flush();
+        container.dispose();
+        if (failure) {
+          source.home.completeError(StateError('Home failed'));
+        } else {
+          source.home.complete({
+            'home': [
+              MultimediaItem(title: 'Late', url: 'test://late', posterUrl: ''),
+            ],
+          });
+        }
+        await _flush();
+      },
+    );
+  }
+
+  test(
+    'removing the selected provider invalidates an in-flight home response',
+    () async {
+      final source = _DeferredHomeSource();
+      final container = ProviderContainer(
+        overrides: [
+          activeProviderProvider.overrideWith(
+            () => _SwitchableActiveProvider(source),
+          ),
+          extensionManagerProvider.overrideWith(_EmptyManager.new),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.listen<HomeState>(homeDataProvider, (_, _) {});
+      await _flush();
+      await container.read(activeProviderProvider.notifier).set(null);
+      expect(container.read(homeDataProvider), isA<HomeNoProvider>());
+
+      source.home.complete({
+        'old': [
+          MultimediaItem(title: 'stale', url: 'test://old', posterUrl: ''),
+        ],
+      });
+      await _flush();
+      expect(container.read(homeDataProvider), isA<HomeNoProvider>());
+    },
+  );
+
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test('keeps loaded home data when the account revision bumps', () async {
     final source = _FakeHomeSource();
     final container = ProviderContainer(
-      overrides: [activeProviderProvider.overrideWithValue(source)],
+      overrides: [
+        activeProviderProvider.overrideWithValue(source),
+        extensionManagerProvider.overrideWith(_EmptyManager.new),
+      ],
     );
     addTearDown(container.dispose);
 
@@ -104,7 +262,10 @@ void main() {
   test('pull-to-refresh does not flash the home loading shimmer', () async {
     final source = _FakeHomeSource(homeDelay: const Duration(milliseconds: 20));
     final container = ProviderContainer(
-      overrides: [activeProviderProvider.overrideWithValue(source)],
+      overrides: [
+        activeProviderProvider.overrideWithValue(source),
+        extensionManagerProvider.overrideWith(_EmptyManager.new),
+      ],
     );
     addTearDown(container.dispose);
 
@@ -125,7 +286,10 @@ void main() {
   test('home data stays cached after the home tab unsubscribes', () async {
     final source = _FakeHomeSource();
     final container = ProviderContainer(
-      overrides: [activeProviderProvider.overrideWithValue(source)],
+      overrides: [
+        activeProviderProvider.overrideWithValue(source),
+        extensionManagerProvider.overrideWith(_EmptyManager.new),
+      ],
     );
     addTearDown(container.dispose);
 

@@ -12,6 +12,7 @@ import 'package:animewitcher/core/services/download_v2/download_v2_provider.dart
 import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
 import 'package:animewitcher/core/services/download_v2/manga_chapter_transport_v2.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
+import 'package:animewitcher/core/storage/download_persistence_worker.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
@@ -43,6 +44,11 @@ void main() {
     PathProviderPlatform.instance = _Paths(root.path);
   });
   tearDown(() async {
+    // Download persistence is isolated in a worker which can still be flushing
+    // a queued metadata write when the artwork observer has already disposed.
+    // Drain and close it before deleting this test's temporary support folder.
+    // Otherwise CI can fail *after* the test with a rename to a deleted path.
+    await DownloadPersistenceWorker.forDirectory(root.path).close();
     PathProviderPlatform.instance = originalPaths;
     await root.delete(recursive: true);
   });
@@ -229,8 +235,10 @@ void main() {
         expect(kept, isNotNull);
         expect(kept!.intent, f.record.intent);
         expect(kept.completedAtMillis, f.record.completedAtMillis);
-        expect(manager.snapshotFor(f.record.logicalId)?.status,
-            DownloadTransportStatus.complete);
+        expect(
+          manager.snapshotFor(f.record.logicalId)?.status,
+          DownloadTransportStatus.complete,
+        );
         expect(await File(f.record.destinationPath).readAsBytes(), [1, 2, 3]);
         for (final file in owned) {
           expect(await file.readAsBytes(), tinyMangaPng);

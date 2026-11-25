@@ -2,11 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../../../core/account/account_providers.dart';
+import '../../../../core/account/anime3rb_account_service.dart';
+import '../../../../core/account/anime3rb_comment_models.dart';
 import '../../../../core/account/animewitcher_account_models.dart';
 import '../../../../core/account/animewitcher_comment_models.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
+import '../../../../core/extensions/providers/anime3rb_provider.dart';
 import '../../../../core/services/notification_service.dart';
+import '../../../../core/storage/anime3rb_library_service.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../comments/presentation/anime3rb_comments_screen.dart';
 import '../../../comments/presentation/animewitcher_comments_screen.dart';
 import '../details_ratings.dart';
 // The two toast strings moved with the actions that show them. They are
@@ -42,6 +47,12 @@ const Key kDetailsRatingsCompactExternalBadgeKey = Key(
 
 const Color kMalBadgeBlue = Color(0xFF2E51A2);
 const Color kImdbBadgeYellow = Color(0xFFF5C518);
+
+String _providerRatingLabel(AnimeDetailsRatings ratings) {
+  if (ratings.isAnime3rb) return 'تقييم أنمي عرب';
+  if (ratings.isWitanime) return 'تقييم WitAnime';
+  return 'تقييم انمي ويتشر';
+}
 
 bool hasDetailsRatingsSummary(MultimediaItem item) {
   final ratings = AnimeDetailsRatings.fromItem(item);
@@ -94,7 +105,7 @@ class DetailsRatingsSummary extends StatelessWidget {
             children: [
               if (showWitcher)
                 Semantics(
-                  label: 'تقييم انمي ويتشر',
+                  label: _providerRatingLabel(ratings),
                   child: KeyedSubtree(
                     key: kDetailsRatingsCompactWitcherKey,
                     child: Row(
@@ -210,6 +221,43 @@ class _DetailsRatingsRowState extends ConsumerState<DetailsRatingsRow> {
   }
 
   Future<void> _loadUserRating() async {
+    if (widget.item.provider == Anime3rbProvider.id) {
+      final a3Account = ref.read(anime3rbAccountServiceProvider);
+      if (!a3Account.isSignedIn) {
+        if (mounted) {
+          setState(() {
+            _userRating = null;
+            _loadingRating = false;
+            _loadedRating = true;
+            _loadedAnimeId = widget.item.url;
+          });
+        }
+        return;
+      }
+      setState(() {
+        _loadingRating = true;
+        _loadedAnimeId = widget.item.url;
+      });
+      try {
+        final rating = await ref
+            .read(anime3rbLibraryServiceProvider)
+            .loadUserRating(widget.item);
+        if (!mounted) return;
+        setState(() {
+          _userRating = rating;
+          _loadingRating = false;
+          _loadedRating = true;
+        });
+      } catch (_) {
+        if (!mounted) return;
+        setState(() {
+          _loadingRating = false;
+          _loadedRating = true;
+        });
+      }
+      return;
+    }
+
     final service = ref.read(animeWitcherAccountServiceProvider);
     final animeId = _ratings.animeId;
     if (!service.isSignedIn || animeId.isEmpty) {
@@ -254,6 +302,19 @@ class _DetailsRatingsRowState extends ConsumerState<DetailsRatingsRow> {
   }
 
   Future<void> _onRatePressed() async {
+    if (widget.item.provider == Anime3rbProvider.id) {
+      final outcome = await openAnimeRatingDialog(
+        context,
+        ref,
+        ratings: _ratings,
+        item: widget.item,
+        initialRating: _userRating ?? 0,
+      );
+      if (!mounted || !outcome.changed) return;
+      setState(() => _userRating = outcome.rating);
+      return;
+    }
+
     final service = ref.read(animeWitcherAccountServiceProvider);
     if (!service.isSignedIn) {
       _toast(kRateLoginRequiredToast);
@@ -290,6 +351,16 @@ class _DetailsRatingsRowState extends ConsumerState<DetailsRatingsRow> {
   }
 
   Future<void> _onReviewsPressed() async {
+    if (widget.item.provider == Anime3rbProvider.id) {
+      final a3Target = Anime3rbCommentTarget.fromAnime(widget.item);
+      if (a3Target == null || !mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => Anime3rbCommentsScreen(target: a3Target),
+        ),
+      );
+      return;
+    }
     final ratings = _ratings;
     if (ratings.reviewsClosed) {
       _toast(kReviewsClosedToast);
@@ -319,11 +390,18 @@ class _DetailsRatingsRowState extends ConsumerState<DetailsRatingsRow> {
 
   @override
   Widget build(BuildContext context) {
-    final account = ref.watch(animeWitcherAccountControllerProvider);
-    final signedIn =
-        account.asData?.value.isSignedIn ??
-        ref.read(animeWitcherAccountServiceProvider).isSignedIn;
-    final animeId = _ratings.animeId;
+    final isAnime3rb = widget.item.provider == Anime3rbProvider.id;
+    late final bool signedIn;
+    if (isAnime3rb) {
+      ref.watch(anime3rbAccountRevisionProvider);
+      signedIn = ref.read(anime3rbAccountServiceProvider).isSignedIn;
+    } else {
+      final account = ref.watch(animeWitcherAccountControllerProvider);
+      signedIn =
+          account.asData?.value.isSignedIn ??
+          ref.read(animeWitcherAccountServiceProvider).isSignedIn;
+    }
+    final animeId = isAnime3rb ? widget.item.url : _ratings.animeId;
     if (signedIn &&
         !_loadingRating &&
         (!_loadedRating || _loadedAnimeId != animeId)) {
@@ -404,7 +482,7 @@ class _DetailsRatingsRowState extends ConsumerState<DetailsRatingsRow> {
                     child: _RatingsActionButton(
                       key: kDetailsRatingsReviewsButtonKey,
                       icon: Icons.rate_review_outlined,
-                      label: 'المراجعات',
+                      label: ratings.isAnime3rb ? 'التعليقات' : 'المراجعات',
                       onPressed: _onReviewsPressed,
                     ),
                   ),
@@ -427,7 +505,7 @@ class _DetailsRatingsRowState extends ConsumerState<DetailsRatingsRow> {
         child: Column(
           children: [
             Text(
-              'تقييم انمي ويتشر',
+              _providerRatingLabel(ratings),
               textAlign: TextAlign.center,
               style: theme.textTheme.labelLarge?.copyWith(
                 color: AppTheme.animeWitcherAccent,
@@ -627,9 +705,8 @@ Future<int?> showAnimeRatingDialog(
                 children: [
                   Text(
                     '$rating /10',
-                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.w800,
-                    ),
+                    style: Theme.of(context).textTheme.headlineSmall
+                        ?.copyWith(fontWeight: FontWeight.w800),
                   ),
                   const SizedBox(height: 12),
                   FittedBox(

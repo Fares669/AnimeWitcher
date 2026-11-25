@@ -20,13 +20,17 @@ import '../../../../core/providers/anime_data_source_settings_provider.dart';
 import '../../details/presentation/downloaded_file_provider.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/extensions/base_provider.dart';
-import '../../../../core/extensions/extension_manager.dart';
+import '../../../../core/extensions/item_provider_resolution.dart';
+import '../../../../core/extensions/providers/anime3rb_provider.dart';
+import '../../../../core/extensions/providers/witanime_provider.dart';
+import '../../../../core/extensions/provider_stream_exception.dart';
 import '../../../../core/storage/history_repository.dart';
 import '../../../../core/storage/episode_watch_repository.dart';
 import '../../library/presentation/history_provider.dart';
 import '../../../../core/providers/device_info_provider.dart';
 import '../../../../core/utils/app_utils.dart';
 import '../../../../core/utils/local_video_payload_probe.dart';
+import '../../../../core/utils/playback_log_redaction.dart';
 import '../../../core/utils/episode_label.dart';
 import 'episode_navigation.dart';
 import '../../details/presentation/stream_source_prefetch.dart';
@@ -265,6 +269,12 @@ class PlayerState {
 }
 
 class PlayerController extends Notifier<PlayerState> {
+  PlaybackLogRedactor _logRedactor = PlaybackLogRedactor();
+
+  void _debugPrint(String? message) {
+    debugPrint(_logRedactor.redact(message ?? ''));
+  }
+
   late Player _player;
   VideoController? _videoViewController;
   late MultimediaItem _item;
@@ -455,6 +465,8 @@ class PlayerController extends Notifier<PlayerState> {
   /// MyAnimeList id for the anime being played, resolved from the catalog or
   /// from the title. Needed to submit a viewer's marks back to AniSkip.
   int? _resolvedMalId;
+  int _skipFetchGeneration = 0;
+  bool _skipNeedsDurationRefresh = false;
   bool _hasConfirmedPlaybackFrame = false;
 
   // RC1 — when a stream fails to start with a decode/codec error (common on
@@ -513,7 +525,7 @@ class PlayerController extends Notifier<PlayerState> {
       _resetBufferWatchdog();
     }
     if (kDebugMode) {
-      debugPrint('[Player] App backgrounded state: $backgrounded');
+      _debugPrint('[Player] App backgrounded state: $backgrounded');
     }
     if (!backgrounded &&
         _isInitialized &&
@@ -722,6 +734,7 @@ class PlayerController extends Notifier<PlayerState> {
     String? progressUrl,
     Episode? episode,
     StreamResult? selectedSource,
+    Future<List<StreamResult>>? sourceResolution,
     VideoController? videoViewController,
     Future<void>? localPlaybackReady,
   }) async {
@@ -732,6 +745,7 @@ class PlayerController extends Notifier<PlayerState> {
     state = PlayerState(sourceSessionId: ++_sourceSessionSerial);
     unawaited(_logSub?.cancel());
     _logSub = null;
+    _logRedactor = PlaybackLogRedactor();
     _hasConfirmedPlaybackFrame = false;
     _manualSelectionPending = false;
     _revertMessage = null;
@@ -770,6 +784,9 @@ class PlayerController extends Notifier<PlayerState> {
     _pendingResumeSeekFuture = null;
     _hasMarkedWatched = false;
     ++_catalogGeneration;
+    ++_skipFetchGeneration;
+    _skipNeedsDurationRefresh = false;
+    _resolvedMalId = null;
     _item = item;
 
     final imdbId =
@@ -819,7 +836,7 @@ class PlayerController extends Notifier<PlayerState> {
       if (selectedSource?.requiresResolution ?? false) {
         _videoUrl = selectedSource!.url;
       }
-      await _initStream();
+      await _initStream(sourceResolution: sourceResolution);
     }
     if (_isDisposed ||
         !identical(_player, player) ||
@@ -893,7 +910,7 @@ class PlayerController extends Notifier<PlayerState> {
         episodes = merged.values.toList(growable: false);
         publish();
       } catch (error) {
-        if (kDebugMode) debugPrint('Player catalog refresh skipped: $error');
+        if (kDebugMode) _debugPrint('Player catalog refresh skipped: $error');
       }
     }
 
@@ -909,7 +926,7 @@ class PlayerController extends Notifier<PlayerState> {
         }
         if (posters.isNotEmpty) publish();
       } catch (error) {
-        if (kDebugMode) debugPrint('Player artwork refresh skipped: $error');
+        if (kDebugMode) _debugPrint('Player artwork refresh skipped: $error');
       }
     }
 
@@ -919,11 +936,22 @@ class PlayerController extends Notifier<PlayerState> {
     }
   }
 
-  void _maybeFetchSkipSegments() {
+  void _maybeFetchSkipSegments({int? knownDurationSec}) {
     // Downloaded episodes used to bail out here, which left them with no skip
     // button at all. They now go through the same path: the cache answers
     // offline, and the online sources still run when there is a connection.
-    unawaited(_fetchAndLogSkipSegments());
+    unawaited(_fetchAndLogSkipSegments(knownDurationSec: knownDurationSec));
+  }
+
+  void _refreshSkipSegmentsIfDurationPending(int? durationSec) {
+    if (!_skipNeedsDurationRefresh ||
+        _isDisposed ||
+        durationSec == null ||
+        durationSec <= 0) {
+      return;
+    }
+    _skipNeedsDurationRefresh = false;
+    _maybeFetchSkipSegments(knownDurationSec: durationSec);
   }
 
   /// Cache keys for the episode playing, offline-safe key first.
@@ -981,20 +1009,48 @@ class PlayerController extends Notifier<PlayerState> {
     return _catalogRuntimeSeconds();
   }
 
-  /// Episode runtime in seconds as published by the catalog (`awDuration` is
-  /// in minutes), or null when it isn't known.
+  /// Episode runtime in seconds as published by the catalog (`awDuration` or
+  /// `MultimediaItem.duration` in minutes), or null when it isn't known.
   int? _catalogRuntimeSeconds() {
     final raw = _item.syncData?['awDuration']?.trim();
-    final minutes = raw == null ? null : int.tryParse(raw);
+    final minutes = (raw == null ? null : int.tryParse(raw)) ?? _item.duration;
     if (minutes == null || minutes <= 0) return null;
     return minutes * 60;
   }
 
-  Future<void> _fetchAndLogSkipSegments() async {
-    if (_episode == null) return;
+  Future<void> _hydrateItemMetadataForSkip(int skipGen) async {
+    if (_item.url.trim().isEmpty) return;
+    final provider = _resolveProvider();
+    if (provider == null) return;
+    try {
+      final details = await provider
+          .getDetails(_item.url)
+          .timeout(const Duration(seconds: 4));
+      if (_isDisposed || skipGen != _skipFetchGeneration) return;
+      final mergedSync = <String, String>{
+        ...?details.syncData,
+        ...?_item.syncData,
+      };
+      _item = _item.copyWith(
+        duration: _item.duration ?? details.duration,
+        imdbId: _item.imdbId ?? details.imdbId,
+        tags: (_item.tags?.isNotEmpty == true) ? _item.tags : details.tags,
+        syncData: mergedSync.isEmpty ? null : mergedSync,
+      );
+      if (state.imdbId == null && (_item.imdbId?.isNotEmpty == true)) {
+        state = state.copyWith(imdbId: _item.imdbId);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _fetchAndLogSkipSegments({int? knownDurationSec}) async {
+    final episode = _episode;
+    if (episode == null) return;
+    final skipGen = _skipFetchGeneration;
+    bool isSkipCurrent() => !_isDisposed && skipGen == _skipFetchGeneration;
     if (state.isLive || _item.contentType == MultimediaContentType.livestream) {
       if (kDebugMode) {
-        debugPrint(
+        _debugPrint(
           'Skip Segments: Bypassed lookup (livestreams are not supported)',
         );
       }
@@ -1013,34 +1069,63 @@ class PlayerController extends Notifier<PlayerState> {
         true;
     if (!skipEnabled) {
       if (kDebugMode) {
-        debugPrint('Skip Segments: Disabled in settings.');
+        _debugPrint('Skip Segments: Disabled in settings.');
       }
       return;
     }
 
-    final malId = int.tryParse(
-      (_item.syncData?['malId'] ?? _item.syncData?['mal_id'] ?? '').trim(),
+    var malId = MalIdResolver.parsePositiveId(
+      _item.syncData?['malId'] ??
+          _item.syncData?['mal_id'] ??
+          _item.syncData?['awMalId'],
     );
-
-    final hasNoIds =
-        state.tmdbId == null &&
-        state.imdbId == null &&
-        malId == null &&
-        _item.syncData?['anilist'] == null &&
-        _item.syncData?['anilistId'] == null &&
-        _item.syncData?['anilist_id'] == null;
+    var aniListId = MalIdResolver.parsePositiveId(
+      _item.syncData?['anilist'] ??
+          _item.syncData?['anilistId'] ??
+          _item.syncData?['anilist_id'],
+    );
+    var aniDbId = MalIdResolver.parsePositiveId(
+      _item.syncData?['anidbId'] ?? _item.syncData?['anidb_id'],
+    );
 
     // Anything resolved on a previous play (or when the episode was
     // downloaded) is on disk, so show it straight away. This is the only
     // path that works with no connection.
     final cache = ref.read(skipSegmentCacheProvider);
-    final cached = cache.readAny(_skipCacheKeys());
-    if (cached.isNotEmpty) {
-      state = state.copyWith(skipSegments: cached);
-      if (kDebugMode) {
-        debugPrint('Skip Segments: ${cached.length} restored from cache');
+    if (knownDurationSec == null) {
+      final cached = cache.readAny(_skipCacheKeys());
+      if (cached.isNotEmpty) {
+        state = state.copyWith(skipSegments: cached);
+        if (kDebugMode) {
+          _debugPrint('Skip Segments: ${cached.length} restored from cache');
+        }
       }
     }
+
+    if (malId == null && aniListId == null && aniDbId == null) {
+      await _hydrateItemMetadataForSkip(skipGen);
+      if (!isSkipCurrent()) return;
+      malId = MalIdResolver.parsePositiveId(
+        _item.syncData?['malId'] ??
+            _item.syncData?['mal_id'] ??
+            _item.syncData?['awMalId'],
+      );
+      aniListId = MalIdResolver.parsePositiveId(
+        _item.syncData?['anilist'] ??
+            _item.syncData?['anilistId'] ??
+            _item.syncData?['anilist_id'],
+      );
+      aniDbId = MalIdResolver.parsePositiveId(
+        _item.syncData?['anidbId'] ?? _item.syncData?['anidb_id'],
+      );
+    }
+
+    final hasNoIds =
+        state.tmdbId == null &&
+        state.imdbId == null &&
+        malId == null &&
+        aniListId == null &&
+        aniDbId == null;
 
     // A title alone is still workable: AniSkip is keyed by MyAnimeList id,
     // and the title resolves to one through AniList. The catalog provider
@@ -1048,7 +1133,7 @@ class PlayerController extends Notifier<PlayerState> {
     // intro/credits skipping for nearly everything.
     if (hasNoIds && _item.title.trim().isEmpty) {
       if (kDebugMode) {
-        debugPrint(
+        _debugPrint(
           'Skip Segments: Bypassed lookup (no IDs and no title available)',
         );
       }
@@ -1056,13 +1141,13 @@ class PlayerController extends Notifier<PlayerState> {
     }
 
     if (kDebugMode) {
-      debugPrint('=============================================');
-      debugPrint('SKIP SEGMENTS (AniSkip/IntroDB/chapters)');
-      debugPrint(
-        'ids: mal=$malId tmdb=${state.tmdbId} imdb=${state.imdbId} '
-        'anilist=${_item.syncData?['anilist'] ?? _item.syncData?['anilistId'] ?? _item.syncData?['anilist_id']}',
+      _debugPrint('=============================================');
+      _debugPrint('SKIP SEGMENTS (AniSkip/IntroDB/chapters)');
+      _debugPrint(
+        'ids: mal=$malId anidb=$aniDbId tmdb=${state.tmdbId} '
+        'imdb=${state.imdbId} anilist=$aniListId',
       );
-      debugPrint('syncData keys: ${_item.syncData?.keys.toList()}');
+      _debugPrint('syncData keys: ${_item.syncData?.keys.toList()}');
     }
 
     // Each source keeps its own list; they are merged by priority at the end
@@ -1071,8 +1156,8 @@ class PlayerController extends Notifier<PlayerState> {
     var introDbSegments = const <SkipSegment>[];
     var aniSkipSegments = const <SkipSegment>[];
     var chapterSegments = const <SkipSegment>[];
-    final int season = _episode!.season > 0 ? _episode!.season : 1;
-    final int episodeNum = _episode!.episode > 0 ? _episode!.episode : 1;
+    final int season = episode.season > 0 ? episode.season : 1;
+    final int episodeNum = episode.episode > 0 ? episode.episode : 1;
 
     final isMovie = _item.contentType == MultimediaContentType.movie;
 
@@ -1088,33 +1173,34 @@ class PlayerController extends Notifier<PlayerState> {
           season: isMovie ? null : season,
           episode: isMovie ? null : episodeNum,
         );
-        if (_isDisposed) return;
+        if (!isSkipCurrent()) return;
         introDbSegments = segments;
         if (kDebugMode) {
-          debugPrint('IntroDB returned ${segments.length} segments:');
+          _debugPrint('IntroDB returned ${segments.length} segments:');
           for (final s in segments) {
-            debugPrint('  - ${s.type.name}: ${s.startTime} -> ${s.endTime}');
+            _debugPrint('  - ${s.type.name}: ${s.startTime} -> ${s.endTime}');
           }
         }
       } catch (e) {
-        if (kDebugMode) debugPrint('IntroDB error: $e');
+        if (kDebugMode) _debugPrint('IntroDB error: $e');
       }
     } else {
       if (kDebugMode) {
-        debugPrint('IntroDB: Bypassed lookup (no TMDB/IMDb id available)');
+        _debugPrint('IntroDB: Bypassed lookup (no TMDB/IMDb id available)');
       }
     }
 
-    if (_isDisposed) return;
+    if (!isSkipCurrent()) return;
 
     // 2. Check if the media is anime or animated to run AnimeSkip logic.
-    // A MyAnimeList id is itself proof of anime — MAL indexes nothing else.
+    // A MyAnimeList/AniList/AniDB id or anime catalog provider is proof of anime.
     final isAnime =
         _item.contentType == MultimediaContentType.anime ||
+        _item.provider == Anime3rbProvider.id ||
+        _item.provider == WitanimeProvider.id ||
         malId != null ||
-        _item.syncData?['anilist'] != null ||
-        _item.syncData?['anilistId'] != null ||
-        _item.syncData?['anilist_id'] != null ||
+        aniListId != null ||
+        aniDbId != null ||
         (_item.tags != null &&
             _item.tags!.any(
               (t) =>
@@ -1125,20 +1211,22 @@ class PlayerController extends Notifier<PlayerState> {
       // 2a. AniSkip (api.aniskip.com) — keyless and MAL-keyed, so it is the
       // primary anime source. Its data is anime-specific, so it replaces
       // whatever IntroDB returned for the same episode.
-      // The provider usually hands us a title and nothing else, so fall
-      // back to resolving the MyAnimeList id from it.
-      var resolvedMalId = malId;
-      if (resolvedMalId == null && _item.title.trim().isNotEmpty) {
-        resolvedMalId = await ref
-            .read(malIdResolverProvider)
-            .resolve(_item.title);
-        if (_isDisposed) return;
-        if (kDebugMode) {
-          debugPrint(
-            'AniSkip: resolved MAL id $resolvedMalId from title '
-            '"${_item.title}"',
-          );
-        }
+      // When no direct MAL id came with the item, fall back to external ids
+      // (AniList/AniDB via ani.zip) or title search.
+      final resolvedMalId =
+          malId ??
+          await ref
+              .read(malIdResolverProvider)
+              .resolveForItem(
+                syncData: _item.syncData,
+                title: _item.title,
+                alternativeTitles: [?_item.syncData?['awEnglishTitle']],
+              );
+      if (!isSkipCurrent()) return;
+      if (kDebugMode && malId == null) {
+        _debugPrint(
+          'AniSkip: resolved MAL id $resolvedMalId for "${_item.title}"',
+        );
       }
       // Recorded after the fallback, not before it: the catalog hands us a
       // title and no ids for most anime, so an id assigned before this line
@@ -1149,10 +1237,13 @@ class PlayerController extends Notifier<PlayerState> {
 
       if (resolvedMalId != null) {
         try {
-          final durationSec = await _awaitDurationSeconds();
-          if (_isDisposed) return;
+          final durationSec = knownDurationSec ?? await _awaitDurationSeconds();
+          if (!isSkipCurrent()) return;
+          if (durationSec == null && knownDurationSec == null) {
+            _skipNeedsDurationRefresh = true;
+          }
           if (kDebugMode) {
-            debugPrint(
+            _debugPrint(
               'AniSkip: querying mal=$resolvedMalId season=$season '
               'episode=$episodeNum durationSec=$durationSec',
             );
@@ -1164,26 +1255,26 @@ class PlayerController extends Notifier<PlayerState> {
             episode: episodeNum,
             duration: durationSec,
           );
-          if (_isDisposed) return;
+          if (!isSkipCurrent()) return;
           aniSkipSegments = segments;
           if (kDebugMode) {
-            debugPrint('AniSkip returned ${segments.length} segments:');
+            _debugPrint('AniSkip returned ${segments.length} segments:');
             for (final s in segments) {
-              debugPrint('  - ${s.type.name}: ${s.startTime} -> ${s.endTime}');
+              _debugPrint('  - ${s.type.name}: ${s.startTime} -> ${s.endTime}');
             }
           }
         } catch (e) {
-          if (kDebugMode) debugPrint('AniSkip error: $e');
+          if (kDebugMode) _debugPrint('AniSkip error: $e');
         }
       } else {
         if (kDebugMode) {
-          debugPrint(
+          _debugPrint(
             'AniSkip: Bypassed lookup (no MyAnimeList id could be resolved)',
           );
         }
       }
 
-      if (_isDisposed) return;
+      if (!isSkipCurrent()) return;
 
       // 2b. IntroDB, reached through the ids ani.zip keeps against the
       // MyAnimeList one. It is a separate database from AniSkip — where
@@ -1195,10 +1286,11 @@ class PlayerController extends Notifier<PlayerState> {
           final ids = await ref
               .read(animeIdMappingsProvider)
               .byMalId(resolvedMalId);
-          if (_isDisposed) return;
+          if (!isSkipCurrent()) return;
           if (ids != null && (ids.imdbId != null || ids.tmdbId != null)) {
-            final durationSec = await _awaitDurationSeconds();
-            if (_isDisposed) return;
+            final durationSec =
+                knownDurationSec ?? await _awaitDurationSeconds();
+            if (!isSkipCurrent()) return;
             introDbSegments = await ref
                 .read(introDbServiceProvider)
                 .getSkipSegments(
@@ -1208,41 +1300,41 @@ class PlayerController extends Notifier<PlayerState> {
                   episode: isMovie ? null : episodeNum,
                   duration: durationSec,
                 );
-            if (_isDisposed) return;
+            if (!isSkipCurrent()) return;
             if (kDebugMode) {
-              debugPrint(
+              _debugPrint(
                 'IntroDB via ani.zip ($ids) returned '
                 '${introDbSegments.length} segments',
               );
             }
           }
         } catch (e) {
-          if (kDebugMode) debugPrint('IntroDB via ani.zip error: $e');
+          if (kDebugMode) _debugPrint('IntroDB via ani.zip error: $e');
         }
       }
     } else {
       if (kDebugMode) {
-        debugPrint('AniSkip: Bypassed lookup (media is not anime/animated)');
+        _debugPrint('AniSkip: Bypassed lookup (media is not anime/animated)');
       }
     }
     // 3. The file's own chapter markers. Per-file data, so it covers the
     // episodes no crowd-sourced service has, and it costs no network call.
-    final durationSec = await _awaitDurationSeconds();
-    if (_isDisposed) return;
+    final durationSec = knownDurationSec ?? await _awaitDurationSeconds();
+    if (!isSkipCurrent()) return;
     try {
       chapterSegments = await ChapterSkipSource.read(
         _player,
         durationSec: durationSec?.toDouble(),
       );
-      if (_isDisposed) return;
+      if (!isSkipCurrent()) return;
       if (kDebugMode) {
-        debugPrint('Chapters returned ${chapterSegments.length} segments:');
+        _debugPrint('Chapters returned ${chapterSegments.length} segments:');
         for (final s in chapterSegments) {
-          debugPrint('  - ${s.type.name}: ${s.startTime} -> ${s.endTime}');
+          _debugPrint('  - ${s.type.name}: ${s.startTime} -> ${s.endTime}');
         }
       }
     } catch (e) {
-      if (kDebugMode) debugPrint('Chapters error: $e');
+      if (kDebugMode) _debugPrint('Chapters error: $e');
     }
 
     // Best source first. Anything overlapping a segment an earlier source
@@ -1255,14 +1347,14 @@ class PlayerController extends Notifier<PlayerState> {
     ], durationSec: durationSec?.toDouble());
 
     if (kDebugMode) {
-      debugPrint('Merged ${merged.length} skip segments:');
+      _debugPrint('Merged ${merged.length} skip segments:');
       for (final s in merged) {
-        debugPrint('  - ${s.type.name}: ${s.startTime} -> ${s.endTime}');
+        _debugPrint('  - ${s.type.name}: ${s.startTime} -> ${s.endTime}');
       }
-      debugPrint('=============================================');
+      _debugPrint('=============================================');
     }
 
-    if (merged.isNotEmpty && !_isDisposed) {
+    if (merged.isNotEmpty && isSkipCurrent()) {
       state = state.copyWith(skipSegments: merged);
       // Keep them for the next play, which may be offline.
       unawaited(cache.write(_skipCacheKeys(), merged));
@@ -1298,6 +1390,9 @@ class PlayerController extends Notifier<PlayerState> {
         if ((info.duration > 0 || info.isLive) &&
             _suppressNextEpisodeDetection) {
           _suppressNextEpisodeDetection = false;
+        }
+        if (info.duration > 0) {
+          _refreshSkipSegmentsIfDurationPending(info.duration ~/ 1000);
         }
       }
     });
@@ -1342,10 +1437,10 @@ class PlayerController extends Notifier<PlayerState> {
       final error = _videoViewController!.error.value;
       if (error != null) {
         if (_isReconnectingCurrentStream || _isRecoveringFromStall) return;
-        if (kDebugMode) debugPrint("VideoView Player Error: $error");
+        if (kDebugMode) _debugPrint("VideoView Player Error: $error");
         if (_isAppBackgrounded) {
           if (kDebugMode) {
-            debugPrint(
+            _debugPrint(
               "VideoView: Ignoring transient error while backgrounded.",
             );
           }
@@ -1373,7 +1468,7 @@ class PlayerController extends Notifier<PlayerState> {
           if (state.isLive && state.currentStream != null) {
             if (_isRecoveringFromStall) return; // already reconnecting
             if (kDebugMode) {
-              debugPrint(
+              _debugPrint(
                 "VideoView live stream error. Triggering reconnect...",
               );
             }
@@ -1591,6 +1686,7 @@ class PlayerController extends Notifier<PlayerState> {
         if (_pendingResumeSeekPosition != null) {
           unawaited(_flushPendingResumeSeek());
         }
+        _refreshSkipSegmentsIfDurationPending(duration.inSeconds);
         // Safe point to re-enable next-episode detection: the new episode's
         // duration is now confirmed, so remaining-time calculations are valid.
         if (_suppressNextEpisodeDetection) {
@@ -1684,7 +1780,7 @@ class PlayerController extends Notifier<PlayerState> {
         stuckFor >= PlaybackRecoveryPolicy.bufferNudgeAfter) {
       _bufferRecoveryStage = 1;
       if (kDebugMode) {
-        debugPrint('Watchdog: buffering 12s — re-issuing seek to $position');
+        _debugPrint('Watchdog: buffering 12s — re-issuing seek to $position');
       }
       final sourceSessionId = state.sourceSessionId;
       unawaited(() async {
@@ -1705,7 +1801,7 @@ class PlayerController extends Notifier<PlayerState> {
       final current = state.currentStream;
       if (current == null) return;
       if (kDebugMode) {
-        debugPrint('Watchdog: buffering 25s — reopening source at $position');
+        _debugPrint('Watchdog: buffering 25s — reopening source at $position');
       }
       _enterRuntimePhase(kind: PlaybackUiPhaseKind.bufferingRuntime);
       // Use the serialized reconnect path, including strict position restore.
@@ -1717,7 +1813,7 @@ class PlayerController extends Notifier<PlayerState> {
         stuckFor >= PlaybackRecoveryPolicy.failoverSourceAfter) {
       _bufferRecoveryStage = 3;
       if (kDebugMode) {
-        debugPrint('Watchdog: buffering 45s — moving to the next source');
+        _debugPrint('Watchdog: buffering 45s — moving to the next source');
       }
       _resetBufferWatchdog();
       _resetMidPlaybackReconnect();
@@ -1745,7 +1841,7 @@ class PlayerController extends Notifier<PlayerState> {
 
     if (_bufferDepletionTimes.length >= 2 && !state.isAdaptiveBufferingActive) {
       if (kDebugMode) {
-        debugPrint(
+        _debugPrint(
           "Multiple buffer stalls detected. Activating adaptive buffering.",
         );
       }
@@ -1779,7 +1875,7 @@ class PlayerController extends Notifier<PlayerState> {
 
     _errorSub = _player.stream.error.listen((error) {
       if (_isReconnectingCurrentStream || _isRecoveringFromStall) return;
-      if (kDebugMode) debugPrint("Player Error: $error");
+      if (kDebugMode) _debugPrint("Player Error: $error");
       if (error.toString().toLowerCase().contains("abort")) return;
 
       final isAudioDecodeError = error.toString().toLowerCase().contains(
@@ -1799,7 +1895,7 @@ class PlayerController extends Notifier<PlayerState> {
           _hasConfirmedPlaybackFrame &&
           _player.state.position > Duration.zero) {
         if (kDebugMode) {
-          debugPrint(
+          _debugPrint(
             '[Player] Ignoring transient video decode error during confirmed playback.',
           );
         }
@@ -1847,7 +1943,7 @@ class PlayerController extends Notifier<PlayerState> {
         );
         if (nextTrack != null) {
           if (kDebugMode) {
-            debugPrint(
+            _debugPrint(
               '[Player] Audio decode error on track $_lastKnownAudioTrackId'
               ' — trying next: ${nextTrack.id} (${nextTrack.language})',
             );
@@ -1860,7 +1956,7 @@ class PlayerController extends Notifier<PlayerState> {
         // the entire source — video was playing correctly and a restart would
         // lose the playback position and show a spinner for no benefit.
         if (kDebugMode) {
-          debugPrint(
+          _debugPrint(
             '[Player] All audio tracks failed — disabling audio to preserve video playback.',
           );
         }
@@ -1895,7 +1991,7 @@ class PlayerController extends Notifier<PlayerState> {
             state.currentStream != null) {
           _forceSoftwareDecode = true;
           if (kDebugMode) {
-            debugPrint(
+            _debugPrint(
               '[Player] Decode/HW error before first frame — retrying '
               'current source with software decoding.',
             );
@@ -1924,14 +2020,16 @@ class PlayerController extends Notifier<PlayerState> {
         // Error during active playback.
         if (_isAppBackgrounded) {
           if (kDebugMode) {
-            debugPrint('[Player] Ignoring transient error while backgrounded.');
+            _debugPrint(
+              '[Player] Ignoring transient error while backgrounded.',
+            );
           }
           return;
         }
         if (state.isLive && state.currentStream != null) {
           if (_isRecoveringFromStall) return; // watchdog already reconnecting
           if (kDebugMode) {
-            debugPrint("Live stream error. Triggering reconnect...");
+            _debugPrint("Live stream error. Triggering reconnect...");
           }
           _enterRuntimePhase(kind: PlaybackUiPhaseKind.reconnectingLive);
           _beginStallRecovery(
@@ -1944,7 +2042,7 @@ class PlayerController extends Notifier<PlayerState> {
         if (_isReconnectingCurrentStream) return;
         if (state.currentStream != null) {
           if (kDebugMode) {
-            debugPrint(
+            _debugPrint(
               '[Player] Mid-playback error — requesting seamless reconnect '
               '($_midPlaybackRetryCount/${PlaybackRecoveryPolicy.maxMidPlaybackRetries}).',
             );
@@ -2102,7 +2200,7 @@ class PlayerController extends Notifier<PlayerState> {
       _wasNetworkOffline = true;
       _waitingForNetworkRecovery = true;
       if (kDebugMode) {
-        debugPrint(
+        _debugPrint(
           '[Player] Device is offline — waiting for network reconnection.',
         );
       }
@@ -2158,7 +2256,7 @@ class PlayerController extends Notifier<PlayerState> {
       if (!canContinue()) return;
       _recoveryPositionMs = null;
       if (kDebugMode) {
-        debugPrint(
+        _debugPrint(
           '[Player] Reconnect successful at position ${oldPos.inSeconds}s.',
         );
       }
@@ -2172,7 +2270,7 @@ class PlayerController extends Notifier<PlayerState> {
         return;
       }
       if (kDebugMode) {
-        debugPrint(
+        _debugPrint(
           '[Player] Reconnect attempt $_midPlaybackRetryCount failed: $e',
         );
       }
@@ -2235,7 +2333,7 @@ class PlayerController extends Notifier<PlayerState> {
             _isLiveStream(_videoUrl);
         if (isLive && state.currentStream != null) {
           if (kDebugMode) {
-            debugPrint("Live stream reached EOF. Forcing auto-reconnect...");
+            _debugPrint("Live stream reached EOF. Forcing auto-reconnect...");
           }
           _enterRuntimePhase(kind: PlaybackUiPhaseKind.reconnectingLive);
           unawaited(_changeStream(state.currentStream!, resetPosition: true));
@@ -2272,7 +2370,7 @@ class PlayerController extends Notifier<PlayerState> {
 
           if (stallDuration.inSeconds >= 5 && !_isRecoveringFromStall) {
             if (kDebugMode) {
-              debugPrint(
+              _debugPrint(
                 "Watchdog: Silent stall detected (5s). Kicking engine...",
               );
             }
@@ -2389,6 +2487,7 @@ class PlayerController extends Notifier<PlayerState> {
     PlaybackUiPhaseKind requestedPhaseKind =
         PlaybackUiPhaseKind.fetchingSources,
     bool forceNewSourceSession = true,
+    Future<List<StreamResult>>? sourceResolution,
   }) async {
     // Any stream-level transition (new episode, source retry, manual
     // quality switch) should re-arm the next-episode overlay. Without
@@ -2437,7 +2536,8 @@ class PlayerController extends Notifier<PlayerState> {
     try {
       if (_videoUrl.isNotEmpty) {
         state = state.copyWith();
-        final rawStreams = await activeProvider.loadStreams(_videoUrl);
+        final rawStreams =
+            await (sourceResolution ?? activeProvider.loadStreams(_videoUrl));
         if (!_isCurrentSourceSession(sourceSessionId)) return;
         if (rawStreams.isNotEmpty) {
           // A source explicitly chosen in AnimeWitcher's picker must not be
@@ -2498,7 +2598,13 @@ class PlayerController extends Notifier<PlayerState> {
         }
       }
     } catch (e) {
-      if (kDebugMode) debugPrint("Error loading streams: $e");
+      if (e is ProviderStreamException) {
+        if (_isCurrentSourceSession(sourceSessionId)) {
+          state = state.copyWith(errorMessage: e.toString());
+        }
+        return;
+      }
+      if (kDebugMode) _debugPrint("Error loading streams: $e");
     }
 
     if (!_isCurrentSourceSession(sourceSessionId)) return;
@@ -2553,7 +2659,13 @@ class PlayerController extends Notifier<PlayerState> {
     if (source.requiresResolution) {
       final provider = _resolveProvider();
       if (provider == null) return false;
-      final streams = await provider.loadStreams(source.url);
+      final List<StreamResult> streams;
+      try {
+        streams = await provider.loadStreams(source.url);
+      } catch (error) {
+        if (kDebugMode) _debugPrint('Error switching streams: $error');
+        return false;
+      }
       if (!_isCurrentSourceSession(sourceSessionId) || streams.isEmpty) {
         return false;
       }
@@ -2567,22 +2679,8 @@ class PlayerController extends Notifier<PlayerState> {
     return _isCurrentSourceSession(sourceSessionId);
   }
 
-  AnimeWitcherProvider? _resolveProvider() {
-    final activeState = ref.read(activeProviderProvider);
-    final manager = ref.read(extensionManagerProvider.notifier);
-
-    if (_item.provider != null) {
-      try {
-        final val = _item.provider!;
-        return manager.getAllProviders().firstWhere(
-          (p) => p.packageName == val || p.name == val,
-        );
-      } catch (e) {
-        if (kDebugMode) debugPrint('PlayerController._resolveProvider: $e');
-      }
-    }
-    return activeState;
-  }
+  AnimeWitcherProvider? _resolveProvider() =>
+      ref.read(itemSourceProvider(_item.provider));
 
   int _findSavedStreamIndex(List<StreamResult> streams) {
     try {
@@ -2615,7 +2713,7 @@ class PlayerController extends Notifier<PlayerState> {
         if (foundIndex != -1) return foundIndex;
       }
     } catch (e) {
-      if (kDebugMode) debugPrint("Error checking saved stream quality: $e");
+      if (kDebugMode) _debugPrint("Error checking saved stream quality: $e");
     }
     return 0;
   }
@@ -2746,7 +2844,7 @@ class PlayerController extends Notifier<PlayerState> {
           forceM3u8Extension: true,
         );
         if (kDebugMode) {
-          debugPrint("[PLAYER] Proxied non-standard HLS: $finalUrl");
+          _debugPrint("[PLAYER] Proxied non-standard HLS: $finalUrl");
         }
       }
 
@@ -2840,7 +2938,7 @@ class PlayerController extends Notifier<PlayerState> {
       if (simplified != null) {
         mediaKitUrl = LocalProxyService.instance.serveM3u8(simplified);
         if (kDebugMode) {
-          debugPrint(
+          _debugPrint(
             '[PLAYER] Serving simplified HLS master (1 audio track): $mediaKitUrl',
           );
         }
@@ -2852,7 +2950,7 @@ class PlayerController extends Notifier<PlayerState> {
           options: proxyOptions,
         );
         if (kDebugMode) {
-          debugPrint(
+          _debugPrint(
             '[PLAYER] Proxying HLS through localhost (master pre-fetch failed): $mediaKitUrl',
           );
         }
@@ -3035,7 +3133,7 @@ class PlayerController extends Notifier<PlayerState> {
         _anime4kApplied = '';
         _anime4kMetalHandle = metalHandle;
         if (kDebugMode) {
-          debugPrint(
+          _debugPrint(
             'Anime4K: Metal ready for ${pipeline.files.length} shaders '
             'at ${_anime4kProcessingDimensions?.width}x'
             '${_anime4kProcessingDimensions?.height}',
@@ -3068,7 +3166,7 @@ class PlayerController extends Notifier<PlayerState> {
           await platform.setProperty('glsl-shaders', '');
           _anime4kApplied = '';
           if (kDebugMode) {
-            debugPrint(
+            _debugPrint(
               'Anime4K: GPU shader stage unavailable (vo="$currentVo")',
             );
           }
@@ -3082,7 +3180,7 @@ class PlayerController extends Notifier<PlayerState> {
       _anime4kApplied = applied.trim();
       if (glslValue.isNotEmpty && _anime4kApplied.isEmpty) {
         if (kDebugMode) {
-          debugPrint('Anime4K: mpv did not accept the shader chain');
+          _debugPrint('Anime4K: mpv did not accept the shader chain');
         }
         return;
       }
@@ -3095,7 +3193,7 @@ class PlayerController extends Notifier<PlayerState> {
           await platform.setProperty('glsl-shaders', '');
           _anime4kApplied = '';
           if (kDebugMode) {
-            debugPrint(
+            _debugPrint(
               'Anime4K: GPU shader stage unavailable '
               '(vo="$currentVo", gpu-dumb-mode="$gpuDumbMode")',
             );
@@ -3104,7 +3202,7 @@ class PlayerController extends Notifier<PlayerState> {
         }
       }
       if (kDebugMode) {
-        debugPrint(
+        _debugPrint(
           'Anime4K: backend=${route.backend.name}, asked for '
           '${pipeline.files.length} shaders, mpv holds "$_anime4kApplied"'
           '${pipeline.missing.isEmpty ? '' : ', missing '
@@ -3114,7 +3212,7 @@ class PlayerController extends Notifier<PlayerState> {
     } catch (e) {
       // Metal/GLSL setup is optional and must never take playback down.
       _disableAnime4kMetal();
-      if (kDebugMode) debugPrint('Anime4K shaders not applied: $e');
+      if (kDebugMode) _debugPrint('Anime4K shaders not applied: $e');
     }
   }
 
@@ -3352,7 +3450,7 @@ class PlayerController extends Notifier<PlayerState> {
     } catch (error) {
       // A native selection already in flight can finish after teardown.
       if (!isActive()) return;
-      if (kDebugMode) debugPrint('Auto subtitle selection failed: $error');
+      if (kDebugMode) _debugPrint('Auto subtitle selection failed: $error');
     }
   }
 
@@ -3526,7 +3624,7 @@ class PlayerController extends Notifier<PlayerState> {
       if (!_isCurrentSourceSession(sourceSessionId)) {
         return;
       }
-      if (kDebugMode) debugPrint("Stream $index failed: $e");
+      if (kDebugMode) _debugPrint("Stream $index failed: $e");
       _markSourceAttempt(index, SourceAttemptStatus.failed);
       if (e is LocalVideoPayloadProblem) {
         _showLocalVideoPayloadError(e);
@@ -3637,7 +3735,7 @@ class PlayerController extends Notifier<PlayerState> {
         return;
       }
       _manualSelectionPending = false;
-      if (kDebugMode) debugPrint("Change stream failed: $e");
+      if (kDebugMode) _debugPrint("Change stream failed: $e");
       if (isRevert) {
         state = state.copyWith(
           errorMessage: _playerText(
@@ -3779,6 +3877,8 @@ class PlayerController extends Notifier<PlayerState> {
     _pendingResumeSeekPosition = null;
     _isApplyingPendingResumeSeek = false;
     _pendingResumeSeekFuture = null;
+    ++_skipFetchGeneration;
+    _skipNeedsDurationRefresh = false;
     if (state.skipSegments.isNotEmpty) {
       state = state.copyWith(skipSegments: const []);
     }
@@ -3786,15 +3886,10 @@ class PlayerController extends Notifier<PlayerState> {
   }
 
   Future<void> _recordEpisodeOpened(Episode episode) async {
-    final pId =
-        _item.provider ??
-        ref.read(activeProviderProvider)?.packageName ??
-        'Unknown';
-    final itemToSave = _item.copyWith(provider: pId);
     await ref
         .read(watchHistoryProvider.notifier)
         .recordOpened(
-          itemToSave,
+          _item,
           lastEpisodeUrl: episode.url,
           season: episode.season,
           episode: episode.episode,
@@ -3830,11 +3925,11 @@ class PlayerController extends Notifier<PlayerState> {
           : next;
       if (target.url.trim().isEmpty) return;
 
-      final provider = ref.read(activeProviderProvider);
+      final provider = _resolveProvider();
       if (provider == null) return;
       ref.read(streamSourcePrefetchProvider).warm(provider, target.url);
     } catch (e) {
-      if (kDebugMode) debugPrint('Next-episode prefetch skipped: $e');
+      if (kDebugMode) _debugPrint('Next-episode prefetch skipped: $e');
     }
   }
 
@@ -3875,6 +3970,7 @@ class PlayerController extends Notifier<PlayerState> {
         ((selectedSource?.requiresResolution ?? false)
             ? selectedSource!.url
             : nextEpisode.url);
+    final sourceResolution = _startDeferredSourceResolution(finalUrl);
 
     // Save current episode's progress BEFORE updating _episode/_videoUrl.
     saveProgress();
@@ -3912,7 +4008,18 @@ class PlayerController extends Notifier<PlayerState> {
 
     await _initStream(
       requestedPhaseKind: PlaybackUiPhaseKind.loadingNextEpisode,
+      sourceResolution: sourceResolution,
     );
+  }
+
+  Future<List<StreamResult>>? _startDeferredSourceResolution(String url) {
+    final provider = _resolveProvider();
+    if (provider == null || !provider.isExplicitStreamSelection(url)) {
+      return null;
+    }
+    final request = provider.loadStreams(url);
+    request.ignore();
+    return request;
   }
 
   void dismissNextEpisodeOverlay() {
@@ -3954,6 +4061,7 @@ class PlayerController extends Notifier<PlayerState> {
         ((selectedSource?.requiresResolution ?? false)
             ? selectedSource!.url
             : episode.url);
+    final sourceResolution = _startDeferredSourceResolution(finalUrl);
 
     await pause();
     if (!_isCurrentSourceSession(sourceSessionId)) return;
@@ -3989,6 +4097,7 @@ class PlayerController extends Notifier<PlayerState> {
 
     await _initStream(
       requestedPhaseKind: PlaybackUiPhaseKind.loadingNextEpisode,
+      sourceResolution: sourceResolution,
     );
   }
 
@@ -4021,15 +4130,10 @@ class PlayerController extends Notifier<PlayerState> {
 
       // Livestreams: save to history without progress (position=0, duration=0)
       if (isLivestream) {
-        final pId =
-            _item.provider ??
-            ref.read(activeProviderProvider)?.packageName ??
-            'Unknown';
-        final itemToSave = _item.copyWith(provider: pId);
         ref
             .read(continueWatchingProvider.notifier)
             .saveProgress(
-              itemToSave,
+              _item,
               0,
               0,
               lastStreamUrl: null, // Don't save temporary links for livestreams
@@ -4050,26 +4154,23 @@ class PlayerController extends Notifier<PlayerState> {
         if (!_hasMarkedWatched) {
           if (isSeries && currentEpisode != null) {
             unawaited(
-              ref
-                  .read(episodeWatchRepositoryProvider)
-                  .setWatched(_item.url, currentEpisode, true)
-                  .catchError((Object error) {
-                    talker.error('Failed to save local watched state', error);
-                  }),
+              setEpisodeWatchedFor(
+                ref.read(episodeWatchRepositoryProvider),
+                _item,
+                currentEpisode,
+                true,
+              ).catchError((Object error) {
+                talker.error('Failed to save local watched state', error);
+              }),
             );
           }
           _hasMarkedWatched = true;
         }
 
         final continueNotifier = ref.read(continueWatchingProvider.notifier);
-        final pId =
-            _item.provider ??
-            ref.read(activeProviderProvider)?.packageName ??
-            'Unknown';
-        final itemToSave = _item.copyWith(provider: pId);
 
         if (!isSeries) {
-          continueNotifier.remove(_item.url);
+          unawaited(continueNotifier.removeForItem(_item));
           return;
         } else if (currentEpisode != null) {
           // Find next episode
@@ -4084,7 +4185,7 @@ class PlayerController extends Notifier<PlayerState> {
             final nextEpisode = episodes[currentIndex + 1];
             // Save NEXT episode as current progress (reset to 0)
             continueNotifier.saveProgress(
-              itemToSave,
+              _item,
               0,
               0,
               lastStreamUrl: null,
@@ -4104,7 +4205,7 @@ class PlayerController extends Notifier<PlayerState> {
             return;
           } else {
             // Last episode of the series completed
-            continueNotifier.remove(_item.url);
+            continueNotifier.removeForItem(_item);
             return;
           }
         }
@@ -4112,15 +4213,10 @@ class PlayerController extends Notifier<PlayerState> {
 
       // 3. Normal local progress saving.
       if (progressPercent > 5 || isSeries) {
-        final pId =
-            _item.provider ??
-            ref.read(activeProviderProvider)?.packageName ??
-            'Unknown';
-        final itemToSave = _item.copyWith(provider: pId);
         ref
             .read(continueWatchingProvider.notifier)
             .saveProgress(
-              itemToSave,
+              _item,
               pos,
               dur,
               lastStreamUrl: state.currentStream?.url,
@@ -4141,7 +4237,7 @@ class PlayerController extends Notifier<PlayerState> {
             );
       }
     } catch (e) {
-      if (kDebugMode) debugPrint("History save failed: $e");
+      if (kDebugMode) _debugPrint("History save failed: $e");
     }
   }
 
@@ -4217,7 +4313,7 @@ class PlayerController extends Notifier<PlayerState> {
         }
       }
     } catch (e) {
-      if (kDebugMode) debugPrint('[PlayerController] subtitle cleanup: $e');
+      if (kDebugMode) _debugPrint('[PlayerController] subtitle cleanup: $e');
     }
   }
 
@@ -4247,7 +4343,7 @@ class PlayerController extends Notifier<PlayerState> {
         return start;
       }
       if (kDebugMode) {
-        debugPrint(
+        _debugPrint(
           "Starting parallel health check for ${candidates.length} streams",
         );
       }
@@ -4277,7 +4373,7 @@ class PlayerController extends Notifier<PlayerState> {
                   }
                   if (results[c]!) {
                     if (kDebugMode) {
-                      debugPrint("Stream $c is healthy (early-exit)");
+                      _debugPrint("Stream $c is healthy (early-exit)");
                     }
                     completer.complete(c);
                     return;
@@ -4307,7 +4403,7 @@ class PlayerController extends Notifier<PlayerState> {
       }
       return winner;
     } catch (e) {
-      if (kDebugMode) debugPrint("Parallel check failed: $e");
+      if (kDebugMode) _debugPrint("Parallel check failed: $e");
     }
 
     return start; // Fallback to initial
@@ -4333,7 +4429,7 @@ class PlayerController extends Notifier<PlayerState> {
           url: resolved.url,
           headers: resolved.headers,
           quality: resolved.quality,
-          refreshUrl: token,
+          refreshUrl: resolved.refreshUrl ?? token,
         );
         _replaceCurrentStream(merged);
         return AppUtils.normalizeUrl(merged.url);
@@ -4357,16 +4453,24 @@ class PlayerController extends Notifier<PlayerState> {
     StreamResult stream, {
     required bool useVideoView,
   }) async {
-    // Debug: log what DRM fields the stream has so failures are traceable.
+    _logRedactor.addSecrets([
+      stream.url,
+      stream.refreshUrl,
+      stream.drmKid,
+      stream.drmKey,
+      stream.licenseUrl,
+      ...headers.values,
+    ]);
+    // Backend diagnostics may echo credentials outside their original labels.
     if (kDebugMode) {
-      debugPrint(
+      _debugPrint(
         '[Player] Opening stream — url=${stream.url} '
         'source=${stream.source} '
         'isLive=${_isLiveStream(stream.url)} '
         'drmKid=${stream.drmKid} drmKey=${stream.drmKey} '
         'licenseUrl=${stream.licenseUrl}',
       );
-      debugPrint('[Player] Headers for stream: $headers');
+      _debugPrint('[Player] Headers for stream: $headers');
       // Enable mpv internal log for every stream so HLS variant selection
       // and segment fetch errors appear in logcat regardless of live/VOD.
       _logSub ??= _player.stream.log.listen((log) {
@@ -4395,7 +4499,7 @@ class PlayerController extends Notifier<PlayerState> {
             log.text.contains('header') ||
             log.text.contains('http://') ||
             log.text.contains('https://')) {
-          debugPrint('[MPV/${log.level}] ${log.text}');
+          _debugPrint('[MPV/${log.level}] ${log.text}');
         }
       });
     }
@@ -4418,7 +4522,7 @@ class PlayerController extends Notifier<PlayerState> {
           // Join with \r\n and ensure it ends with \r\n
           final fields = '${headerFields.join('\r\n')}\r\n';
           if (kDebugMode) {
-            debugPrint('Player: Setting http-header-fields: $fields');
+            _debugPrint('Player: Setting http-header-fields: $fields');
           }
           await native.setProperty('http-header-fields', fields);
         }
@@ -4448,15 +4552,6 @@ class PlayerController extends Notifier<PlayerState> {
       } else {
         await native.setProperty('hwdec', 'no');
       }
-
-      // RC3: disable TLS cert verification for VOD too (was previously only
-      // set on the live path). The libmpv builds differ per platform — the
-      // shinchiro Windows build and the bundled macOS build ship
-      // differently-aged CA bundles, so a stream whose cert chain validates
-      // on Windows can fail the TLS handshake on macOS. Disabling cert
-      // verification removes that per-build divergence. This matches the
-      // existing posture (live already did this; usesCleartextTraffic is on).
-      await native.setProperty('tls-verify', 'no');
 
       // 1. Performance tuning & Anti-Looping
       await native.setProperty('cache', 'yes');
@@ -4488,7 +4583,7 @@ class PlayerController extends Notifier<PlayerState> {
           _isLiveStream(stream.url) ||
           _item.contentType == MultimediaContentType.livestream;
       if (kDebugMode) {
-        debugPrint(
+        _debugPrint(
           'Stream Type (isLivePattern): $isLivePattern, URL: ${stream.url}',
         );
       }
@@ -4502,8 +4597,6 @@ class PlayerController extends Notifier<PlayerState> {
 
         // Network
         await native.setProperty('network-timeout', '30');
-        await native.setProperty('tls-verify', 'no');
-
         // Reconnect
         await native.setProperty(
           'stream-lavf-o',
@@ -4632,10 +4725,11 @@ class PlayerController extends Notifier<PlayerState> {
       }
 
       if (keyHex != null) {
+        _logRedactor.addSecrets([keyHex]);
         // FFmpeg's DASH demuxer natively expects cenc_decryption_key.
         // It's usually the 32-character hex KEY.
         if (kDebugMode) {
-          debugPrint(
+          _debugPrint(
             '[DRM] Injecting cenc_decryption_key via demuxer-lavf-o: $keyHex',
           );
         }
@@ -4677,7 +4771,7 @@ class PlayerController extends Notifier<PlayerState> {
           await native.setProperty('cache-dir', tempDir.path);
         } catch (e) {
           if (kDebugMode)
-            debugPrint('Failed to set cache-dir/cookies-file: $e');
+            _debugPrint('Failed to set cache-dir/cookies-file: $e');
         }
       }
 
@@ -4768,7 +4862,7 @@ class PlayerController extends Notifier<PlayerState> {
               RegExp(r'URI="([^"]+)"'),
               (m) {
                 final resolved = baseUri.resolve(m.group(1)!).toString();
-                return 'URI="${LocalProxyService.instance.getProxyUrl(resolved, headers: headers, options: proxyOptions)}"';
+                return 'URI="${LocalProxyService.instance.getChildProxyUrl(resolved, parentUrl: baseUri, headers: headers, options: proxyOptions)}"';
               },
             );
             if (audioEmitted == 0) {
@@ -4794,8 +4888,9 @@ class PlayerController extends Notifier<PlayerState> {
         if (t.isNotEmpty && !t.startsWith('#')) {
           final resolved = baseUri.resolve(t).toString();
           result.add(
-            LocalProxyService.instance.getProxyUrl(
+            LocalProxyService.instance.getChildProxyUrl(
               resolved,
+              parentUrl: baseUri,
               headers: headers,
               options: proxyOptions,
             ),
@@ -4807,14 +4902,14 @@ class PlayerController extends Notifier<PlayerState> {
       }
 
       if (kDebugMode) {
-        debugPrint(
+        _debugPrint(
           '[PLAYER] Simplified HLS master: kept ${kept.length}/${allAudio.length} audio tracks',
         );
       }
       return result.join('\n');
     } catch (e) {
       if (kDebugMode) {
-        debugPrint('[PLAYER] _buildSimplifiedMasterPlaylist error: $e');
+        _debugPrint('[PLAYER] _buildSimplifiedMasterPlaylist error: $e');
       }
       return null;
     }
@@ -4829,13 +4924,13 @@ class PlayerController extends Notifier<PlayerState> {
   }) async {
     try {
       if (kDebugMode) {
-        debugPrint('[DRM] Fetching ClearKey license from $licenseUrl');
+        _debugPrint('[DRM] Fetching ClearKey license from $licenseUrl');
       }
       final response = await http.get(Uri.parse(licenseUrl), headers: headers);
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
         if (kDebugMode) {
-          debugPrint('[DRM] License server returned ${response.statusCode}');
+          _debugPrint('[DRM] License server returned ${response.statusCode}');
         }
         return null;
       }
@@ -4843,7 +4938,7 @@ class PlayerController extends Notifier<PlayerState> {
       final body = jsonDecode(response.body) as Map<String, dynamic>;
       final keys = body['keys'] as List<dynamic>?;
       if (keys == null || keys.isEmpty) {
-        if (kDebugMode) debugPrint('[DRM] No keys array in license response');
+        if (kDebugMode) _debugPrint('[DRM] No keys array in license response');
         return null;
       }
 
@@ -4863,7 +4958,7 @@ class PlayerController extends Notifier<PlayerState> {
 
       return null;
     } catch (e) {
-      if (kDebugMode) debugPrint('[DRM] Error fetching/parsing license: $e');
+      if (kDebugMode) _debugPrint('[DRM] Error fetching/parsing license: $e');
       return null;
     }
   }
@@ -4880,7 +4975,7 @@ class PlayerController extends Notifier<PlayerState> {
       return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
     } catch (e) {
       if (kDebugMode) {
-        debugPrint('[DRM] base64url decode failed for "$base64url": $e');
+        _debugPrint('[DRM] base64url decode failed for "$base64url": $e');
       }
       return null;
     }
@@ -4956,7 +5051,7 @@ class PlayerController extends Notifier<PlayerState> {
         controller.seekTo(targetMs);
         return targetMs;
       } catch (e) {
-        if (kDebugMode) debugPrint("ExoPlayer seek failed: $e");
+        if (kDebugMode) _debugPrint("ExoPlayer seek failed: $e");
       }
       return null;
     }
@@ -4979,7 +5074,7 @@ class PlayerController extends Notifier<PlayerState> {
       return targetMs;
     } on TimeoutException catch (e) {
       if (kDebugMode) {
-        debugPrint("Timeout waiting for duration: $e");
+        _debugPrint("Timeout waiting for duration: $e");
       }
 
       // Best-effort fallback: some streams can seek before duration is reported.
@@ -4989,12 +5084,12 @@ class PlayerController extends Notifier<PlayerState> {
         return position;
       } catch (seekError) {
         if (kDebugMode) {
-          debugPrint("Fallback seek failed: $seekError");
+          _debugPrint("Fallback seek failed: $seekError");
         }
       }
     } catch (e) {
       if (kDebugMode) {
-        debugPrint("Seek failed: $e");
+        _debugPrint("Seek failed: $e");
       }
     }
     return null;
@@ -5050,7 +5145,7 @@ class PlayerController extends Notifier<PlayerState> {
         restored = true;
       }
     } catch (e) {
-      if (kDebugMode) debugPrint('Resume seek failed: $e');
+      if (kDebugMode) _debugPrint('Resume seek failed: $e');
     } finally {
       if (_isCurrentSourceSession(sourceSessionId)) {
         _pendingResumeSeekPosition = null;
@@ -5091,14 +5186,15 @@ class PlayerController extends Notifier<PlayerState> {
     final history = ref.read(historyRepositoryProvider);
     final episode = _resolveCurrentEpisode();
     if (isSeries) {
-      return history.getEpisodePosition(
-        _currentProgressUrl,
-        mainUrl: _item.url,
+      return historyPositionForItem(
+        history,
+        _item,
+        episodeUrl: _currentProgressUrl,
         season: episode?.season,
         episode: episode?.episode,
       );
     }
-    return history.getPosition(_item.url);
+    return historyPositionForItem(history, _item);
   }
 
   /// [persist] = true marks this as a user-driven speed change that should

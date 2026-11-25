@@ -527,6 +527,8 @@ void main() {
         await tester.pumpWidget(const SizedBox.shrink());
         container.dispose();
         await manager.dispose();
+        // The cache manager defers cleanup after reading artwork metadata.
+        await tester.pump(const Duration(seconds: 10));
         PathProviderPlatform.instance = previousPaths;
         await tester.runAsync(() => root.delete(recursive: true));
       }

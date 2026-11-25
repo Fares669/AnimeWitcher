@@ -1,5 +1,7 @@
 import '../domain/entity/multimedia_item.dart';
 
+typedef LibraryMembership = ({LibraryCategory? category, bool favorite});
+
 enum LibraryCategory {
   favorite('favorite'),
   watching('watching'),
@@ -21,14 +23,34 @@ enum LibraryCategory {
     LibraryCategory.notInterested,
   ];
 
+  static const List<LibraryCategory> witanimeValues = <LibraryCategory>[
+    LibraryCategory.favorite,
+    LibraryCategory.watching,
+    LibraryCategory.planToWatch,
+    LibraryCategory.completed,
+  ];
+
+  static const List<LibraryCategory> witanimePrimaryValues = <LibraryCategory>[
+    LibraryCategory.watching,
+    LibraryCategory.planToWatch,
+    LibraryCategory.completed,
+  ];
+
+  static List<LibraryCategory> valuesForCatalog({required bool witanimeAnime}) =>
+      witanimeAnime ? witanimeValues : LibraryCategory.values;
+
   /// List-assignment options for the details overflow menu.
   ///
-  /// Hides [watching] when the title has not aired yet, and hides
-  /// [completed] unless the title is finished. Existing watching entries
-  /// are left in place; the option is simply not offered.
+  /// Hides [watching] when the title has not aired yet, hides [completed]
+  /// unless the title is finished, and hides AnimeWitcher-only lists for
+  /// Witanime anime/movies.
   static List<LibraryCategory> assignmentValuesFor(MultimediaItem item) {
+    final isWitanimeAnime =
+        item.provider == 'witanime' &&
+        item.contentType != MultimediaContentType.manga;
+    final candidates = isWitanimeAnime ? witanimePrimaryValues : primaryValues;
     return <LibraryCategory>[
-      for (final category in primaryValues)
+      for (final category in candidates)
         if (category.isAssignableTo(item)) category,
     ];
   }

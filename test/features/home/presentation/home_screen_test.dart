@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -5,11 +6,17 @@ import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
+import 'package:animewitcher/core/extensions/providers/witanime_provider.dart';
 import 'package:animewitcher/core/providers/device_info_provider.dart';
+import 'package:animewitcher/core/storage/settings_repository.dart';
+import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/home/presentation/home_screen.dart';
+import 'package:animewitcher/features/home/presentation/latest_episodes_provider.dart';
 import 'package:animewitcher/features/home/presentation/widgets/media_horizontal_list.dart';
 import 'package:animewitcher/features/library/presentation/history_provider.dart';
 import 'package:animewitcher/features/search/data/mal_rankings.dart';
+import 'package:animewitcher/features/settings/presentation/general_settings_provider.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -20,6 +27,7 @@ import 'package:visibility_detector/visibility_detector.dart';
 
 import '../../../support/test_fonts.dart';
 import '../../../support/debug_shots.dart';
+import '../../../support/memory_storage_service.dart';
 
 const _brokenChapterId = 'RxOiaLyVTBIUObsclHrw';
 
@@ -32,7 +40,9 @@ MultimediaItem _item(String title, {String? catalogType}) {
   );
 }
 
-class _FakeHomeSource extends AnimeWitcherProvider {
+class _FakeHomeSource extends AnimeWitcherNativeProvider {
+  _FakeHomeSource() : super(Dio(), SettingsRepository(MemoryStorageService()));
+
   @override
   String get packageName => 'fake.home';
 
@@ -55,6 +65,12 @@ class _FakeHomeSource extends AnimeWitcherProvider {
   };
 
   @override
+  Future<ProviderNewsPage> getHomeNewsPage({
+    int offset = 0,
+    int limit = 10,
+  }) async => const ProviderNewsPage(items: [], nextOffset: 0, hasMore: false);
+
+  @override
   Future<MangaLatestChapterPage> getLatestMangaPage({
     int offset = 0,
     int limit = 30,
@@ -65,7 +81,7 @@ class _FakeHomeSource extends AnimeWitcherProvider {
           manga: MultimediaItem(
             title: 'Latest Manga',
             url: 'https://animewitcher.com/manga/latest',
-            posterUrl: '',
+            posterUrl: 'https://example.test/latest-manga.jpg',
             contentType: MultimediaContentType.manga,
             provider: packageName,
           ),
@@ -95,6 +111,12 @@ class _FakeHomeSource extends AnimeWitcherProvider {
       ],
       'آخر الأعمال المضافة': <MultimediaItem>[_item('Added Show')],
     };
+  }
+
+  @override
+  Future<MapEntry<String, List<MultimediaItem>>> getLatestHomeEpisodes() async {
+    const title = 'الحلقات الجديدة';
+    return MapEntry(title, (await getHome())[title]!);
   }
 
   @override
@@ -129,10 +151,20 @@ Widget _app({
   bool emptyRankings = false,
   int rankingOffset = 10,
   ProviderMediaPage Function(MalRanking)? loadRanking,
+  AnimeWitcherProvider? secondarySource,
 }) {
+  final source = _FakeHomeSource();
+  final storage = MemoryStorageService();
   return ProviderScope(
     overrides: [
-      activeProviderProvider.overrideWithValue(_FakeHomeSource()),
+      storageServiceProvider.overrideWithValue(storage),
+      extensionManagerProvider.overrideWithValue(<AnimeWitcherProvider>[
+        source,
+        ?secondarySource,
+      ]),
+      if (secondarySource == null)
+        activeProviderProvider.overrideWithValue(source),
+      mangaHasOwnTabProvider.overrideWithValue(false),
       continueWatchingProvider.overrideWith(_EmptyContinueWatching.new),
       homeMalRankingPageProvider.overrideWith(
         (ref, ranking) async =>
@@ -182,6 +214,91 @@ void main() {
 
   tearDown(() {
     VisibilityDetectorController.instance.notifyNow();
+  });
+
+  testWidgets('optional latest episodes follow the active rail and source', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 3000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    var home = Completer<String>();
+    final requests = <String>[];
+    final witanime = WitanimeProvider((uri, {cancelToken}) async {
+      requests.add(uri.path.isEmpty ? '/' : uri.path);
+      return uri.path == '/new-episodes'
+          ? '<main><a href="/anime/other"><h3>Another show</h3></a></main>'
+          : home.future;
+    });
+    const nativeTitle = 'الحلقات الجديدة';
+    const witTitle = 'أحدث الحلقات';
+    const witSecondaryTitle = 'أحدث الحلقات (Witanime)';
+    const nativeSecondaryTitle = 'أحدث الحلقات (Fake)';
+    const html =
+        '<main><section><h2>أحدث الحلقات</h2>'
+        '<a href="/watch/new/7"><h3>Wit episode</h3></a></section></main>';
+
+    await tester.pumpWidget(_app(secondarySource: witanime));
+    await tester.pumpAndSettle();
+    expect(find.text(nativeTitle), findsOneWidget);
+    expect(find.text(witSecondaryTitle), findsNothing);
+    expect(requests, isEmpty);
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(HomeScreen)),
+    );
+    final settings = container.read(latestEpisodesSettingsProvider.notifier);
+    final native = container.read(activeProviderProvider)!;
+    await settings.setEnabled(witanime.packageName, true);
+    await tester.pumpAndSettle();
+    expect(requests, ['/']);
+    expect(find.text(nativeTitle), findsOneWidget);
+    expect(find.text(witSecondaryTitle), findsNothing);
+
+    home.completeError(StateError('Witanime unavailable'));
+    await tester.pumpAndSettle();
+    expect(find.text(nativeTitle), findsOneWidget);
+    expect(find.text(witSecondaryTitle), findsNothing);
+
+    home = Completer<String>()..complete(html);
+    await tester
+        .widget<RefreshIndicator>(find.byType(RefreshIndicator))
+        .onRefresh();
+    await tester.pumpAndSettle();
+    final titles = tester
+        .widgetList<MediaHorizontalList>(find.byType(MediaHorizontalList))
+        .map((rail) => rail.title);
+    expect(titles.take(2), [nativeTitle, witSecondaryTitle]);
+    final secondaryRail = tester.widget<MediaHorizontalList>(
+      find.widgetWithText(MediaHorizontalList, witSecondaryTitle),
+    );
+    final item = secondaryRail.mediaList.single;
+    expect(item.provider, WitanimeProvider.id);
+    expect(
+      item.syncData?[WitanimeProvider.watchUrlKey],
+      endsWith('/watch/new/7'),
+    );
+    final page = await secondaryRail.loadViewAllPage!(0);
+    expect(page.items.single.title, 'Another show');
+    expect(requests.last, '/new-episodes');
+
+    await container.read(activeProviderProvider.notifier).set(witanime);
+    await tester.pumpAndSettle();
+    expect(find.text(witTitle), findsOneWidget);
+    expect(find.text(witSecondaryTitle), findsNothing);
+    expect(find.text(nativeTitle), findsNothing);
+
+    await settings.setEnabled(native.packageName, true);
+    await tester.pumpAndSettle();
+    final nativeSecondary = find.text(nativeSecondaryTitle);
+    expect(nativeSecondary, findsOneWidget);
+    expect(
+      tester.getTopLeft(nativeSecondary).dy,
+      greaterThan(tester.getTopLeft(find.text(witTitle)).dy),
+    );
+    await settings.setEnabled(native.packageName, false);
+    await tester.pumpAndSettle();
+    expect(nativeSecondary, findsNothing);
+    expect(find.text(witTitle), findsOneWidget);
   });
 
   testWidgets(

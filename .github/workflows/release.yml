@@ -84,6 +84,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
+          flutter-version: 3.50.1
 
       # Gradle downloads its own distribution before it will build anything,
       # and with nothing cached that is a fresh ~200MB fetch on every run. A
@@ -104,7 +105,7 @@ jobs:
         run: |
           flutter pub get
           flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
+          dart run build_runner build
 
       - name: Decode Keystore
         if: env.ANDROID_KEYSTORE_BASE64 != ''
@@ -116,17 +117,13 @@ jobs:
           echo "storeFile=release.jks" >> android/key.properties
 
       - name: Generate dart-defines file
-        shell: bash
-        run: |
-          cat > dart-defines.json << 'JSON_EOF'
-          {
-            "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",
-            "MAL_CLIENT_SECRET": "${{ secrets.MAL_CLIENT_SECRET }}",
-            "ANILIST_CLIENT_ID": "${{ secrets.ANILIST_CLIENT_ID }}",
-            "ANIMEWITCHER_FIREBASE_PROJECT_ID": "${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}",
-            "ANIMEWITCHER_FIREBASE_API_KEY": "${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}"
-          }
-          JSON_EOF
+        env:
+          MAL_CLIENT_ID: ${{ secrets.MAL_CLIENT_ID }}
+          MAL_CLIENT_SECRET: ${{ secrets.MAL_CLIENT_SECRET }}
+          ANILIST_CLIENT_ID: ${{ secrets.ANILIST_CLIENT_ID }}
+          ANIMEWITCHER_FIREBASE_PROJECT_ID: ${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}
+          ANIMEWITCHER_FIREBASE_API_KEY: ${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}
+        run: python3 scripts/write_dart_defines.py
 
       # One APK that installs on any device. The per-ABI splits only saved a
       # download at the cost of making the reader pick their own CPU, and the
@@ -166,28 +163,25 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
+          flutter-version: 3.50.1
           
       - name: Install Dependencies
         run: |
           flutter pub get
           flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
+          dart run build_runner build
 
       - name: Prepare media_kit iOS Headers
         run: bash scripts/prepare_media_kit_ios_headers.sh
 
       - name: Generate dart-defines file
-        shell: bash
-        run: |
-          cat > dart-defines.json << 'JSON_EOF'
-          {
-            "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",
-            "MAL_CLIENT_SECRET": "${{ secrets.MAL_CLIENT_SECRET }}",
-            "ANILIST_CLIENT_ID": "${{ secrets.ANILIST_CLIENT_ID }}",
-            "ANIMEWITCHER_FIREBASE_PROJECT_ID": "${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}",
-            "ANIMEWITCHER_FIREBASE_API_KEY": "${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}"
-          }
-          JSON_EOF
+        env:
+          MAL_CLIENT_ID: ${{ secrets.MAL_CLIENT_ID }}
+          MAL_CLIENT_SECRET: ${{ secrets.MAL_CLIENT_SECRET }}
+          ANILIST_CLIENT_ID: ${{ secrets.ANILIST_CLIENT_ID }}
+          ANIMEWITCHER_FIREBASE_PROJECT_ID: ${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}
+          ANIMEWITCHER_FIREBASE_API_KEY: ${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}
+        run: python3 scripts/write_dart_defines.py
 
       - name: Build iOS (No Codesign)
         run: |
@@ -231,25 +225,22 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
+          flutter-version: 3.50.1
 
       - name: Install Dependencies
         run: |
           flutter pub get
           flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
+          dart run build_runner build
 
       - name: Generate dart-defines file
-        shell: bash
-        run: |
-          cat > dart-defines.json << 'JSON_EOF'
-          {
-            "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",
-            "MAL_CLIENT_SECRET": "${{ secrets.MAL_CLIENT_SECRET }}",
-            "ANILIST_CLIENT_ID": "${{ secrets.ANILIST_CLIENT_ID }}",
-            "ANIMEWITCHER_FIREBASE_PROJECT_ID": "${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}",
-            "ANIMEWITCHER_FIREBASE_API_KEY": "${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}"
-          }
-          JSON_EOF
+        env:
+          MAL_CLIENT_ID: ${{ secrets.MAL_CLIENT_ID }}
+          MAL_CLIENT_SECRET: ${{ secrets.MAL_CLIENT_SECRET }}
+          ANILIST_CLIENT_ID: ${{ secrets.ANILIST_CLIENT_ID }}
+          ANIMEWITCHER_FIREBASE_PROJECT_ID: ${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}
+          ANIMEWITCHER_FIREBASE_API_KEY: ${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}
+        run: python3 scripts/write_dart_defines.py
 
       # Build for a single architecture to reduce app size from ~430MB (universal) to ~270MB
       - name: Build macOS (${{ matrix.arch }})
@@ -342,12 +333,13 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
+          flutter-version: 3.50.1
 
       - name: Install Dependencies
         run: |
           flutter pub get
           flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
+          dart run build_runner build
 
       - name: Download libmpv-2.dll
         shell: pwsh
@@ -381,17 +373,13 @@ jobs:
           Write-Host "Using downloaded libmpv: $($dll.FullName)"
 
       - name: Generate dart-defines file
-        shell: bash
-        run: |
-          cat > dart-defines.json << 'JSON_EOF'
-          {
-            "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",
-            "MAL_CLIENT_SECRET": "${{ secrets.MAL_CLIENT_SECRET }}",
-            "ANILIST_CLIENT_ID": "${{ secrets.ANILIST_CLIENT_ID }}",
-            "ANIMEWITCHER_FIREBASE_PROJECT_ID": "${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}",
-            "ANIMEWITCHER_FIREBASE_API_KEY": "${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}"
-          }
-          JSON_EOF
+        env:
+          MAL_CLIENT_ID: ${{ secrets.MAL_CLIENT_ID }}
+          MAL_CLIENT_SECRET: ${{ secrets.MAL_CLIENT_SECRET }}
+          ANILIST_CLIENT_ID: ${{ secrets.ANILIST_CLIENT_ID }}
+          ANIMEWITCHER_FIREBASE_PROJECT_ID: ${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}
+          ANIMEWITCHER_FIREBASE_API_KEY: ${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}
+        run: python3 scripts/write_dart_defines.py
 
       - name: Build Windows
         run: flutter build windows --release --dart-define-from-file=dart-defines.json
@@ -471,6 +459,7 @@ jobs:
         if: ${{ matrix.arch != 'arm64' }}
         with:
           channel: 'stable'
+          flutter-version: 3.50.1
       - name: Setup Flutter (ARM64 Linux)
         if: ${{ matrix.arch == 'arm64' }}
         run: |
@@ -490,20 +479,16 @@ jobs:
           flutter config --enable-linux-desktop
           flutter pub get
           flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
+          dart run build_runner build
 
       - name: Generate dart-defines file
-        shell: bash
-        run: |
-          cat > dart-defines.json << 'JSON_EOF'
-          {
-            "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",
-            "MAL_CLIENT_SECRET": "${{ secrets.MAL_CLIENT_SECRET }}",
-            "ANILIST_CLIENT_ID": "${{ secrets.ANILIST_CLIENT_ID }}",
-            "ANIMEWITCHER_FIREBASE_PROJECT_ID": "${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}",
-            "ANIMEWITCHER_FIREBASE_API_KEY": "${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}"
-          }
-          JSON_EOF
+        env:
+          MAL_CLIENT_ID: ${{ secrets.MAL_CLIENT_ID }}
+          MAL_CLIENT_SECRET: ${{ secrets.MAL_CLIENT_SECRET }}
+          ANILIST_CLIENT_ID: ${{ secrets.ANILIST_CLIENT_ID }}
+          ANIMEWITCHER_FIREBASE_PROJECT_ID: ${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}
+          ANIMEWITCHER_FIREBASE_API_KEY: ${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}
+        run: python3 scripts/write_dart_defines.py
 
       - name: Build Linux Packages
         run: |

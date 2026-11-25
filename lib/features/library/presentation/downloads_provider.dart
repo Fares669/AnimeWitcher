@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
@@ -6,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/entity/manga.dart';
+import '../../../core/account/account_providers.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/services/download_concurrency.dart';
 import '../../../core/services/download_v2/download_artwork_store_v2.dart';
@@ -64,8 +66,16 @@ class DownloadItem {
   String get id => task.taskId;
 }
 
+bool sameDownloadProvider(MultimediaItem a, MultimediaItem b) =>
+    downloadProviderScopeV2(a.provider) == downloadProviderScopeV2(b.provider);
+
 bool downloadsPointAtSameTarget(DownloadItem a, DownloadItem b) {
   if (identical(a, b) || a.id == b.id) return true;
+  if (a.mediaKind == DownloadMediaKind.videoEpisode &&
+      b.mediaKind == DownloadMediaKind.videoEpisode &&
+      !sameDownloadProvider(a.item, b.item)) {
+    return false;
+  }
   final logicalA = a.logicalId?.trim();
   final logicalB = b.logicalId?.trim();
   if (logicalA != null &&
@@ -162,7 +172,10 @@ DownloadItem? completedEpisodeDownload(
         item.mediaKind != DownloadMediaKind.videoEpisode) {
       continue;
     }
-    if (parentUrl.isNotEmpty && item.item.url.trim() != parentUrl) continue;
+    if (!sameDownloadProvider(item.item, parentItem)) continue;
+    if (parentUrl.isNotEmpty && item.item.url.trim() != parentUrl) {
+      continue;
+    }
     if (episodeUrl.isNotEmpty &&
         (item.trackingUrl.trim() == episodeUrl ||
             item.episode?.url.trim() == episodeUrl)) {
@@ -238,9 +251,17 @@ List<List<DownloadItem>> groupDownloadsByEpisodeOrFile(
       unionKey(byLogicalId, logicalId, i);
       continue;
     }
-    unionKey(byTracking, items[i].trackingUrl.trim(), i);
-    unionKey(byTracking, items[i].episode?.url.trim() ?? '', i);
-    unionKey(byFile, items[i].destinationPath.trim(), i);
+    String scoped(String value) {
+      if (value.isEmpty) return '';
+      final scope = items[i].mediaKind == DownloadMediaKind.videoEpisode
+          ? downloadProviderScopeV2(items[i].item.provider)
+          : null;
+      return jsonEncode([scope, value]);
+    }
+
+    unionKey(byTracking, scoped(items[i].trackingUrl.trim()), i);
+    unionKey(byTracking, scoped(items[i].episode?.url.trim() ?? ''), i);
+    unionKey(byFile, scoped(items[i].destinationPath.trim()), i);
   }
 
   final groups = <int, List<DownloadItem>>{};
@@ -327,6 +348,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
 
   @override
   Future<List<DownloadItem>> build() async {
+    ref.watch(accountDataRevisionProvider);
     final manager = ref.read(downloadManagerV2Provider);
     final store = ref.read(logicalDownloadStoreV2Provider);
     final storage = ref.read(storageServiceProvider);
@@ -355,13 +377,20 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     // Refresh live connection counts from memory, without polling disk or
     // changing the frequency of progress and speed measurements.
     _connectionRefreshTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-      if (ref.mounted &&
-          _records.any(
-            (record) =>
-                record.completedAtMillis == null &&
-                record.intent != DownloadUserIntent.canceled,
-          )) {
-        _refreshPresentationState();
+      if (!ref.mounted) return;
+      final visible = state.value;
+      if (visible == null) return;
+      for (final row in visible) {
+        final logicalId = row.logicalId;
+        if (logicalId == null) continue;
+        final observed = manager.snapshotFor(DownloadLogicalId(logicalId));
+        final connections = observed?.taskId == row.id
+            ? observed?.activeConnections ?? 0
+            : 0;
+        if (connections != row.activeConnections) {
+          _refreshPresentationState();
+          break;
+        }
       }
     });
     // Keep a much slower durable reconciliation as a lifecycle/race safety net.
@@ -438,6 +467,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
 
     final items = <DownloadItem>[];
     for (final record in _records) {
+      if (!manager.canAccessSourceDescriptor(record.sourceDescriptor)) continue;
       final observed = manager.snapshotFor(record.logicalId);
       final snapshot = observed?.taskId == record.taskId ? observed : null;
       // A timed-out cancellation still owns its exact native writer. Keep its
@@ -537,6 +567,15 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       return true;
     }
     final current = List<DownloadItem>.from(state.value ?? items);
+    if (items.any(
+      (requested) => !current.any(
+        (visible) =>
+            visible.id == requested.id &&
+            visible.logicalId == requested.logicalId,
+      ),
+    )) {
+      return false;
+    }
     final toRemove = <String, DownloadItem>{};
 
     for (final requested in items) {
@@ -570,10 +609,26 @@ class DownloadsNotifier extends _$DownloadsNotifier {
         orderedItems.map((item) async {
           final logical = item.logicalId?.trim();
           if (logical != null && logical.isNotEmpty) {
+            final currentRecord = await ref
+                .read(logicalDownloadStoreV2Provider)
+                .get(DownloadLogicalId(logical));
+            if (currentRecord == null ||
+                !manager.canAccessSourceDescriptor(
+                  currentRecord.sourceDescriptor,
+                )) {
+              return;
+            }
+            if (currentRecord.taskId != item.id) {
+              droppedIds.add(item.id);
+              return;
+            }
             // Capture the deleted incarnation before releasing the manager queue.
             // A re-download can already have replaced this logical-key metadata
             // when delete returns, including a newly reused generation-one task.
-            await manager.delete(DownloadLogicalId(logical));
+            await manager.delete(
+              DownloadLogicalId(logical),
+              expectedTaskId: item.id,
+            );
             for (final entry in metadata.entries) {
               if ((entry.value['logicalId'] as String?)?.trim() == logical) {
                 await storage.removeDownloadMetadataIfUnchanged(
@@ -618,7 +673,16 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     final item = state.value?.where((item) => item.id == taskId).firstOrNull;
     final logical = item?.logicalId?.trim();
     if (logical == null || logical.isEmpty) return;
-    await ref.read(downloadManagerV2Provider).pause(DownloadLogicalId(logical));
+    final record = await ref
+        .read(logicalDownloadStoreV2Provider)
+        .get(DownloadLogicalId(logical));
+    if (record == null || record.taskId != taskId) {
+      await _reloadDurableState();
+      return;
+    }
+    await ref
+        .read(downloadManagerV2Provider)
+        .pause(DownloadLogicalId(logical), expectedTaskId: taskId);
     await _reloadDurableState();
   }
 
@@ -629,7 +693,11 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     final record = await ref
         .read(logicalDownloadStoreV2Provider)
         .get(DownloadLogicalId(logical));
-    if (record != null && record.intent == DownloadUserIntent.canceled) {
+    if (record == null || record.taskId != taskId) {
+      await _reloadDurableState();
+      return;
+    }
+    if (record.intent == DownloadUserIntent.canceled) {
       if (record.taskId == taskId && _isDownloadCleanupPending(record)) {
         await removeDownload(item!);
       }
@@ -637,7 +705,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     }
     await ref
         .read(downloadManagerV2Provider)
-        .restart(DownloadLogicalId(logical));
+        .retry(DownloadLogicalId(logical), expectedTaskId: taskId);
     await _reloadDurableState();
   }
 
@@ -645,9 +713,16 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     final item = state.value?.where((item) => item.id == taskId).firstOrNull;
     final logical = item?.logicalId?.trim();
     if (logical == null || logical.isEmpty) return;
+    final record = await ref
+        .read(logicalDownloadStoreV2Provider)
+        .get(DownloadLogicalId(logical));
+    if (record == null || record.taskId != taskId) {
+      await _reloadDurableState();
+      return;
+    }
     await ref
         .read(downloadManagerV2Provider)
-        .resume(DownloadLogicalId(logical));
+        .resume(DownloadLogicalId(logical), expectedTaskId: taskId);
     await _reloadDurableState();
   }
 }

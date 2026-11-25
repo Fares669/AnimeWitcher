@@ -2,7 +2,7 @@
 # Validate every seam before writing; never silently patch a changed upstream.
 def patch_background_downloader_continued_session(plugin_root)
   version = File.read(File.join(plugin_root, 'pubspec.yaml'))[/^version:\s*(\S+)/, 1]
-  raise 'Continued download session patch requires background_downloader 9.6.5' unless version == '9.6.5'
+  raise 'Continued download session patch requires background_downloader 9.6.6' unless version == '9.6.6'
 
   directory = File.join(plugin_root, 'ios/background_downloader/Sources/background_downloader')
   files = %w[BDPlugin.swift UrlSessionDelegate.swift WiFi.swift HoldingQueue.swift]

@@ -11,8 +11,11 @@ import 'package:animewitcher/core/services/notification_service.dart';
 import 'package:animewitcher/core/storage/secure_token_storage.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/core/theme/app_theme.dart';
+import 'package:animewitcher/features/comments/presentation/animewitcher_comments_screen.dart';
 import 'package:animewitcher/features/details/presentation/adult_content_warning.dart';
 import 'package:animewitcher/features/details/presentation/widgets/details_ratings_row.dart';
+import 'package:animewitcher/features/details/presentation/widgets/details_rating_actions.dart';
+import 'package:animewitcher/features/details/presentation/details_ratings.dart';
 import 'package:animewitcher/features/details/presentation/widgets/scale_rating_bar.dart';
 import 'package:animewitcher/features/details/presentation/widgets/premium_details_widgets.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
@@ -25,19 +28,19 @@ import '../../../support/test_fonts.dart';
 import '../../../support/debug_shots.dart';
 
 class _FakeAccountService extends AnimeWitcherAccountService {
-  _FakeAccountService({
-    this.signedIn = false,
-    this.userRating,
-  }) : super(
-         storage: StorageService(),
-         secureStorage: SecureTokenStorage(StorageService()),
-       );
+  _FakeAccountService({this.signedIn = false, this.userRating})
+    : super(
+        storage: StorageService(),
+        secureStorage: SecureTokenStorage(StorageService()),
+      );
 
   final bool signedIn;
   int? userRating;
   final bool reviewsClosedLive = false;
   final List<String> writes = <String>[];
   final List<String> deletes = <String>[];
+  final List<String> reads = <String>[];
+  final List<String> reviewChecks = <String>[];
 
   @override
   bool get isSignedIn => signedIn;
@@ -55,7 +58,10 @@ class _FakeAccountService extends AnimeWitcherAccountService {
   );
 
   @override
-  Future<int?> loadAnimeUserRating(String animeId) async => userRating;
+  Future<int?> loadAnimeUserRating(String animeId) async {
+    reads.add(animeId);
+    return userRating;
+  }
 
   @override
   Future<int?> saveAnimeUserRating(String animeId, int rate) async {
@@ -71,7 +77,10 @@ class _FakeAccountService extends AnimeWitcherAccountService {
   }
 
   @override
-  Future<bool> isAnimeReviewsClosed(String animeId) async => reviewsClosedLive;
+  Future<bool> isAnimeReviewsClosed(String animeId) async {
+    reviewChecks.add(animeId);
+    return reviewsClosedLive;
+  }
 
   @override
   Future<AnimeWitcherCommentPage> loadComments(
@@ -96,6 +105,7 @@ class _FixedAccountController extends AnimeWitcherAccountController {
 }
 
 MultimediaItem _item({
+  String? provider,
   List<String>? tags,
   String? contentRating,
   Map<String, String>? syncData,
@@ -107,6 +117,7 @@ MultimediaItem _item({
     title: 'تجريبي',
     url: 'https://animewitcher.com/anime/test-anime',
     posterUrl: '',
+    provider: provider,
     tags: tags,
     contentRating: contentRating,
     syncData: syncData,
@@ -432,7 +443,9 @@ void main() {
     expect((badgeWidget.decoration as BoxDecoration).color, kMalBadgeBlue);
   });
 
-  testWidgets('mobile actions-only rating card hides score columns', (tester) async {
+  testWidgets('mobile actions-only rating card hides score columns', (
+    tester,
+  ) async {
     await _pumpStack(
       tester,
       item: _item(syncData: _ratedSync()),
@@ -446,7 +459,9 @@ void main() {
     expect(find.byKey(kDetailsRatingsReviewsButtonKey), findsOneWidget);
   });
 
-  testWidgets('compact summary uses the IMDb badge on the right', (tester) async {
+  testWidgets('compact summary uses the IMDb badge on the right', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       _app(
         service: _FakeAccountService(),
@@ -705,9 +720,8 @@ void main() {
         );
         final image = await boundary.toImage(pixelRatio: 2);
         final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-        File(
-          '${artifacts.path}/$name.png',
-        ).writeAsBytesSync(bytes!.buffer.asUint8List());
+        File('${artifacts.path}/$name.png')
+            .writeAsBytesSync(bytes!.buffer.asUint8List());
       });
     }
 
@@ -763,9 +777,8 @@ void main() {
       );
       final image = await boundary.toImage(pixelRatio: 2);
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-      File(
-        '${artifacts.path}/details_ratings_after_user_rates.png',
-      ).writeAsBytesSync(bytes!.buffer.asUint8List());
+      File('${artifacts.path}/details_ratings_after_user_rates.png')
+          .writeAsBytesSync(bytes!.buffer.asUint8List());
     });
 
     await tester.tap(find.byKey(kDetailsRatingsRateButtonKey));
@@ -777,9 +790,8 @@ void main() {
       );
       final image = await boundary.toImage(pixelRatio: 2);
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-      File(
-        '${artifacts.path}/details_rate_dialog.png',
-      ).writeAsBytesSync(bytes!.buffer.asUint8List());
+      File('${artifacts.path}/details_rate_dialog.png')
+          .writeAsBytesSync(bytes!.buffer.asUint8List());
     });
   });
 }

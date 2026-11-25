@@ -221,6 +221,81 @@ query ($search: String) {
     return variants;
   }
 
+  static int? parsePositiveId(String? raw) {
+    final value = raw == null ? null : int.tryParse(raw.trim());
+    return (value != null && value > 0) ? value : null;
+  }
+
+  /// Resolves a MyAnimeList id from direct ids, AniList/AniDB mappings, then titles.
+  Future<int?> resolveForItem({
+    Map<String, String>? syncData,
+    String? title,
+    List<String> alternativeTitles = const <String>[],
+  }) async {
+    final direct =
+        parsePositiveId(syncData?['malId']) ??
+        parsePositiveId(syncData?['mal_id']) ??
+        parsePositiveId(syncData?['awMalId']);
+    if (direct != null) return direct;
+
+    final aniListId =
+        parsePositiveId(syncData?['anilist']) ??
+        parsePositiveId(syncData?['anilistId']) ??
+        parsePositiveId(syncData?['anilist_id']);
+    final aniDbId =
+        parsePositiveId(syncData?['anidbId']) ??
+        parsePositiveId(syncData?['anidb_id']);
+    final fromExternal = await resolveExternalIds(
+      aniListId: aniListId,
+      aniDbId: aniDbId,
+    );
+    if (fromExternal != null) return fromExternal;
+
+    final seen = <String>{};
+    for (final raw in <String?>[title, ...alternativeTitles]) {
+      final candidate = raw?.trim() ?? '';
+      if (candidate.isEmpty || !seen.add(candidate.toLowerCase())) continue;
+      final resolved = await resolve(candidate);
+      if (resolved != null) return resolved;
+    }
+    return null;
+  }
+
+  /// Resolves a MyAnimeList id from AniList or AniDB ids via ani.zip.
+  Future<int?> resolveExternalIds({int? aniListId, int? aniDbId}) async {
+    for (final entry in <(String param, String prefix, int? id)>[
+      ('anilist_id', 'anilist', aniListId),
+      ('anidb_id', 'anidb', aniDbId),
+    ]) {
+      final id = entry.$3;
+      if (id == null || id <= 0) continue;
+      final cacheKey = '${entry.$2}:$id';
+      if (_cache.containsKey(cacheKey)) {
+        final hit = _cache[cacheKey];
+        if (hit != null) {
+          _cache.remove(cacheKey);
+          _cache[cacheKey] = hit;
+          return hit;
+        }
+        continue;
+      }
+      final stored = _readStored(cacheKey);
+      if (stored != null) {
+        _remember(cacheKey, stored);
+        return stored;
+      }
+      _sourceUnavailable = false;
+      final resolved = await _fromAniZipBy(entry.$1, id);
+      if (resolved != null) {
+        _remember(cacheKey, resolved);
+        await _store(cacheKey, resolved);
+        return resolved;
+      }
+      if (!_sourceUnavailable) _remember(cacheKey, null);
+    }
+    return null;
+  }
+
   Future<int?> resolve(String title) async {
     final search = normalizeTitle(title);
     if (search.isEmpty) return null;
@@ -316,7 +391,7 @@ query ($search: String) {
         // is how the id is reached while AniList's own API is refusing.
         final aniListId = MalIdParsers.kitsuAniListId(mappings.data);
         if (aniListId == null) return null;
-        return _fromAniZip(aniListId);
+        return _fromAniZipBy('anilist_id', aniListId);
       } on DioException catch (e) {
         _noteFailure(_kitsuEndpoint, e, 'Kitsu');
         final status = e.response?.statusCode ?? 0;
@@ -328,13 +403,13 @@ query ($search: String) {
     return null;
   }
 
-  /// ani.zip's mapping table, reached with an AniList id.
-  Future<int?> _fromAniZip(int aniListId) async {
-    if (_throttled(_aniZipEndpoint)) return null;
+  /// ani.zip's mapping table, reached with an AniList or AniDB id.
+  Future<int?> _fromAniZipBy(String paramName, int id) async {
+    if (id <= 0 || _throttled(_aniZipEndpoint)) return null;
     try {
       final response = await _dio.get<Map<String, dynamic>>(
         _aniZipEndpoint,
-        queryParameters: <String, dynamic>{'anilist_id': aniListId},
+        queryParameters: <String, dynamic>{paramName: id},
       );
       return MalIdParsers.aniZip(response.data);
     } on DioException catch (e) {

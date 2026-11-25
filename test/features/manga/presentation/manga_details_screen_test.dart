@@ -1,5 +1,12 @@
 import 'dart:io';
 
+import 'package:animewitcher/core/account/account_providers.dart';
+import 'package:animewitcher/core/account/animewitcher_account_service.dart';
+import 'package:animewitcher/core/storage/library_category.dart';
+import 'package:animewitcher/core/storage/secure_token_storage.dart';
+import 'package:animewitcher/features/library/presentation/library_media_kind.dart';
+import 'package:animewitcher/features/library/presentation/library_provider.dart';
+import 'package:animewitcher/features/library/presentation/library_state.dart';
 import 'package:animewitcher/features/manga/presentation/widgets/manga_chapter_row.dart';
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
@@ -179,12 +186,68 @@ final class _Manager extends ExtensionManager {
   List<AnimeWitcherProvider> build() => <AnimeWitcherProvider>[provider];
 }
 
+final class _MembershipAccount extends AnimeWitcherAccountService {
+  _MembershipAccount(StorageService storage)
+    : super(storage: storage, secureStorage: SecureTokenStorage(storage));
+
+  LibraryMembership membership = (
+    category: LibraryCategory.watching,
+    favorite: true,
+  );
+  int reads = 0;
+
+  @override
+  bool get isSignedIn => true;
+
+  @override
+  String get accountUid => 'manga-account';
+
+  @override
+  Future<LibraryMembership?> fetchMangaLibraryMembership(
+    MultimediaItem item,
+  ) async {
+    reads++;
+    return membership;
+  }
+
+  @override
+  Future<int?> loadMangaUserRating(String mangaId) async => null;
+}
+
+final class _MembershipLibrary extends Library {
+  @override
+  LibraryState build() =>
+      const LibraryEmpty(LibraryCategory.favorite, LibraryMediaKind.manga);
+
+  @override
+  bool isFavorite(String url, {String? providerId}) => false;
+
+  @override
+  LibraryCategory? itemCategory(
+    String url, {
+    String? providerId,
+    bool manga = false,
+  }) => null;
+
+  @override
+  Future<void> setFavorite(
+    MultimediaItem item,
+    bool favorite, {
+    LibraryMembership? membership,
+  }) async {}
+}
+
 Widget _app(
   AnimeWitcherProvider provider, {
   MangaReadingRepository? progressRepository,
+  _MembershipAccount? account,
 }) => ProviderScope(
   overrides: [
     extensionManagerProvider.overrideWith(() => _Manager(provider)),
+    if (account != null) ...[
+      animeWitcherAccountServiceProvider.overrideWithValue(account),
+      libraryProvider.overrideWith(_MembershipLibrary.new),
+    ],
     artworkFallbackServiceProvider.overrideWithValue(_NoArtwork()),
     storageServiceProvider.overrideWithValue(_MangaDetailsReadingStorage()),
     mangaReaderSettingsProvider.overrideWith(
@@ -238,6 +301,36 @@ void _usePhoneWindow(WidgetTester tester) {
 }
 
 void main() {
+  testWidgets('manga details refreshes server membership after reopening', (
+    tester,
+  ) async {
+    _usePhoneWindow(tester);
+    final provider = _MangaProvider();
+    final account = _MembershipAccount(_MangaDetailsReadingStorage());
+    await tester.pumpWidget(_app(provider, account: account));
+    await _pumpUntil(
+      tester,
+      () => find.text('أقرأها حاليًا').evaluate().isNotEmpty,
+      reason: 'the list should come from the server even with an empty local library',
+    );
+    expect(find.byIcon(Icons.favorite_rounded), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.favorite_rounded));
+    await tester.pump();
+    expect(find.byIcon(Icons.favorite_border_rounded), findsOneWidget);
+    expect(find.text('أقرأها حاليًا'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    account.membership = (category: LibraryCategory.completed, favorite: true);
+    await tester.pumpWidget(_app(provider, account: account));
+    await _pumpUntil(
+      tester,
+      () => find.text('تمت قراءتها').evaluate().isNotEmpty,
+      reason: 'reopening should show the list currently on the server',
+    );
+    expect(account.reads, 2);
+    expect(find.byIcon(Icons.favorite_rounded), findsOneWidget);
+  });
+
   testWidgets(
     'manga details defers chapters until the collapsed section opens once',
     (tester) async {

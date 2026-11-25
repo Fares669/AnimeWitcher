@@ -73,18 +73,18 @@ Future<void> cacheSkipSegmentsForDownloadV2(
     final keys = <String>[SkipSegmentCache.keyForEpisodeUrl(episodeUrl)];
     if (cache.readAny(keys).isNotEmpty) return;
 
-    var malId = int.tryParse(
-      (item.syncData?['malId'] ?? item.syncData?['mal_id'] ?? '').trim(),
-    );
-    malId ??= item.title.trim().isEmpty
-        ? null
-        : await ref.read(malIdResolverProvider).resolve(item.title);
+    final malId = await ref
+        .read(malIdResolverProvider)
+        .resolveForItem(
+          syncData: item.syncData,
+          title: item.title,
+          alternativeTitles: [?item.syncData?['awEnglishTitle']],
+        );
     if (malId == null) return;
 
     final episodeNumber = episode.episode > 0 ? episode.episode : 1;
-    final runtimeMinutes = int.tryParse(
-      item.syncData?['awDuration']?.trim() ?? '',
-    );
+    final rawDuration = item.syncData?['awDuration']?.trim() ?? '';
+    final runtimeMinutes = int.tryParse(rawDuration) ?? item.duration;
     final segments = await ref
         .read(aniSkipServiceProvider)
         .getSkipSegments(

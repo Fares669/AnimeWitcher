@@ -392,7 +392,7 @@ void main() {
   for (final queued in <bool>[false, true]) {
     for (final reattach in <bool>[false, true]) {
       test(
-        '${queued ? 'candidate' : 'existing'} stale refresh reattach=$reattach bypasses queue and preserves existing ordering',
+        '${queued ? 'candidate' : 'existing'} stale refresh reattach=$reattach bypasses queue and keeps the refreshed image',
         () async {
           // Occupy the shared limiter. Expired resolutions must not join it.
           final blockers = List.generate(4, (_) => _Codec());
@@ -446,7 +446,7 @@ void main() {
             completer.removeListener(listener);
             completer.addListener(listener);
             await _flush();
-            expect(oldCodec.requests, hasLength(2));
+            expect(oldCodec.requests, hasLength(1));
           }
           cache.events.add(
             FileInfo(
@@ -459,23 +459,16 @@ void main() {
           await _flush();
           final oldImage = _image(2);
           final freshImage = _image(3);
-          // Adversarial order: if permitted to start, fresh decoding finishes first.
+          // Finish the refreshed image before the pending stale frame.
           expect(newCodec.requests, hasLength(1));
           newCodec.finish(freshImage);
           await _flush();
-          for (var i = 0; i < (reattach ? 2 : 1); i++) {
-            oldCodec.finish(oldImage);
-          }
-          await _flush();
-          if (newCodec.requests.any((r) => !r.isCompleted)) {
-            newCodec.finish(freshImage);
-          }
+          expect(widths, [3]);
+          oldCodec.finish(oldImage);
           await _flush();
           expect(decodeCalls, 2);
-          // The package's pre-existing out-of-order refresh behavior is recorded
-          // here, not fixed by this RAM change. The candidate must not add queue
-          // delay to either expired or fresh codec in this refreshing resolution.
-          expect(widths, [3, ...List<int>.filled(reattach ? 2 : 1, 2)]);
+          expect(newCodec.requests, hasLength(1));
+          expect(widths, [3]);
           expect(errors, isEmpty);
           for (final blocker in blockers) {
             blocker.finish(oldImage);
