@@ -546,8 +546,13 @@ class Anime3rbLibraryService extends ChangeNotifier {
   int _epochFor(String accountId, String workUrl) =>
       _mutationEpochs[_mutationKey(accountId, workUrl)] ?? 0;
 
-  Map<String, Anime3rbStoredLibraryEntry> _readEntries(String accountId) {
-    final raw = _storage.getString(_entriesKey(accountId));
+  Map<String, Anime3rbStoredLibraryEntry> _readEntries(String accountId) =>
+      _decodeEntries(_storage.getString(_entriesKey(accountId)));
+
+  Map<String, Anime3rbStoredLibraryEntry> _decodeEntries(
+    String? raw, {
+    Map<String, Map<String, dynamic>>? itemJson,
+  }) {
     if (raw == null || raw.isEmpty) {
       return <String, Anime3rbStoredLibraryEntry>{};
     }
@@ -557,7 +562,14 @@ class Anime3rbLibraryService extends ChangeNotifier {
       final result = <String, Anime3rbStoredLibraryEntry>{};
       for (final entry in decoded.entries) {
         final parsed = Anime3rbStoredLibraryEntry.fromJson(entry.value);
-        if (parsed != null) result[entry.key.toString()] = parsed;
+        if (parsed == null) continue;
+        final key = entry.key.toString();
+        result[key] = parsed;
+        if (itemJson != null) {
+          itemJson[key] = Map<String, dynamic>.from(
+            (entry.value as Map)['item'] as Map,
+          );
+        }
       }
       return result;
     } catch (_) {
@@ -641,17 +653,45 @@ class Anime3rbLibraryService extends ChangeNotifier {
     return _readEntries(accountId)[canonicalWorkUrl(url)]?.userRating;
   }
 
+  // Weak keys keep the projection reachable only through its actual session.
+  // Re-authentication uses a new key, even if the account ID and JSON match.
+  final _shelfProjections = Expando<({
+    String? raw,
+    Map<LibraryCategory, List<Map<String, dynamic>>> shelves,
+  })>();
+
   List<MultimediaItem> itemsForCategory(LibraryCategory category) {
     final accountId = _activeAccountId;
     if (accountId == null) return const <MultimediaItem>[];
-    final entries = _readEntries(accountId).values.toList()
-      ..sort((a, b) => b.updatedAtMillis.compareTo(a.updatedAtMillis));
+    final session = _accountService.session;
+    final owner = session?.accountId == accountId ? session : null;
+    final raw = _storage.getString(_entriesKey(accountId));
+    var snapshot = owner == null ? null : _shelfProjections[owner];
+    if (snapshot == null || snapshot.raw != raw) {
+      final itemJson = <String, Map<String, dynamic>>{};
+      final entries = _decodeEntries(raw, itemJson: itemJson).entries.toList()
+        ..sort(
+          (a, b) => b.value.updatedAtMillis.compareTo(a.value.updatedAtMillis),
+        );
+      final shelves = <LibraryCategory, List<Map<String, dynamic>>>{};
+      for (final entry in entries) {
+        final row = itemJson[entry.key]!;
+        final category = entry.value.category;
+        if (category != null && category != LibraryCategory.favorite) {
+          (shelves[category] ??= []).add(row);
+        }
+        if (entry.value.favorite) {
+          (shelves[LibraryCategory.favorite] ??= []).add(row);
+        }
+      }
+      snapshot = (raw: raw, shelves: shelves);
+      if (owner != null) _shelfProjections[owner] = snapshot;
+    }
+    // Never hand out cached models: nested item collections remain independent
+    // of both this read projection and the mutable merge/write path.
     return <MultimediaItem>[
-      for (final entry in entries)
-        if (category == LibraryCategory.favorite
-            ? entry.favorite
-            : entry.category == category)
-          entry.item,
+      for (final row in snapshot.shelves[category] ?? const [])
+        MultimediaItem.fromJson(row),
     ];
   }
 
