@@ -449,15 +449,21 @@ class _Poster extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final imageUrl = item.posterUrl;
+    final malId = item.artworkLookupMalId;
+    final lookupTitle = item.artworkLookupTitle;
     return ClipRRect(
       borderRadius: BorderRadius.circular(radius),
       child: SizedBox(
         width: width,
         height: width * 1.45,
         child: FallbackPosterImage(
-          imageUrl: item.posterUrl,
-          malId: item.artworkLookupMalId,
-          title: item.artworkLookupTitle,
+          // The top slot stays mounted across tabs. Its pending lookup must
+          // not paint into a poster now showing different artwork inputs.
+          key: ValueKey((imageUrl, malId, lookupTitle)),
+          imageUrl: imageUrl,
+          malId: malId,
+          title: lookupTitle,
           memCacheWidth: (width * 2.5).round(),
           placeholder: (_) => PosterPlate(seed: item.title),
           errorWidget: (_) => PosterPlate(seed: item.title),
