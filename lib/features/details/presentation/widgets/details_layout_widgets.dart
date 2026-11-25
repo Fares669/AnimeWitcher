@@ -395,21 +395,21 @@ class DetailsActionButtons extends HookConsumerWidget {
 class SliverEpisodeCardGrid extends StatelessWidget {
   const SliverEpisodeCardGrid({
     super.key,
-    required this.children,
+    required this.itemCount,
+    required this.itemBuilder,
     this.mainAxisSpacing = 12,
     this.crossAxisSpacing = 8,
   });
 
-  final List<Widget> children;
+  final int itemCount;
+  final IndexedWidgetBuilder itemBuilder;
   final double mainAxisSpacing;
   final double crossAxisSpacing;
 
   @override
   Widget build(BuildContext context) {
     final crossAxisCount = ResponsiveBreakpoints.episodeCrossAxisCount(context);
-    final rowCount = children.isEmpty
-        ? 0
-        : (children.length / crossAxisCount).ceil();
+    final rowCount = (itemCount / crossAxisCount).ceil();
 
     return SliverList.separated(
       itemCount: rowCount,
@@ -418,7 +418,7 @@ class SliverEpisodeCardGrid extends StatelessWidget {
         final startIndex = rowIndex * crossAxisCount;
         // A single card already determines its row height. IntrinsicHeight
         // adds a speculative layout pass to every newly visible episode.
-        if (crossAxisCount == 1) return children[startIndex];
+        if (crossAxisCount == 1) return itemBuilder(context, startIndex);
         return IntrinsicHeight(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -430,8 +430,8 @@ class SliverEpisodeCardGrid extends StatelessWidget {
                       left: i == 0 ? 0 : crossAxisSpacing / 2,
                       right: i == crossAxisCount - 1 ? 0 : crossAxisSpacing / 2,
                     ),
-                    child: startIndex + i < children.length
-                        ? children[startIndex + i]
+                    child: startIndex + i < itemCount
+                        ? itemBuilder(context, startIndex + i)
                         : const SizedBox.shrink(),
                   ),
                 ),
@@ -562,20 +562,21 @@ class SliverDetailsEpisodeList extends HookConsumerWidget {
         if (displayedEpisodes.isEmpty)
           const SliverToBoxAdapter(child: EpisodeBrowseEmpty()),
         SliverEpisodeCardGrid(
-          children: [
-            for (final ep in displayedEpisodes)
-              _withTransition(
-                EpisodeCard(
-                  key: ValueKey(ep.url),
-                  episode: ep,
-                  parentItem: parentItem,
-                  // Rows on the page, as the PC and tablet list has them: no
-                  // panel round each one, only the current or chosen
-                  // episode filled.
-                  plain: true,
-                ),
+          itemCount: displayedEpisodes.length,
+          itemBuilder: (_, index) {
+            final ep = displayedEpisodes[index];
+            return _withTransition(
+              EpisodeCard(
+                key: ValueKey(ep.url),
+                episode: ep,
+                parentItem: parentItem,
+                // Rows on the page, as the PC and tablet list has them: no
+                // panel round each one, only the current or chosen
+                // episode filled.
+                plain: true,
               ),
-          ],
+            );
+          },
         ),
       ],
     );

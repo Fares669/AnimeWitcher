@@ -234,11 +234,12 @@ List<int> _shownProjection(WidgetTester tester) {
       final EpisodeCard episodeCard => episodeCard,
       _ => throw StateError('Unexpected Details row widget'),
     };
-    return tester
-        .widget<SliverEpisodeCardGrid>(grid)
-        .children
-        .map((child) => card(child).episode.episode)
-        .toList();
+    final deck = tester.widget<SliverEpisodeCardGrid>(grid);
+    final context = tester.element(grid);
+    return [
+      for (var i = 0; i < deck.itemCount; i++)
+        card(deck.itemBuilder(context, i)).episode.episode,
+    ];
   }
   return tester
       .widgetList<EpisodeCard>(find.byType(EpisodeCard))

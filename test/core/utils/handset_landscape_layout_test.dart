@@ -221,27 +221,25 @@ void main() {
               SliverPadding(
                 padding: const EdgeInsets.all(16),
                 sliver: SliverEpisodeCardGrid(
-                  children: [
-                    for (var i = 0; i < 4; i++)
-                      DecoratedBox(
-                        key: ValueKey('episode-$i'),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF2A2A2A),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFFEEC60A)),
-                        ),
-                        child: Align(
-                          alignment: Alignment.centerRight,
-                          child: Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: Text(
-                              'الحلقة ${i + 1}',
-                              style: const TextStyle(color: Colors.white),
-                            ),
-                          ),
+                  itemCount: 4,
+                  itemBuilder: (_, i) => DecoratedBox(
+                    key: ValueKey('episode-$i'),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2A2A2A),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFEEC60A)),
+                    ),
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Text(
+                          'الحلقة ${i + 1}',
+                          style: const TextStyle(color: Colors.white),
                         ),
                       ),
-                  ],
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -275,14 +273,12 @@ void main() {
         child: CustomScrollView(
           slivers: [
             SliverEpisodeCardGrid(
-              children: [
-                for (var i = 0; i < 2; i++)
-                  ColoredBox(
-                    key: ValueKey('episode-$i'),
-                    color: Colors.grey,
-                    child: SizedBox(height: 72, child: Text('E$i')),
-                  ),
-              ],
+              itemCount: 2,
+              itemBuilder: (_, i) => ColoredBox(
+                key: ValueKey('episode-$i'),
+                color: Colors.grey,
+                child: SizedBox(height: 72, child: Text('E$i')),
+              ),
             ),
           ],
         ),
