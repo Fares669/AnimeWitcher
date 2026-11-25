@@ -118,6 +118,7 @@ AnimeWitcherNativeProvider _provider({
   return AnimeWitcherNativeProvider(
     dio ?? _stubDio(searchHits: _catalogHits),
     SettingsRepository(_TestStorageService()),
+    algoliaSearchApiKey: 'synthetic-ecchi-filter-fixture',
     isEcchiHidden: () => hideEcchi,
     resolveAnimeByMalIds: resolveAnimeByMalIds,
   );

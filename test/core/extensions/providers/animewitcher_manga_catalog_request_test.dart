@@ -82,6 +82,7 @@ void main() {
     final provider = AnimeWitcherNativeProvider(
       _server(searches),
       SettingsRepository(_Storage()),
+      algoliaSearchApiKey: 'synthetic-catalog-fixture',
     );
 
     final page = await provider.searchMangaPage(
@@ -139,6 +140,7 @@ void main() {
       final provider = AnimeWitcherNativeProvider(
         _server(searches, mangaHits: () => hits),
         SettingsRepository(_Storage()),
+        algoliaSearchApiKey: 'synthetic-catalog-fixture',
       );
       final genres = <String>{'اكشن'};
       final filters = ProviderSearchFilters(sort: 'name_asc', genres: genres);

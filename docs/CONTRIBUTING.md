@@ -50,6 +50,32 @@ To build AnimeWitcher from source, you need the following installed on your mach
     flutter run
     ```
 
+### Optional native catalog search configuration
+
+AnimeWitcher uses its existing service-provided configuration when available.
+For an authorized fallback in a local build, put
+`ANIMEWITCHER_ALGOLIA_SEARCH_API_KEY` in an ignored `dart-defines.local.json`
+file as a JSON string field, then rebuild with:
+
+```bash
+flutter run --dart-define-from-file=dart-defines.local.json
+```
+
+Use the same flag for a local `flutter build`. Setting a shell environment
+variable alone does not change a compiled Flutter app. Automated preview and
+release jobs are unchanged and do not inject this optional define. Before
+distributing an automated build, verify that the app's existing service
+provides the intended search configuration; otherwise build locally with the
+restricted client key. Pull-request tests do not need a live search key.
+If neither service configuration nor a build fallback is available, native
+search can be unavailable even though the app builds and launches.
+
+Use only an authorized client key with the `search` ACL for the needed indices
+in the native catalog's existing Algolia application. Do not use a browse,
+write, or admin key. Keep real values out of source, logs, and shared config
+files. A key included in a distributed app is readable from the app even if
+it was stored as an Actions secret during the build.
+
 ---
 
 ## 📂 Project Structure

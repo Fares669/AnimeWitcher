@@ -108,8 +108,13 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     this._settings, {
     AnimeWitcherMalIdResolver? resolveAnimeByMalIds,
     bool Function()? isEcchiHidden,
+    String algoliaSearchApiKey = const String.fromEnvironment(
+      'ANIMEWITCHER_ALGOLIA_SEARCH_API_KEY',
+    ),
   }) : _resolveAnimeByMalIds = resolveAnimeByMalIds,
-       _isEcchiHidden = isEcchiHidden ?? _ecchiIsVisible;
+       _isEcchiHidden = isEcchiHidden ?? _ecchiIsVisible,
+       _configuredAlgoliaSearchKey = algoliaSearchApiKey.trim(),
+       _algoliaApiKey = algoliaSearchApiKey.trim();
 
   final Dio _dio;
   final SettingsRepository _settings;
@@ -120,13 +125,15 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   static const String _baseUrl = 'https://animewitcher.com';
   static const String _firestoreProjectId = 'animewitcher-1c66d';
   static const String _defaultAlgoliaAppId = '5UIU27G8CZ';
-  static const String _defaultAlgoliaApiKey =
-      'ef06c5ee4a0d213c011694f18861805c';
   static const String _aniZipUrl = 'https://api.ani.zip/mappings';
 
   String _algoliaAppId = _defaultAlgoliaAppId;
-  String _algoliaApiKey = _defaultAlgoliaApiKey;
+  final String _configuredAlgoliaSearchKey;
+  String _algoliaApiKey;
+  bool _usingConfiguredAlgoliaSearchKey = true;
   String _algoliaBrowseApiKey = '';
+  bool _loadedSavedCatalogSettings = false;
+  static final _validAlgoliaAppId = RegExp(r'^[A-Za-z0-9]+$');
 
   /// From `Settings/constants.search_settings.is_search_active`. Defaults to
   /// true so a missing field keeps the production Algolia catalogs working.
@@ -530,7 +537,10 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       if (fields.isEmpty) {
         fields = await _loadConstantsFromAlgoliaFallback();
       }
-      if (fields.isEmpty) return;
+      if (fields.isEmpty) {
+        _restoreSavedCatalogSettings();
+        return;
+      }
       await _applyRemoteConstants(fields);
       _remoteConstantsExpiresAt = DateTime.now().add(_remoteConstantsTtl);
     }();
@@ -570,23 +580,68 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     return payload;
   }
 
-  Future<void> _applyRemoteConstants(Map<String, dynamic> fields) async {
-    final settings = _map(fields['search_settings']);
-    final settings2 = _map(fields['search_settings2']);
-    final appId = _text(
-      settings['app_id_v3'] ?? settings['app_id'] ?? settings['application_id'],
-    );
-    final apiKey = _text(settings['api_key'] ?? settings['search_api_key']);
+  String _catalogSettingsAppId(Map<String, dynamic> settings) => _text(
+    settings['app_id_v3'] ?? settings['app_id'] ?? settings['application_id'],
+  );
+
+  String _catalogSettingsSearchKey(Map<String, dynamic> settings) =>
+      _text(settings['api_key'] ?? settings['search_api_key']);
+
+  void _restoreSavedCatalogSettings() {
+    if (_loadedSavedCatalogSettings) return;
+    _loadedSavedCatalogSettings = true;
+    final saved = _settings.getAnimeWitcherSearchSettings();
+    // A cached key needs an explicit matching application.
+    if (_validAlgoliaAppId.hasMatch(_catalogSettingsAppId(saved)) &&
+        _catalogSettingsSearchKey(saved).isNotEmpty) {
+      _applyCatalogSearchSettings(saved);
+    }
+  }
+
+  void _applyCatalogSearchSettings(Map<String, dynamic> settings) {
+    final appId = _catalogSettingsAppId(settings);
+    final apiKey = _catalogSettingsSearchKey(settings);
     final browseKey = _text(
       settings['browse_api_key'] ?? settings['browseApiKey'],
     );
-    if (appId.isNotEmpty) _algoliaAppId = appId;
-    if (apiKey.isNotEmpty) _algoliaApiKey = apiKey;
+    final previousAppId = _algoliaAppId;
+    final previousApiKey = _algoliaApiKey;
+    final wasSearchActive = _isSearchActive;
+    if (appId.isNotEmpty && appId != _algoliaAppId) {
+      _algoliaAppId = appId;
+      // Neither the previous app's key nor the configured default-app key
+      // can be sent to a different Algolia application.
+      _algoliaApiKey = appId == _defaultAlgoliaAppId
+          ? _configuredAlgoliaSearchKey
+          : '';
+      _usingConfiguredAlgoliaSearchKey = true;
+      _algoliaBrowseApiKey = '';
+    }
+    if (apiKey.isNotEmpty) {
+      _algoliaApiKey = apiKey;
+      _usingConfiguredAlgoliaSearchKey = false;
+    }
     if (browseKey.isNotEmpty) _algoliaBrowseApiKey = browseKey;
     final searchActive =
         settings['is_search_active'] ?? settings['isSearchActive'];
     if (searchActive != null) {
       _isSearchActive = _flag(searchActive, fallback: true);
+    }
+    if (_algoliaAppId != previousAppId ||
+        _algoliaApiKey != previousApiKey ||
+        _isSearchActive != wasSearchActive) {
+      invalidateMangaCatalog();
+    }
+  }
+
+  Future<void> _applyRemoteConstants(Map<String, dynamic> fields) async {
+    final settings = _map(fields['search_settings']);
+    final settings2 = _map(fields['search_settings2']);
+    if (settings.isEmpty) {
+      _restoreSavedCatalogSettings();
+    } else {
+      _loadedSavedCatalogSettings = true;
+      _applyCatalogSearchSettings(settings);
     }
     if (settings2.isNotEmpty) {
       _searchSettings2 = Map<String, dynamic>.from(settings2);
@@ -682,6 +737,9 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     required String path,
     Map<String, dynamic>? queryParameters,
   }) async {
+    if (!_validAlgoliaAppId.hasMatch(appId) || apiKey.trim().isEmpty) {
+      return null;
+    }
     final headers = _algoliaAuthHeaders(appId, apiKey);
     for (final host in _algoliaHosts(appId)) {
       try {
@@ -711,6 +769,9 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     required Map<String, dynamic> body,
     CancelToken? cancelToken,
   }) async {
+    if (!_validAlgoliaAppId.hasMatch(appId) || apiKey.trim().isEmpty) {
+      return null;
+    }
     final headers = _algoliaAuthHeaders(appId, apiKey);
     for (final host in _algoliaHosts(appId)) {
       try {
@@ -928,17 +989,31 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     if (!_isSearchActive) {
       throw const AnimeWitcherSearchDisabledException('لا يوجد بيانات');
     }
-    final payload = await _algoliaBrowseGet(
-      index: animeWitcherCharactersAlgoliaIndex,
-      appId: _algoliaAppId,
-      apiKey: _algoliaApiKey,
-      query: text,
-      page: 0,
-      hitsPerPage: animeWitcherCharacterSearchHitsPerPage,
-      maxHitsPerPage: animeWitcherCharacterSearchHitsPerPage,
-      attributes: animeWitcherCharacterAlgoliaAttributes,
-      throwOnFailure: true,
-    );
+    // A configured fallback key needs the search ACL only. Keep the legacy
+    // browse operation for service-supplied credentials.
+    final payload = _usingConfiguredAlgoliaSearchKey
+        ? await _algoliaIndexRequest(
+            index: animeWitcherCharactersAlgoliaIndex,
+            operation: 'query',
+            appId: _algoliaAppId,
+            apiKey: _algoliaApiKey,
+            query: text,
+            hitsPerPage: animeWitcherCharacterSearchHitsPerPage,
+            maxHitsPerPage: animeWitcherCharacterSearchHitsPerPage,
+            attributes: animeWitcherCharacterAlgoliaAttributes,
+            throwOnFailure: true,
+          )
+        : await _algoliaBrowseGet(
+            index: animeWitcherCharactersAlgoliaIndex,
+            appId: _algoliaAppId,
+            apiKey: _algoliaApiKey,
+            query: text,
+            page: 0,
+            hitsPerPage: animeWitcherCharacterSearchHitsPerPage,
+            maxHitsPerPage: animeWitcherCharacterSearchHitsPerPage,
+            attributes: animeWitcherCharacterAlgoliaAttributes,
+            throwOnFailure: true,
+          );
     return _characterPageFromAlgolia(payload, requestedPage: 0, isSearch: true);
   }
 
@@ -2746,8 +2821,24 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   /// searches it cannot answer itself: a filter, or an order other than its
   /// own. Kept a few minutes, so paging through the results reads nothing.
   final _mangaCatalogCache = <String, _MangaCatalog>{};
+  final _mangaCatalogRequests =
+      <(String query, String index), Future<_MangaCatalog>>{};
+  int _mangaCatalogGeneration = 0;
 
   static const Duration _mangaCatalogTtl = Duration(minutes: 10);
+  static const int _maxSharedMangaCatalogRequests = 4;
+
+  /// Do not keep an account's catalog or share its pending requests after a
+  /// change of account or search configuration.
+  void invalidateMangaCatalog() {
+    _mangaCatalogCache.clear();
+    _invalidateMangaCatalogRequests();
+  }
+
+  void _invalidateMangaCatalogRequests() {
+    _mangaCatalogGeneration++;
+    _mangaCatalogRequests.clear();
+  }
 
   /// Only what a card, a filter and a sort read. The whole record, story and
   /// all, is about seven times the size, and opening a manga fetches its full
@@ -2787,12 +2878,44 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       }
       cached._prepared = null;
     }
+
+    final index = _mangaSearchIndexForSort(sort);
+    final generation = _mangaCatalogGeneration;
+    if (cancelToken != null) {
+      return _fetchMangaCatalog(query, index, key, generation, cancelToken);
+    }
+    // Pending calls must use exactly the same transport plan, including the
+    // query's case. Sort/filter affect the view, not this index request.
+    final requestKey = (query, index);
+    final inFlight = _mangaCatalogRequests[requestKey];
+    if (inFlight != null) return inFlight;
+    final request = _fetchMangaCatalog(query, index, key, generation, null);
+    if (_mangaCatalogRequests.length >= _maxSharedMangaCatalogRequests) {
+      return request;
+    }
+    _mangaCatalogRequests[requestKey] = request;
+    try {
+      return await request;
+    } finally {
+      if (identical(_mangaCatalogRequests[requestKey], request)) {
+        final _ = _mangaCatalogRequests.remove(requestKey);
+      }
+    }
+  }
+
+  Future<_MangaCatalog> _fetchMangaCatalog(
+    String query,
+    String index,
+    String key,
+    int generation,
+    CancelToken? cancelToken,
+  ) async {
     const batch = 1000;
     const maxPages = 5;
     final hits = <Map<String, Object?>>[];
     for (var page = 0; page < maxPages; page++) {
       final payload = await _algoliaQuery(
-        _mangaSearchIndexForSort(sort),
+        index,
         query: query,
         page: page,
         hitsPerPage: batch,
@@ -2810,11 +2933,13 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       final nbPages = int.tryParse(_text(payload['nbPages'])) ?? 0;
       if (raw.length < batch || (nbPages > 0 && page + 1 >= nbPages)) break;
     }
-    if (_mangaCatalogCache.length >= 4) {
-      _mangaCatalogCache.remove(_mangaCatalogCache.keys.first);
-    }
     final catalog = _MangaCatalog(DateTime.now(), hits);
-    _mangaCatalogCache[key] = catalog;
+    if (generation == _mangaCatalogGeneration) {
+      if (_mangaCatalogCache.length >= 4) {
+        _mangaCatalogCache.remove(_mangaCatalogCache.keys.first);
+      }
+      _mangaCatalogCache[key] = catalog;
+    }
     return catalog;
   }
 
@@ -4192,6 +4317,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     _remoteConstantsExpiresAt = DateTime.fromMillisecondsSinceEpoch(0);
     _remoteConstantsRequest = null;
     _officialHomeSectionsRequest = null;
+    _invalidateMangaCatalogRequests();
     resetStaleHttpClient(_dio);
   }
 
