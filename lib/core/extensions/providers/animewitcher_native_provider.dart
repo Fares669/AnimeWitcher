@@ -2963,37 +2963,47 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
             .trim()
             .toLowerCase();
 
-    final sorted = List<Map<String, Object?>>.of(hits);
-    if (sorted.length < 2) return sorted;
+    List<Map<String, Object?>> sortedBy<Key>(
+      Key Function(Map<String, Object?>) selectKey,
+      int Function(Key, Key) compare,
+    ) {
+      // Keep the same comparisons and tie order without hashing raw rows.
+      final order = List<int>.generate(
+        hits.length,
+        (index) => index,
+        growable: false,
+      );
+      final keys = List<Key>.generate(
+        hits.length,
+        (index) => selectKey(hits[index]),
+        growable: false,
+      );
+      order.sort((a, b) => compare(keys[a], keys[b]));
+      return List<Map<String, Object?>>.generate(
+        hits.length,
+        (index) => hits[order[index]],
+      );
+    }
+
+    if (hits.length < 2) return List<Map<String, Object?>>.of(hits);
     switch (sort) {
       case 'name_asc' || 'name_desc':
         final ascending = sort == 'name_asc';
-        final names = Map<Map<String, Object?>, String>.identity();
-        for (final hit in sorted) {
-          names[hit] = nameOf(hit);
-        }
-        sorted.sort(
-          (a, b) => ascending
-              ? names[a]!.compareTo(names[b]!)
-              : names[b]!.compareTo(names[a]!),
+        return sortedBy(
+          nameOf,
+          (a, b) => ascending ? a.compareTo(b) : b.compareTo(a),
         );
       case 'year_asc' || 'year_desc':
         final ascending = sort == 'year_asc';
-        final years = Map<Map<String, Object?>, int?>.identity();
-        for (final hit in sorted) {
-          years[hit] = yearOf(hit);
-        }
-        sorted.sort((a, b) {
-          final ya = years[a], yb = years[b];
+        return sortedBy(yearOf, (ya, yb) {
           if (ya == null && yb == null) return 0;
           if (ya == null) return 1;
           if (yb == null) return -1;
           return ascending ? ya.compareTo(yb) : yb.compareTo(ya);
         });
       default:
-        break;
+        return List<Map<String, Object?>>.of(hits);
     }
-    return sorted;
   }
 
   /// A manga search the index cannot run itself, run here over the whole
