@@ -401,17 +401,30 @@ class StorageService {
     }
   }
 
-  dynamic _libraryMetadata(String url, String field) {
-    final canonicalUrl = _canonicalMediaUrl(url);
-    for (var i = 0; i < _libraryBox.length; i++) {
-      final raw = _libraryBox.getAt(i);
+  final _libraryRowUrls = Expando<({String source, String canonical})>();
+
+  Map<dynamic, dynamic>? _firstLibraryRow(String canonicalUrl) {
+    // Hive's values iterator is in the same key order as getAt(). Iterate
+    // current rows, not cached metadata: local/cloud writes take effect now.
+    for (final raw in _libraryBox.values) {
       if (raw is! Map) continue;
-      if (_canonicalMediaUrl((raw['url'] as String?) ?? '') == canonicalUrl) {
-        return raw[field];
+      final source = (raw['url'] as String?) ?? '';
+      final cached = _libraryRowUrls[raw];
+      final String canonical;
+      if (cached != null && cached.source == source) {
+        canonical = cached.canonical;
+      } else {
+        canonical = _canonicalMediaUrl(source);
+        // Weakly associate only pure URL normalization with the live row.
+        _libraryRowUrls[raw] = (source: source, canonical: canonical);
       }
+      if (canonical == canonicalUrl) return raw;
     }
     return null;
   }
+
+  dynamic _libraryMetadata(String url, String field) =>
+      _firstLibraryRow(_canonicalMediaUrl(url))?[field];
 
   int _libraryMetadataInt(String url, String field) {
     final raw = _libraryMetadata(url, field);
@@ -437,39 +450,18 @@ class StorageService {
 
   bool isInLibrary(String url) {
     final canonicalUrl = _canonicalMediaUrl(url);
-    if (_libraryBox.containsKey(_getKey(canonicalUrl))) return true;
-    for (var i = 0; i < _libraryBox.length; i++) {
-      final raw = _libraryBox.getAt(i);
-      if (raw is Map &&
-          _canonicalMediaUrl((raw['url'] as String?) ?? '') == canonicalUrl) {
-        return true;
-      }
-    }
-    return false;
+    return _libraryBox.containsKey(_getKey(canonicalUrl)) ||
+        _firstLibraryRow(canonicalUrl) != null;
   }
 
   bool isLibraryItemFavorite(String url) {
-    final canonicalUrl = _canonicalMediaUrl(url);
-    for (var i = 0; i < _libraryBox.length; i++) {
-      final raw = _libraryBox.getAt(i);
-      if (raw is! Map) continue;
-      if (_canonicalMediaUrl((raw['url'] as String?) ?? '') == canonicalUrl) {
-        return _storedLibraryFavorite(raw);
-      }
-    }
-    return false;
+    final raw = _firstLibraryRow(_canonicalMediaUrl(url));
+    return raw != null && _storedLibraryFavorite(raw);
   }
 
   String? getLibraryItemCategory(String url) {
-    final canonicalUrl = _canonicalMediaUrl(url);
-    for (var i = 0; i < _libraryBox.length; i++) {
-      final raw = _libraryBox.getAt(i);
-      if (raw is! Map) continue;
-      if (_canonicalMediaUrl((raw['url'] as String?) ?? '') == canonicalUrl) {
-        return _storedLibraryCategory(raw);
-      }
-    }
-    return null;
+    final raw = _firstLibraryRow(_canonicalMediaUrl(url));
+    return raw == null ? null : _storedLibraryCategory(raw);
   }
 
   List<MultimediaItem> getLibraryItems({String? category}) {
