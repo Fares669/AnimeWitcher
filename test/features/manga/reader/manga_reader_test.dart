@@ -209,12 +209,17 @@ final class _LocalStreamProvider extends AnimeWitcherProvider {
 }
 
 final class _WebtoonStreamSettingsNotifier extends MangaReaderSettingsNotifier {
+  _WebtoonStreamSettingsNotifier({this.preloadWidth = 6});
+
+  final int preloadWidth;
+
   @override
-  MangaReaderSettings build() => const MangaReaderSettings(
+  MangaReaderSettings build() => MangaReaderSettings(
     defaultMode: MangaReaderMode.webtoon,
     showReadingMode: false,
     keepScreenOn: false,
     fullScreen: false,
+    pagePreloadAmount: preloadWidth,
   );
 }
 
@@ -289,9 +294,11 @@ void main() {
   setUpAll(() {
     VisibilityDetectorController.instance.updateInterval = Duration.zero;
   });
+  final preloadWidths = ValueVariant<int>({6, 2});
   testWidgets('Webtoon resumes a completed chapter and persists physical scroll', (
     tester,
   ) async {
+    final preloadWidth = preloadWidths.currentValue!;
     const chapter = MangaChapter(
       id: 'plain-webtoon-chapter',
       mangaId: 'plain-webtoon-manga',
@@ -343,7 +350,7 @@ void main() {
         extensionManagerProvider.overrideWith(() => _ReaderManager(provider)),
         mangaReadingRepositoryProvider.overrideWithValue(progress),
         mangaReaderSettingsProvider.overrideWith(
-          _WebtoonStreamSettingsNotifier.new,
+          () => _WebtoonStreamSettingsNotifier(preloadWidth: preloadWidth),
         ),
         downloadsProvider.overrideWith(_NoOtherDownloadedChapters.new),
       ],
@@ -449,6 +456,7 @@ void main() {
     expect(initial.doublePage, isFalse);
     expect(initial.sectionDividers, isEmpty);
     expect(initial.settings.showPageGaps, isTrue);
+    expect(initial.settings.pagePreloadAmount, preloadWidth);
     final controller = initial.controller;
     final sessionCenter = tester.widget<CustomScrollView>(scrollView).center;
     expect(controller, isNotNull);
@@ -485,6 +493,8 @@ void main() {
     await eventually('exit reader route', () =>
         webtoon.evaluate().isEmpty && launcher.hitTestable().evaluate().isNotEmpty);
     expect(savedPage(), last);
+    // Reopen with the file-image cache still warm: image settlement can
+    // notify Webtoon synchronously while Flutter is laying out a row.
     await tester.tap(launcher);
     await eventually('local chapter open', () => webtoon.evaluate().isNotEmpty);
     expect(tester.widget<MangaWebtoonReader>(webtoon).initialPage, last);
@@ -502,7 +512,7 @@ void main() {
         expect(await MangaChapterManifestV2.pageDigest(file), digests[i]);
       }
     });
-  });
+  }, variant: preloadWidths);
 
   test('reader exposes webtoon, paged LTR and paged RTL modes', () {
     expect(MangaReaderMode.values, <MangaReaderMode>[

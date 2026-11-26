@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase;
 import 'package:visibility_detector/visibility_detector.dart';
 
 import '../../../../core/domain/entity/manga.dart';
@@ -71,6 +72,8 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
   late final bool _ownsController = widget.controller == null;
   bool _trailingAdvanceRequested = false;
   MangaReaderLoadBatchController? _loadBatches;
+  MangaReaderLoadBatchController? _deferredLoadBatchUpdate;
+  bool _replayingSettledLoads = false;
 
   List<List<int>> get _spreads => widget.doublePage
       ? mangaReaderPageSpreads(
@@ -120,6 +123,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
   }
 
   void _resetLoadBatches() {
+    _deferredLoadBatchUpdate = null;
     _loadBatches?.removeListener(_onLoadBatchChanged);
     _loadBatches?.dispose();
     _loadBatches = MangaReaderLoadBatchController(
@@ -131,16 +135,48 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
     // Re-seed a rebuilt scheduler with pages already completed in this reader
     // session so a settings rebuild can never relock or stall them.
     final settled = _settledPages.toList()..sort();
-    for (final pageIndex in settled) {
-      _loadBatches?.markSettled(pageIndex);
+    _replayingSettledLoads = true;
+    try {
+      for (final pageIndex in settled) {
+        _loadBatches?.markSettled(pageIndex);
+      }
+    } finally {
+      _replayingSettledLoads = false;
     }
   }
 
   void _onLoadBatchChanged() {
-    if (mounted) setState(() {});
-    // Page extents settle as images arrive; the end may have come into
-    // reach without any scrolling.
-    _checkTrailingProximitySoon();
+    if (!mounted) return;
+    // A reset already has a build pending. Keep checking the tail as
+    // settled pages are replayed, without scheduling another rebuild.
+    if (_replayingSettledLoads) {
+      _checkTrailingProximitySoon();
+      return;
+    }
+    if (SchedulerBinding.instance.schedulerPhase !=
+        SchedulerPhase.persistentCallbacks) {
+      setState(() {});
+      _checkTrailingProximitySoon();
+      return;
+    }
+
+    // A cached image can settle synchronously while a sliver child is
+    // being laid out. Keep its admission immediate, but invalidate this
+    // ancestor once after the frame, while the same scheduler is active.
+    final batches = _loadBatches;
+    if (batches == null || identical(_deferredLoadBatchUpdate, batches)) {
+      return;
+    }
+    _deferredLoadBatchUpdate = batches;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!identical(_deferredLoadBatchUpdate, batches)) return;
+      _deferredLoadBatchUpdate = null;
+      if (!mounted || !identical(_loadBatches, batches)) return;
+      setState(() {});
+      if (_controller.hasClients) {
+        _checkTrailingProximity(_controller.position);
+      }
+    });
   }
 
   @override
@@ -155,6 +191,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
 
   @override
   void dispose() {
+    _deferredLoadBatchUpdate = null;
     _loadBatches?.removeListener(_onLoadBatchChanged);
     _loadBatches?.dispose();
     if (_ownsController) _controller.dispose();
