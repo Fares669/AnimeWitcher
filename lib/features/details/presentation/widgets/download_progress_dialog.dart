@@ -6,13 +6,21 @@ import '../../../../core/services/download_v2/download_v2_identity.dart';
 import '../../../../core/services/download_v2/download_v2_provider.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../../../core/utils/localized_text.dart';
-import '../../../../core/utils/download_progress_data.dart';
 import '../../../../core/utils/file_size_formatter.dart';
 import '../../../library/presentation/download_progress_v2_provider.dart';
 import '../../../library/presentation/download_delete_confirmation.dart';
 import '../../../library/presentation/downloads_provider.dart';
 
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+
+typedef _SelectedDownloadProgress = ({
+  String taskId,
+  TaskStatus status,
+  double progress,
+  int totalSize,
+  int? completedPages,
+  int? totalPages,
+});
 
 class DownloadProgressDialog extends ConsumerStatefulWidget {
   final String title;
@@ -62,7 +70,7 @@ class _DownloadProgressDialogState
     return null;
   }
 
-  Future<void> _cancelDownload(DownloadProgressData data) async {
+  Future<void> _cancelDownload(_SelectedDownloadProgress data) async {
     if (_dismissRequested || _commandInFlight) return;
     final item = _itemForTask(data.taskId);
     final logical = item?.logicalId?.trim();
@@ -90,7 +98,7 @@ class _DownloadProgressDialogState
     }
   }
 
-  Future<void> _togglePause(DownloadProgressData data) async {
+  Future<void> _togglePause(_SelectedDownloadProgress data) async {
     if (_commandInFlight || _dismissRequested) return;
     setState(() => _commandInFlight = true);
     try {
@@ -116,8 +124,22 @@ class _DownloadProgressDialogState
 
   @override
   Widget build(BuildContext context) {
-    final progressMap = ref.watch(downloadProgressProvider);
-    final data = progressMap[widget.trackingUrl];
+    final lookupKey = widget.trackingUrl;
+    final data = ref.watch(
+      downloadProgressProvider.select((progressMap) {
+        final progress = progressMap[lookupKey];
+        if (progress == null) return null;
+        // Select both the raw display values and the exact task used by controls.
+        return (
+          taskId: progress.taskId,
+          status: progress.status,
+          progress: progress.progress,
+          totalSize: progress.totalSize,
+          completedPages: progress.completedPages,
+          totalPages: progress.totalPages,
+        );
+      }),
+    );
 
     if (data == null) {
       // A cancellation removes the V2 presentation entry before its Future
