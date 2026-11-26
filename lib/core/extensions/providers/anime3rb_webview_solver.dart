@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:webview_cookie_manager_flutter/webview_cookie_manager.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
@@ -70,12 +71,38 @@ class _ParkedWebViewSession {
 /// Apple CFNetwork / Android WebView TLS fingerprint and `cf_clearance` cookie
 /// whenever Dart's `HttpClient` (Dio) is rejected due to TLS/JA4 binding.
 class Anime3rbWebViewSolver {
-  Anime3rbWebViewSolver._();
+  Anime3rbWebViewSolver._() {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      _nativeIosChannel.setMethodCallHandler(_handleNativeChannelCall);
+    }
+  }
 
   static final Anime3rbWebViewSolver instance = Anime3rbWebViewSolver._();
 
+  static const MethodChannel _nativeIosChannel = MethodChannel(
+    'com.animewitcher.app/anime3rb_webview',
+  );
+
+  static bool get _useNativeIosBridge =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+
   static bool get isSupported =>
       !kIsWeb && Anime3rbAuthWebViewScreen.isSupported;
+
+  Future<void> _handleNativeChannelCall(MethodCall call) async {
+    if (call.method != 'diagnostic') return;
+    final args = call.arguments;
+    if (args is! Map) return;
+    final action = args['action']?.toString();
+    if (action == null || action.isEmpty) return;
+    _recordWebViewDiagnostic(
+      action,
+      status: args['status']?.toString(),
+      durationMs: (args['durationMs'] as num?)?.toInt(),
+      reason: args['reason']?.toString(),
+      result: args['result'] is bool ? args['result'] as bool : null,
+    );
+  }
 
   static const String _fetchBridgeChannelName = 'awAnime3rbFetch';
   static const Set<String> _cloudflareCookieNames = <String>{
@@ -168,6 +195,13 @@ class Anime3rbWebViewSolver {
 
   /// Releases any parked background WebView session (e.g. on explicit retry).
   void disposeParkedSession() {
+    if (_useNativeIosBridge) {
+      unawaited(
+        _nativeIosChannel
+            .invokeMethod<void>('disposeParked')
+            .catchError((Object _) {}),
+      );
+    }
     final session = _parkedSession;
     _parkedSession = null;
     session?.dispose();
@@ -190,11 +224,51 @@ class Anime3rbWebViewSolver {
     Object? body,
     bool followRedirects = true,
   }) async {
+    if (!followRedirects || (body != null && body is! String)) {
+      return null;
+    }
+
+    if (_useNativeIosBridge) {
+      try {
+        final raw = await _nativeIosChannel.invokeMethod<Object?>('fetch', <String, Object?>{
+          'url': uri.toString(),
+          'method': method.toUpperCase(),
+          'headers': headers,
+          'body': ?(body as String?),
+        });
+        if (raw is! Map) return null;
+        final status = (raw['status'] as num?)?.toInt() ?? 0;
+        final text = raw['body']?.toString() ?? '';
+        final finalUrl = raw['url']?.toString();
+        final rawHeaders = raw['headers'];
+        final headersMap = <String, List<String>>{};
+        if (rawHeaders is Map) {
+          for (final entry in rawHeaders.entries) {
+            final val = entry.value;
+            if (val is List) {
+              headersMap[entry.key.toString()] = val
+                  .map((e) => e.toString())
+                  .toList(growable: false);
+            } else if (val != null) {
+              headersMap[entry.key.toString()] = [val.toString()];
+            }
+          }
+        }
+        return Anime3rbHttpResponse(
+          statusCode: status,
+          body: text,
+          headers: headersMap,
+          finalUri: finalUrl != null ? Uri.tryParse(finalUrl) : null,
+        );
+      } on MissingPluginException {
+        // Fall through to Flutter WebView session in unit tests / unsupported hosts.
+      } catch (_) {
+        return null;
+      }
+    }
+
     final session = _parkedSession;
-    if (session == null ||
-        !followRedirects ||
-        session.origin != uri.origin ||
-        (body != null && body is! String)) {
+    if (session == null || session.origin != uri.origin) {
       return null;
     }
 
@@ -357,6 +431,43 @@ class Anime3rbWebViewSolver {
   }
 
   Future<Anime3rbChallengeSolution?> _runCloudflareSession(Uri uri) async {
+    if (_useNativeIosBridge) {
+      try {
+        final raw = await _nativeIosChannel.invokeMethod<Object?>(
+          'solveChallenge',
+          <String, Object?>{
+            'url': uri.toString(),
+            'title': 'التحقق من Anime3rb',
+            'subtitle': 'أكمل التحقق الأمني للمتابعة في التصفح والتحميل.',
+            'timeoutSeconds': 90,
+          },
+        );
+        if (raw is! Map) return null;
+        final cookies = <String, String>{};
+        final rawCookies = raw['cookies'];
+        if (rawCookies is Map) {
+          for (final entry in rawCookies.entries) {
+            final k = entry.key.toString().trim();
+            final v = entry.value?.toString().trim() ?? '';
+            if (k.isNotEmpty && v.isNotEmpty) {
+              cookies[k] = v;
+            }
+          }
+        }
+        final html = raw['html']?.toString();
+        final ua = raw['userAgent']?.toString().trim();
+        return (
+          cookies: cookies,
+          html: (html != null && html.trim().isNotEmpty) ? html : null,
+          userAgent: (ua != null && ua.isNotEmpty) ? ua : null,
+        );
+      } on MissingPluginException {
+        // Fall back to Flutter WebView overlay if the native channel is absent.
+      } catch (_) {
+        return null;
+      }
+    }
+
     // Discard any stale parked session for this origin before solving anew.
     if (_parkedSession?.origin == uri.origin) {
       disposeParkedSession();

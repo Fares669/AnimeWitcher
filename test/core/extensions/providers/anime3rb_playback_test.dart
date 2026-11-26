@@ -595,24 +595,12 @@ var video_sources = [
     expect(pages[1], contains('data-webview-path="/titles/list"'));
   });
 
-  test('normalizeAnime3rbWebViewUserAgent restores Safari tokens on iOS WKWebView and strips wv on Android', () {
+  test('normalizeAnime3rbWebViewUserAgent preserves iOS WKWebView UA untouched and strips wv on Android', () {
     expect(
       normalizeAnime3rbWebViewUserAgent(
-        'Mozilla/5.0 (iPhone; CPU iPhone OS 18_3_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
       ),
-      'Mozilla/5.0 (iPhone; CPU iPhone OS 18_3_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1',
-    );
-    expect(
-      normalizeAnime3rbWebViewUserAgent(
-        'Mozilla/5.0 (iPad; CPU OS 18_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
-      ),
-      'Mozilla/5.0 (iPad; CPU OS 18_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Mobile/15E148 Safari/604.1',
-    );
-    expect(
-      normalizeAnime3rbWebViewUserAgent(
-        'Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1',
-      ),
-      'Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1',
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
     );
     expect(
       normalizeAnime3rbWebViewUserAgent(

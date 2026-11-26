@@ -212,35 +212,14 @@ typedef Anime3rbWebViewFetcher =
 /// Normalizes a native embedded WebView User-Agent into its authentic browser
 /// counterpart without faking the OS or rendering engine.
 ///
-/// - On iOS `WKWebView`, the default UA omits `Version/X.Y` and `Safari/604.1`
-///   (`... Mobile/15E148`), which Cloudflare flags as an embedded WebView. We
-///   derive `Version/X.Y` from the device's own `OS X_Y` token so TLS, HTTP/2,
-///   JavaScriptCore, and UA stay 100% consistent with Mobile Safari.
 /// - On Android `WebView`, strips the `; wv` and `Version/4.0 ` markers while
 ///   preserving the exact device model and installed `Chrome/XXX` version.
+/// - On iOS `WKWebView`, preserves the genuine system User-Agent untouched so
+///   Safari version tokens never contradict frozen iOS 26 OS tokens.
 String? normalizeAnime3rbWebViewUserAgent(String? raw) {
   if (raw == null) return null;
   var ua = raw.trim();
   if (ua.isEmpty) return null;
-
-  if (ua.contains('AppleWebKit/') &&
-      ua.contains('Mobile/') &&
-      !ua.contains('Safari/')) {
-    final osMatch = RegExp(r'OS (\d+)[._](\d+)').firstMatch(ua);
-    final version = osMatch != null
-        ? '${osMatch.group(1)}.${osMatch.group(2)}'
-        : '18.0';
-    if (!ua.contains('Version/')) {
-      ua = ua.replaceFirst('Mobile/', 'Version/$version Mobile/');
-    }
-    return '$ua Safari/604.1';
-  }
-
-  if (ua.contains('Macintosh') &&
-      ua.contains('AppleWebKit/') &&
-      !ua.contains('Safari/')) {
-    return '$ua Version/18.0 Safari/605.1.15';
-  }
 
   if (ua.contains('; wv)')) {
     ua = ua.replaceFirst('; wv)', ')').replaceFirst('Version/4.0 ', '');
