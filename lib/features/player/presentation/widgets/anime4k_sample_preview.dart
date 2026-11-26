@@ -155,6 +155,20 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
     });
 
     try {
+      if (widget.mode == Anime4kMode.off ||
+          widget.shaderDirectory.trim().isEmpty) {
+        final bytes = await rootBundle.load(Anime4kSamplePreview.assetPath);
+        if (!_isCurrentRequest(request)) return;
+        setState(() {
+          _processedPreviewBytes = bytes.buffer.asUint8List(
+            bytes.offsetInBytes,
+            bytes.lengthInBytes,
+          );
+          _ready = true;
+        });
+        return;
+      }
+
       final file = await _writeSample();
       final pipeline = await const Anime4kShaderLibrary().pipeline(
         mode: widget.mode,
