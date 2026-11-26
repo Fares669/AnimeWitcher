@@ -295,6 +295,12 @@ void main() {
     );
 
     await _selectTab(tester, 'المواسم الأخرى');
+    // The archive loads when this tab is first reached.
+    final firstYear = find.byKey(const ValueKey('other-season-year-2026'));
+    for (var frame = 0; frame < 12 && firstYear.evaluate().isEmpty; frame++) {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(firstYear, findsOneWidget);
     expect(find.byType(SeasonListTitle).hitTestable(), findsNothing);
 
     final screen = tester.getRect(find.byType(Scaffold));

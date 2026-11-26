@@ -68,21 +68,24 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
       throw StateError('Season catalog provider is unavailable');
     }
     final config = await provider.getSeasonConfig();
-    final allSeasons = await provider.getAllSeasons();
-    return _SeasonsBootstrap(
-      provider: provider,
-      config: config,
-      allSeasons: allSeasons,
-    );
+    return _SeasonsBootstrap(provider: provider, config: config);
   }
 
-  Future<void> _refreshSeasons() async {
+  Future<void> _refreshSeasons({bool waitForArchive = false}) async {
     final future = _loadBootstrap();
     setState(() {
       _reloadGeneration++;
       _bootstrapFuture = future;
     });
-    await future;
+    final data = await future;
+    if (!waitForArchive || !mounted || !identical(_bootstrapFuture, future)) {
+      return;
+    }
+    try {
+      await data.allSeasons;
+    } catch (_) {
+      // The archive pane presents its own retry state.
+    }
   }
 
   @override
@@ -146,7 +149,8 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
                           controller: _tabController,
                           index: index,
                           builder: (context) => MouseDragRefreshIndicator(
-                            onRefresh: _refreshSeasons,
+                            onRefresh: () =>
+                                _refreshSeasons(waitForArchive: index == 3),
                             child: _tabBody(data, index),
                           ),
                         ),
@@ -188,10 +192,24 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
           emptyLabel: 'لا توجد أعمال في الموسم القادم',
         );
       default:
-        return _OtherSeasonsList(
+        return FutureBuilder<List<String>>(
           key: ValueKey('other-seasons-$_reloadGeneration'),
-          provider: data.provider,
-          allSeasons: data.allSeasons,
+          future: data.allSeasons,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const _SeasonsLoadingBody(showSeasonTitle: false);
+            }
+            if (snapshot.hasError || !snapshot.hasData) {
+              return _LoadError(
+                message: 'تعذر تحميل بيانات المواسم',
+                onRetry: () => _refreshSeasons(waitForArchive: true).ignore(),
+              );
+            }
+            return _OtherSeasonsList(
+              provider: data.provider,
+              allSeasons: snapshot.requireData,
+            );
+          },
         );
     }
   }
@@ -264,13 +282,11 @@ class _SeasonsLoadingBody extends StatelessWidget {
 class _SeasonsBootstrap {
   final AnimeWitcherProvider provider;
   final ProviderSeasonConfig config;
-  final List<String> allSeasons;
+  // One archive request per exact config/provider generation, on demand.
+  late final Future<List<String>> allSeasons =
+      Future<List<String>>.sync(() => provider.getAllSeasons());
 
-  const _SeasonsBootstrap({
-    required this.provider,
-    required this.config,
-    required this.allSeasons,
-  });
+  _SeasonsBootstrap({required this.provider, required this.config});
 }
 
 class _SeasonTabs extends StatelessWidget {
@@ -307,7 +323,6 @@ class _OtherSeasonsList extends StatelessWidget {
   final List<String> allSeasons;
 
   const _OtherSeasonsList({
-    super.key,
     required this.provider,
     required this.allSeasons,
   });
