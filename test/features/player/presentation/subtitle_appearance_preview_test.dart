@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:animewitcher/features/player/presentation/player_controller.dart';
 import 'package:animewitcher/features/player/presentation/widgets/subtitle_appearance_dialog.dart';
 import 'package:animewitcher/features/settings/presentation/player_settings_provider.dart';
@@ -7,6 +9,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+const _previewImage = 'assets/images/subtitles_preview_background.jpg';
+
+class _SubtitlePreviewBundle extends CachingAssetBundle {
+  _SubtitlePreviewBundle(this.previewBytes);
+
+  final ByteData previewBytes;
+
+  @override
+  Future<ByteData> load(String key) {
+    if (key == _previewImage) return Future<ByteData>.value(previewBytes);
+    return rootBundle.load(key);
+  }
+}
 
 class _Player extends PlayerController {
   @override
@@ -39,6 +55,15 @@ void main() {
               ))
               .load(),
     );
+    // This unwired dialog is exercised directly by tests. Keep the original
+    // JPEG out of the app bundle while exercising the real image decoder.
+    final manifest = await tester.runAsync(
+      () => AssetManifest.loadFromAssetBundle(rootBundle),
+    );
+    expect(manifest!.listAssets(), isNot(contains(_previewImage)));
+    final previewBundle = _SubtitlePreviewBundle(
+      ByteData.sublistView(File(_previewImage).readAsBytesSync()),
+    );
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -47,7 +72,10 @@ void main() {
         ],
         child: MaterialApp(
           theme: ThemeData(fontFamily: fontFamily),
-          home: const SubtitleAppearanceDialog(wasPlaying: false),
+          home: DefaultAssetBundle(
+            bundle: previewBundle,
+            child: const SubtitleAppearanceDialog(wasPlaying: false),
+          ),
         ),
       ),
     );

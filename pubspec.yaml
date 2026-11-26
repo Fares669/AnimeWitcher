@@ -105,7 +105,7 @@ flutter:
   uses-material-design: true
   generate: true
   assets:
-    - assets/images/
+    - assets/images/anime4k_sample.jpg
 
   shaders:
     - shaders/progressive_header_blur.frag
