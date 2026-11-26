@@ -312,8 +312,18 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
   Widget build(BuildContext context) {
     if (widget.pages.isEmpty) return const SizedBox.shrink();
 
-    final items = _items;
-    final start = _startItemIndex(items);
+    // With one page per row and no chapter dividers, the row is its
+    // page offset. Let the sliver request it instead of laying out the
+    // whole chapter's descriptors each time the reader rebuilds.
+    final items = !widget.doublePage && widget.sectionDividers.isEmpty
+        ? null
+        : _items;
+    final start = items == null ? _startPage : _startItemIndex(items);
+    final itemCount = items?.length ?? widget.pages.length;
+
+    Widget buildRow(BuildContext context, int index) => items == null
+        ? _spread(context, <int>[index])
+        : _item(context, items[index]);
     final viewport = MediaQuery.sizeOf(context);
     final cacheExtent = mangaReaderPreloadCacheExtent(
       settings: widget.settings,
@@ -334,7 +344,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
           if (start > 0)
             SliverList(
               delegate: SliverChildBuilderDelegate(
-                (context, index) => _item(context, items[index]),
+                buildRow,
                 childCount: start,
                 addAutomaticKeepAlives: false,
                 addRepaintBoundaries: false,
@@ -346,9 +356,9 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
             delegate: SliverChildBuilderDelegate(
               (context, localIndex) {
                 final index = start + localIndex;
-                return _item(context, items[index]);
+                return buildRow(context, index);
               },
-              childCount: items.length - start,
+              childCount: itemCount - start,
               addAutomaticKeepAlives: false,
               addRepaintBoundaries: false,
               addSemanticIndexes: false,
