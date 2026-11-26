@@ -235,11 +235,28 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     );
   }
 
+  HomeState _watchHomeWithoutNews() {
+    ref.watch(
+      homeDataProvider.select(
+        (state) => switch (state) {
+          HomeSuccess(:final data, :final latestManga) => (data, latestManga),
+          _ => state,
+        },
+      ),
+    );
+    return ref.read(homeDataProvider);
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
     ref.listen(homeTabReselectionProvider, (_, _) => _onHomeTabReselected());
-    final homeDataAsync = ref.watch(homeDataProvider);
+    // On a desktop or tablet the shell has its own News button, which reads
+    // the latest articles on tap. Only phones render the News rail here.
+    final showNewsOnHome = !appLayoutsAvailable(context);
+    final homeDataAsync = showNewsOnHome
+        ? ref.watch(homeDataProvider)
+        : _watchHomeWithoutNews();
     final continueWatching = ref.watch(continueWatchingProvider);
     final profile = ref.watch(deviceProfileProvider).asData?.value;
     final isWidescreen =
@@ -260,6 +277,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 context,
                 homeDataAsync,
                 continueWatching,
+                showNewsOnHome: showNewsOnHome,
                 isWidescreen: isWidescreen,
               ),
             ),
@@ -425,6 +443,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     BuildContext context,
     HomeState state,
     List<HistoryItem> continueWatching, {
+    required bool showNewsOnHome,
     bool isWidescreen = false,
   }) {
     final l10n = AppLocalizations.of(context)!;
@@ -437,13 +456,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         ),
       );
     }
-
-    // On a desktop every layout — dock, side rail, top bar — carries a news
-    // button of its own, so home leaves the news row out rather than showing
-    // it twice. Phones keep the row.
-    final newsHasItsOwnButton = appLayoutsAvailable(context);
-    List<NewsItem> newsFor(List<NewsItem> news) =>
-        newsHasItsOwnButton ? const <NewsItem>[] : news;
 
     final activeProvider = ref.watch(activeProviderProvider);
     if (activeProvider == null) {
@@ -530,7 +542,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                     _buildProviderSectionsWithNews(
                       context,
                       data,
-                      newsFor(homeNews),
+                      showNewsOnHome ? homeNews : const <NewsItem>[],
                       latestManga,
                       activeProvider,
                       secondaryEpisodeRails,
