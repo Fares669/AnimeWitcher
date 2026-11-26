@@ -99,6 +99,7 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
   Uint8List? _processedPreviewBytes;
   String? _error;
   bool _ready = false;
+  bool _useOriginalSampleBacking = false;
   int _previewRequest = 0;
 
   /// Where the divider sits, as a fraction of the width.
@@ -151,6 +152,7 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
     setState(() {
       _ready = false;
       _processedPreviewBytes = null;
+      _useOriginalSampleBacking = false;
       _error = null;
     });
 
@@ -159,11 +161,14 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
           widget.shaderDirectory.trim().isEmpty) {
         final bytes = await rootBundle.load(Anime4kSamplePreview.assetPath);
         if (!_isCurrentRequest(request)) return;
+        final canShare = await _hasExactRootSampleVariant();
+        if (!_isCurrentRequest(request)) return;
         setState(() {
           _processedPreviewBytes = bytes.buffer.asUint8List(
             bytes.offsetInBytes,
             bytes.lengthInBytes,
           );
+          _useOriginalSampleBacking = canShare;
           _ready = true;
         });
         return;
@@ -425,9 +430,27 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
     return file;
   }
 
+  Future<bool> _hasExactRootSampleVariant() async {
+    try {
+      // AssetImage also obtains its variants from this cached manifest. Only
+      // the exact root sample may stand in for the byte-decoded output.
+      final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
+      final variants = manifest.getAssetVariants(Anime4kSamplePreview.assetPath);
+      if (variants == null || variants.length != 1) return false;
+      final variant = variants.single;
+      return variant.main &&
+          variant.key == Anime4kSamplePreview.assetPath &&
+          (variant.targetDevicePixelRatio ?? 1) == 1;
+    } catch (_) {
+      return false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final processedBytes = _processedPreviewBytes;
+    final shareSample = _useOriginalSampleBacking &&
+        identical(DefaultAssetBundle.of(context), rootBundle);
     final fill = widget.fillColor ?? Colors.white.withValues(alpha: 0.04);
 
     return Column(
@@ -482,11 +505,17 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
                               if (processedBytes != null && _ready)
                                 ClipRect(
                                   clipper: _LeftOf(_split),
-                                  child: Image.memory(
-                                    processedBytes,
-                                    fit: BoxFit.cover,
-                                    gaplessPlayback: true,
-                                  ),
+                                  child: shareSample
+                                      ? Image.asset(
+                                          Anime4kSamplePreview.assetPath,
+                                          fit: BoxFit.cover,
+                                          gaplessPlayback: true,
+                                        )
+                                      : Image.memory(
+                                          processedBytes,
+                                          fit: BoxFit.cover,
+                                          gaplessPlayback: true,
+                                        ),
                                 ),
                               if (!_ready)
                                 const Center(
