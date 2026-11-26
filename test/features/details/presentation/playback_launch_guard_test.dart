@@ -107,6 +107,24 @@ final _item = MultimediaItem(
 Episode _episode(int number) =>
     Episode(name: 'Saved episode', url: 'episode://$number', episode: number);
 
+class _SavedCatalogue extends MultimediaItem {
+  _SavedCatalogue()
+    : super(
+        title: _item.title,
+        url: _item.url,
+        posterUrl: _item.posterUrl,
+        episodes: [_episode(1), _episode(2), _episode(3)],
+      );
+
+  int reads = 0;
+
+  @override
+  List<Episode>? get episodes {
+    reads++;
+    return super.episodes;
+  }
+}
+
 class _Notifications extends NotificationService {
   int errors = 0;
   @override
@@ -580,8 +598,11 @@ void main() {
     },
   );
   testWidgets(
-    'completed download taps share guard before file preflight starts',
+    'distinct completed taps skip rejected preparation and unlock on Back',
     (tester) async {
+      tester.view.physicalSize = const Size(1000, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
       final file = Completer<File?>();
       final root = (await tester.runAsync(
         () => Directory.systemTemp.createTemp('aw-launch-ui-'),
@@ -595,6 +616,7 @@ void main() {
         PathProviderPlatform.instance = originalPaths;
         await root.delete(recursive: true);
       });
+      final catalogues = [_SavedCatalogue(), _SavedCatalogue()];
       final rows = [
         for (var episode = 1; episode <= 2; episode++)
           DownloadItem(
@@ -604,7 +626,7 @@ void main() {
             ),
             status: TaskStatus.complete,
             progress: 1,
-            item: _item,
+            item: catalogues[episode - 1],
             episode: _episode(episode),
             timestamp: episode,
           ),
@@ -637,19 +659,93 @@ void main() {
           await pumpUntilFuture(tester, widget.future!, 'saved artwork lookup');
         }
       }
-      for (var tap = 0; tap < 12; tap++) {
-        cards[tap % 2].onPlay();
+      Finder playSurface(DownloadItem row) {
+        final card = find.byKey(ValueKey(row.id));
+        final onPlay = tester.widget<CompletedDownloadEpisodeCard>(card).onPlay;
+        final target = find.descendant(
+          of: card,
+          matching: find.byWidgetPredicate(
+            (widget) => widget is InkWell && identical(widget.onTap, onPlay),
+          ),
+        ).hitTestable();
+        expect(target, findsOneWidget);
+        return target;
       }
+
+      final before = catalogues.map((catalogue) => catalogue.reads).toList();
+      await tester.tap(playSurface(rows.first));
       await tester.pump();
+      expect(catalogues.first.reads - before.first, 1);
       expect(app.files.calls, 1);
+      await tester.tap(playSurface(rows.last));
+      await tester.pump();
+      expect(catalogues.last.reads, before.last);
+      expect(app.files.calls, 1);
+      expect(app.pushes.count, 0);
+
       file.complete(File('/tmp/saved.mp4'));
       await tester.pumpAndSettle();
       expect(app.pushes.count, 1);
+      expect(app.opened?.episode?.episode, 1);
+      expect(app.opened?.item.episodes?.map((episode) => episode.episode), [
+        1,
+        2,
+        3,
+      ]);
+
+      app.router.pop();
+      await tester.pumpAndSettle();
+      await tester.tap(playSurface(rows.last));
+      await tester.pumpAndSettle();
+      expect(catalogues.last.reads - before.last, 1);
+      expect(app.files.calls, 2);
+      expect(app.pushes.count, 2);
+      expect(app.opened?.episode?.episode, 2);
+
       app.router.pop();
       await tester.pumpAndSettle();
       await app.dispose(tester);
     },
   );
+
+  testWidgets('throwing download preparation unlocks without a lookup', (
+    tester,
+  ) async {
+    final app = _Harness();
+    await app.mount(tester);
+    final launcher = app.container.read(playbackLauncherProvider);
+    var resolves = 0;
+    Future<String?> resolve() async {
+      resolves++;
+      return '/tmp/saved.mp4';
+    }
+
+    await expectLater(
+      launcher.playDownloaded(
+        app.origin,
+        '/tmp/saved.mp4',
+        prepareBaseItem: () => throw StateError('Invalid prepared catalogue'),
+        resolveUrl: resolve,
+      ),
+      throwsStateError,
+    );
+    expect(resolves, 0);
+    expect(app.pushes.count, 0);
+
+    final repeat = launcher.playDownloaded(
+      app.origin,
+      '/tmp/saved.mp4',
+      prepareBaseItem: () => _item,
+      resolveUrl: resolve,
+    );
+    await tester.pumpAndSettle();
+    expect(resolves, 1);
+    expect(app.pushes.count, 1);
+    app.router.pop();
+    await tester.pumpAndSettle();
+    await repeat;
+    await app.dispose(tester);
+  });
 
   testWidgets(
     'known downloaded episode keeps its identity when details catalog is absent',

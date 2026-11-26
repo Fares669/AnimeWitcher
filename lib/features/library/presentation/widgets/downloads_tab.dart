@@ -1157,16 +1157,19 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
     WidgetRef ref,
     DownloadItem item,
     AppLocalizations l10n,
-  ) => ref
-      .read(playbackLauncherProvider)
-      .play(
-        context,
-        item.trackingUrl,
-        baseItem: _savedPlaybackItem(item, items),
-        episode: item.episode,
-        resolveUrl: () => _resolveLocalPlaybackUrl(ref, item),
-        onMissingFile: () => _removeMissingDownload(context, ref, item, l10n),
-      );
+  ) {
+    final groupItems = items;
+    return ref
+        .read(playbackLauncherProvider)
+        .playDownloaded(
+          context,
+          item.trackingUrl,
+          prepareBaseItem: () => _savedPlaybackItem(item, groupItems),
+          episode: item.episode,
+          resolveUrl: () => _resolveLocalPlaybackUrl(ref, item),
+          onMissingFile: () => _removeMissingDownload(context, ref, item, l10n),
+        );
+  }
 
   Future<void> _confirmDeleteAll(BuildContext context, WidgetRef ref) async {
     if (_deleteInFlight) return;
@@ -1561,19 +1564,22 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
     BuildContext context,
     WidgetRef ref,
     AppLocalizations l10n,
-  ) => ref
-      .read(playbackLauncherProvider)
-      .play(
-        context,
-        item.trackingUrl,
-        baseItem: _savedPlaybackItem(
-          item,
-          ref.read(downloadsProvider).value ?? [item],
-        ),
-        episode: item.episode,
-        resolveUrl: () => _resolveLocalPlaybackUrl(ref, item),
-        onMissingFile: () => _removeMissingDownload(context, ref, item, l10n),
-      );
+  ) {
+    final selected = item;
+    return ref
+        .read(playbackLauncherProvider)
+        .playDownloaded(
+          context,
+          selected.trackingUrl,
+          prepareBaseItem: () => _savedPlaybackItem(
+            selected,
+            ref.read(downloadsProvider).value ?? [selected],
+          ),
+          episode: selected.episode,
+          resolveUrl: () => _resolveLocalPlaybackUrl(ref, item),
+          onMissingFile: () => _removeMissingDownload(context, ref, item, l10n),
+        );
+  }
 
   Future<void> _confirmDelete() async {
     if (_deleteInFlight) return;

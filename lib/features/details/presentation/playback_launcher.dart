@@ -440,7 +440,52 @@ class PlaybackLauncher {
     StreamResult? preselectedSource,
     Future<String?> Function()? resolveUrl,
     Future<void> Function()? onMissingFile,
-  }) => _guardLaunch(context, (launch) async {
+  }) => _guardLaunch(
+    context,
+    (launch) => _resolveAndPlay(
+      launch,
+      url,
+      baseItem: baseItem,
+      detailedItem: detailedItem,
+      episode: episode,
+      preselectedSource: preselectedSource,
+      resolveUrl: resolveUrl,
+      onMissingFile: onMissingFile,
+    ),
+  );
+
+  /// Prepares the local catalogue only for the accepted launch, synchronously
+  /// while the route owns the slot and before starting the file lookup.
+  Future<void> playDownloaded(
+    BuildContext context,
+    String url, {
+    required MultimediaItem Function() prepareBaseItem,
+    required Future<String?> Function() resolveUrl,
+    Episode? episode,
+    Future<void> Function()? onMissingFile,
+  }) => _guardLaunch(
+    context,
+    (launch) => _resolveAndPlay(
+      launch,
+      url,
+      baseItem: prepareBaseItem(),
+      episode: episode,
+      resolveUrl: resolveUrl,
+      onMissingFile: onMissingFile,
+    ),
+  );
+
+  Future<void> _resolveAndPlay(
+    _PlaybackLaunch launch,
+    String url, {
+    required MultimediaItem baseItem,
+    MultimediaItem? detailedItem,
+    Episode? episode,
+    StreamResult? preselectedSource,
+    Future<String?> Function()? resolveUrl,
+    Future<void> Function()? onMissingFile,
+  }) async {
+    final context = launch.context;
     final resolvedUrl = resolveUrl == null
         ? url
         : await launch.wait(resolveUrl);
@@ -458,7 +503,7 @@ class PlaybackLauncher {
       preselectedSource: preselectedSource,
       launch: launch,
     );
-  });
+  }
 
   Future<void> _play(
     BuildContext context,

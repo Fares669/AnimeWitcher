@@ -113,18 +113,22 @@ class _Playback extends PlaybackLauncher {
   final List<String> played = [];
   final List<MultimediaItem> playedItems = [];
   @override
-  Future<void> play(BuildContext context, String url, {
-    required MultimediaItem baseItem, MultimediaItem? detailedItem, Episode? episode,
-    StreamResult? preselectedSource, Future<String?> Function()? resolveUrl,
+  Future<void> playDownloaded(
+    BuildContext context,
+    String url, {
+    required MultimediaItem Function() prepareBaseItem,
+    required Future<String?> Function() resolveUrl,
+    Episode? episode,
     Future<void> Function()? onMissingFile,
   }) async {
-    final playableUrl = resolveUrl == null ? url : await resolveUrl();
+    final baseItem = prepareBaseItem();
+    final playableUrl = await resolveUrl();
     if (playableUrl == null) {
       await onMissingFile?.call();
       return;
     }
     played.add(playableUrl);
-    playedItems.add(detailedItem ?? baseItem);
+    playedItems.add(baseItem);
   }
 }
 
