@@ -855,7 +855,7 @@ class Anime3rbPlaybackResolver {
       quality: token.quality,
       headers: {
         'Referer': '${_origin.origin}/',
-        'User-Agent': kDefaultBrowserUserAgent,
+        'User-Agent': _activeUserAgent,
       },
       refreshUrl: token.watchUrl,
     ),

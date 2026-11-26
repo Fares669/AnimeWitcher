@@ -747,7 +747,9 @@ class Anime3rbProvider extends AnimeWitcherProvider {
 
   @override
   void prepareForNetworkRetry() {
-    _transport;
+    if (_transport case final DioAnime3rbTransport dioTransport) {
+      dioTransport.resetChallengeCooldown();
+    }
     _detailsCache.clear();
     _playback?.clearCache();
   }

@@ -5,9 +5,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:webview_cookie_manager_flutter/webview_cookie_manager.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import '../../../features/settings/presentation/widgets/anime3rb_auth_webview_screen.dart';
-import '../../network/http_defaults.dart';
 import '../../router/app_router.dart';
 import 'anime3rb_playback.dart';
 import 'anime3rb_transport.dart';
@@ -27,6 +27,25 @@ class Anime3rbWebViewSolver {
 
   static bool get isSupported =>
       !kIsWeb && Anime3rbAuthWebViewScreen.isSupported;
+
+  /// Applies platform-specific settings required for Cloudflare Turnstile
+  /// iframes (such as third-party cookies on Android) while keeping the
+  /// WebView's authentic native User-Agent so TLS/JS fingerprints stay aligned.
+  static Future<void> configurePlatformWebView(
+    WebViewController controller,
+  ) async {
+    try {
+      final platformController = controller.platform;
+      final platformCookieManager = WebViewCookieManager().platform;
+      if (platformController is AndroidWebViewController &&
+          platformCookieManager is AndroidWebViewCookieManager) {
+        await platformCookieManager.setAcceptThirdPartyCookies(
+          platformController,
+          true,
+        );
+      }
+    } catch (_) {}
+  }
 
   final WebviewCookieManager _cookieManager = WebviewCookieManager();
   Future<void> _queue = Future<void>.value();
@@ -55,6 +74,8 @@ class Anime3rbWebViewSolver {
   }
 
   Future<Anime3rbChallengeSolution?> _runCloudflareSession(Uri uri) async {
+    var sawChallenge = false;
+    DateTime? clearedWithoutCookieAt;
     return _withWebViewOverlay<Anime3rbChallengeSolution>(
       initialUri: uri,
       title: 'التحقق من Anime3rb',
@@ -66,23 +87,36 @@ class Anime3rbWebViewSolver {
           controller,
           '''
 (function() {
+  var href = String(window.location && window.location.href ? window.location.href : '');
   var title = (document.title || '').toLowerCase();
-  var text = document.body ? (document.body.innerText || '') : '';
-  var cfEl = document.querySelector('#challenge-form, #challenge-running, #cf-please-wait, .cf-browser-verification');
+  var text = document.body ? (document.body.textContent || '') : '';
+  var textLower = text.toLowerCase();
+  var cfEl = document.querySelector(
+    '#challenge-form, #challenge-running, #challenge-stage, #cf-please-wait, .cf-browser-verification, script[src*="/cdn-cgi/challenge-platform/"]'
+  );
   var isCf = !!cfEl ||
+    typeof window._cf_chl_opt !== 'undefined' ||
+    href.indexOf('/cdn-cgi/challenge') !== -1 ||
     title.indexOf('just a moment') !== -1 ||
     title.indexOf('attention required') !== -1 ||
     title.indexOf('لحظة واحدة') !== -1 ||
-    text.indexOf('Checking your browser') !== -1 ||
-    text.indexOf('Verify you are human') !== -1 ||
-    text.indexOf('Enable JavaScript and cookies') !== -1;
-  var hasInteractive = !!document.querySelector('iframe[src*="challenges.cloudflare.com"], input[name="cf-turnstile-response"], .cf-turnstile, #turnstile-wrapper');
+    title.indexOf('security verification') !== -1 ||
+    textLower.indexOf('checking your browser') !== -1 ||
+    textLower.indexOf('verify you are human') !== -1 ||
+    textLower.indexOf('performing security verification') !== -1 ||
+    textLower.indexOf('verifies you are not a bot') !== -1 ||
+    textLower.indexOf('security service to protect against malicious bots') !== -1 ||
+    textLower.indexOf('enable javascript and cookies') !== -1;
+  var hasInteractive = !!document.querySelector(
+    'iframe[src*="challenges.cloudflare.com"], input[name="cf-turnstile-response"], .cf-turnstile, #turnstile-wrapper'
+  );
   return JSON.stringify({
     isCf: isCf,
     hasInteractive: hasInteractive,
     ready: document.readyState || '',
     len: text.trim().length,
-    ua: navigator.userAgent || ''
+    ua: navigator.userAgent || '',
+    href: href
   });
 })()
 ''',
@@ -93,15 +127,32 @@ class Anime3rbWebViewSolver {
         final ready = state['ready']?.toString() ?? '';
         final len = (state['len'] as num?)?.toInt() ?? 0;
         final ua = state['ua']?.toString().trim();
+        final href = state['href']?.toString().trim() ?? '';
+        final effectiveUrl = href.isNotEmpty ? href : currentUrl;
 
-        if (isCf && hasInteractive) {
-          promoteVisible();
-        }
-        if (isCf || ready != 'complete') return null;
-
-        final cookies = await _collectCookies(controller, currentUrl);
-        if (!cookies.containsKey('cf_clearance') && len < 80) {
+        if (isCf) {
+          sawChallenge = true;
+          clearedWithoutCookieAt = null;
+          if (hasInteractive) {
+            promoteVisible();
+          }
           return null;
+        }
+        if (ready != 'complete') return null;
+
+        final cookies = await _collectCookies(controller, effectiveUrl);
+        final hasClearance = cookies.containsKey('cf_clearance');
+        if (!hasClearance) {
+          if (len < 80) return null;
+          if (sawChallenge) {
+            // Give iOS WKHTTPCookieStore a brief window to flush the newly
+            // issued HttpOnly cf_clearance cookie after the challenge redirect.
+            clearedWithoutCookieAt ??= DateTime.now();
+            if (DateTime.now().difference(clearedWithoutCookieAt!) <
+                const Duration(milliseconds: 1500)) {
+              return null;
+            }
+          }
         }
         final html = await _evalString(
           controller,
@@ -154,12 +205,17 @@ class Anime3rbWebViewSolver {
           '''
 (function() {
   var title = (document.title || '').toLowerCase();
-  var text = document.body ? (document.body.innerText || '') : '';
-  var cfChallenge = !!document.querySelector('#challenge-form, #challenge-running, .cf-browser-verification') ||
+  var text = document.body ? (document.body.textContent || '') : '';
+  var textLower = text.toLowerCase();
+  var cfChallenge = !!document.querySelector('#challenge-form, #challenge-running, #challenge-stage, .cf-browser-verification, script[src*="/cdn-cgi/challenge-platform/"]') ||
+    typeof window._cf_chl_opt !== 'undefined' ||
     title.indexOf('just a moment') !== -1 ||
     title.indexOf('attention required') !== -1 ||
-    text.indexOf('Checking your browser') !== -1 ||
-    text.indexOf('Verify you are human') !== -1;
+    title.indexOf('security verification') !== -1 ||
+    textLower.indexOf('checking your browser') !== -1 ||
+    textLower.indexOf('verify you are human') !== -1 ||
+    textLower.indexOf('performing security verification') !== -1 ||
+    textLower.indexOf('verifies you are not a bot') !== -1;
 
   var managedWrap = document.querySelector('.captcha-wrapper');
   var managedVisible = false;
@@ -431,136 +487,136 @@ class Anime3rbWebViewSolver {
     }
 
     controller = WebViewController();
-    unawaited(controller.setJavaScriptMode(JavaScriptMode.unrestricted));
-    unawaited(
-      controller.setNavigationDelegate(
-        NavigationDelegate(
-          onProgress: (p) {
-            if (!completer.isCompleted) {
-              progress.value = p / 100.0;
-              if (onProgressHook != null) {
-                unawaited(onProgressHook(controller, p));
-              }
+    await controller.setJavaScriptMode(JavaScriptMode.unrestricted);
+    await configurePlatformWebView(controller);
+    await controller.setNavigationDelegate(
+      NavigationDelegate(
+        onProgress: (p) {
+          if (!completer.isCompleted) {
+            progress.value = p / 100.0;
+            if (onProgressHook != null) {
+              unawaited(onProgressHook(controller, p));
             }
-          },
-          onUrlChange: (change) {
-            if (change.url != null && change.url!.isNotEmpty) {
-              currentUrl = change.url!;
+          }
+        },
+        onUrlChange: (change) {
+          if (change.url != null && change.url!.isNotEmpty) {
+            currentUrl = change.url!;
+          }
+        },
+        onPageStarted: (url) {
+          if (url.isNotEmpty) currentUrl = url;
+          if (onPageStartedHook != null) {
+            unawaited(onPageStartedHook(controller));
+          }
+        },
+        onPageFinished: (url) {
+          if (url.isNotEmpty) currentUrl = url;
+          unawaited(() async {
+            if (onPageFinishedHook != null) {
+              await onPageFinishedHook(controller);
             }
-          },
-          onPageStarted: (url) {
-            if (url.isNotEmpty) currentUrl = url;
-            if (onPageStartedHook != null) {
-              unawaited(onPageStartedHook(controller));
-            }
-          },
-          onPageFinished: (url) {
-            if (url.isNotEmpty) currentUrl = url;
-            unawaited(() async {
-              if (onPageFinishedHook != null) {
-                await onPageFinishedHook(controller);
-              }
-              await checkNow();
-            }());
-          },
-        ),
+            await checkNow();
+          }());
+        },
       ),
     );
-    try {
-      await controller.setUserAgent(kDefaultBrowserUserAgent);
-    } catch (_) {}
 
-    final webViewWidget = WebViewWidget(controller: controller);
+    final webViewKey = GlobalKey();
+    final webViewWidget = WebViewWidget(
+      key: webViewKey,
+      controller: controller,
+    );
 
     entry = OverlayEntry(
       builder: (context) => ValueListenableBuilder<bool>(
         valueListenable: visible,
         builder: (context, isVisible, child) {
-          if (!isVisible) {
-            return Positioned(
-              left: 0,
-              top: 0,
-              width: 390,
-              height: 640,
-              child: IgnorePointer(child: Opacity(opacity: 0.01, child: child)),
-            );
-          }
           final size = MediaQuery.sizeOf(context);
           final maxWidth = (size.width - 32).clamp(280.0, 520.0);
           final maxHeight = (size.height * 0.72).clamp(360.0, 620.0);
           return Positioned.fill(
-            child: Material(
-              color: Colors.black54,
-              child: SafeArea(
-                child: Center(
-                  child: Container(
-                    width: maxWidth,
-                    height: maxHeight,
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.surface,
-                      borderRadius: BorderRadius.circular(18),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Colors.black38,
-                          blurRadius: 24,
-                          offset: Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: Column(
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      title,
-                                      style: Theme.of(
-                                        context,
-                                      ).textTheme.titleMedium,
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      subtitle,
-                                      style: Theme.of(
-                                        context,
-                                      ).textTheme.bodySmall,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              IconButton(
-                                tooltip: 'إعادة التحميل',
-                                icon: const Icon(Icons.refresh_rounded),
-                                onPressed: () => unawaited(
-                                  controller.loadRequest(
-                                    initialUri,
-                                    headers: requestHeaders,
+            child: IgnorePointer(
+              ignoring: !isVisible,
+              child: Opacity(
+                opacity: isVisible ? 1.0 : 0.01,
+                child: Material(
+                  color: isVisible ? Colors.black54 : Colors.transparent,
+                  child: SafeArea(
+                    child: Center(
+                      child: Container(
+                        width: maxWidth,
+                        height: maxHeight,
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.surface,
+                          borderRadius: BorderRadius.circular(18),
+                          boxShadow: isVisible
+                              ? const [
+                                  BoxShadow(
+                                    color: Colors.black38,
+                                    blurRadius: 24,
+                                    offset: Offset(0, 10),
                                   ),
-                                ),
-                              ),
-                              IconButton(
-                                tooltip: 'إغلاق',
-                                icon: const Icon(Icons.close),
-                                onPressed: () => finish(null),
-                              ),
-                            ],
-                          ),
+                                ]
+                              : const [],
                         ),
-                        ValueListenableBuilder<double>(
-                          valueListenable: progress,
-                          builder: (_, value, _) => value > 0 && value < 1
-                              ? LinearProgressIndicator(value: value)
-                              : const Divider(height: 1),
+                        clipBehavior: Clip.antiAlias,
+                        child: Column(
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          title,
+                                          style: Theme.of(
+                                            context,
+                                          ).textTheme.titleMedium,
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          subtitle,
+                                          style: Theme.of(
+                                            context,
+                                          ).textTheme.bodySmall,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  IconButton(
+                                    tooltip: 'إعادة التحميل',
+                                    icon: const Icon(Icons.refresh_rounded),
+                                    onPressed: () => unawaited(
+                                      controller.loadRequest(
+                                        initialUri,
+                                        headers: requestHeaders,
+                                      ),
+                                    ),
+                                  ),
+                                  IconButton(
+                                    tooltip: 'إغلاق',
+                                    icon: const Icon(Icons.close),
+                                    onPressed: () => finish(null),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            ValueListenableBuilder<double>(
+                              valueListenable: progress,
+                              builder: (_, value, _) => value > 0 && value < 1
+                                  ? LinearProgressIndicator(value: value)
+                                  : const Divider(height: 1),
+                            ),
+                            Expanded(child: child!),
+                          ],
                         ),
-                        Expanded(child: child!),
-                      ],
+                      ),
                     ),
                   ),
                 ),
@@ -581,7 +637,7 @@ class Anime3rbWebViewSolver {
     }
 
     pollTimer = Timer.periodic(
-      const Duration(milliseconds: 450),
+      const Duration(milliseconds: 650),
       (_) => unawaited(checkNow()),
     );
     revealTimer = Timer(invisibleGracePeriod, () {

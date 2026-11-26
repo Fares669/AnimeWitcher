@@ -462,4 +462,136 @@ var video_sources = [
     expect(attempts, 2);
     expect(html, contains('ok'));
   });
+
+  test('isCloudflareChallenge recognizes modern Performing security verification interstitials', () {
+    const resp = Anime3rbHttpResponse(
+      statusCode: 403,
+      body:
+          '<html><body><h1>anime3rb.com</h1>'
+          '<h2>Performing security verification</h2>'
+          '<p>This website uses a security service to protect against malicious bots. '
+          'This page is displayed while the website verifies you are not a bot.</p>'
+          '</body></html>',
+    );
+    expect(resp.isCloudflareChallenge, isTrue);
+  });
+
+  test('DioAnime3rbTransport coalesces concurrent 403 challenges on the same domain into one solve', () async {
+    var resolverCalls = 0;
+    final dio = Dio();
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          final cookie = options.headers['Cookie']?.toString() ?? '';
+          if (!cookie.contains('cf_clearance=ios-cleared')) {
+            handler.resolve(
+              Response<String>(
+                requestOptions: options,
+                statusCode: 403,
+                headers: Headers.fromMap({
+                  'cf-mitigated': ['challenge'],
+                }),
+                data: '<title>Performing security verification</title>',
+              ),
+            );
+            return;
+          }
+          expect(
+            options.headers['User-Agent'],
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
+          );
+          expect(options.headers.containsKey('sec-ch-ua'), isFalse);
+          handler.resolve(
+            Response<String>(
+              requestOptions: options,
+              statusCode: 200,
+              data: '<div data-path="${options.uri.path}">ok</div>',
+            ),
+          );
+        },
+      ),
+    );
+
+    final transport = DioAnime3rbTransport(
+      dio: dio,
+      challengeResolver: (uri, {currentCookies = const <String, String>{}}) async {
+        resolverCalls++;
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+        return (
+          cookies: const {'cf_clearance': 'ios-cleared'},
+          html: '<div data-path="${uri.path}">webview</div>',
+          userAgent:
+              'Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
+        );
+      },
+    );
+
+    final results = await Future.wait([
+      transport.fetchHtml(Uri.https('anime3rb.com', '/')),
+      transport.fetchHtml(Uri.https('anime3rb.com', '/titles/list')),
+      transport.fetchHtml(Uri.https('anime3rb.com', '/titles/list/movie')),
+    ]);
+
+    expect(resolverCalls, 1);
+    expect(results[0], contains('data-path="/"'));
+    expect(results[1], contains('data-path="/titles/list"'));
+    expect(results[2], contains('data-path="/titles/list/movie"'));
+  });
+
+  test('DioAnime3rbTransport respects dismissal cooldown until reset and never reuses another URI HTML on TLS-bound 403', () async {
+    var resolverCalls = 0;
+    final dio = Dio();
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          handler.resolve(
+            Response<String>(
+              requestOptions: options,
+              statusCode: 403,
+              headers: Headers.fromMap({
+                'cf-mitigated': ['challenge'],
+              }),
+              data: '<title>Just a moment...</title>',
+            ),
+          );
+        },
+      ),
+    );
+
+    var shouldSolve = false;
+    final transport = DioAnime3rbTransport(
+      dio: dio,
+      challengeResolver: (uri, {currentCookies = const <String, String>{}}) async {
+        resolverCalls++;
+        if (!shouldSolve) return null;
+        return (
+          cookies: const {'cf_clearance': 'wk-bound'},
+          html: '<div data-webview-path="${uri.path}">ok</div>',
+          userAgent:
+              'Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
+        );
+      },
+    );
+
+    // Dismissed prompt enters cooldown so immediate follow-up doesn't re-open it.
+    await expectLater(
+      transport.fetchHtml(Uri.https('anime3rb.com', '/')),
+      throwsA(isA<Anime3rbBrowserRequiredException>()),
+    );
+    await expectLater(
+      transport.fetchHtml(Uri.https('anime3rb.com', '/titles/list')),
+      throwsA(isA<Anime3rbBrowserRequiredException>()),
+    );
+    expect(resolverCalls, 1);
+
+    // Explicit retry resets cooldown; when Dio stays 403, each URI gets its own HTML.
+    shouldSolve = true;
+    transport.resetChallengeCooldown();
+    final pages = await Future.wait([
+      transport.fetchHtml(Uri.https('anime3rb.com', '/')),
+      transport.fetchHtml(Uri.https('anime3rb.com', '/titles/list')),
+    ]);
+    expect(pages[0], contains('data-webview-path="/"'));
+    expect(pages[1], contains('data-webview-path="/titles/list"'));
+  });
 }

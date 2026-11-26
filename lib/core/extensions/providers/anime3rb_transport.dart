@@ -120,7 +120,11 @@ class Anime3rbHttpResponse {
     return lower.contains('just a moment') ||
         lower.contains('challenges.cloudflare.com') ||
         lower.contains('cf-browser-verification') ||
-        lower.contains('cf-turnstile');
+        lower.contains('cf-turnstile') ||
+        lower.contains('performing security verification') ||
+        lower.contains('verifies you are not a bot') ||
+        lower.contains('/cdn-cgi/challenge-platform/') ||
+        lower.contains('_cf_chl_opt');
   }
 
   bool get hasMediaContent {
@@ -230,6 +234,9 @@ class DioAnime3rbTransport implements Anime3rbTransport {
   final Anime3rbChallengeResolver? _challengeResolver;
   final Map<String, Map<String, String>> _cookiesByDomain = {};
   final Map<String, String?> _lastAuthCookies = {};
+  final Map<String, Future<({Uri uri, Anime3rbChallengeSolution? solution})>>
+  _inFlightChallenges = {};
+  final Map<String, DateTime> _challengeDismissedUntil = {};
   String? _overrideUserAgent;
 
   String get effectiveUserAgent =>
@@ -238,6 +245,13 @@ class DioAnime3rbTransport implements Anime3rbTransport {
       : kDefaultBrowserUserAgent;
 
   static const _hostRequestTimeout = Duration(seconds: 10);
+  static const _dismissCooldown = Duration(seconds: 20);
+
+  /// Clears any temporary cooldown set after a dismissed Cloudflare prompt so
+  /// an explicit user retry can trigger verification again immediately.
+  void resetChallengeCooldown() {
+    _challengeDismissedUntil.clear();
+  }
 
   static String? _cookieDomain(Uri uri) {
     final host = uri.host.toLowerCase();
@@ -389,7 +403,8 @@ class DioAnime3rbTransport implements Anime3rbTransport {
     }
   }
 
-  Future<Anime3rbChallengeSolution?> _resolveChallengeIfPossible(
+  Future<({Uri uri, Anime3rbChallengeSolution solution})?>
+  _resolveChallengeIfPossible(
     Uri uri,
     Anime3rbHttpResponse blockedResponse,
     CancelToken? cancelToken,
@@ -399,19 +414,71 @@ class DioAnime3rbTransport implements Anime3rbTransport {
         cancelToken?.isCancelled == true) {
       return null;
     }
+    final domainKey = _cookieDomain(uri) ?? uri.host.toLowerCase();
+    final outcome = await _getOrStartChallenge(uri, domainKey);
+    final solution = outcome.solution;
+    return solution == null ? null : (uri: outcome.uri, solution: solution);
+  }
+
+  Future<({Uri uri, Anime3rbChallengeSolution? solution})>
+  _getOrStartChallenge(Uri uri, String domainKey) {
+    final existing = _inFlightChallenges[domainKey];
+    if (existing != null) return existing;
+
+    final dismissedUntil = _challengeDismissedUntil[domainKey];
+    if (dismissedUntil != null && DateTime.now().isBefore(dismissedUntil)) {
+      return Future<({Uri uri, Anime3rbChallengeSolution? solution})>.value((
+        uri: uri,
+        solution: null,
+      ));
+    }
+
+    late final Future<({Uri uri, Anime3rbChallengeSolution? solution})> future;
+    future = _runChallenge(uri, domainKey).whenComplete(() {
+      if (identical(_inFlightChallenges[domainKey], future)) {
+        _inFlightChallenges.remove(domainKey);
+      }
+    });
+    _inFlightChallenges[domainKey] = future;
+    return future;
+  }
+
+  Future<({Uri uri, Anime3rbChallengeSolution? solution})> _runChallenge(
+    Uri uri,
+    String domainKey,
+  ) async {
     final domain = _cookieDomain(uri);
     final current = domain == null
         ? const <String, String>{}
         : Map<String, String>.unmodifiable(
             _cookiesByDomain[domain] ?? const <String, String>{},
           );
-    final solution = await _challengeResolver(uri, currentCookies: current);
-    if (solution == null) return null;
+    final solution = await _challengeResolver!(uri, currentCookies: current);
+    if (solution == null) {
+      _challengeDismissedUntil[domainKey] = DateTime.now().add(
+        _dismissCooldown,
+      );
+      return (uri: uri, solution: null);
+    }
+    _challengeDismissedUntil.remove(domainKey);
     absorbCookies(uri, solution.cookies);
     if (solution.userAgent != null && solution.userAgent!.trim().isNotEmpty) {
       _overrideUserAgent = solution.userAgent!.trim();
     }
-    return solution;
+    return (uri: uri, solution: solution);
+  }
+
+  Future<Anime3rbChallengeSolution?> _fetchSpecificUriAfterClearance(
+    Uri uri,
+  ) async {
+    if (_challengeResolver == null) return null;
+    final domainKey = _cookieDomain(uri) ?? uri.host.toLowerCase();
+    final dismissedUntil = _challengeDismissedUntil[domainKey];
+    if (dismissedUntil != null && DateTime.now().isBefore(dismissedUntil)) {
+      return null;
+    }
+    final outcome = await _runChallenge(uri, domainKey);
+    return outcome.solution;
   }
 
   ({CancelToken? token, Timer? timer}) _requestCancellation(
@@ -458,8 +525,8 @@ class DioAnime3rbTransport implements Anime3rbTransport {
       cancelToken: cancelToken,
       operation: operation,
     );
-    final solution = await _resolveChallengeIfPossible(uri, first, cancelToken);
-    if (solution == null) return first;
+    final resolved = await _resolveChallengeIfPossible(uri, first, cancelToken);
+    if (resolved == null) return first;
 
     final retried = await _getOnce(
       uri,
@@ -469,18 +536,33 @@ class DioAnime3rbTransport implements Anime3rbTransport {
       cancelToken: cancelToken,
       operation: '${operation}_cf_retry',
     );
-    if (retried.isCloudflareChallenge &&
-        followRedirects &&
-        !inspectMedia &&
-        solution.html != null &&
-        solution.html!.trim().isNotEmpty) {
-      final webViewResp = Anime3rbHttpResponse(
-        statusCode: 200,
-        body: solution.html!,
-        finalUri: uri,
-      );
-      if (!webViewResp.isCloudflareChallenge) {
-        return webViewResp;
+    if (retried.isCloudflareChallenge && followRedirects && !inspectMedia) {
+      if (resolved.uri == uri &&
+          resolved.solution.html != null &&
+          resolved.solution.html!.trim().isNotEmpty) {
+        final webViewResp = Anime3rbHttpResponse(
+          statusCode: 200,
+          body: resolved.solution.html!,
+          finalUri: uri,
+        );
+        if (!webViewResp.isCloudflareChallenge) {
+          return webViewResp;
+        }
+      }
+      if (resolved.uri != uri &&
+          cancelToken?.isCancelled != true &&
+          resolved.solution.cookies.isNotEmpty) {
+        final direct = await _fetchSpecificUriAfterClearance(uri);
+        if (direct?.html != null && direct!.html!.trim().isNotEmpty) {
+          final webViewResp = Anime3rbHttpResponse(
+            statusCode: 200,
+            body: direct.html!,
+            finalUri: uri,
+          );
+          if (!webViewResp.isCloudflareChallenge) {
+            return webViewResp;
+          }
+        }
       }
     }
     return retried;
