@@ -594,4 +594,113 @@ var video_sources = [
     expect(pages[0], contains('data-webview-path="/"'));
     expect(pages[1], contains('data-webview-path="/titles/list"'));
   });
+
+  test('normalizeAnime3rbWebViewUserAgent restores Safari tokens on iOS WKWebView and strips wv on Android', () {
+    expect(
+      normalizeAnime3rbWebViewUserAgent(
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 18_3_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
+      ),
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 18_3_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1',
+    );
+    expect(
+      normalizeAnime3rbWebViewUserAgent(
+        'Mozilla/5.0 (iPad; CPU OS 18_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
+      ),
+      'Mozilla/5.0 (iPad; CPU OS 18_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Mobile/15E148 Safari/604.1',
+    );
+    expect(
+      normalizeAnime3rbWebViewUserAgent(
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1',
+      ),
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1',
+    );
+    expect(
+      normalizeAnime3rbWebViewUserAgent(
+        'Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/UP1A.231005.007; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/134.0.6998.135 Mobile Safari/537.36',
+      ),
+      'Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/UP1A.231005.007) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6998.135 Mobile Safari/537.36',
+    );
+  });
+
+  test('DioAnime3rbTransport switches to parked webViewFetcher when Dio stays TLS-blocked after challenge solve', () async {
+    var dioCalls = 0;
+    var solverCalls = 0;
+    var webViewFetchCalls = 0;
+
+    final dio = Dio();
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          dioCalls++;
+          handler.resolve(
+            Response<String>(
+              requestOptions: options,
+              statusCode: 403,
+              headers: Headers.fromMap({
+                'cf-mitigated': ['challenge'],
+              }),
+              data: '<title>Performing security verification</title>',
+            ),
+          );
+        },
+      ),
+    );
+
+    final transport = DioAnime3rbTransport(
+      dio: dio,
+      challengeResolver: (uri, {currentCookies = const <String, String>{}}) async {
+        solverCalls++;
+        return (
+          cookies: const {'cf_clearance': 'wk-bound'},
+          html: '<div data-path="${uri.path}">solved-home</div>',
+          userAgent:
+              'Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1',
+        );
+      },
+      webViewFetcher: (
+        uri, {
+        method = 'GET',
+        headers = const {},
+        body,
+        followRedirects = true,
+      }) async {
+        webViewFetchCalls++;
+        return Anime3rbHttpResponse(
+          statusCode: 200,
+          body: '<div data-wv-path="${uri.path}" data-method="$method">ok</div>',
+          finalUri: uri,
+        );
+      },
+    );
+
+    final firstWave = await Future.wait([
+      transport.fetchHtml(Uri.https('anime3rb.com', '/')),
+      transport.fetchHtml(Uri.https('anime3rb.com', '/titles/list')),
+      transport.fetchHtml(Uri.https('anime3rb.com', '/titles/list/movie')),
+    ]);
+
+    expect(solverCalls, 1);
+    expect(firstWave[0], contains('solved-home'));
+    expect(firstWave[1], contains('data-wv-path="/titles/list"'));
+    expect(firstWave[2], contains('data-wv-path="/titles/list/movie"'));
+
+    final dioCallsAfterFirstWave = dioCalls;
+    // Subsequent GET and POST go directly through the parked WebView fetch bridge
+    // without wasting Dio 403 round-trips or opening another challenge modal.
+    final details = await transport.fetchHtml(
+      Uri.https('anime3rb.com', '/titles/one-piece'),
+    );
+    final postResp = await transport.post(
+      Uri.https('anime3rb.com', '/livewire/update'),
+      body: '{"query":"one piece"}',
+      headers: const {'Content-Type': 'application/json'},
+    );
+
+    expect(dioCalls, dioCallsAfterFirstWave);
+    expect(solverCalls, 1);
+    expect(webViewFetchCalls, 4);
+    expect(details, contains('data-wv-path="/titles/one-piece"'));
+    expect(postResp.statusCode, 200);
+    expect(postResp.body, contains('data-method="POST"'));
+  });
 }

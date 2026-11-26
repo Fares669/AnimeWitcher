@@ -104,7 +104,7 @@ class _Anime3rbAuthWebViewScreenState
   @override
   void initState() {
     super.initState();
-    _controller = WebViewController();
+    _controller = Anime3rbWebViewSolver.createPlatformController();
     unawaited(_loadInitialPage());
   }
 

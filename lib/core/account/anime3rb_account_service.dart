@@ -1072,6 +1072,7 @@ final anime3rbTransportProvider = Provider<Anime3rbTransport>((ref) {
           uri,
           currentCookies: currentCookies,
         ),
+    webViewFetcher: Anime3rbWebViewSolver.instance.fetchViaWebView,
   );
   ref.onDispose(() => transport.close(force: true));
   return transport;

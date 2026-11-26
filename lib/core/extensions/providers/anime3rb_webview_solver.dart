@@ -1,25 +1,74 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:webview_cookie_manager_flutter/webview_cookie_manager.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 import '../../../features/settings/presentation/widgets/anime3rb_auth_webview_screen.dart';
 import '../../router/app_router.dart';
+import '../../services/app_diagnostics.dart';
 import 'anime3rb_playback.dart';
 import 'anime3rb_transport.dart';
+
+class _ParkedWebViewSession {
+  _ParkedWebViewSession({
+    required this.origin,
+    required this.controller,
+    required this.entry,
+    required this.visible,
+    required this.parked,
+    required this.progress,
+    required this.pendingFetches,
+    required this.onDispose,
+  });
+
+  final String origin;
+  final WebViewController controller;
+  final OverlayEntry entry;
+  final ValueNotifier<bool> visible;
+  final ValueNotifier<bool> parked;
+  final ValueNotifier<double> progress;
+  final Map<String, Completer<Anime3rbHttpResponse?>> pendingFetches;
+  final VoidCallback onDispose;
+  Timer? idleTimer;
+  bool _disposed = false;
+
+  void touch() {
+    if (_disposed) return;
+    idleTimer?.cancel();
+    idleTimer = Timer(const Duration(minutes: 15), dispose);
+  }
+
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    idleTimer?.cancel();
+    for (final completer in pendingFetches.values) {
+      if (!completer.isCompleted) completer.complete(null);
+    }
+    pendingFetches.clear();
+    try {
+      entry.remove();
+    } catch (_) {}
+    visible.dispose();
+    parked.dispose();
+    progress.dispose();
+    onDispose();
+  }
+}
 
 /// Cross-platform (iOS WKWebView & Android WebView) solver for Anime3rb
 /// Cloudflare challenges and Vid3rb Turnstile source resolution.
 ///
-/// Always attempts an invisible, non-interactive load first so Cloudflare JS
-/// checks and Vid3rb's `#cf-invisible-turnstile` complete silently without user
-/// interruption. If Cloudflare or Vid3rb presents an interactive verification
-/// prompt, the same live WebView is promoted into a visible verification dialog
-/// so the user can complete verification legitimately.
+/// After clearing a Cloudflare challenge for `anime3rb.com`, keeps the cleared
+/// WebView parked silently so same-origin `fetch()` calls can reuse the live
+/// Apple CFNetwork / Android WebView TLS fingerprint and `cf_clearance` cookie
+/// whenever Dart's `HttpClient` (Dio) is rejected due to TLS/JA4 binding.
 class Anime3rbWebViewSolver {
   Anime3rbWebViewSolver._();
 
@@ -28,10 +77,46 @@ class Anime3rbWebViewSolver {
   static bool get isSupported =>
       !kIsWeb && Anime3rbAuthWebViewScreen.isSupported;
 
+  static const String _fetchBridgeChannelName = 'awAnime3rbFetch';
+  static const Set<String> _cloudflareCookieNames = <String>{
+    'cf_clearance',
+    '__cf_bm',
+    '_cfuvid',
+    'cf_chl_2',
+    'cf_chl_rc_m',
+    'cf_chl_rc_ni',
+  };
+  static const Set<String> _forbiddenFetchHeaders = <String>{
+    'cookie',
+    'user-agent',
+    'referer',
+    'origin',
+    'host',
+    'content-length',
+    'connection',
+    'accept-encoding',
+  };
+
+  /// Creates a platform-configured [WebViewController] with iOS WebKit
+  /// preferences needed for Cloudflare Turnstile iframes.
+  static WebViewController createPlatformController() {
+    late final PlatformWebViewControllerCreationParams params;
+    if (WebViewPlatform.instance is WebKitWebViewPlatform) {
+      params = WebKitWebViewControllerCreationParams(
+        allowsInlineMediaPlayback: true,
+        mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
+        javaScriptCanOpenWindowsAutomatically: true,
+      );
+    } else {
+      params = const PlatformWebViewControllerCreationParams();
+    }
+    return WebViewController.fromPlatformCreationParams(params);
+  }
+
   /// Applies platform-specific settings required for Cloudflare Turnstile
-  /// iframes (such as third-party cookies on Android) while keeping the
-  /// WebView's authentic native User-Agent so TLS/JS fingerprints stay aligned.
-  static Future<void> configurePlatformWebView(
+  /// iframes (Android third-party cookies, authentic Mobile Safari / Chrome
+  /// User-Agent normalization without cross-OS spoofing).
+  static Future<String?> configurePlatformWebView(
     WebViewController controller,
   ) async {
     try {
@@ -45,15 +130,186 @@ class Anime3rbWebViewSolver {
         );
       }
     } catch (_) {}
+
+    try {
+      final nativeUa = await controller.getUserAgent();
+      final normalized = normalizeAnime3rbWebViewUserAgent(nativeUa);
+      if (normalized != null &&
+          normalized.isNotEmpty &&
+          normalized != nativeUa?.trim()) {
+        await controller.setUserAgent(normalized);
+      }
+      return normalized ?? nativeUa?.trim();
+    } catch (_) {
+      return null;
+    }
   }
 
   final WebviewCookieManager _cookieManager = WebviewCookieManager();
   Future<void> _queue = Future<void>.value();
+  _ParkedWebViewSession? _parkedSession;
+  int _fetchSeq = 0;
+
+  void _recordWebViewDiagnostic(
+    String action, {
+    String? status,
+    int? durationMs,
+    String? reason,
+    bool? result,
+  }) {
+    appDiagnostics.record('anime3rb.webview', <String, Object?>{
+      'action': action,
+      if (status != null && status.isNotEmpty) 'status': status,
+      'durationMs': ?durationMs,
+      if (reason != null && reason.isNotEmpty) 'reason': reason,
+      'result': ?result,
+    });
+  }
+
+  /// Releases any parked background WebView session (e.g. on explicit retry).
+  void disposeParkedSession() {
+    final session = _parkedSession;
+    _parkedSession = null;
+    session?.dispose();
+  }
 
   Future<T?> _serialized<T>(Future<T?> Function() action) {
     final next = _queue.then<T?>((_) => action(), onError: (_) => action());
     _queue = next.then((_) {}, onError: (_) {});
     return next;
+  }
+
+  /// Executes a same-origin HTTP request through the already-cleared parked
+  /// WebView using `window.fetch(..., { credentials: 'include' })` so requests
+  /// inherit the real browser TLS/JA4 fingerprint, HTTP/2 stack, and `HttpOnly`
+  /// `cf_clearance` cookies.
+  Future<Anime3rbHttpResponse?> fetchViaWebView(
+    Uri uri, {
+    String method = 'GET',
+    Map<String, String> headers = const <String, String>{},
+    Object? body,
+    bool followRedirects = true,
+  }) async {
+    final session = _parkedSession;
+    if (session == null ||
+        !followRedirects ||
+        session.origin != uri.origin ||
+        (body != null && body is! String)) {
+      return null;
+    }
+
+    session.touch();
+    final elapsed = Stopwatch()..start();
+    final reqId = 'aw_${++_fetchSeq}';
+    final completer = Completer<Anime3rbHttpResponse?>();
+    session.pendingFetches[reqId] = completer;
+
+    final safeHeaders = <String, String>{};
+    for (final entry in headers.entries) {
+      final lower = entry.key.trim().toLowerCase();
+      if (lower.isEmpty ||
+          _forbiddenFetchHeaders.contains(lower) ||
+          lower.startsWith('sec-')) {
+        continue;
+      }
+      safeHeaders[entry.key] = entry.value;
+    }
+
+    final payload = jsonEncode(<String, Object?>{
+      'id': reqId,
+      'url': uri.toString(),
+      'method': method.toUpperCase(),
+      'headers': safeHeaders,
+      'body': body as String?,
+    });
+
+    try {
+      await session.controller.runJavaScript('''
+(function(req) {
+  var opts = {
+    method: req.method || 'GET',
+    credentials: 'include',
+    redirect: 'follow',
+    headers: req.headers || {}
+  };
+  if (req.body !== null && req.body !== undefined && req.method !== 'GET' && req.method !== 'HEAD') {
+    opts.body = req.body;
+  }
+  fetch(req.url, opts).then(function(resp) {
+    var hdrs = {};
+    try {
+      resp.headers.forEach(function(v, k) {
+        var key = String(k).toLowerCase();
+        if (!hdrs[key]) hdrs[key] = [];
+        hdrs[key].push(String(v));
+      });
+    } catch (_) {}
+    return resp.text().then(function(txt) {
+      $_fetchBridgeChannelName.postMessage(JSON.stringify({
+        id: req.id,
+        status: resp.status,
+        url: resp.url || req.url,
+        headers: hdrs,
+        body: txt
+      }));
+    });
+  }).catch(function(err) {
+    $_fetchBridgeChannelName.postMessage(JSON.stringify({
+      id: req.id,
+      error: String(err && err.message ? err.message : err)
+    }));
+  });
+})($payload);
+''');
+    } catch (_) {
+      session.pendingFetches.remove(reqId);
+      disposeParkedSession();
+      _recordWebViewDiagnostic(
+        'webview_fetch',
+        status: 'failed',
+        durationMs: elapsed.elapsedMilliseconds,
+        reason: 'js_eval_error',
+      );
+      return null;
+    }
+
+    try {
+      final response = await completer.future.timeout(
+        const Duration(seconds: 15),
+        onTimeout: () => null,
+      );
+      session.pendingFetches.remove(reqId);
+      if (response == null) {
+        _recordWebViewDiagnostic(
+          'webview_fetch',
+          status: 'failed',
+          durationMs: elapsed.elapsedMilliseconds,
+          reason: 'timeout_or_error',
+        );
+        return null;
+      }
+      if (response.isCloudflareChallenge) {
+        disposeParkedSession();
+        _recordWebViewDiagnostic(
+          'webview_fetch',
+          status: 'cf_challenge',
+          durationMs: elapsed.elapsedMilliseconds,
+          reason: 'http_${response.statusCode}',
+        );
+        return response;
+      }
+      session.touch();
+      _recordWebViewDiagnostic(
+        'webview_fetch',
+        status: response.isSuccess ? 'ok' : 'http_error',
+        durationMs: elapsed.elapsedMilliseconds,
+        reason: response.isSuccess ? null : 'http_${response.statusCode}',
+      );
+      return response;
+    } catch (_) {
+      session.pendingFetches.remove(reqId);
+      return null;
+    }
   }
 
   /// Resolves a Cloudflare challenge for [uri] and returns updated cookies,
@@ -73,15 +329,61 @@ class Anime3rbWebViewSolver {
     return _serialized(() => _runVid3rbTurnstileSession(playerUri));
   }
 
+  Future<void> _clearCloudflareCookies(Uri uri) async {
+    final targets = <String>{
+      uri.origin,
+      'https://anime3rb.com',
+      'https://video.vid3rb.com',
+    };
+    final expiredCookies = <Cookie>[];
+    final seen = <String>{};
+    for (final target in targets) {
+      try {
+        final cookies = await _cookieManager.getCookies(target);
+        for (final cookie in cookies) {
+          final name = cookie.name.trim();
+          if (!_cloudflareCookieNames.contains(name)) continue;
+          final key = '$name|${cookie.domain ?? ''}|${cookie.path ?? '/'}';
+          if (!seen.add(key)) continue;
+          cookie.expires = DateTime.fromMillisecondsSinceEpoch(0);
+          expiredCookies.add(cookie);
+        }
+      } catch (_) {}
+    }
+    if (expiredCookies.isEmpty) return;
+    try {
+      await _cookieManager.setCookies(expiredCookies);
+    } catch (_) {}
+  }
+
   Future<Anime3rbChallengeSolution?> _runCloudflareSession(Uri uri) async {
+    // Discard any stale parked session for this origin before solving anew.
+    if (_parkedSession?.origin == uri.origin) {
+      disposeParkedSession();
+    }
+
+    final elapsed = Stopwatch()..start();
     var sawChallenge = false;
     DateTime? clearedWithoutCookieAt;
-    return _withWebViewOverlay<Anime3rbChallengeSolution>(
+    final isAnime3rbSite =
+        uri.host == 'anime3rb.com' || uri.host.endsWith('.anime3rb.com');
+
+    final solution = await _withWebViewOverlay<Anime3rbChallengeSolution>(
       initialUri: uri,
       title: 'التحقق من Anime3rb',
       subtitle: 'أكمل التحقق الأمني للمتابعة في التصفح والتحميل.',
-      invisibleGracePeriod: const Duration(milliseconds: 4500),
+      invisibleGracePeriod: const Duration(milliseconds: 2200),
       totalTimeout: const Duration(seconds: 90),
+      parkOnSuccess: isAnime3rbSite,
+      onRefreshPressed: (controller) async {
+        await _clearCloudflareCookies(uri);
+        _recordWebViewDiagnostic('cf_refresh_clear', status: 'ok');
+      },
+      onProgressHook: (controller, progress, checkNow) async {
+        if (progress >= 30 && progress < 100) {
+          await checkNow();
+        }
+      },
       evaluateState: (controller, currentUrl, promoteVisible) async {
         final state = await _evalJson(
           controller,
@@ -92,7 +394,10 @@ class Anime3rbWebViewSolver {
   var text = document.body ? (document.body.textContent || '') : '';
   var textLower = text.toLowerCase();
   var cfEl = document.querySelector(
-    '#challenge-form, #challenge-running, #challenge-stage, #cf-please-wait, .cf-browser-verification, script[src*="/cdn-cgi/challenge-platform/"]'
+    '#challenge-form, #challenge-running, #challenge-stage, #challenge-body-text, #cf-please-wait, .cf-browser-verification, .ray-id, script[src*="/cdn-cgi/challenge-platform/"]'
+  );
+  var hasInteractive = !!document.querySelector(
+    'iframe[src*="challenges.cloudflare.com"], input[name="cf-turnstile-response"], .cf-turnstile, #turnstile-wrapper'
   );
   var isCf = !!cfEl ||
     typeof window._cf_chl_opt !== 'undefined' ||
@@ -101,20 +406,30 @@ class Anime3rbWebViewSolver {
     title.indexOf('attention required') !== -1 ||
     title.indexOf('لحظة واحدة') !== -1 ||
     title.indexOf('security verification') !== -1 ||
+    title.indexOf('التحقق الأمني') !== -1 ||
     textLower.indexOf('checking your browser') !== -1 ||
     textLower.indexOf('verify you are human') !== -1 ||
     textLower.indexOf('performing security verification') !== -1 ||
     textLower.indexOf('verifies you are not a bot') !== -1 ||
     textLower.indexOf('security service to protect against malicious bots') !== -1 ||
-    textLower.indexOf('enable javascript and cookies') !== -1;
-  var hasInteractive = !!document.querySelector(
-    'iframe[src*="challenges.cloudflare.com"], input[name="cf-turnstile-response"], .cf-turnstile, #turnstile-wrapper'
+    textLower.indexOf('enable javascript and cookies') !== -1 ||
+    textLower.indexOf('إجراء التحقق الأمني') !== -1 ||
+    textLower.indexOf('يتحقق من أنك') !== -1 ||
+    textLower.indexOf('تأكد من أنك إنسان') !== -1;
+  var ready = document.readyState || '';
+  var hasAppContent = !!document.querySelector(
+    'meta[name="csrf-token"], #videos, .titles-list, .title-card, a[href*="/titles/"], a[href*="/episode/"], [wire\\\\:id], [wire\\\\:snapshot]'
   );
+  var visibleLen = 0;
+  if (!isCf && ready === 'complete' && document.body) {
+    visibleLen = String(document.body.innerText || '').trim().length;
+  }
   return JSON.stringify({
     isCf: isCf,
     hasInteractive: hasInteractive,
-    ready: document.readyState || '',
-    len: text.trim().length,
+    hasAppContent: hasAppContent,
+    ready: ready,
+    visibleLen: visibleLen,
     ua: navigator.userAgent || '',
     href: href
   });
@@ -123,9 +438,9 @@ class Anime3rbWebViewSolver {
         );
         if (state == null) return null;
         final isCf = state['isCf'] == true;
-        final hasInteractive = state['hasInteractive'] == true;
+        final hasAppContent = state['hasAppContent'] == true;
         final ready = state['ready']?.toString() ?? '';
-        final len = (state['len'] as num?)?.toInt() ?? 0;
+        final visibleLen = (state['visibleLen'] as num?)?.toInt() ?? 0;
         final ua = state['ua']?.toString().trim();
         final href = state['href']?.toString().trim() ?? '';
         final effectiveUrl = href.isNotEmpty ? href : currentUrl;
@@ -133,17 +448,27 @@ class Anime3rbWebViewSolver {
         if (isCf) {
           sawChallenge = true;
           clearedWithoutCookieAt = null;
-          if (hasInteractive) {
-            promoteVisible();
-          }
+          // Reveal immediately whenever Cloudflare presents a challenge so
+          // Turnstile initializes at full opacity=1.0 and interactive state.
+          promoteVisible('cf_detected');
           return null;
         }
         if (ready != 'complete') return null;
 
+        final effectiveUri = Uri.tryParse(effectiveUrl);
+        if (effectiveUri == null ||
+            effectiveUri.scheme == 'about' ||
+            effectiveUri.host.isEmpty) {
+          return null;
+        }
+
         final cookies = await _collectCookies(controller, effectiveUrl);
         final hasClearance = cookies.containsKey('cf_clearance');
+        if (isAnime3rbSite && !hasAppContent && !(hasClearance && visibleLen >= 80)) {
+          return null;
+        }
         if (!hasClearance) {
-          if (len < 80) return null;
+          if (visibleLen < 80) return null;
           if (sawChallenge) {
             // Give iOS WKHTTPCookieStore a brief window to flush the newly
             // issued HttpOnly cf_clearance cookie after the challenge redirect.
@@ -158,6 +483,13 @@ class Anime3rbWebViewSolver {
           controller,
           'document.documentElement ? document.documentElement.outerHTML : ""',
         );
+        _recordWebViewDiagnostic(
+          'cf_solved',
+          status: 'ok',
+          durationMs: elapsed.elapsedMilliseconds,
+          reason: sawChallenge ? 'after_challenge' : 'already_clear',
+          result: hasClearance,
+        );
         return (
           cookies: cookies,
           html: (html != null && html.trim().isNotEmpty) ? html : null,
@@ -165,6 +497,7 @@ class Anime3rbWebViewSolver {
         );
       },
     );
+    return solution;
   }
 
   Future<Anime3rbTurnstileResult?> _runVid3rbTurnstileSession(
@@ -190,7 +523,7 @@ class Anime3rbWebViewSolver {
         await _installVid3rbHook(controller);
         hookInstalled = true;
       },
-      onProgressHook: (controller, progress) async {
+      onProgressHook: (controller, progress, _) async {
         if (progress >= 10) {
           await _installVid3rbHook(controller);
         }
@@ -207,7 +540,7 @@ class Anime3rbWebViewSolver {
   var title = (document.title || '').toLowerCase();
   var text = document.body ? (document.body.textContent || '') : '';
   var textLower = text.toLowerCase();
-  var cfChallenge = !!document.querySelector('#challenge-form, #challenge-running, #challenge-stage, .cf-browser-verification, script[src*="/cdn-cgi/challenge-platform/"]') ||
+  var cfChallenge = !!document.querySelector('#challenge-form, #challenge-running, #challenge-stage, #challenge-body-text, .cf-browser-verification, script[src*="/cdn-cgi/challenge-platform/"]') ||
     typeof window._cf_chl_opt !== 'undefined' ||
     title.indexOf('just a moment') !== -1 ||
     title.indexOf('attention required') !== -1 ||
@@ -315,7 +648,7 @@ class Anime3rbWebViewSolver {
         if (state == null) return null;
 
         if (state['cfChallenge'] == true || state['managedVisible'] == true) {
-          promoteVisible();
+          promoteVisible('vid3rb_interactive');
         }
 
         final sourcesJson = state['sourcesJson']?.toString().trim() ?? '';
@@ -428,15 +761,21 @@ class Anime3rbWebViewSolver {
     required String subtitle,
     required Duration invisibleGracePeriod,
     required Duration totalTimeout,
+    bool parkOnSuccess = false,
+    Future<void> Function(WebViewController controller)? onRefreshPressed,
     required Future<T?> Function(
       WebViewController controller,
       String currentUrl,
-      VoidCallback promoteVisible,
+      void Function(String reason) promoteVisible,
     )
     evaluateState,
     Future<void> Function(WebViewController controller)? onPageStartedHook,
     Future<void> Function(WebViewController controller)? onPageFinishedHook,
-    Future<void> Function(WebViewController controller, int progress)?
+    Future<void> Function(
+      WebViewController controller,
+      int progress,
+      Future<void> Function() checkNow,
+    )?
     onProgressHook,
   }) async {
     final overlay = rootNavigatorKey.currentState?.overlay;
@@ -444,7 +783,9 @@ class Anime3rbWebViewSolver {
 
     final completer = Completer<T?>();
     final visible = ValueNotifier<bool>(false);
+    final parked = ValueNotifier<bool>(false);
     final progress = ValueNotifier<double>(0);
+    final pendingFetches = <String, Completer<Anime3rbHttpResponse?>>{};
     var currentUrl = initialUri.toString();
     var busyEvaluating = false;
     Timer? pollTimer;
@@ -454,28 +795,59 @@ class Anime3rbWebViewSolver {
 
     late final WebViewController controller;
 
-    void finish(T? value) {
+    void finish(T? value, {String? endReason}) {
       if (completer.isCompleted) return;
       pollTimer?.cancel();
       revealTimer?.cancel();
       overallTimer?.cancel();
-      try {
-        entry?.remove();
-      } catch (_) {}
-      visible.dispose();
-      progress.dispose();
+
+      if (value != null && parkOnSuccess && entry != null) {
+        visible.value = false;
+        parked.value = true;
+        final session = _ParkedWebViewSession(
+          origin: initialUri.origin,
+          controller: controller,
+          entry: entry,
+          visible: visible,
+          parked: parked,
+          progress: progress,
+          pendingFetches: pendingFetches,
+          onDispose: () {
+            if (_parkedSession?.controller == controller) {
+              _parkedSession = null;
+            }
+          },
+        );
+        final previous = _parkedSession;
+        _parkedSession = session;
+        session.touch();
+        previous?.dispose();
+      } else {
+        if (endReason != null) {
+          _recordWebViewDiagnostic(endReason, status: 'cancelled');
+        }
+        try {
+          entry?.remove();
+        } catch (_) {}
+        visible.dispose();
+        parked.dispose();
+        progress.dispose();
+      }
       completer.complete(value);
+    }
+
+    void reveal(String reason) {
+      if (!completer.isCompleted && !visible.value) {
+        visible.value = true;
+        _recordWebViewDiagnostic('cf_revealed', status: 'ok', reason: reason);
+      }
     }
 
     Future<void> checkNow() async {
       if (completer.isCompleted || busyEvaluating) return;
       busyEvaluating = true;
       try {
-        final result = await evaluateState(controller, currentUrl, () {
-          if (!completer.isCompleted && !visible.value) {
-            visible.value = true;
-          }
-        });
+        final result = await evaluateState(controller, currentUrl, reveal);
         if (result != null) {
           finish(result);
         }
@@ -486,16 +858,69 @@ class Anime3rbWebViewSolver {
       }
     }
 
-    controller = WebViewController();
+    controller = createPlatformController();
     await controller.setJavaScriptMode(JavaScriptMode.unrestricted);
-    await configurePlatformWebView(controller);
+    final activeUa = await configurePlatformWebView(controller);
+    _recordWebViewDiagnostic(
+      'cf_start',
+      status: 'ok',
+      reason: (activeUa != null && activeUa.contains('Safari/'))
+          ? 'safari_ua'
+          : 'native_ua',
+    );
+    if (parkOnSuccess) {
+      try {
+        await controller.addJavaScriptChannel(
+          _fetchBridgeChannelName,
+          onMessageReceived: (JavaScriptMessage message) {
+            try {
+              final decoded = jsonDecode(message.message);
+              if (decoded is! Map) return;
+              final id = decoded['id']?.toString();
+              if (id == null) return;
+              final pending = pendingFetches.remove(id);
+              if (pending == null || pending.isCompleted) return;
+              if (decoded['error'] != null) {
+                pending.complete(null);
+                return;
+              }
+              final status = (decoded['status'] as num?)?.toInt() ?? 0;
+              final body = decoded['body']?.toString() ?? '';
+              final url = decoded['url']?.toString();
+              final rawHeaders = decoded['headers'];
+              final headersMap = <String, List<String>>{};
+              if (rawHeaders is Map) {
+                for (final entry in rawHeaders.entries) {
+                  final val = entry.value;
+                  if (val is List) {
+                    headersMap[entry.key.toString()] = val
+                        .map((e) => e.toString())
+                        .toList(growable: false);
+                  } else if (val != null) {
+                    headersMap[entry.key.toString()] = [val.toString()];
+                  }
+                }
+              }
+              pending.complete(
+                Anime3rbHttpResponse(
+                  statusCode: status,
+                  body: body,
+                  headers: headersMap,
+                  finalUri: url != null ? Uri.tryParse(url) : null,
+                ),
+              );
+            } catch (_) {}
+          },
+        );
+      } catch (_) {}
+    }
     await controller.setNavigationDelegate(
       NavigationDelegate(
         onProgress: (p) {
           if (!completer.isCompleted) {
             progress.value = p / 100.0;
             if (onProgressHook != null) {
-              unawaited(onProgressHook(controller, p));
+              unawaited(onProgressHook(controller, p, checkNow));
             }
           }
         },
@@ -530,98 +955,125 @@ class Anime3rbWebViewSolver {
 
     entry = OverlayEntry(
       builder: (context) => ValueListenableBuilder<bool>(
-        valueListenable: visible,
-        builder: (context, isVisible, child) {
-          final size = MediaQuery.sizeOf(context);
-          final maxWidth = (size.width - 32).clamp(280.0, 520.0);
-          final maxHeight = (size.height * 0.72).clamp(360.0, 620.0);
-          return Positioned.fill(
-            child: IgnorePointer(
-              ignoring: !isVisible,
-              child: Opacity(
-                opacity: isVisible ? 1.0 : 0.01,
-                child: Material(
-                  color: isVisible ? Colors.black54 : Colors.transparent,
-                  child: SafeArea(
-                    child: Center(
-                      child: Container(
-                        width: maxWidth,
-                        height: maxHeight,
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.surface,
-                          borderRadius: BorderRadius.circular(18),
-                          boxShadow: isVisible
-                              ? const [
-                                  BoxShadow(
-                                    color: Colors.black38,
-                                    blurRadius: 24,
-                                    offset: Offset(0, 10),
-                                  ),
-                                ]
-                              : const [],
-                        ),
-                        clipBehavior: Clip.antiAlias,
-                        child: Column(
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Text(
-                                          title,
-                                          style: Theme.of(
-                                            context,
-                                          ).textTheme.titleMedium,
-                                        ),
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          subtitle,
-                                          style: Theme.of(
-                                            context,
-                                          ).textTheme.bodySmall,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  IconButton(
-                                    tooltip: 'إعادة التحميل',
-                                    icon: const Icon(Icons.refresh_rounded),
-                                    onPressed: () => unawaited(
-                                      controller.loadRequest(
-                                        initialUri,
-                                        headers: requestHeaders,
+        valueListenable: parked,
+        builder: (context, isParked, child) {
+          if (isParked) {
+            return Positioned(
+              left: 0,
+              top: 0,
+              width: 1,
+              height: 1,
+              child: IgnorePointer(child: Opacity(opacity: 0.01, child: child)),
+            );
+          }
+          return ValueListenableBuilder<bool>(
+            valueListenable: visible,
+            builder: (context, isVisible, innerChild) {
+              final size = MediaQuery.sizeOf(context);
+              final maxWidth = (size.width - 32).clamp(280.0, 520.0);
+              final maxHeight = (size.height * 0.72).clamp(360.0, 620.0);
+              return Positioned.fill(
+                child: IgnorePointer(
+                  ignoring: !isVisible,
+                  child: Opacity(
+                    opacity: isVisible ? 1.0 : 0.01,
+                    child: Material(
+                      color: isVisible ? Colors.black54 : Colors.transparent,
+                      child: SafeArea(
+                        child: Center(
+                          child: Container(
+                            width: maxWidth,
+                            height: maxHeight,
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).colorScheme.surface,
+                              borderRadius: BorderRadius.circular(18),
+                              boxShadow: isVisible
+                                  ? const [
+                                      BoxShadow(
+                                        color: Colors.black38,
+                                        blurRadius: 24,
+                                        offset: Offset(0, 10),
                                       ),
-                                    ),
-                                  ),
-                                  IconButton(
-                                    tooltip: 'إغلاق',
-                                    icon: const Icon(Icons.close),
-                                    onPressed: () => finish(null),
-                                  ),
-                                ],
-                              ),
+                                    ]
+                                  : const [],
                             ),
-                            ValueListenableBuilder<double>(
-                              valueListenable: progress,
-                              builder: (_, value, _) => value > 0 && value < 1
-                                  ? LinearProgressIndicator(value: value)
-                                  : const Divider(height: 1),
+                            clipBehavior: Clip.antiAlias,
+                            child: Column(
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    16,
+                                    12,
+                                    8,
+                                    8,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(
+                                              title,
+                                              style: Theme.of(
+                                                context,
+                                              ).textTheme.titleMedium,
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              subtitle,
+                                              style: Theme.of(
+                                                context,
+                                              ).textTheme.bodySmall,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      IconButton(
+                                        tooltip: 'إعادة التحميل',
+                                        icon: const Icon(Icons.refresh_rounded),
+                                        onPressed: () => unawaited(() async {
+                                          if (onRefreshPressed != null) {
+                                            await onRefreshPressed(controller);
+                                          }
+                                          await controller.loadRequest(
+                                            initialUri,
+                                            headers: requestHeaders,
+                                          );
+                                        }()),
+                                      ),
+                                      IconButton(
+                                        tooltip: 'إغلاق',
+                                        icon: const Icon(Icons.close),
+                                        onPressed: () => finish(
+                                          null,
+                                          endReason: 'cf_dismissed',
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                ValueListenableBuilder<double>(
+                                  valueListenable: progress,
+                                  builder: (_, value, _) =>
+                                      value > 0 && value < 1
+                                      ? LinearProgressIndicator(value: value)
+                                      : const Divider(height: 1),
+                                ),
+                                Expanded(child: innerChild!),
+                              ],
                             ),
-                            Expanded(child: child!),
-                          ],
+                          ),
                         ),
                       ),
                     ),
                   ),
                 ),
-              ),
-            ),
+              );
+            },
+            child: child,
           );
         },
         child: webViewWidget,
@@ -632,20 +1084,19 @@ class Anime3rbWebViewSolver {
     try {
       await controller.loadRequest(initialUri, headers: requestHeaders);
     } catch (_) {
-      finish(null);
+      finish(null, endReason: 'cf_load_error');
       return completer.future;
     }
 
     pollTimer = Timer.periodic(
-      const Duration(milliseconds: 650),
+      const Duration(milliseconds: 550),
       (_) => unawaited(checkNow()),
     );
-    revealTimer = Timer(invisibleGracePeriod, () {
-      if (!completer.isCompleted) {
-        visible.value = true;
-      }
-    });
-    overallTimer = Timer(totalTimeout, () => finish(null));
+    revealTimer = Timer(invisibleGracePeriod, () => reveal('grace_timeout'));
+    overallTimer = Timer(
+      totalTimeout,
+      () => finish(null, endReason: 'cf_timeout'),
+    );
 
     return completer.future;
   }
