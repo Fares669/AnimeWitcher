@@ -370,15 +370,30 @@ void main() {
   setUpAll(() {
     VisibilityDetectorController.instance.updateInterval = Duration.zero;
   });
-  final webtoonFixtures = ValueVariant<({int preloadWidth, int count})>({
-    (preloadWidth: 6, count: 8),
-    (preloadWidth: 2, count: 8),
-    (preloadWidth: 2, count: 192),
-  });
+  final webtoonFixtures =
+      ValueVariant<({int preloadWidth, int count, bool animated})>({
+        (preloadWidth: 6, count: 8, animated: false),
+        (preloadWidth: 2, count: 8, animated: false),
+        (preloadWidth: 2, count: 192, animated: false),
+        (preloadWidth: 2, count: 8, animated: true),
+      });
   testWidgets('Webtoon resumes a completed chapter and persists physical scroll', (
     tester,
   ) async {
-    final (:preloadWidth, :count) = webtoonFixtures.currentValue!;
+    final (:preloadWidth, :count, :animated) = webtoonFixtures.currentValue!;
+    if (animated) {
+      tester.view.physicalSize = const Size(390, 420);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      // Keep the real coalesced visibility path, rather than immediate tests.
+      VisibilityDetectorController.instance.updateInterval =
+          const Duration(milliseconds: 100);
+      addTearDown(() {
+        VisibilityDetectorController.instance.updateInterval = Duration.zero;
+      });
+    }
+    const alternate = [219, 31, 149];
     const chapter = MangaChapter(
       id: 'plain-webtoon-chapter',
       mangaId: 'plain-webtoon-manga',
@@ -394,8 +409,20 @@ void main() {
       for (var i = 0; i < count; i++) {
         final color = [20 + (i * 31) % 211, 30 + (i * 47) % 201, 88];
         colors[i] = color;
-        final picture = img.Image(width: 24, height: 16);
+        final picture = img.Image(
+          width: 24,
+          height: animated ? 28 : 16,
+          frameDuration: 100,
+        );
         img.fill(picture, color: img.ColorRgb8(color[0], color[1], color[2]));
+        if (animated) {
+          picture.addFrame(
+            img.fill(
+              img.Image(width: 24, height: 28, frameDuration: 100),
+              color: img.ColorRgb8(alternate[0], alternate[1], alternate[2]),
+            ),
+          );
+        }
         final file = File('${dir.path}/${(i + 1).toString().padLeft(4, '0')}.gif');
         await file.writeAsBytes(img.encodeGif(picture), flush: true);
         digests[i] = await MangaChapterManifestV2.pageDigest(file);
@@ -490,17 +517,53 @@ void main() {
     Finder row(int index) => find.byKey(ValueKey('manga-webtoon-$index-$index'));
     Finder painted(int index) =>
         find.descendant(of: row(index), matching: find.byType(RawImage));
+    Future<List<int>> rgb(ui.Image image) async {
+      final copy = image.clone();
+      try {
+        final data = await tester.runAsync(
+          () => copy.toByteData(format: ui.ImageByteFormat.rawRgba),
+        );
+        expect(data, isNotNull);
+        return [for (var channel = 0; channel < 3; channel++) data!.getUint8(channel)];
+      } finally {
+        copy.dispose();
+      }
+    }
+
     Future<void> expectPixels(int index) async {
       await eventually('decoded page $index', () => painted(index).evaluate().any(
         (element) => (element.widget as RawImage).image != null,
       ));
       final raw = tester.widget<RawImage>(painted(index));
-      final image = raw.image!;
-      final byteData = await tester.runAsync(
-        () => image.toByteData(format: ui.ImageByteFormat.rawRgba),
-      );
-      expect(byteData, isNotNull);
-      expect([for (var i = 0; i < 3; i++) byteData!.getUint8(i)], colors[index]);
+      final color = await rgb(raw.image!);
+      if (animated) {
+        expect(color, anyOf(equals(colors[index]), equals(alternate)));
+      } else {
+        expect(color, colors[index]);
+      }
+    }
+
+    Future<void> observeAnimation(int index) async {
+      if (!animated) return;
+      ui.Image image() => tester.widget<RawImage>(painted(index)).image!;
+      final pixelColors = <String>{};
+      var previous = image();
+      var frameChanges = 0;
+      for (var i = 0; i < 32; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 4)),
+        );
+        await tester.pump(const Duration(milliseconds: 48));
+        final current = image();
+        if (identical(current, previous)) continue;
+        frameChanges++;
+        previous = current;
+        if (pixelColors.length < 2) {
+          pixelColors.add((await rgb(current)).join(','));
+        }
+      }
+      expect(frameChanges, greaterThan(4));
+      expect(pixelColors, {colors[index]!.join(','), alternate.join(',')});
     }
 
     void expectLayout(int anchor, {Key? sessionCenter}) {
@@ -553,6 +616,7 @@ void main() {
     expectLayout(resume);
     await expectPixels(resume);
     expectVisibleGap(resume);
+    await observeAnimation(resume);
     expect(provider.requestedChapterIds, isEmpty);
 
     await tester.drag(scrollView, const Offset(0, -620));
@@ -563,6 +627,7 @@ void main() {
     expect(tester.widget<MangaWebtoonReader>(webtoon).controller, same(controller));
     expectLayout(resume, sessionCenter: sessionCenter);
     expectVisibleGap(advanced);
+    await observeAnimation(advanced);
     await tester.drag(scrollView, const Offset(0, 620));
     await eventually('progress after reverse', () => (savedPage() ?? -1) < advanced);
     final reversed = savedPage()!;
@@ -570,6 +635,7 @@ void main() {
     expect(tester.state(webtoon), same(state));
     expectLayout(resume, sessionCenter: sessionCenter);
     expectVisibleGap(reversed);
+    await observeAnimation(reversed);
     await tester.drag(scrollView, const Offset(0, -620));
     await eventually('progress after second forward', () => (savedPage() ?? -1) > reversed);
     final last = savedPage()!;
@@ -592,6 +658,7 @@ void main() {
     expectLayout(last);
     await expectPixels(last);
     expectVisibleGap(last);
+    await observeAnimation(last);
     expect(provider.requestedChapterIds, isEmpty);
 
     await tester.pumpWidget(const SizedBox());

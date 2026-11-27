@@ -108,7 +108,9 @@ class AnimeWitcherPlayerControlsState
   bool _isLocked = false;
 
   // Seek animation state
-  late AnimationController _seekAnimController;
+  late final AnimationController _seekAnimController;
+  late final Animation<double> _seekFade;
+  late final Animation<double> _seekScale;
   Timer? _seekOverlayTimer;
   bool _seekOverlayVisible = false;
   int _seekAccumulatedSeconds = 0;
@@ -340,6 +342,12 @@ class AnimeWitcherPlayerControlsState
       vsync: this,
       duration: const Duration(milliseconds: 180),
     );
+    // Curves stay attached to the same controller for the entire session.
+    // These are forward-only transforms and need no status listeners.
+    _seekFade = _seekAnimController.drive(CurveTween(curve: Curves.easeOutCubic));
+    _seekScale = _seekAnimController
+        .drive(CurveTween(curve: Curves.easeOut))
+        .drive(Tween<double>(begin: 0.94, end: 1.0));
     // The short controller animates the entrance; a separate one-second timer
     // keeps the cumulative seek value visible between repeated seeks.
 
@@ -1324,16 +1332,9 @@ class AnimeWitcherPlayerControlsState
         : '0';
 
     return FadeTransition(
-      opacity: Tween<double>(begin: 0.0, end: 1.0).animate(
-        CurvedAnimation(
-          parent: _seekAnimController,
-          curve: Curves.easeOutCubic,
-        ),
-      ),
+      opacity: _seekFade,
       child: ScaleTransition(
-        scale: Tween<double>(begin: 0.94, end: 1.0).animate(
-          CurvedAnimation(parent: _seekAnimController, curve: Curves.easeOut),
-        ),
+        scale: _seekScale,
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1657,18 +1658,15 @@ class AnimeWitcherPlayerControlsState
 
                 // Seek kick animation â a single Align (no nested Stack):
                 // ~8% in from the seeking edge, ~45% down from the top.
-                AnimatedBuilder(
-                  animation: _seekAnimController,
-                  builder: (context, _) {
-                    if (!_seekOverlayVisible) {
-                      return const SizedBox.shrink();
-                    }
-                    return Align(
-                      alignment: Alignment(_isSeekingLeft ? -0.84 : 0.84, 0.0),
-                      child: _buildKickAnimation(),
-                    );
-                  },
-                ),
+                // The transitions update themselves on each tick. Keep
+                // their label and layout from rebuilding until the seek
+                // feedback changes or its timer clears it.
+                _seekOverlayVisible
+                    ? Align(
+                        alignment: Alignment(_isSeekingLeft ? -0.84 : 0.84, 0.0),
+                        child: _buildKickAnimation(),
+                      )
+                    : const SizedBox.shrink(),
 
                 // OSD and volume overlay â only this subtree rebuilds on handler changes
                 PlayerOSDVolumeOverlay(

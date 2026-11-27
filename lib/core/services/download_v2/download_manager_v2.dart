@@ -2164,28 +2164,42 @@ final class DownloadManagerV2 {
     } while (_admissionPromotionRequested);
   }
 
-  /// Waiting downloads in admission order: FIFO by enqueue stamp, never by
-  /// last-write time — record rewrites (pause/resume, restart
-  /// reconciliation) must not reshuffle the queue. Logical id breaks legacy
-  /// ties so the order is total and deterministic.
+  bool _waitsForAdmission(LogicalDownloadRecordV2 record) =>
+      record.intent == DownloadUserIntent.active &&
+      canAccessSourceDescriptor(record.sourceDescriptor) &&
+      record.awaitingAdmission &&
+      !_pendingStopControls.containsKey(record.logicalId);
+
+  /// FIFO by enqueue stamp, never by last-write time. Logical id breaks
+  /// legacy timestamp ties in both the pass and its fresh head check.
+  int _compareAdmissionOrder(
+    LogicalDownloadRecordV2 a,
+    LogicalDownloadRecordV2 b,
+  ) {
+    final byEnqueue = a.queueOrderMillis.compareTo(b.queueOrderMillis);
+    return byEnqueue != 0
+        ? byEnqueue
+        : a.logicalId.value.compareTo(b.logicalId.value);
+  }
+
   List<LogicalDownloadRecordV2> _queueOrder(
     Iterable<LogicalDownloadRecordV2> records,
+  ) => records.where(_waitsForAdmission).toList()..sort(_compareAdmissionOrder);
+
+  DownloadLogicalId? _currentAdmissionHead(
+    Iterable<LogicalDownloadRecordV2> records,
+    Set<DownloadLogicalId> skipped,
   ) {
-    return records
-        .where(
-          (record) =>
-              record.intent == DownloadUserIntent.active &&
-              canAccessSourceDescriptor(record.sourceDescriptor) &&
-              record.awaitingAdmission &&
-              !_pendingStopControls.containsKey(record.logicalId),
-        )
-        .toList()
-      ..sort((a, b) {
-        final byEnqueue = a.queueOrderMillis.compareTo(b.queueOrderMillis);
-        return byEnqueue != 0
-            ? byEnqueue
-            : a.logicalId.value.compareTo(b.logicalId.value);
-      });
+    LogicalDownloadRecordV2? first;
+    for (final record in records) {
+      if (!_waitsForAdmission(record) || skipped.contains(record.logicalId)) {
+        continue;
+      }
+      if (first == null || _compareAdmissionOrder(record, first) < 0) {
+        first = record;
+      }
+    }
+    return first?.logicalId;
   }
 
   Future<void> _promoteAdmissionsPass() async {
@@ -2235,9 +2249,10 @@ final class DownloadManagerV2 {
             // download paused and resumed, a new one enqueued). Promoting
             // past the true head is what started queued chapters out of
             // order on device.
-            final head = _queueOrder(await _store.all())
-                .where((record) => !skipped.contains(record.logicalId));
-            if (head.isNotEmpty && head.first.logicalId != latest.logicalId) {
+            // Only the first eligible row is needed; keep this fresh read
+            // and find its head without sorting or copying all waiters again.
+            final head = _currentAdmissionHead(await _store.all(), skipped);
+            if (head != null && head != latest.logicalId) {
               return _AdmissionAttempt.superseded;
             }
             // No free slot: stop the pass instead of letting a later

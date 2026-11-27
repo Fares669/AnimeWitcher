@@ -146,20 +146,29 @@ class _MangaPageImageState extends State<MangaPageImage> {
     final oldListener = _sizeListener;
     if (oldListener != null) _sizeStream?.removeListener(oldListener);
 
-    if (_useSubsampling) {
+    // Animated pages read dimensions from the first frame. A local GIF
+    // keeps the same logical canvas even while its pixels change.
+    final localAnimation = _imageProvider is FileImage;
+    if (_useSubsampling || (localAnimation && _imageSize != null)) {
       _sizeStream = null;
       _sizeListener = null;
       return;
     }
     final ImageProvider<Object> provider = _imageProvider;
     final stream = provider.resolve(createLocalImageConfiguration(context));
-    final listener = ImageStreamListener((info, _) {
+    late final ImageStreamListener listener;
+    listener = ImageStreamListener((info, _) {
       final Size size;
       try {
         size = Size(info.image.width.toDouble(), info.image.height.toDouble());
       } finally {
-        // Only dimensions are needed, including on repeated animated frames.
+        // Only dimensions are needed, not this cloned frame handle.
         info.dispose();
+      }
+      if (localAnimation && identical(_sizeListener, listener)) {
+        stream.removeListener(listener);
+        _sizeListener = null;
+        _sizeStream = null;
       }
       if (!mounted || size == _imageSize) return;
       setState(() => _imageSize = size);

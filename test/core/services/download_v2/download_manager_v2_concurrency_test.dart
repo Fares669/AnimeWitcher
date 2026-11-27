@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
 import 'package:animewitcher/core/services/download_v2/download_manager_v2.dart';
@@ -10,6 +11,121 @@ import 'package:animewitcher/core/services/download_v2/logical_download_store_v2
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'deep persisted queue preserves fresh head, legacy ties and blocked rows',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('aw-admission-head-');
+      addTearDown(() => dir.delete(recursive: true));
+      final originalPath = '${dir.path}/owner.mp4';
+      final firstRequest = _request(
+        episode: 'owner',
+        chunks: 1,
+        destinationPath: originalPath,
+      );
+      final store = InMemoryLogicalDownloadStoreV2();
+      final gateway = _ConcurrencyGateway();
+      final resolver = _Resolver();
+      final manager = DownloadManagerV2(
+        store: store,
+        gateway: gateway,
+        sourceResolver: resolver,
+        maxConcurrentDownloads: () => 1,
+        sourceAllowed: (descriptor) => descriptor['disabled'] != true,
+      );
+      addTearDown(manager.dispose);
+      await manager.start(firstRequest);
+      await manager.reconcileAdmission();
+      expect(gateway.startedSpecs, hasLength(1));
+      final payload = List<int>.generate(100, (i) => i);
+      await File(originalPath).writeAsBytes(payload);
+
+      LogicalDownloadRecordV2 row(
+        String label,
+        int enqueue, {
+        int updated = 77,
+        bool disabled = false,
+        bool conflict = false,
+        bool paused = false,
+      }) {
+        final request = _request(episode: label, chunks: 1);
+        return LogicalDownloadRecordV2(
+          schemaVersion: kLogicalDownloadSchemaVersionV2,
+          logicalId: request.logicalId,
+          mediaId: request.mediaId,
+          unitKey: request.unitKey,
+          variantKey: request.variantKey,
+          generation: 1,
+          taskId: taskIdForGeneration(request.logicalId, 1),
+          destinationPath: conflict ? originalPath : '${dir.path}/$label.mp4',
+          sourceDescriptor: {
+            ...request.sourceDescriptor,
+            if (disabled) 'disabled': true,
+          },
+          intent: paused
+              ? DownloadUserIntent.paused
+              : DownloadUserIntent.active,
+          awaitingAdmission: true,
+          enqueuedAtMillis: enqueue,
+          updatedAtMillis: updated,
+          expectedBytes: 100,
+        );
+      }
+
+      final legacy = row('legacy-a', 0, updated: 9);
+      final tie = row('explicit-b', 9, updated: 9000);
+      final expected = legacy.logicalId.value.compareTo(tie.logicalId.value) < 0
+          ? legacy
+          : tie;
+      final next = identical(expected, legacy) ? tie : legacy;
+      final conflict = row('owned-destination', 1, conflict: true);
+      final disabled = row('disabled', 2, disabled: true);
+      final paused = row('paused', 3, paused: true);
+      final seeded = [
+        legacy,
+        tie,
+        conflict,
+        disabled,
+        paused,
+        for (var i = 0; i < 512; i++) row('filler-$i', 10 + i * 2),
+      ]..shuffle(Random(140282));
+      for (final item in seeded) {
+        await store.put(item);
+      }
+
+      // Real foreground and iOS background staging share current head
+      // validation, but neither is allowed to start another owner yet.
+      await manager.stageQueuedDownloadsForBackground();
+      expect(gateway.startedSpecs, hasLength(1));
+      expect(resolver.calls, 1);
+
+      gateway.emit(
+        gateway.startedSpecs.single.taskId,
+        DownloadTransportStatus.complete,
+      );
+      await gateway.waitForStarts(2, timeout: const Duration(seconds: 18));
+      await manager.reconcileAdmission();
+      expect(gateway.startedSpecs.map((spec) => spec.taskId), [
+        taskIdForGeneration(firstRequest.logicalId, 1),
+        expected.taskId,
+      ]);
+      expect(resolver.calls, 2);
+      expect(
+        (await store.get(firstRequest.logicalId))?.completedAtMillis,
+        isNotNull,
+      );
+      expect(await File(originalPath).readAsBytes(), payload);
+      expect((await store.get(expected.logicalId))?.awaitingAdmission, isFalse);
+      expect((await store.get(next.logicalId))?.awaitingAdmission, isTrue);
+      expect((await store.get(conflict.logicalId))?.awaitingAdmission, isTrue);
+      expect((await store.get(disabled.logicalId))?.awaitingAdmission, isTrue);
+      expect(
+        (await store.get(paused.logicalId))?.intent,
+        DownloadUserIntent.paused,
+      );
+    },
+    timeout: const Timeout(Duration(seconds: 55)),
+  );
+
   test(
     'verified completion promotes a waiter after an earlier full-slot pump',
     () async {
@@ -350,6 +466,7 @@ void main() {
 DownloadStartRequestV2 _request({
   required String episode,
   required int chunks,
+  String? destinationPath,
 }) {
   final logicalId = logicalDownloadIdFor(
     animeId: 'anilist:21',
@@ -361,7 +478,7 @@ DownloadStartRequestV2 _request({
     mediaId: 'anilist:21',
     unitKey: episode,
     variantKey: 'sub:1080p',
-    destinationPath: 'downloads/anime/episode-$episode.mp4',
+    destinationPath: destinationPath ?? 'downloads/anime/episode-$episode.mp4',
     sourceDescriptor: <String, Object?>{
       'providerId': 'provider.example',
       'episode': episode,
@@ -459,11 +576,14 @@ final class _ConcurrencyGateway implements BackgroundDownloaderGateway {
     _handles[taskId]?.emit(status);
   }
 
-  Future<void> waitForStarts(int count) async {
+  Future<void> waitForStarts(
+    int count, {
+    Duration timeout = const Duration(seconds: 2),
+  }) async {
     while (startedSpecs.length < count) {
       final waiter = Completer<void>();
       _waiters.add(waiter);
-      await waiter.future.timeout(const Duration(seconds: 2));
+      await waiter.future.timeout(timeout);
     }
   }
 }

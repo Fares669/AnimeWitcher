@@ -244,6 +244,21 @@ class DetailsDesktopHero extends ConsumerWidget {
               ),
         );
 
+        // Library state, selection and synopsis changes can rebuild the hero
+        // without changing either layout's artwork.
+        final stableBackdrop = HookBuilder(
+          builder: (_) => useMemoized(backdropArtwork, [
+            backdrop,
+            artworkMalId,
+            artworkTitle,
+            artworkLabel,
+            artworkIsManga,
+            artworkWidth,
+            artworkPlaceholder,
+            artworkErrorPoster,
+          ]),
+        );
+
         final lazy = slivers;
         final page = Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -278,7 +293,7 @@ class DetailsDesktopHero extends ConsumerWidget {
                       key: const ValueKey<String>(
                         'details-hero-portrait-banner',
                       ),
-                      child: backdropArtwork(),
+                      child: stableBackdrop,
                     ),
                   ),
                 ] else
@@ -287,20 +302,7 @@ class DetailsDesktopHero extends ConsumerWidget {
                     top: 0,
                     right: 0,
                     bottom: 3 - pictureRunOn,
-                    // Episode selection and library updates rebuild the page,
-                    // but do not change what the banner has to load.
-                    child: HookBuilder(
-                      builder: (_) => useMemoized(backdropArtwork, [
-                        backdrop,
-                        artworkMalId,
-                        artworkTitle,
-                        artworkLabel,
-                        artworkIsManga,
-                        artworkWidth,
-                        artworkPlaceholder,
-                        artworkErrorPoster,
-                      ]),
-                    ),
+                    child: stableBackdrop,
                   ),
 
                 // The picture goes to ground before the page's own
@@ -484,6 +486,12 @@ class DetailsDesktopHero extends ConsumerWidget {
     final isPortraitPhone = compact && size.height > size.width;
     final posterWidth = _posterWidthFor(context);
     final posterHeight = _posterHeightFor(context);
+    final artworkUrl = posterUrl ?? '';
+    final artworkMalId = displayItem.artworkLookupMalId;
+    final artworkTitle = displayItem.artworkLookupTitle;
+    final artworkLabel = displayItem.title;
+    final artworkIsManga = manga;
+    final artworkPlaceholder = colors.surfaceContainerHighest;
     final poster = GestureDetector(
       key: const ValueKey<String>('details-hero-poster'),
       behavior: HitTestBehavior.opaque,
@@ -504,22 +512,36 @@ class DetailsDesktopHero extends ConsumerWidget {
             ),
           ],
         ),
-        child: ArtworkDecode(
-          paintedWidth: posterWidth,
-          sizeHighQualityToDisplay: true,
-          builder: (BuildContext context, int? decodeWidth) =>
-              FallbackPosterImage(
-                imageUrl: posterUrl ?? '',
-                malId: displayItem.artworkLookupMalId,
-                title: displayItem.artworkLookupTitle,
-                manga: manga,
-                fit: BoxFit.cover,
-                memCacheWidth: decodeWidth,
-                placeholder: (_) =>
-                    ColoredBox(color: colors.surfaceContainerHighest),
-                errorWidget: (_) =>
-                    ThumbnailErrorPlaceholder(label: displayItem.title),
-              ),
+        // Keep the tap handler current but retain the image subtree while
+        // its inputs stay unchanged. ArtworkDecode still watches DPR and quality.
+        child: HookBuilder(
+          builder: (_) => useMemoized(
+            () => ArtworkDecode(
+              paintedWidth: posterWidth,
+              sizeHighQualityToDisplay: true,
+              builder: (BuildContext context, int? decodeWidth) =>
+                  FallbackPosterImage(
+                    imageUrl: artworkUrl,
+                    malId: artworkMalId,
+                    title: artworkTitle,
+                    manga: artworkIsManga,
+                    fit: BoxFit.cover,
+                    memCacheWidth: decodeWidth,
+                    placeholder: (_) => ColoredBox(color: artworkPlaceholder),
+                    errorWidget: (_) =>
+                        ThumbnailErrorPlaceholder(label: artworkLabel),
+                  ),
+            ),
+            [
+              artworkUrl,
+              artworkMalId,
+              artworkTitle,
+              artworkLabel,
+              artworkIsManga,
+              artworkPlaceholder,
+              posterWidth,
+            ],
+          ),
         ),
       ),
     );
