@@ -6,6 +6,7 @@ import '../../../core/account/account_providers.dart';
 import '../../../core/account/animewitcher_account_config.dart';
 import '../../../core/account/animewitcher_account_models.dart';
 import '../../../core/services/notification_service.dart';
+import '../../../core/utils/account_profile_avatar.dart';
 import '../../../core/utils/localized_text.dart';
 import '../../../core/utils/artwork_quality.dart';
 import '../../../core/utils/layout_constants.dart';
@@ -447,7 +448,7 @@ class _AnimeWitcherAccountScreenState
                       backgroundColor: colors.primaryContainer,
                       foregroundImage: photoUrl.isEmpty
                           ? null
-                          : NetworkImage(photoUrl),
+                          : AccountProfileAvatar(NetworkImage(photoUrl)),
                       onForegroundImageError: photoUrl.isEmpty
                           ? null
                           : (_, _) {},

@@ -32,6 +32,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:super_sliver_list/super_sliver_list.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
@@ -160,9 +161,10 @@ final class _PerMangaReaderSettingsNotifier
 /// Serves real local image files as chapter pages, so the full screen
 /// can stream chapters whose images actually load.
 final class _LocalStreamProvider extends AnimeWitcherProvider {
-  _LocalStreamProvider(this.directory);
+  _LocalStreamProvider(this.directory, {this.extension = 'bmp'});
 
   final Directory directory;
+  final String extension;
   final List<String> requestedChapterIds = <String>[];
 
   @override
@@ -202,10 +204,84 @@ final class _LocalStreamProvider extends AnimeWitcherProvider {
       for (var i = 0; i < 3; i++)
         MangaPage(
           index: i,
-          imageUrl: File('${directory.path}/page-${i + 1}.bmp').uri.toString(),
+          imageUrl: File(
+            '${directory.path}/page-${i + 1}.$extension',
+          ).uri.toString(),
         ),
     ];
   }
+}
+
+final class _ReaderCachePathProvider extends PathProviderPlatform {
+  _ReaderCachePathProvider(this.root);
+
+  final String root;
+
+  @override
+  Future<String?> getTemporaryPath() async => root;
+}
+
+final class _CacheUiIoProbe extends IOOverrides {
+  _CacheUiIoProbe(this.directory);
+
+  final String directory;
+  int synchronousListings = 0;
+  int synchronousStats = 0;
+  Duration synchronousListTime = Duration.zero;
+  Duration synchronousStatTime = Duration.zero;
+
+  @override
+  Directory createDirectory(String path) {
+    final delegate = super.createDirectory(path);
+    return path == directory ? _TracedCacheDirectory(delegate, this) : delegate;
+  }
+
+  @override
+  FileStat statSync(String path) {
+    if (!path.startsWith('$directory${Platform.pathSeparator}')) {
+      return super.statSync(path);
+    }
+    final timer = Stopwatch()..start();
+    final result = super.statSync(path);
+    synchronousStats++;
+    synchronousStatTime += timer.elapsed;
+    return result;
+  }
+}
+
+final class _TracedCacheDirectory implements Directory {
+  _TracedCacheDirectory(this._delegate, this._probe);
+
+  final Directory _delegate;
+  final _CacheUiIoProbe _probe;
+
+  @override
+  String get path => _delegate.path;
+
+  @override
+  Future<bool> exists() => _delegate.exists();
+
+  @override
+  Future<Directory> create({bool recursive = false}) =>
+      _delegate.create(recursive: recursive);
+
+  @override
+  List<FileSystemEntity> listSync({
+    bool recursive = false,
+    bool followLinks = true,
+  }) {
+    final timer = Stopwatch()..start();
+    final result = _delegate.listSync(
+      recursive: recursive,
+      followLinks: followLinks,
+    );
+    _probe.synchronousListings++;
+    _probe.synchronousListTime += timer.elapsed;
+    return result;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 final class _WebtoonStreamSettingsNotifier extends MangaReaderSettingsNotifier {
@@ -656,6 +732,57 @@ void main() {
     expect(await cache.get('expired-m1', chapter), isNull);
   });
 
+  test('reader cache trims oldest entries only after durable publication', () async {
+    final directory = await Directory.systemTemp.createTemp('reader_trim_');
+    addTearDown(() => directory.delete(recursive: true));
+    final cache = MangaReaderPageCache(cacheDirectory: directory);
+    final otherCache = MangaReaderPageCache(cacheDirectory: directory);
+    final now = DateTime.now();
+    Future<File> sparseFile(String name, int mebibytes, int age) async {
+      final file = File('${directory.path}/$name');
+      final handle = await file.open(mode: FileMode.write);
+      await handle.truncate(mebibytes * 1024 * 1024);
+      await handle.close();
+      await file.setLastModified(now.subtract(Duration(minutes: age)));
+      return file;
+    }
+    final old = await sparseFile('old.json', 20, 4);
+    final newer = await sparseFile('newer.json', 85, 2);
+    final unrelated = await sparseFile('unrelated.tmp', 105, 6);
+    const chapter = MangaChapter(
+      id: 'evict',
+      mangaId: 'm1',
+      url: '/evict',
+      name: 'Evict',
+    );
+    const oldPages = <MangaPage>[MangaPage(index: 0, imageUrl: 'old')];
+    const freshPages = <MangaPage>[
+      MangaPage(
+        index: 7,
+        imageUrl: ' https://example.test/new.webp ',
+        headers: {'Referer': 'https://example.test'},
+      ),
+    ];
+    await cache.put('m1', chapter, oldPages);
+    await otherCache.put('m1', chapter, freshPages);
+    final fresh = (await cache.get(' m1 ', chapter))!.single;
+    expect(fresh.index, 7);
+    expect(fresh.imageUrl, 'https://example.test/new.webp');
+    expect(fresh.headers, {'Referer': 'https://example.test'});
+    expect(await cache.get('different-owner', chapter), isNull);
+    await Future.wait<void>([
+      cache.waitForMaintenance(),
+      otherCache.waitForMaintenance(),
+    ]);
+    expect(await old.exists(), isFalse);
+    expect(await newer.exists(), isTrue);
+    expect(await unrelated.exists(), isTrue);
+    expect((await cache.get('m1', chapter))?.single.imageUrl, fresh.imageUrl);
+    expect((await directory.list().toList()).where(
+      (file) => file.path.endsWith('.tmp') && file.path != unrelated.path,
+    ), isEmpty);
+  });
+
   test('a descending chapter list still navigates in reading order', () async {
     final temp = await Directory.systemTemp.createTemp('aw_reader_order_');
     addTearDown(() => temp.delete(recursive: true));
@@ -983,6 +1110,85 @@ void main() {
       }
       fail('webtoon stream did not reach the expected state');
     }
+
+    testWidgets('mock remote Webtoon paints and reopens with a warm disk cache', (
+      tester,
+    ) async {
+      const entries = 2400;
+      final root = Directory.systemTemp.createTempSync('reader_warm_cache_');
+      final directory = Directory(
+        '${root.path}/${MangaReaderPageCache.cacheFolderName}',
+      )..createSync();
+      final image = img.Image(width: 24, height: 16);
+      img.fill(image, color: img.ColorRgb8(35, 81, 122));
+      final bytes = img.encodeGif(image);
+      await tester.runAsync(() async {
+        for (var i = 1; i <= 3; i++) {
+          File('${root.path}/page-$i.gif').writeAsBytesSync(bytes);
+        }
+        final seed = jsonEncode({
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+          'pages': [{'imageUrl': File('${root.path}/page-1.gif').uri.toString()}],
+        });
+        for (var i = 0; i < entries; i++) {
+          File('${directory.path}/seed-$i.json').writeAsStringSync(seed);
+        }
+      });
+      addTearDown(() => root.delete(recursive: true));
+      final previousPaths = PathProviderPlatform.instance;
+      PathProviderPlatform.instance = _ReaderCachePathProvider(root.path);
+      addTearDown(() => PathProviderPlatform.instance = previousPaths);
+      final probe = _CacheUiIoProbe(directory.path);
+      final provider = _LocalStreamProvider(root, extension: 'gif');
+      final row = find.byKey(const ValueKey('manga-webtoon-0-0'));
+      final painted = find.descendant(of: row, matching: find.byType(RawImage));
+
+      Future<void> expectFirstPagePixels() async {
+        for (var attempt = 0; attempt < 100; attempt++) {
+          final images = tester.widgetList<RawImage>(painted)
+              .where((widget) => widget.image != null);
+          if (images.isNotEmpty) {
+            final pixels = await tester.runAsync(
+              () => images.first.image!.toByteData(
+                format: ui.ImageByteFormat.rawRgba,
+              ),
+            );
+            expect([for (var i = 0; i < 3; i++) pixels!.getUint8(i)], [35, 81, 122]);
+            return;
+          }
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 2)),
+          );
+          await tester.pump(const Duration(milliseconds: 16));
+        }
+        fail('the mock remote first page did not paint');
+      }
+
+      await IOOverrides.runWithIOOverrides(() async {
+        final open = Stopwatch()..start();
+        await pumpStreamScreen(tester, provider, firstChapter, chapters: const [firstChapter]);
+        await webtoonWhen(tester, (reader) => reader.pages.length == 3);
+        final readerReady = open.elapsedMicroseconds;
+        await expectFirstPagePixels();
+        debugPrint(
+          'reader-cache-fixture: entries=$entries '
+          'ui_list_sync=${probe.synchronousListings} '
+          'ui_stat_sync=${probe.synchronousStats} '
+          'list_us=${probe.synchronousListTime.inMicroseconds} '
+          'stat_us=${probe.synchronousStatTime.inMicroseconds} '
+          'reader_ready_us=$readerReady first_rgba_us=${open.elapsedMicroseconds}',
+        );
+        expect(provider.requestedChapterIds, [firstChapter.id]);
+        expect(probe.synchronousListings, isZero);
+        expect(probe.synchronousStats, isZero);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await pumpStreamScreen(tester, provider, firstChapter, chapters: const [firstChapter]);
+        await webtoonWhen(tester, (reader) => reader.pages.length == 3);
+        await expectFirstPagePixels();
+        expect(provider.requestedChapterIds, [firstChapter.id]);
+        await tester.pumpWidget(const SizedBox.shrink());
+      }, probe);
+    });
 
     testWidgets('opening a chapter leaves the previous one out of the stream', (
       tester,

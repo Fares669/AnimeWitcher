@@ -13,12 +13,6 @@ MultimediaItem mergeDetailsItem({
   List<Episode>? episodes,
 }) {
   final resolvedEpisodes = episodes ?? incoming.episodes ?? fallback.episodes;
-  String? episodeArtwork;
-  for (final episode in resolvedEpisodes ?? const <Episode>[]) {
-    episodeArtwork = AppImageFallbacks.optional(episode.posterUrl);
-    if (episodeArtwork != null) break;
-  }
-
   final incomingPoster = AppImageFallbacks.poster(incoming.posterUrl);
   final fallbackPoster = AppImageFallbacks.poster(fallback.posterUrl);
   final incomingBanner = AppImageFallbacks.optional(incoming.bannerUrl);
@@ -29,7 +23,7 @@ MultimediaItem mergeDetailsItem({
   final poster =
       incomingPoster ??
       fallbackPoster ??
-      episodeArtwork ??
+      _firstEpisodeArtwork(resolvedEpisodes) ??
       incomingBanner ??
       fallbackBanner ??
       '';
@@ -61,6 +55,17 @@ MultimediaItem mergeDetailsItem({
         : null,
     episodes: resolvedEpisodes,
   );
+}
+
+// The screen and controller both merge details repeatedly. Only inspect the
+// episode catalog when neither title poster has already resolved.
+String? _firstEpisodeArtwork(List<Episode>? episodes) {
+  if (episodes == null) return null;
+  for (final episode in episodes) {
+    final artwork = AppImageFallbacks.optional(episode.posterUrl);
+    if (artwork != null) return artwork;
+  }
+  return null;
 }
 
 /// A full-size URL only counts when it is actually larger than the catalog

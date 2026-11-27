@@ -51,6 +51,7 @@ import '../../../../core/storage/settings_repository.dart';
 import 'playback_recovery_policy.dart';
 import 'playback_resume.dart';
 import 'player_platform_service.dart';
+import 'skip_duration_wait.dart';
 import '../data/anime4k.dart';
 import '../data/anime4k_shader_library.dart';
 import '../data/anime4k_performance.dart';
@@ -485,7 +486,14 @@ class PlayerController extends Notifier<PlayerState> {
   /// from the title. Needed to submit a viewer's marks back to AniSkip.
   int? _resolvedMalId;
   int _skipFetchGeneration = 0;
-  bool _skipNeedsDurationRefresh = false;
+  SkipDurationWait _skipDuration = SkipDurationWait();
+  int? _skipSourceSession;
+  bool _skipOpenDispatched = false;
+  bool _skipLookupStarted = false;
+  String? _skipVideoViewSource;
+  bool _skipMediaKitReady = false;
+  bool _skipMediaKitReset = false;
+  int? _skipMediaKitEarlyDuration;
   bool _hasConfirmedPlaybackFrame = false;
 
   // RC1 — when a stream fails to start with a decode/codec error (common on
@@ -621,6 +629,8 @@ class PlayerController extends Notifier<PlayerState> {
   int _beginSourceSession({bool resetAttempts = false}) {
     _cancelAutoSubtitleSelection();
     final nextSessionId = ++_sourceSessionSerial;
+    if (_skipSourceSession != null) _resetSkipDuration();
+    if (_skipLookupStarted) _skipSourceSession = nextSessionId;
     _userDismissedOverlay = false;
     state = state.copyWith(
       sourceSessionId: nextSessionId,
@@ -691,6 +701,7 @@ class PlayerController extends Notifier<PlayerState> {
     // disposeController() being called, clean up subscriptions.
     ref.onDispose(() {
       _isDisposed = true;
+      _skipDuration.cancel();
       _pendingContinueCheckpoint = null;
       _cancelAutoSubtitleSelection();
       _disableAnime4kMetal();
@@ -819,8 +830,7 @@ class PlayerController extends Notifier<PlayerState> {
     _hasMarkedWatched = false;
     _pendingContinueCheckpoint = null;
     ++_catalogGeneration;
-    ++_skipFetchGeneration;
-    _skipNeedsDurationRefresh = false;
+    _resetSkipDuration();
     _resolvedMalId = null;
     _item = item;
 
@@ -971,22 +981,68 @@ class PlayerController extends Notifier<PlayerState> {
     }
   }
 
-  void _maybeFetchSkipSegments({int? knownDurationSec}) {
-    // Downloaded episodes used to bail out here, which left them with no skip
-    // button at all. They now go through the same path: the cache answers
-    // offline, and the online sources still run when there is a connection.
-    unawaited(_fetchAndLogSkipSegments(knownDurationSec: knownDurationSec));
+  void _resetSkipDuration() {
+    _skipDuration.cancel();
+    _skipDuration = SkipDurationWait();
+    ++_skipFetchGeneration;
+    _skipSourceSession = null;
+    _skipOpenDispatched = false;
+    _skipLookupStarted = false;
+    _skipVideoViewSource = null;
+    _skipMediaKitReady = false;
+    _skipMediaKitReset = false;
+    _skipMediaKitEarlyDuration = null;
   }
 
-  void _refreshSkipSegmentsIfDurationPending(int? durationSec) {
-    if (!_skipNeedsDurationRefresh ||
-        _isDisposed ||
-        durationSec == null ||
-        durationSec <= 0) {
+  SkipDurationWait _armSkipDuration(
+    int sourceSessionId, {
+    String? videoViewSource,
+  }) {
+    // Automatic failover and reconnect can open another file within the same
+    // source session. Its duration must not inherit the failed file's.
+    if (_skipOpenDispatched) _resetSkipDuration();
+    _skipSourceSession = sourceSessionId;
+    _skipOpenDispatched = true;
+    _skipVideoViewSource = videoViewSource;
+    if (!_skipLookupStarted) _maybeFetchSkipSegments();
+    return _skipDuration;
+  }
+
+  void _maybeFetchSkipSegments({bool actualDurationRefresh = false}) {
+    // Downloaded episodes also use the cache and the normal lookup, including
+    // when the embedded chapter markers are the only online-independent data.
+    _skipLookupStarted = true;
+    unawaited(
+      _fetchAndLogSkipSegments(actualDurationRefresh: actualDurationRefresh),
+    );
+  }
+
+  void _reportSkipDuration(int durationSec) {
+    if (!_skipDuration.report(durationSec)) return;
+    // A fallback lookup may still be in flight. It cannot overwrite this pass.
+    ++_skipFetchGeneration;
+    _maybeFetchSkipSegments(actualDurationRefresh: true);
+  }
+
+  void _onMediaKitSkipDuration(Duration duration) {
+    if (_skipVideoViewSource != null ||
+        !_skipOpenDispatched ||
+        !_isCurrentSourceSession(_skipSourceSession!)) {
       return;
     }
-    _skipNeedsDurationRefresh = false;
-    _maybeFetchSkipSegments(knownDurationSec: durationSec);
+    // media_kit.open resets the duration stream before loading the new file.
+    // Don't adopt queued values from the previous file or a failed open.
+    if (duration == Duration.zero) {
+      _skipMediaKitReset = true;
+      _skipMediaKitEarlyDuration = null;
+      return;
+    }
+    if (!_skipMediaKitReset || duration.inSeconds <= 0) return;
+    if (_skipMediaKitReady) {
+      _reportSkipDuration(duration.inSeconds);
+    } else {
+      _skipMediaKitEarlyDuration = duration.inSeconds;
+    }
   }
 
   /// Cache keys for the episode playing, offline-safe key first.
@@ -1006,42 +1062,6 @@ class PlayerController extends Notifier<PlayerState> {
       );
     }
     return keys;
-  }
-
-  /// Episode length in seconds, or null while the media is still opening.
-  /// AniSkip uses it to scale crowd-sourced timestamps to this exact file.
-  int? _currentDurationSeconds() {
-    final dur = state.useExoPlayer
-        ? Duration(
-            milliseconds: _videoViewController?.mediaInfo.value?.duration ?? 0,
-          )
-        : _player.state.duration;
-    return dur > Duration.zero ? dur.inSeconds : null;
-  }
-
-  /// Skip segments are looked up as soon as playback starts, which is
-  /// usually before the engine reports a duration. Without a length AniSkip
-  /// hands back every submission it has for the episode — including entries
-  /// timed against other releases, which overlap each other. Waiting the
-  /// couple of seconds it takes for the duration to land gets the set that
-  /// actually matches this file.
-  Future<int?> _awaitDurationSeconds({
-    Duration timeout = const Duration(seconds: 4),
-  }) async {
-    final immediate = _currentDurationSeconds();
-    if (immediate != null) return immediate;
-
-    final deadline = DateTime.now().add(timeout);
-    while (!_isDisposed && DateTime.now().isBefore(deadline)) {
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-      final value = _currentDurationSeconds();
-      if (value != null) return value;
-    }
-    // The engine is still opening the file. The catalog knows the runtime,
-    // which is close enough for AniSkip to match a submission, and beats
-    // making the viewer wait for a skip button that arrives after the
-    // opening has already played.
-    return _catalogRuntimeSeconds();
   }
 
   /// Episode runtime in seconds as published by the catalog (`awDuration` or
@@ -1078,11 +1098,17 @@ class PlayerController extends Notifier<PlayerState> {
     } catch (_) {}
   }
 
-  Future<void> _fetchAndLogSkipSegments({int? knownDurationSec}) async {
+  Future<void> _fetchAndLogSkipSegments({
+    required bool actualDurationRefresh,
+  }) async {
     final episode = _episode;
     if (episode == null) return;
     final skipGen = _skipFetchGeneration;
+    final durationWait = _skipDuration;
     bool isSkipCurrent() => !_isDisposed && skipGen == _skipFetchGeneration;
+    Future<int?> lookupDuration() async =>
+        await durationWait.wait() ??
+        (isSkipCurrent() ? _catalogRuntimeSeconds() : null);
     if (state.isLive || _item.contentType == MultimediaContentType.livestream) {
       if (kDebugMode) {
         _debugPrint(
@@ -1127,7 +1153,7 @@ class PlayerController extends Notifier<PlayerState> {
     // downloaded) is on disk, so show it straight away. This is the only
     // path that works with no connection.
     final cache = ref.read(skipSegmentCacheProvider);
-    if (knownDurationSec == null) {
+    if (!actualDurationRefresh) {
       final cached = cache.readAny(_skipCacheKeys());
       if (cached.isNotEmpty) {
         state = state.copyWith(skipSegments: cached);
@@ -1272,11 +1298,8 @@ class PlayerController extends Notifier<PlayerState> {
 
       if (resolvedMalId != null) {
         try {
-          final durationSec = knownDurationSec ?? await _awaitDurationSeconds();
+          final durationSec = await lookupDuration();
           if (!isSkipCurrent()) return;
-          if (durationSec == null && knownDurationSec == null) {
-            _skipNeedsDurationRefresh = true;
-          }
           if (kDebugMode) {
             _debugPrint(
               'AniSkip: querying mal=$resolvedMalId season=$season '
@@ -1323,8 +1346,7 @@ class PlayerController extends Notifier<PlayerState> {
               .byMalId(resolvedMalId);
           if (!isSkipCurrent()) return;
           if (ids != null && (ids.imdbId != null || ids.tmdbId != null)) {
-            final durationSec =
-                knownDurationSec ?? await _awaitDurationSeconds();
+            final durationSec = await lookupDuration();
             if (!isSkipCurrent()) return;
             introDbSegments = await ref
                 .read(introDbServiceProvider)
@@ -1354,13 +1376,18 @@ class PlayerController extends Notifier<PlayerState> {
     }
     // 3. The file's own chapter markers. Per-file data, so it covers the
     // episodes no crowd-sourced service has, and it costs no network call.
-    final durationSec = knownDurationSec ?? await _awaitDurationSeconds();
+    final durationSec = await lookupDuration();
     if (!isSkipCurrent()) return;
     try {
-      chapterSegments = await ChapterSkipSource.read(
-        _player,
-        durationSec: durationSec?.toDouble(),
-      );
+      // A pending open can still expose the previous file's chapter list.
+      // After open returns, media_kit has unloaded that file, even if the new
+      // file hasn't reported a duration.
+      if (_skipMediaKitReady) {
+        chapterSegments = await ChapterSkipSource.read(
+          _player,
+          durationSec: durationSec?.toDouble(),
+        );
+      }
       if (!isSkipCurrent()) return;
       if (kDebugMode) {
         _debugPrint('Chapters returned ${chapterSegments.length} segments:');
@@ -1397,10 +1424,12 @@ class PlayerController extends Notifier<PlayerState> {
   }
 
   void _setupVideoViewListeners() {
-    if (_videoViewController == null) return;
+    final controller = _videoViewController;
+    if (controller == null) return;
 
-    _videoViewController!.mediaInfo.addListener(() {
-      final info = _videoViewController!.mediaInfo.value;
+    controller.mediaInfo.addListener(() {
+      if (_isDisposed || !identical(_videoViewController, controller)) return;
+      final info = controller.mediaInfo.value;
       if (info != null) {
         final detectedIsLive =
             _item.contentType == MultimediaContentType.livestream
@@ -1426,8 +1455,9 @@ class PlayerController extends Notifier<PlayerState> {
             _suppressNextEpisodeDetection) {
           _suppressNextEpisodeDetection = false;
         }
-        if (info.duration > 0) {
-          _refreshSkipSegmentsIfDurationPending(info.duration ~/ 1000);
+        if (_skipVideoViewSource == info.source &&
+            _isCurrentSourceSession(_skipSourceSession!)) {
+          _reportSkipDuration(info.duration ~/ 1000);
         }
       }
     });
@@ -1693,7 +1723,10 @@ class PlayerController extends Notifier<PlayerState> {
 
   void _setupDurationListener() {
     _durationSub?.cancel();
-    _durationSub = _player.stream.duration.listen((duration) {
+    final player = _player;
+    _durationSub = player.stream.duration.listen((duration) {
+      if (_isDisposed || !identical(_player, player)) return;
+      _onMediaKitSkipDuration(duration);
       if (duration.inMilliseconds >= 30000) {
         _lastKnownPlaybackDurationMs = duration.inMilliseconds;
       }
@@ -1701,7 +1734,6 @@ class PlayerController extends Notifier<PlayerState> {
         if (_pendingResumeSeekPosition != null) {
           unawaited(_flushPendingResumeSeek());
         }
-        _refreshSkipSegmentsIfDurationPending(duration.inSeconds);
         // Safe point to re-enable next-episode detection: the new episode's
         // duration is now confirmed, so remaining-time calculations are valid.
         if (_suppressNextEpisodeDetection) {
@@ -2828,6 +2860,7 @@ class PlayerController extends Notifier<PlayerState> {
         play && !_shouldPauseLocalStartup(playUrl),
       );
       final subs = state.externalSubtitles;
+      _armSkipDuration(sourceSessionId, videoViewSource: finalUrl);
 
       if (subs.isNotEmpty && _videoViewSupportsMergedExternalSubtitles) {
         _videoViewController!.openWithSubtitles(
@@ -2919,12 +2952,22 @@ class PlayerController extends Notifier<PlayerState> {
       if (!_isCurrentSourceSession(sourceSessionId)) return;
     }
 
+    final skipDuration = _armSkipDuration(sourceSessionId);
+    // The reset event is distinct, so an already-zero duration might not emit.
+    _skipMediaKitReset = player.state.duration == Duration.zero;
     await player.open(
       Media(mediaKitUrl, httpHeaders: headers),
       play: play && !_shouldPauseLocalStartup(playUrl),
     );
     if (!_isCurrentSourceSession(sourceSessionId)) {
       return;
+    }
+    if (identical(_skipDuration, skipDuration)) {
+      _skipMediaKitReady = true;
+      if (_skipMediaKitEarlyDuration case final duration?) {
+        _reportSkipDuration(duration);
+        _skipMediaKitEarlyDuration = null;
+      }
     }
     state = state.copyWith(useExoPlayer: false, isSeekable: true);
     unawaited(applyAnime4kShaders());
@@ -3833,8 +3876,7 @@ class PlayerController extends Notifier<PlayerState> {
     _pendingResumeSeekPosition = null;
     _isApplyingPendingResumeSeek = false;
     _pendingResumeSeekFuture = null;
-    ++_skipFetchGeneration;
-    _skipNeedsDurationRefresh = false;
+    _resetSkipDuration();
     if (state.skipSegments.isNotEmpty) {
       state = state.copyWith(skipSegments: const []);
     }
@@ -4284,6 +4326,7 @@ class PlayerController extends Notifier<PlayerState> {
     if (player != null && _isInitialized && !identical(_player, player)) return;
     if (_isDisposed) return;
     _isDisposed = true;
+    _skipDuration.cancel();
     _cancelAutoSubtitleSelection();
     _disableAnime4kMetal();
     final closingSession = ++_sourceSessionSerial;

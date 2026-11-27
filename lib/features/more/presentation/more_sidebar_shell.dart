@@ -8,6 +8,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../../../core/utils/account_profile_avatar.dart';
 import '../../../core/utils/localized_text.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
 
@@ -283,7 +284,9 @@ class MoreSidebarHeader extends StatelessWidget {
             CircleAvatar(
               radius: 20,
               backgroundColor: colors.surfaceContainerHighest,
-              backgroundImage: photo.isEmpty ? null : NetworkImage(photo),
+              backgroundImage: photo.isEmpty
+                  ? null
+                  : AccountProfileAvatar(NetworkImage(photo)),
               child: photo.isEmpty
                   ? Icon(
                       Icons.person_rounded,

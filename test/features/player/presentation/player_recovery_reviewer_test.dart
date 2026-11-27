@@ -17,6 +17,11 @@ import 'package:animewitcher/features/library/presentation/history_provider.dart
 import 'package:animewitcher/features/player/presentation/player_controller_base.dart';
 import 'package:animewitcher/features/player/presentation/player_teardown.dart';
 import 'package:animewitcher/features/settings/presentation/player_settings_provider.dart';
+import 'package:animewitcher/features/skip/data/anime_id_mappings.dart';
+import 'package:animewitcher/features/skip/data/aniskip_service.dart';
+import 'package:animewitcher/features/skip/data/intro_db_service.dart';
+import 'package:animewitcher/features/skip/data/skip_segment_cache.dart';
+import 'package:animewitcher/features/skip/data/skip_service.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -34,6 +39,8 @@ class _Player extends Fake implements media.Player {
   final buffers = StreamController<bool>.broadcast(sync: true);
   bool seekThrows = false;
   bool emitDurationDuringOpen = false;
+  Duration? nextMediaDuration;
+  Duration? staleDurationBeforeReset;
   final opened = <String>[];
   Completer<void>? pendingPause;
   Completer<void>? pendingOpen;
@@ -63,6 +70,11 @@ class _Player extends Fake implements media.Player {
     if (!openEnteredSignal.isCompleted) openEnteredSignal.complete();
     await pendingOpen?.future;
     value = value.copyWith(position: Duration.zero, playing: play);
+    if (staleDurationBeforeReset case final stale?) reportDuration(stale);
+    if (nextMediaDuration case final next?) {
+      reportDuration(Duration.zero); // Matches media_kit's open/stop contract.
+      reportDuration(next);
+    }
     if (emitDurationDuringOpen) durations.add(value.duration);
     if (!openedSignal.isCompleted) openedSignal.complete();
   }
@@ -91,6 +103,11 @@ class _Player extends Fake implements media.Player {
   void advance(Duration position) {
     value = value.copyWith(position: position);
     positions.add(position);
+  }
+
+  void reportDuration(Duration duration) {
+    value = value.copyWith(duration: duration);
+    durations.add(duration);
   }
 
   Future<void> close() async {
@@ -293,9 +310,75 @@ class _ArtworkSettings extends AnimeDataSourceSettingsNotifier {
 }
 
 class _SettingsRepository extends Fake implements SettingsRepository {
+  bool enableSkip = false;
+
   @override
   T? getPlayerSetting<T>(String key, {T? defaultValue}) =>
-      key == 'player_skip_segments' ? false as T : defaultValue;
+      key == 'player_skip_segments' ? enableSkip as T : defaultValue;
+}
+
+class _AniSkip extends Fake implements AniSkipService {
+  final durations = <(int, int?)>[];
+
+  @override
+  Future<List<SkipSegment>> getSkipSegments({
+    int? tmdbId,
+    String? imdbId,
+    int? anilistId,
+    int? malId,
+    required int season,
+    required int episode,
+    int? duration,
+  }) async {
+    durations.add((episode, duration));
+    return [
+      SkipSegment(
+        startTime: 2,
+        endTime: duration == null || duration >= 60 ? 8 : 6,
+        type: SkipType.intro,
+      ),
+    ];
+  }
+}
+
+class _IntroDb extends Fake implements IntroDbService {
+  final durations = <int?>[];
+
+  @override
+  Future<List<SkipSegment>> getSkipSegments({
+    int? tmdbId,
+    String? imdbId,
+    int? anilistId,
+    int? malId,
+    required int? season,
+    required int? episode,
+    int? duration,
+  }) async {
+    durations.add(duration);
+    return [
+      SkipSegment(startTime: 1, endTime: 9, type: SkipType.intro),
+      SkipSegment(startTime: 9, endTime: 11, type: SkipType.recap),
+    ];
+  }
+}
+
+class _SkipMappings extends Fake implements AnimeIdMappings {
+  @override
+  Future<AnimeIds?> byMalId(int malId) async =>
+      const AnimeIds(imdbId: 'ttTest');
+}
+
+class _SkipCache extends Fake implements SkipSegmentCache {
+  var cached = const <SkipSegment>[];
+  final firstWrite = Completer<void>();
+
+  @override
+  List<SkipSegment> readAny(List<String> keys) => cached;
+
+  @override
+  Future<void> write(List<String> keys, List<SkipSegment> segments) async {
+    if (!firstWrite.isCompleted) firstWrite.complete();
+  }
 }
 
 class _HistoryRepository extends Fake implements HistoryRepository {
@@ -556,6 +639,10 @@ void main() {
   late _Account account;
   late _HistoryRepository history;
   late _CheckpointProbe checkpointProbe;
+  late _SettingsRepository settings;
+  late _AniSkip aniSkip;
+  late _IntroDb introDb;
+  late _SkipCache skipCache;
   final additionalPlayers = <_Player>[];
   int connectivityChecks = 0;
   Completer<List<String>>? pendingConnectivity;
@@ -577,13 +664,21 @@ void main() {
     account = _Account();
     history = _HistoryRepository();
     checkpointProbe = _CheckpointProbe();
+    settings = _SettingsRepository();
+    aniSkip = _AniSkip();
+    introDb = _IntroDb();
+    skipCache = _SkipCache();
     container = ProviderContainer(
       overrides: [
         extensionManagerProvider.overrideWith(() => _Extensions(catalog)),
         activeProviderProvider.overrideWithValue(catalog),
         playerSettingsProvider.overrideWith(_Settings.new),
         animeDataSourceSettingsProvider.overrideWith(_ArtworkSettings.new),
-        settingsRepositoryProvider.overrideWithValue(_SettingsRepository()),
+        settingsRepositoryProvider.overrideWithValue(settings),
+        aniSkipServiceProvider.overrideWithValue(aniSkip),
+        introDbServiceProvider.overrideWithValue(introDb),
+        animeIdMappingsProvider.overrideWithValue(_SkipMappings()),
+        skipSegmentCacheProvider.overrideWithValue(skipCache),
         historyRepositoryProvider.overrideWithValue(history),
         animeWitcherAccountServiceProvider.overrideWithValue(account),
         watchHistoryProvider.overrideWith(_History.new),
@@ -642,6 +737,230 @@ void main() {
     player.advance(const Duration(seconds: 5));
     await flush();
   }
+
+  Future<void> startSkipFixture({int? runtime}) async {
+    settings.enableSkip = true;
+    final episodes = [_episode(1), _episode(2)];
+    const selected = StreamResult(
+      url: 'https://video.test/one.mp4',
+      source: 'Selected',
+    );
+    await controller.init(
+      player: player,
+      item: _item(episodes).copyWith(
+        syncData: {
+          'malId': '101',
+          if (runtime != null) 'awDuration': '$runtime',
+        },
+      ),
+      videoUrl: selected.url,
+      episode: episodes.first,
+      selectedSource: selected,
+    );
+  }
+
+  test(
+    'skip cache is immediate and fast duration selects the shown segment',
+    () async {
+      skipCache.cached = [
+        SkipSegment(startTime: 0, endTime: 4, type: SkipType.intro),
+      ];
+      player.pendingOpen = Completer<void>();
+      player.nextMediaDuration = const Duration(seconds: 29);
+      final opening = startSkipFixture();
+      await player.openEnteredSignal.future;
+      expect(controller.currentState.skipSegments.single.endTime, 4);
+      expect(aniSkip.durations, isEmpty);
+      player.pendingOpen!.complete();
+      await opening;
+      await skipCache.firstWrite.future.timeout(const Duration(seconds: 2));
+      expect(aniSkip.durations, [(1, 29)]);
+      expect(introDb.durations, [29]);
+      expect(
+        controller.currentState.skipSegments.map((s) => (s.type, s.endTime)),
+        [(SkipType.intro, 6), (SkipType.recap, 11)],
+      );
+    },
+  );
+
+  test('skip duration cannot inherit the previous episode or source', () async {
+    player.nextMediaDuration = const Duration(seconds: 61);
+    await startSkipFixture();
+    await skipCache.firstWrite.future.timeout(const Duration(seconds: 2));
+
+    player.advance(const Duration(seconds: 5));
+    player.nextMediaDuration = const Duration(seconds: 24);
+    player.staleDurationBeforeReset = const Duration(seconds: 61);
+    final episode = _episode(2);
+    await controller.loadEpisode(
+      episode,
+      selectedSource: const StreamResult(
+        url: 'https://video.test/two.mp4',
+        source: 'Selected',
+      ),
+    );
+    await flush();
+    expect(aniSkip.durations, [(1, 61), (2, 24)]);
+    expect(controller.currentState.skipSegments.first.endTime, 6);
+
+    player.advance(const Duration(seconds: 5));
+    final sourceSessionId = controller.currentState.sourceSessionId;
+    player.nextMediaDuration = const Duration(seconds: 73);
+    player.staleDurationBeforeReset = const Duration(seconds: 24);
+    expect(
+      await controller.switchToSource(
+        const StreamResult(
+          url: 'https://video.test/alt.mp4',
+          source: 'Alternate',
+        ),
+      ),
+      isTrue,
+    );
+    await flush();
+    expect(controller.currentState.sourceSessionId, sourceSessionId);
+    expect(aniSkip.durations, [(1, 61), (2, 24), (2, 73)]);
+    expect(controller.currentState.skipSegments.first.endTime, 8);
+  });
+
+  test('skip wait cancels on Back before duration arrives', () async {
+    await startSkipFixture();
+    controller.disposeController(player: player);
+    player.reportDuration(const Duration(seconds: 49));
+    await flush();
+    expect(aniSkip.durations, isEmpty);
+    expect(introDb.durations, isEmpty);
+  });
+
+  test('skip no-duration timer wakeups and late refresh', () async {
+    final watch = Stopwatch()..start();
+    var pollWakes = 0;
+    var deadlineWakes = 0;
+    final benchmark =
+        Platform.environment['ANIMEWITCHER_TEST_SKIP_TIMER_BENCH'];
+    await runZoned(
+      () async {
+        await startSkipFixture(runtime: 2);
+        await skipCache.firstWrite.future.timeout(const Duration(seconds: 15));
+        expect(aniSkip.durations, [(1, 120)]);
+        expect(introDb.durations, [120]);
+        expect(controller.currentState.skipSegments.first.endTime, 8);
+        final initialWakes = (pollWakes, deadlineWakes);
+        // ignore: avoid_print
+        print(
+          'SKIP TIMER: ${initialWakes.$1}x100ms, ${initialWakes.$2}x4s, '
+          '${watch.elapsedMilliseconds}ms until merged skip segments',
+        );
+        if (benchmark == 'stock') return;
+        expect(initialWakes, (0, 1));
+        player.reportDuration(const Duration(seconds: 26));
+        await flush();
+        expect(aniSkip.durations, [(1, 120), (1, 26)]);
+        expect(introDb.durations, [120, 26]);
+        expect(controller.currentState.skipSegments.first.endTime, 6);
+        player.reportDuration(const Duration(seconds: 27));
+        await flush();
+        expect(aniSkip.durations.length, 2);
+      },
+      zoneSpecification: ZoneSpecification(
+        createTimer: (self, parent, zone, delay, callback) {
+          final source = StackTrace.current.toString();
+          final isPolling =
+              delay == const Duration(milliseconds: 100) &&
+              source.contains('_awaitDurationSeconds');
+          final isDeadline =
+              delay == const Duration(seconds: 4) &&
+              source.contains('SkipDurationWait.wait');
+          return parent.createTimer(zone, delay, () {
+            if (isPolling) pollWakes++;
+            if (isDeadline) deadlineWakes++;
+            callback();
+          });
+        },
+      ),
+    );
+  });
+
+  final skipClip1 = Platform.environment['ANIMEWITCHER_TEST_SKIP_CLIP_1'];
+  final skipClip2 = Platform.environment['ANIMEWITCHER_TEST_SKIP_CLIP_2'];
+  final skipLibrary = Platform.environment['ANIMEWITCHER_TEST_LIBMPV'];
+  test(
+    'native skip duration and chapters follow unequal local files',
+    () async {
+      final priorNativeMode = media.NativePlayer.test;
+      media.NativePlayer.test = true;
+      addTearDown(() => media.NativePlayer.test = priorNativeMode);
+      media.MediaKit.ensureInitialized(libmpv: skipLibrary);
+      settings.enableSkip = true;
+
+      final native = media.Player(
+        configuration: const media.PlayerConfiguration(muted: true),
+      );
+      final episodes = [_episode(1), _episode(2)];
+      const deadline = Duration(seconds: 7);
+      try {
+        await controller
+            .init(
+              player: native,
+              item: _item(episodes).copyWith(syncData: const {'malId': '101'}),
+              videoUrl: skipClip1!,
+              episode: episodes.first,
+              selectedSource: StreamResult(url: skipClip1, source: 'Local'),
+            )
+            .timeout(deadline);
+        await skipCache.firstWrite.future.timeout(deadline);
+        expect(aniSkip.durations, [(1, 14)]);
+        expect(
+          controller.currentState.skipSegments.last,
+          isA<SkipSegment>()
+              .having((s) => s.type, 'type', SkipType.outro)
+              .having((s) => s.startTime, 'start', 12)
+              .having((s) => s.endTime, 'end', 14),
+        );
+
+        if (controller.currentState.isLoading) {
+          await native.stream.position
+              .firstWhere((position) => position > const Duration(seconds: 1))
+              .timeout(deadline);
+        }
+        expect(controller.currentState.isLoading, isFalse);
+        final reachedSecondOutro = Completer<SkipSegment>();
+        final watch = container.listen(playerControllerProvider, (_, next) {
+          for (final segment in next.skipSegments) {
+            if (segment.type == SkipType.outro &&
+                segment.endTime == 19 &&
+                !reachedSecondOutro.isCompleted) {
+              reachedSecondOutro.complete(segment);
+            }
+          }
+        });
+        try {
+          await controller
+              .loadEpisode(
+                episodes.last,
+                selectedSource: StreamResult(url: skipClip2!, source: 'Local'),
+              )
+              .timeout(deadline);
+          expect(
+            (await reachedSecondOutro.future.timeout(deadline)).startTime,
+            17,
+          );
+        } finally {
+          watch.close();
+        }
+        expect(aniSkip.durations, [(1, 14), (2, 19)]);
+      } finally {
+        controller.disposeController(player: native);
+        await stopPlayerBeforeExit(native).timeout(deadline);
+        await native.dispose().timeout(deadline);
+      }
+    },
+    skip:
+        !Platform.isLinux ||
+        skipClip1 == null ||
+        skipClip2 == null ||
+        skipLibrary == null,
+    timeout: const Timeout(Duration(seconds: 25)),
+  );
 
   test('close coalesces only the matching in-flight checkpoint', () async {
     await startSource();

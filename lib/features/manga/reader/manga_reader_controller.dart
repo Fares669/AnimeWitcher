@@ -448,7 +448,10 @@ class MangaReaderController extends ChangeNotifier {
     _progressTimer?.cancel();
     _preloadedChapterPages.clear();
     _preloadingChapterIds.clear();
-    _closing = Future.wait<void>([..._cacheOperations, flushProgress()]);
+    _closing = Future.wait<void>([
+      ..._cacheOperations,
+      flushProgress(),
+    ]).whenComplete(_pageCache.waitForMaintenance);
     // Widgets dispose synchronously; close() still exposes a flush failure to
     // callers that explicitly await shutdown.
     _closing!.ignore();

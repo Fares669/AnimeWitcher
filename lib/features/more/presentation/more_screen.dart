@@ -5,6 +5,7 @@ import 'package:animewitcher/shared/widgets/app_side_menu.dart';
 import 'package:animewitcher/shared/widgets/app_page_header.dart';
 
 import '../../../core/account/account_providers.dart';
+import '../../../core/utils/account_profile_avatar.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/providers/witanime_provider.dart';
 import '../../../core/navigation/app_layout_style.dart';
@@ -204,7 +205,9 @@ class MoreScreen extends ConsumerWidget {
                     : CircleAvatar(
                         radius: 24,
                         backgroundColor: theme.colorScheme.primaryContainer,
-                        foregroundImage: NetworkImage(accountPhotoUrl),
+                        foregroundImage: AccountProfileAvatar(
+                          NetworkImage(accountPhotoUrl),
+                        ),
                         onForegroundImageError: (_, _) {},
                         child: Icon(
                           Icons.person_rounded,

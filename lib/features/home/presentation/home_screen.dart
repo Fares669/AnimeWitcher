@@ -118,7 +118,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     // first page is fetched too, so the tab opens already filled.
     _prefetchTimer = Timer(const Duration(seconds: 6), () {
       if (!mounted || !ref.read(mangaHasOwnTabProvider)) return;
-      ref.read(mangaHomeFirstPageProvider.future).ignore();
+      ref
+          .read(mangaHomeWarmupProvider)
+          .prefetch(() => mangaCatalogueOf(ref.read(extensionManagerProvider)));
     });
   }
 

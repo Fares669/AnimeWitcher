@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/account/animewitcher_account_models.dart';
+import '../../../core/utils/account_profile_avatar.dart';
 import '../../../core/utils/layout_constants.dart';
 import '../../../core/utils/localized_text.dart';
 import '../../../shared/widgets/app_page_header.dart';
@@ -154,10 +155,10 @@ class _AnimeWitcherProfileEditScreenState
     final coverUrl = widget.profile.coverUrl?.trim() ?? '';
     final avatarUrl = widget.profile.photoUrl?.trim() ?? '';
     final ImageProvider<Object>? avatarImage = _avatarBytes != null
-        ? MemoryImage(_avatarBytes!)
+        ? AccountProfileAvatar(MemoryImage(_avatarBytes!))
         : avatarUrl.isEmpty
         ? null
-        : NetworkImage(avatarUrl);
+        : AccountProfileAvatar(NetworkImage(avatarUrl));
 
     Widget cover;
     if (_coverBytes != null) {
@@ -237,7 +238,7 @@ class _AnimeWitcherProfileEditScreenState
               clipBehavior: Clip.none,
               children: [
                 CircleAvatar(
-                  radius: 58,
+                  radius: AccountProfileAvatar.largestPaintedDiameter / 2,
                   backgroundColor: colors.primaryContainer,
                   foregroundImage: avatarImage,
                   onForegroundImageError: avatarImage == null
