@@ -18,6 +18,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -153,13 +154,17 @@ class _Manager extends ExtensionManager {
   List<AnimeWitcherProvider> build() => [provider];
 }
 
-void _configure(WidgetTester tester) {
+void _configure(
+  WidgetTester tester, {
+  double dpr = 2,
+  Size logicalViewport = const Size(1200, 900),
+}) {
   final originalFallback = artworkFallbackEnabled.value;
   final originalUnreachable = malArtworkUnreachable.value;
   artworkFallbackEnabled.value = true;
   malArtworkUnreachable.value = false;
-  tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(1200, 900);
+  tester.view.devicePixelRatio = dpr;
+  tester.view.physicalSize = logicalViewport * dpr;
   addTearDown(() {
     PaintingBinding.instance.imageCache
       ..clear()
@@ -173,8 +178,9 @@ void _configure(WidgetTester tester) {
 Future<List<DetailsRouteExtra>> _mountAndType(
   WidgetTester tester,
   _Catalog source,
-  _DelayedArtwork artwork,
-) async {
+  _DelayedArtwork artwork, {
+  Key? pixelBoundary,
+}) async {
   final storage = MemoryStorageService();
   final container = ProviderContainer(
     overrides: [
@@ -204,11 +210,14 @@ Future<List<DetailsRouteExtra>> _mountAndType(
   await tester.pumpWidget(
     UncontrolledProviderScope(
       container: container,
-      child: MaterialApp.router(
-        routerConfig: router,
-        locale: const Locale('ar'),
-        localizationsDelegates: AppLocalizations.localizationsDelegates,
-        supportedLocales: AppLocalizations.supportedLocales,
+      child: RepaintBoundary(
+        key: pixelBoundary,
+        child: MaterialApp.router(
+          routerConfig: router,
+          locale: const Locale('ar'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+        ),
       ),
     ),
   );
@@ -411,4 +420,138 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
   });
+
+  for (final (dpr, wide) in [
+    (1.0, false),
+    (1.5, false),
+    (2.0, false),
+    (3.0, false),
+    (1.0, true),
+  ]) {
+    testWidgets(
+      'typed Search retains display-sized artwork (DPR $dpr, wide $wide)',
+      (tester) async {
+        _configure(tester, dpr: dpr, logicalViewport: const Size(1200, 1200));
+        artworkFallbackEnabled.value = false;
+        final works = [
+          for (var i = 0; i < 7; i++)
+            MultimediaItem(
+              title: i == 0 ? 'Artwork Saga' : 'Artwork Saga: Part $i',
+              url: 'https://fixture.invalid/title/$i',
+              posterUrl: 'https://fixture.invalid/preview-$dpr-$wide-$i.png',
+              provider: 'fixture.search',
+              contentType: MultimediaContentType.series,
+            ),
+        ];
+        await tester.runAsync(() async {
+          final recorder = ui.PictureRecorder();
+          final sourceWidth = wide ? 1600 : 600;
+          ui.Canvas(recorder)
+            ..drawColor(const Color(0xff28619d), ui.BlendMode.src)
+            ..drawRect(
+              Rect.fromLTWH(sourceWidth / 2, 0, sourceWidth / 2, 900),
+              Paint()..color = const Color(0xffc94b36),
+            );
+          final picture = recorder.endRecording();
+          final image = await picture.toImage(sourceWidth, 900);
+          picture.dispose();
+          final png = (await image.toByteData(format: ui.ImageByteFormat.png))!;
+          image.dispose();
+          for (final work in works) {
+            await posterCacheManager.putFile(
+              work.posterUrl,
+              png.buffer.asUint8List(png.offsetInBytes, png.lengthInBytes),
+              fileExtension: 'png',
+            );
+          }
+        });
+
+        const boundary = ValueKey<String>('search-preview-pixels');
+        final source = _Catalog(works);
+        await _mountAndType(
+          tester,
+          source,
+          _DelayedArtwork([]),
+          pixelBoundary: boundary,
+        );
+        final panel = find.byKey(const ValueKey('search-results-panel'));
+        final pictures = find.descendant(
+          of: panel,
+          matching: find.byWidgetPredicate(
+            (widget) => widget is RawImage && widget.image != null,
+          ),
+        );
+        await pumpUntil(
+          tester,
+          () => pictures.evaluate().length == 13,
+          'one Top-match poster, six related posters and six dense results',
+        );
+        await tester.pump(const Duration(milliseconds: 500));
+
+        expect(source.suggestionQueries, ['بحث artwork']);
+        final paintedSizes = <double, int>{};
+        final dimensions = <int, int>{};
+        final points = <(Offset, Offset)>[];
+        var decodedBytes = 0;
+        for (final element in pictures.evaluate()) {
+          final logo = element.widget as RawImage;
+          final box = element.renderObject! as RenderBox;
+          final bounds = box.localToGlobal(Offset.zero) & box.size;
+          final width = box.size.width;
+          expect(box.size.height, closeTo(width * 1.45, 0.01));
+          paintedSizes.update(width, (n) => n + 1, ifAbsent: () => 1);
+          final decoded = logo.image!;
+          dimensions.update(decoded.width, (n) => n + 1, ifAbsent: () => 1);
+          final ratio = wide ? 900 / 1600 : 1.5;
+          expect(decoded.height, closeTo(decoded.width * ratio, 0.51));
+          decodedBytes += decoded.width * decoded.height * 4;
+          points.add((
+            Offset(bounds.left + width / 4, bounds.center.dy),
+            Offset(bounds.right - width / 4, bounds.center.dy),
+          ));
+        }
+        expect(paintedSizes, {72: 1, 92: 6, 40: 6});
+        final expected = switch ((dpr, wide)) {
+          (1.0, false) => const {90: 1, 115: 6, 50: 6},
+          (1.5, false) => const {135: 1, 173: 6, 75: 6},
+          _ => const {180: 1, 230: 6, 100: 6},
+        };
+        expect(dimensions, expected);
+        final cache = PaintingBinding.instance.imageCache;
+        expect(cache.currentSize, 13);
+        expect(cache.currentSizeBytes, decodedBytes);
+
+        // Read pixels from the rendered results surface, not just image headers.
+        // The separated paint samples detect lost/cropped or wrong artwork.
+        final render = tester.renderObject<RenderRepaintBoundary>(
+          find.byKey(boundary),
+        );
+        final colors = await tester.runAsync(() async {
+          final screenshot = await render.toImage();
+          try {
+            final rgba = (await screenshot.toByteData())!;
+            int at(Offset p) => rgba.getUint32(
+              (p.dy.floor() * screenshot.width + p.dx.floor()) * 4,
+            );
+            return [for (final (left, right) in points) (at(left), at(right))];
+          } finally {
+            screenshot.dispose();
+          }
+        });
+        expect(colors, everyElement((0x28619dff, 0xc94b36ff)));
+
+        // The same visible result is still actionable, with the original URL.
+        await tester.tap(find.byKey(const ValueKey('search-instant-open')));
+        await tester.pump(const Duration(milliseconds: 400));
+        await tester.pump();
+        expect(find.text('Captured selected work'), findsOneWidget);
+        debugPrint(
+          'Search artwork DPR=$dpr, wide=$wide: $paintedSizes painted, $dimensions '
+          'decoded, ${cache.currentSize} cache keys, $decodedBytes bytes',
+        );
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+      },
+    );
+  }
 }

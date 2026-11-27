@@ -9,6 +9,7 @@ import 'tiling_engine.dart';
 /// It replaces the use of CustomPaint to eliminate ephemeral allocations of CustomPainter.
 class SubsamplingImageRenderWidget extends LeafRenderObjectWidget {
   final TilingEngine tilingEngine;
+  final int tilesRevision;
   final double scale;
   final ui.Offset vTranslate;
   final int rotation;
@@ -23,6 +24,7 @@ class SubsamplingImageRenderWidget extends LeafRenderObjectWidget {
   const SubsamplingImageRenderWidget({
     super.key,
     required this.tilingEngine,
+    required this.tilesRevision,
     required this.scale,
     required this.vTranslate,
     required this.rotation,
@@ -39,6 +41,7 @@ class SubsamplingImageRenderWidget extends LeafRenderObjectWidget {
   RenderSubsamplingImage createRenderObject(BuildContext context) {
     return RenderSubsamplingImage(
       tilingEngine: tilingEngine,
+      tilesRevision: tilesRevision,
       scale: scale,
       vTranslate: vTranslate,
       rotation: rotation,
@@ -58,6 +61,7 @@ class SubsamplingImageRenderWidget extends LeafRenderObjectWidget {
   ) {
     renderObject
       ..tilingEngine = tilingEngine
+      ..tilesRevision = tilesRevision
       ..scale = scale
       ..vTranslate = vTranslate
       ..rotation = rotation
@@ -75,6 +79,7 @@ class SubsamplingImageRenderWidget extends LeafRenderObjectWidget {
 class RenderSubsamplingImage extends RenderBox {
   RenderSubsamplingImage({
     required this._tilingEngine,
+    required this._tilesRevision,
     required this._scale,
     required this._vTranslate,
     required this._rotation,
@@ -91,6 +96,13 @@ class RenderSubsamplingImage extends RenderBox {
   set tilingEngine(TilingEngine value) {
     if (_tilingEngine == value) return;
     _tilingEngine = value;
+    markNeedsPaint();
+  }
+
+  int _tilesRevision;
+  set tilesRevision(int value) {
+    if (_tilesRevision == value) return;
+    _tilesRevision = value;
     markNeedsPaint();
   }
 

@@ -1,6 +1,7 @@
 // Laid out after Harbor's search overlay (src/components/search/*).
 // Harbor: Copyright (c) 2026 Harbor, MIT License — see THIRD_PARTY_NOTICES.md.
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
@@ -465,12 +466,21 @@ class _Poster extends StatelessWidget {
           malId: malId,
           title: lookupTitle,
           memCacheWidth: (width * 2.5).round(),
+          coverDecodeSize: _previewCoverSize(context, width),
           placeholder: (_) => PosterPlate(seed: item.title),
           errorWidget: (_) => PosterPlate(seed: item.title),
         ),
       ),
     );
   }
+}
+
+Size? _previewCoverSize(BuildContext context, double width) {
+  final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1;
+  // At DPR 2 the old 2.5× decode already leaves just 25% headroom.
+  // Preserve exact cache keys on high-density screens and on web.
+  if (kIsWeb || dpr >= 2 || dpr <= 0 || !dpr.isFinite) return null;
+  return Size(width, width * 1.45) * (dpr * 1.25);
 }
 
 /// "Series • 2002 • ★ 8.4".

@@ -58,8 +58,7 @@ List<String> preferReachableArtwork(Iterable<String> candidates) {
 
 /// A tiny asset on the same CDN as the posters. Fetching it is enough to know
 /// whether the host resolves at all.
-const String _probeUrl =
-    'https://cdn.myanimelist.net/images/favicon.ico';
+const String _probeUrl = 'https://cdn.myanimelist.net/images/favicon.ico';
 
 /// How long a probe result is trusted before checking again. Long enough to
 /// cost nothing, short enough that the app recovers when a block lifts.
@@ -71,37 +70,62 @@ void seedMalArtworkReachability(bool unreachable) {
   malArtworkUnreachable.value = unreachable;
 }
 
-/// Checks whether the MyAnimeList CDN responds, and returns the result so the
-/// caller can persist it. Deliberately short-timeout: a poster that resolves
-/// late is a poster the viewer already saw fail.
-Future<bool> probeMalArtworkUnreachable({
+/// Whether the MyAnimeList CDN is unreachable. A timeout is unknown, so
+/// callers should retain their previous answer and not persist it as a block.
+Future<bool?> probeMalArtworkUnreachable({
   Duration timeout = const Duration(seconds: 3),
+}) => probeArtworkHost(timeout: timeout);
+
+@visibleForTesting
+Future<bool?> probeArtworkHost({
+  required Duration timeout,
+  Future<List<InternetAddress>> Function(String) lookup =
+      InternetAddress.lookup,
+  HttpClient Function() createClient = HttpClient.new,
 }) async {
-  // A blocking network usually answers the name with a sinkhole address
-  // (0.0.0.0), which is known at once; a request to it would only hang.
-  try {
-    final addresses = await InternetAddress.lookup(Uri.parse(_probeUrl).host)
-        .timeout(timeout);
-    if (addresses.isEmpty || addresses.every(_isSinkhole)) return true;
-  } catch (_) {
-    return true;
-  }
+  final uri = Uri.parse(_probeUrl);
   HttpClient? client;
-  try {
-    client = HttpClient()..connectionTimeout = timeout;
-    final request = await client
-        .headUrl(Uri.parse(_probeUrl))
-        .timeout(timeout);
-    final response = await request.close().timeout(timeout);
-    await response.drain<void>();
-    // Any answer at all means the host is reachable; the status itself does
-    // not matter, only that something responded.
-    return false;
-  } catch (e) {
-    if (kDebugMode) {
-      debugPrint('[Artwork] MyAnimeList CDN unreachable, using AniList: $e');
+  var expired = false;
+
+  Future<bool?> check() async {
+    try {
+      // Some blocking DNS servers reply immediately with a sinkhole address.
+      final addresses = await lookup(uri.host);
+      if (expired) return null;
+      if (addresses.isEmpty || addresses.every(_isSinkhole)) return true;
+
+      final activeClient = createClient();
+      client = activeClient;
+      final request = await activeClient.headUrl(uri);
+      if (expired) return null;
+      await request.close();
+      // Response headers prove reachability regardless of status. No need to
+      // wait for a response body from a dedicated HEAD request.
+      return expired ? null : false;
+    } on TimeoutException {
+      return null;
+    } catch (error) {
+      if (expired) return null;
+      if (kDebugMode) {
+        debugPrint(
+          '[Artwork] MyAnimeList CDN unreachable, using AniList: $error',
+        );
+      }
+      return true;
     }
-    return true;
+  }
+
+  try {
+    // One budget for DNS, opening the connection and receiving headers, not
+    // one per phase. DNS itself cannot be cancelled, but a late result cannot
+    // open a client or publish an answer.
+    return await check().timeout(
+      timeout,
+      onTimeout: () {
+        expired = true;
+        return null;
+      },
+    );
   } finally {
     client?.close(force: true);
   }

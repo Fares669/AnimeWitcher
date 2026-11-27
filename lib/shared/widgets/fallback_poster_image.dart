@@ -1,9 +1,12 @@
 import 'dart:async';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:animewitcher/core/network/poster_cache.dart';
 import 'package:animewitcher/core/network/queued_poster_image_provider.dart';
 import 'package:animewitcher/shared/widgets/poster_plate.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart' show SynchronousFuture;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:octo_image/octo_image.dart';
@@ -33,6 +36,7 @@ class FallbackPosterImage extends ConsumerStatefulWidget {
     this.width,
     this.height,
     this.memCacheWidth,
+    this.coverDecodeSize,
     this.queueStaticPosterDecode = false,
     this.filterQuality = FilterQuality.medium,
     this.fadeInDuration = const Duration(milliseconds: 120),
@@ -72,6 +76,10 @@ class FallbackPosterImage extends ConsumerStatefulWidget {
   final double? height;
   final int? memCacheWidth;
 
+  /// Physical-pixel cover target for a fixed slot, including any headroom.
+  /// [memCacheWidth] remains an upper bound if supplied.
+  final Size? coverDecodeSize;
+
   /// Opt-in for standard-quality desktop cards, not heroes or the player.
   final bool queueStaticPosterDecode;
   final FilterQuality filterQuality;
@@ -80,6 +88,63 @@ class FallbackPosterImage extends ConsumerStatefulWidget {
   @override
   ConsumerState<FallbackPosterImage> createState() =>
       _FallbackPosterImageState();
+}
+
+/// Size an image to cover its slot without distorting it. A landscape fallback
+/// in a portrait frame needs enough height, not just the frame's width.
+@immutable
+class _DisplayCoverPoster extends ImageProvider<_DisplayCoverPoster> {
+  const _DisplayCoverPoster(
+    this.source,
+    this.width,
+    this.height,
+    this.maxWidth,
+  );
+
+  final CachedNetworkImageProvider source;
+  final int width;
+  final int height;
+  final int? maxWidth;
+
+  @override
+  Future<_DisplayCoverPoster> obtainKey(ImageConfiguration configuration) =>
+      SynchronousFuture(this);
+
+  @override
+  ImageStreamCompleter loadImage(
+    _DisplayCoverPoster key,
+    ImageDecoderCallback decode,
+  ) {
+    final stream = key.source.loadImage(
+      key.source,
+      (buffer, {getTargetSize}) => decode(
+        buffer,
+        getTargetSize: (sourceWidth, sourceHeight) {
+          final widthFromHeight =
+              (key.height * sourceWidth + sourceHeight - 1) ~/ sourceHeight;
+          final upperBound = math.min(sourceWidth, key.maxWidth ?? sourceWidth);
+          return ui.TargetImageSize(
+            width: math.min(math.max(key.width, widthFromHeight), upperBound),
+          );
+        },
+      ),
+    );
+    stream.addEphemeralErrorListener(
+      (_, _) => scheduleMicrotask(() => imageCache.evict(key)),
+    );
+    return stream;
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is _DisplayCoverPoster &&
+      other.source == source &&
+      other.width == width &&
+      other.height == height &&
+      other.maxWidth == maxWidth;
+
+  @override
+  int get hashCode => Object.hash(source, width, height, maxWidth);
 }
 
 class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
@@ -359,18 +424,29 @@ class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
 
     final key = ValueKey<String>('$url#$_retry');
     final Widget image;
-    if (widget.queueStaticPosterDecode) {
+    final coverDecodeSize = widget.coverDecodeSize;
+    if (widget.queueStaticPosterDecode || coverDecodeSize != null) {
       // CachedNetworkImage itself renders through OctoImage. Keep its visual
       // options and original cache provider semantics, adding only the codec
       // adapter at the public provider boundary.
+      final source = widget.queueStaticPosterDecode
+          ? QueuedPosterImageProvider(url)
+          : CachedNetworkImageProvider(url, cacheManager: posterCacheManager);
       image = OctoImage(
         key: key,
-        image: QueuedPosterImageProvider(url),
+        image: coverDecodeSize == null
+            ? source
+            : _DisplayCoverPoster(
+                source,
+                coverDecodeSize.width.ceil(),
+                coverDecodeSize.height.ceil(),
+                widget.memCacheWidth,
+              ),
         fit: widget.fit,
         alignment: widget.alignment,
         width: widget.width,
         height: widget.height,
-        memCacheWidth: widget.memCacheWidth,
+        memCacheWidth: coverDecodeSize == null ? widget.memCacheWidth : null,
         filterQuality: widget.filterQuality,
         placeholderBuilder: widget.placeholder,
         errorBuilder: errorBuilder,

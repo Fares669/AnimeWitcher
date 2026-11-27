@@ -891,12 +891,11 @@ class StorageService {
   // --- Artwork hosts ---
   // Remembers whether the MyAnimeList image CDN answered last time it was
   // probed, so the first frame can pick reachable artwork without waiting.
-  Future<void> setMalArtworkUnreachable(bool unreachable) async {
-    await _settingsBox.put('mal_artwork_unreachable', unreachable);
-    await _settingsBox.put(
-      'mal_artwork_probed_at',
-      DateTime.now().millisecondsSinceEpoch,
-    );
+  Future<void> setMalArtworkUnreachable(bool unreachable) {
+    return _settingsBox.putAll(<String, Object>{
+      'mal_artwork_unreachable': unreachable,
+      'mal_artwork_probed_at': DateTime.now().millisecondsSinceEpoch,
+    });
   }
 
   bool isMalArtworkUnreachable() {

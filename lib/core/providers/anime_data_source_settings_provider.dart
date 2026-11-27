@@ -68,10 +68,11 @@ class AnimeDataSourceSettingsNotifier
     state = state.copyWith(artworkFallback: enabled);
     applyArtworkFallbackEnabled(enabled);
     await _repository.setArtworkFallbackEnabled(enabled);
-    if (!enabled) return;
+    if (!enabled || !ref.mounted) return;
     // Turning this on is how someone reacts to blank posters, so answer the
     // question now rather than at the next launch.
     final unreachable = await probeMalArtworkUnreachable();
+    if (!ref.mounted || unreachable == null) return;
     seedMalArtworkReachability(unreachable);
     await _repository.setMalArtworkUnreachable(unreachable);
   }

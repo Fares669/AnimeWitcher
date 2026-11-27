@@ -440,6 +440,12 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
   late TilingEngine _tilingEngine;
   bool _isInitialized = false;
   bool _rebuildScheduled = false;
+  int _tilesRevision = 0;
+  int _sourceGeneration = 0;
+  ui.Rect? _tileSourceRect;
+  // Full dimensions in the decoder's cropped coordinate space.
+  int _sourceWidth = 0;
+  int _sourceHeight = 0;
   int _sWidth = 0;
   int _sHeight = 0;
 
@@ -544,16 +550,14 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
         widget.srcRect != oldWidget.srcRect;
 
     if (imageChanged || cropChanged) {
-      _isInitialized = false;
-      _tilingEngine.dispose();
-      _tilingEngine = TilingEngine();
+      _invalidateSource();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _loadFromProvider();
       });
     } else if ((scaleTypeChanged || geometryChanged) && _isInitialized) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        setState(() => _setupInitialViewState());
+        if (!mounted || !_isInitialized) return;
+        setState(_setupInitialViewState);
       });
     }
 
@@ -628,21 +632,29 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
     return null;
   }
 
+  void _invalidateSource() {
+    _sourceGeneration++;
+    _sourceWidth = _sourceHeight = 0;
+    _resolvedFilePath = null;
+    _isInitialized = false;
+    _tilingEngine.dispose();
+    _tilingEngine = TilingEngine();
+  }
+
   Future<void> _loadFromProvider({bool evictCache = false}) async {
+    if (!mounted) return;
     _cancelImageStream();
     // Start from no tiles. The page only reports itself loaded when a tile
     // finishes decoding, so tiles kept from before — on a retry — would
     // leave it on its loading spinner for good.
-    _tilingEngine.dispose();
-    _tilingEngine = TilingEngine();
+    _invalidateSource();
+    final generation = _sourceGeneration;
+    bool isCurrentSource() => mounted && generation == _sourceGeneration;
 
-    if (mounted) {
-      setState(() {
-        _loadState = LoadState.loading;
-        _loadingProgress = null;
-        _isInitialized = false;
-      });
-    }
+    setState(() {
+      _loadState = LoadState.loading;
+      _loadingProgress = null;
+    });
 
     if (evictCache) {
       final provider = widget.image;
@@ -651,6 +663,7 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
       } catch (_) {}
     }
 
+    if (!isCurrentSource()) return;
     if (widget.resolvedFilePath != null) {
       _resolvedFilePath = widget.resolvedFilePath;
       await _initImage();
@@ -690,6 +703,7 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
           extension: detectImageExtension(bytes),
           bytesProvider: () => bytes,
         );
+        if (!isCurrentSource()) return;
         _resolvedFilePath = tempFile.path;
         await _initImage();
         return;
@@ -701,8 +715,8 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
     // at once — the stream path below decodes the whole page and writes a
     // PNG copy of it before a single tile can be drawn.
     if (provider is CachedNetworkImageProvider) {
-      final path = await _cachedNetworkFile(provider);
-      if (!mounted) return;
+      final path = await _cachedNetworkFile(provider, isCurrentSource);
+      if (!isCurrentSource()) return;
       if (path != null) {
         _resolvedFilePath = path;
         await _initImage();
@@ -725,6 +739,7 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
 
     if (networkUrl != null) {
       final cachedFile = await _findCachedFile(networkUrl, cacheFolderName);
+      if (!isCurrentSource()) return;
       if (cachedFile != null) {
         _resolvedFilePath = cachedFile.path;
         await _initImage();
@@ -733,6 +748,7 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
     }
 
     // 4. General path: resolution via ImageStream
+    if (!isCurrentSource()) return;
     final completer = Completer<ImageInfo>();
 
     final stream = provider.resolve(ImageConfiguration.empty);
@@ -752,7 +768,7 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
         }
       },
       onChunk: (ImageChunkEvent chunk) {
-        if (mounted) {
+        if (isCurrentSource()) {
           setState(() => _loadingProgress = chunk);
         }
       },
@@ -766,14 +782,14 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
       final frame = await completer.future;
       ownedFrame = frame;
       final loadedImage = frame.image;
+      if (!isCurrentSource()) return;
       _cancelImageStream();
-
-      if (!mounted) return;
 
       // If it was a network provider, it probably wrote the image to disk during loading.
       // We re-check the cache before doing the heavy re-encoding fallback.
       if (networkUrl != null) {
         final cachedFile = await _findCachedFile(networkUrl, cacheFolderName);
+        if (!isCurrentSource()) return;
         if (cachedFile != null) {
           _resolvedFilePath = cachedFile.path;
           await _initImage();
@@ -798,22 +814,19 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
         },
       );
 
+      if (!isCurrentSource()) return;
       _resolvedFilePath = tempFile.path;
-
-      if (mounted) {
-        await _initImage();
-      }
+      await _initImage();
     } catch (e, st) {
+      if (!isCurrentSource()) return;
       if (kDebugMode) {
         debugPrint('SubsamplingScaleImageView: Failed to load image: $e\n$st');
       }
       _cancelImageStream();
-      if (mounted) {
-        setState(() => _loadState = LoadState.failed);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) widget.onError?.call(e.toString());
-        });
-      }
+      setState(() => _loadState = LoadState.failed);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (isCurrentSource()) widget.onError?.call(e.toString());
+      });
     } finally {
       // The first listener clone outlives the subscription during PNG
       // encoding. Release it on every exit, even if disk IO failed.
@@ -830,6 +843,7 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
   /// it is not there yet, or null if it cannot be had.
   Future<String?> _cachedNetworkFile(
     CachedNetworkImageProvider provider,
+    bool Function() isCurrentSource,
   ) async {
     final key = provider.cacheKey ?? provider.url;
     final known = _networkFiles[key];
@@ -837,6 +851,7 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
     final manager = provider.cacheManager ?? DefaultCacheManager();
     try {
       final cached = await manager.getFileFromCache(key);
+      if (!isCurrentSource()) return null;
       if (cached != null && cached.file.existsSync()) {
         return _networkFiles[key] = cached.file.path;
       }
@@ -846,7 +861,7 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
         headers: provider.headers,
         withProgress: true,
       )) {
-        if (!mounted) return null;
+        if (!isCurrentSource()) return null;
         if (response is DownloadProgress) {
           setState(
             () => _loadingProgress = ImageChunkEvent(
@@ -876,8 +891,7 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
 
   void _reset() {
     if (!mounted || !_isInitialized) return;
-    setState(() => _setupInitialViewState());
-    _refreshTiles(load: true);
+    setState(_setupInitialViewState);
   }
 
   void _setScaleAndTranslation(double scale, ui.Offset translation) {
@@ -1041,26 +1055,34 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
   }
 
   Future<void> _initImage() async {
-    var path = _resolvedFilePath;
-    if (path == null) return;
+    final originalPath = _resolvedFilePath;
+    if (originalPath == null) return;
+    var path = originalPath;
+    final cropBorders = widget.cropBorders;
+    final generation = _sourceGeneration;
+    bool isCurrentSource() =>
+        mounted &&
+        _sourceGeneration == generation &&
+        _resolvedFilePath == path &&
+        widget.cropBorders == cropBorders;
 
     var outSize = await ffiImageDecoder.getImageDimensionsAsync(
       path,
-      cropBorders: widget.cropBorders,
+      cropBorders: cropBorders,
     );
 
-    if (!mounted || _resolvedFilePath != path) return;
+    if (!isCurrentSource()) return;
 
     if (outSize == null || outSize[0] == 0 || outSize[1] == 0) {
       try {
         final convertedPath = await _legacyIosAvifPng(path);
-        if (!mounted || _resolvedFilePath != path) return;
+        if (!isCurrentSource()) return;
         if (convertedPath != null) {
           path = convertedPath;
           _resolvedFilePath = path;
           outSize = await ffiImageDecoder.getImageDimensionsAsync(
             path,
-            cropBorders: widget.cropBorders,
+            cropBorders: cropBorders,
           );
         }
       } catch (e, st) {
@@ -1072,7 +1094,7 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
       }
     }
 
-    if (!mounted || _resolvedFilePath != path) return;
+    if (!isCurrentSource()) return;
 
     if (outSize == null || outSize[0] == 0 || outSize[1] == 0) {
       final msg = 'Failed to analyze image: $path';
@@ -1082,18 +1104,16 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
       if (mounted) {
         setState(() => _loadState = LoadState.failed);
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) widget.onError?.call(msg);
+          if (isCurrentSource()) widget.onError?.call(msg);
         });
       }
       return;
     }
 
-    _sWidth = widget.srcRect != null
-        ? widget.srcRect!.width.toInt()
-        : outSize[0];
-    _sHeight = widget.srcRect != null
-        ? widget.srcRect!.height.toInt()
-        : outSize[1];
+    _sourceWidth = outSize[0];
+    _sourceHeight = outSize[1];
+    _sWidth = widget.srcRect?.width.toInt() ?? _sourceWidth;
+    _sHeight = widget.srcRect?.height.toInt() ?? _sourceHeight;
 
     if (mounted && _viewSize.width > 0 && _viewSize.height > 0) {
       _setupInitialViewState();
@@ -1101,6 +1121,26 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
   }
 
   void _setupInitialViewState() {
+    final sourceRect = widget.srcRect;
+    // Tiles describe raw pixels; rotation, viewport size, and fit change
+    // only the painter's transform. Keep both decoded and in-flight tiles.
+    if (_tilingEngine.tileMap.isEmpty || _tileSourceRect != sourceRect) {
+      _tilingEngine.dispose();
+      _tilingEngine = TilingEngine();
+      _tileSourceRect = sourceRect;
+      _sWidth = sourceRect?.width.toInt() ?? _sourceWidth;
+      _sHeight = sourceRect?.height.toInt() ?? _sourceHeight;
+      _tilingEngine.initialiseTileMap(
+        sWidth: _sWidth,
+        sHeight: _sHeight,
+        maxTileWidth: 4096.0,
+        maxTileHeight: 4096.0,
+        baseSampleSize: 1,
+        viewWidth: _viewSize.width,
+        viewHeight: _viewSize.height,
+      );
+    }
+
     final transformer = CoordinateTransformer(
       scale: 1.0,
       vTranslate: ui.Offset.zero,
@@ -1117,18 +1157,6 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
     final double tx = (_viewSize.width - (effWidth * _scale)) / 2;
     final double ty = (_viewSize.height - (effHeight * _scale)) / 2;
     _vTranslate = ui.Offset(tx, ty);
-
-    const int baseSampleSize = 1;
-
-    _tilingEngine.initialiseTileMap(
-      sWidth: _sWidth,
-      sHeight: _sHeight,
-      maxTileWidth: 4096.0,
-      maxTileHeight: 4096.0,
-      baseSampleSize: baseSampleSize,
-      viewWidth: _viewSize.width,
-      viewHeight: _viewSize.height,
-    );
 
     _isInitialized = true;
     _refreshTiles(load: true);
@@ -1286,14 +1314,16 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
   void _loadTile(Tile tile) {
     if (_resolvedFilePath == null) return;
     tile.loading = true;
+    final engine = _tilingEngine;
+    bool currentGrid() => mounted && identical(_tilingEngine, engine);
 
     // TilingEngine partitions the unrotated file/region. The painter rotates
     // those tiles as it draws; inverse-rotating again here can request pixels
     // outside a non-square file and leave the rotated page blank.
-    var fileRect = tile.sRect;
-    if (widget.srcRect != null) {
-      fileRect = fileRect.translate(widget.srcRect!.left, widget.srcRect!.top);
-    }
+    final sourceRect = _tileSourceRect;
+    final fileRect = sourceRect == null
+        ? tile.sRect
+        : tile.sRect.translate(sourceRect.left, sourceRect.top);
 
     final params = DecodeParams(
       filePath: _resolvedFilePath!,
@@ -1322,7 +1352,7 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
         final pointer = Pointer<Uint8>.fromAddress(result.pointerAddress!);
         final bytes = pointer.asTypedList(destWidth * destHeight * 4);
 
-        if (!mounted) {
+        if (!currentGrid()) {
           calloc.free(pointer);
           return;
         }
@@ -1335,12 +1365,13 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
             ui.PixelFormat.rgba8888,
             (ui.Image img) {
               calloc.free(pointer);
-              if (!mounted) {
+              if (!currentGrid()) {
                 img.dispose();
                 return;
               }
               tile.image = img;
               tile.loading = false;
+              _tilesRevision++;
               if (_loadState != LoadState.completed) {
                 _loadState = LoadState.completed;
                 _notifyStateChanged();
@@ -1353,12 +1384,13 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
         } catch (e) {
           calloc.free(pointer);
           tile.loading = false;
-          if (mounted) {
+          if (currentGrid()) {
             setState(() {});
           }
         }
       } else {
         tile.loading = false;
+        if (!currentGrid()) return;
         final msg = result.error ?? 'Unknown error';
         if (msg != 'Cancelled') {
           if (kDebugMode) {
@@ -1589,19 +1621,17 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
           _viewSize = ui.Size(newWidth, newHeight);
           if (isFirstLayout) {
             // No debounce for initial layout — start loading immediately
-            if (_sWidth > 0 && _sHeight > 0) {
+            if (_sourceWidth > 0 && _sourceHeight > 0) {
               _setupInitialViewState();
-            } else if (_resolvedFilePath != null) {
-              _initImage();
             }
           } else {
             _resizeTimer?.cancel();
             _resizeTimer = Timer(const Duration(milliseconds: 150), () {
               if (!mounted) return;
-              if (_sWidth > 0 && _sHeight > 0) {
-                _setupInitialViewState();
-              } else if (_resolvedFilePath != null) {
-                _initImage();
+              // While an alternate file is still resolving, the old page
+              // dimensions remain useful for layout only, not for decoding.
+              if (_sourceWidth > 0 && _sourceHeight > 0) {
+                setState(_setupInitialViewState);
               }
             });
           }
@@ -1651,6 +1681,7 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
           child: ClipRect(
             child: SubsamplingImageRenderWidget(
               tilingEngine: _tilingEngine,
+              tilesRevision: _tilesRevision,
               scale: _scale,
               vTranslate: _vTranslate,
               rotation: widget.rotation,
