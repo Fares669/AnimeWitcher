@@ -108,13 +108,8 @@ final class HiveLogicalDownloadStoreV2 implements LogicalDownloadStoreV2 {
 
   @override
   Future<List<LogicalDownloadRecordV2>> all() async {
-    final rows = await _run('hive.all', []) as Map;
-    final records = <LogicalDownloadRecordV2>[];
-    for (final raw in rows.values) {
-      final record = LogicalDownloadRecordV2.fromJson(raw);
-      if (record != null) records.add(record);
-    }
-    return records;
+    return await _run('hive.logicalRecords', [])
+        as List<LogicalDownloadRecordV2>;
   }
 
   @override

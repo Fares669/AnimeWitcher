@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_account_service.dart';
+import 'package:animewitcher/core/account/animewitcher_comment_models.dart';
+import 'package:animewitcher/core/account/firestore_rest_client.dart';
 import 'package:animewitcher/core/extensions/item_provider_resolution.dart';
 import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
 import 'package:animewitcher/core/extensions/providers/witanime_provider.dart';
@@ -11,6 +15,7 @@ import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/core/storage/settings_repository.dart';
 import 'package:animewitcher/features/details/presentation/details_controller.dart';
 import 'package:animewitcher/features/details/presentation/details_screen.dart';
+import 'package:animewitcher/features/details/presentation/widgets/details_comments_preview.dart';
 import 'package:animewitcher/features/details/presentation/widgets/details_hero_actions.dart';
 import 'package:animewitcher/features/details/presentation/widgets/details_seasons_bar.dart';
 import 'package:animewitcher/features/library/presentation/library_media_kind.dart';
@@ -141,6 +146,31 @@ final class _CatalogueProbe extends AnimeWitcherNativeProvider {
   }
 }
 
+final class _ReviewsAccount extends AnimeWitcherAccountService {
+  _ReviewsAccount(_Storage storage)
+    : super(storage: storage, secureStorage: SecureTokenStorage(storage));
+
+  final loads = <FirestoreDocument?>[];
+  final requests = <Completer<AnimeWitcherCommentPage>>[];
+
+  @override
+  Future<AnimeWitcherCommentPage> loadComments(
+    AnimeWitcherCommentTarget target, {
+    AnimeWitcherCommentSort sort = AnimeWitcherCommentSort.newest,
+    FirestoreDocument? cursor,
+    int limit = 20,
+  }) {
+    expect(target.isReviews, isTrue);
+    expect(target.animeId, 'anime');
+    expect(sort, AnimeWitcherCommentSort.newest);
+    expect(limit, kDetailsCommentsPageSize);
+    loads.add(cursor);
+    final request = Completer<AnimeWitcherCommentPage>();
+    requests.add(request);
+    return request.future;
+  }
+}
+
 MultimediaItem _franchiseFixture(
   int id, {
   String? relation,
@@ -158,6 +188,140 @@ MultimediaItem _franchiseFixture(
 );
 
 void main() {
+  testWidgets('RTL details appends reviews without rebuilding previous rows', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(590, 650));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final storage = _Storage();
+    final account = _ReviewsAccount(storage);
+    final item = MultimediaItem(
+      title: 'أنمي',
+      url: 'https://animewitcher.com/watch/anime',
+      posterUrl: '',
+      contentType: MultimediaContentType.anime,
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          storageServiceProvider.overrideWithValue(storage),
+          animeWitcherAccountServiceProvider.overrideWithValue(account),
+          libraryProvider.overrideWith(_EmptyLibrary.new),
+          detailsControllerProvider(item.url)
+              .overrideWith(() => _NoEpisodeDetailsController(item)),
+        ],
+        child: MaterialApp(
+          locale: const Locale('ar'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: TextButton(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => DetailsScreen(item: item),
+                  ),
+                ),
+                child: const Text('فتح'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('فتح'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    final footer = find.byKey(kDetailsCommentsPreviewKey);
+    final view = tester.element(footer);
+    expect(Directionality.of(view), TextDirection.rtl);
+    final position = Scrollable.of(view).position;
+    if (account.loads.isEmpty) {
+      position.jumpTo(position.maxScrollExtent);
+      await tester.pump();
+    }
+
+    final oldBuildCallback = debugOnRebuildDirtyWidget;
+    var rebuilds = 0;
+    debugOnRebuildDirtyWidget = (element, builtOnce) {
+      oldBuildCallback?.call(element, builtOnce);
+      if (element.widget.runtimeType.toString() == '_CommentRow') rebuilds++;
+    };
+    addTearDown(() => debugOnRebuildDirtyWidget = oldBuildCallback);
+
+    final counts = <int>[];
+    final spoiler = find.descendant(
+      of: footer,
+      matching: find.text('يحتوي على حرق — افتح للقراءة'),
+    );
+    const pages = 4;
+    const pageSize = kDetailsCommentsPageSize;
+    FirestoreDocument? cursor;
+    for (var page = 0; page < pages; page++) {
+      rebuilds = 0;
+      if (page > 0) {
+        position.jumpTo(0);
+        position.jumpTo(position.maxScrollExtent);
+        await tester.pump();
+      }
+      expect(account.loads, hasLength(page + 1));
+      expect(account.loads.last, same(cursor));
+      final offset = page * pageSize;
+      final contents = List.generate(pageSize, (index) {
+        final number = offset + index;
+        return AnimeWitcherComment(
+          id: '$number',
+          path: 'anime_list/anime/reviews/$number',
+          text: 'مراجعة رقم $number',
+          userId: 'user-$number',
+          userName: 'كاتب $number',
+          likes: page,
+          replies: index.isEven ? 1 : 0,
+          spoiler: index == 1,
+        );
+      });
+      cursor = FirestoreDocument(
+        id: contents.last.id,
+        path: contents.last.path,
+        fields: const {},
+      );
+      account.requests.last.complete(
+        AnimeWitcherCommentPage(
+          items: contents,
+          cursor: cursor,
+          hasMore: page + 1 < pages,
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      counts.add(rebuilds);
+
+      expect(spoiler, findsNWidgets(page + 1));
+      expect(find.text('مراجعة رقم ${offset + 1}'), findsNothing);
+      expect(find.text('مراجعة رقم ${offset + 2}'), findsOneWidget);
+    }
+
+    final authors = tester.widgetList<Text>(
+      find.descendant(
+        of: footer,
+        matching: find.byWidgetPredicate(
+          (widget) =>
+              widget is Text && (widget.data?.startsWith('كاتب ') ?? false),
+        ),
+      ),
+    );
+    expect(
+      authors.map((text) => text.data),
+      List.generate(pages * pageSize, (index) => 'كاتب $index'),
+    );
+    position.jumpTo(0);
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    expect(account.loads, hasLength(pages));
+    expect(counts, [6, 6, 6, 6], reason: 'Review row builds per page');
+  });
+
   for (final scenario in ['external', 'standalone', 'sequel']) {
     testWidgets(
       'details season requests only for displayable work ($scenario)',

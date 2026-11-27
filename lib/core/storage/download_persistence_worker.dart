@@ -10,6 +10,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../services/download_parallel.dart';
+import '../services/download_v2/download_v2_models.dart';
 import 'download_persistence_io.dart';
 
 /// Exclusive owner of the download boxes and downloader JSON files.
@@ -207,6 +208,16 @@ Future<dynamic> _dispatch(
         return box.get(args[1]);
       case 'hive.all':
         return box.toMap();
+      case 'hive.logicalRecords':
+        // Decode the fresh snapshot on the isolate that owns the box. Only
+        // the typed records cross the port: the box keys and raw Hive maps
+        // are not needed on the caller's isolate.
+        final records = <LogicalDownloadRecordV2>[];
+        for (final raw in box.values) {
+          final record = LogicalDownloadRecordV2.fromJson(raw);
+          if (record != null) records.add(record);
+        }
+        return records;
       case 'hive.put':
         return box.put(args[1], args[2]);
       case 'hive.delete':

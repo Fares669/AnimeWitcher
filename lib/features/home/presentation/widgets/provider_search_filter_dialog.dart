@@ -199,12 +199,38 @@ class _ProviderSearchFilterDialogState
     );
   }
 
+  // Painting the controls only needs a count. Keep the independent sets
+  // in _value for Apply, not for every dialog build.
+  int get _selectedCount {
+    final options = _shownOptions;
+    int countOffered(Set<String> chosen, List<String>? offered) {
+      if (offered == null) return chosen.length;
+      if (offered.isEmpty) return 0;
+      var count = 0;
+      for (final value in chosen) {
+        if (offered.contains(value)) count++;
+      }
+      return count;
+    }
+
+    return countOffered(_statuses, options?.statuses) +
+        countOffered(_types, options?.types) +
+        countOffered(_ageRatings, options?.ageRatings) +
+        countOffered(_countries, options?.countries) +
+        countOffered(_years, options?.years) +
+        countOffered(_seasons, options?.seasons) +
+        countOffered(_genres, options?.genres) +
+        countOffered(_tags, options?.tags) +
+        countOffered(_studios, options?.studios) +
+        countOffered(_sources, options?.sources) +
+        countOffered(_versions, options?.versions);
+  }
+
   /// Back on the left, the title between, reset on the right — in either
   /// reading direction.
-  Widget _header(BuildContext context) {
+  Widget _header(BuildContext context, int count) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final count = _value.count;
     return Directionality(
       textDirection: TextDirection.ltr,
       child: Padding(
@@ -262,7 +288,7 @@ class _ProviderSearchFilterDialogState
                 const Spacer(),
                 TextButton(
                   key: const ValueKey<String>('filterReset'),
-                  onPressed: _value.isEmpty ? null : _clearAll,
+                  onPressed: count == 0 ? null : _clearAll,
                   style: TextButton.styleFrom(
                     foregroundColor: colors.error,
                     padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -636,9 +662,8 @@ class _ProviderSearchFilterDialogState
   }
 
   /// The big Apply bar along the bottom.
-  Widget _applyBar(BuildContext context) {
+  Widget _applyBar(BuildContext context, int count) {
     final colors = Theme.of(context).colorScheme;
-    final count = _value.count;
     return SafeArea(
       top: false,
       child: Padding(
@@ -690,6 +715,7 @@ class _ProviderSearchFilterDialogState
         builder: (context, snapshot) {
           final options = snapshot.data;
           if (options != null) _shownOptions = options;
+          final count = _selectedCount;
           final loading =
               options == null &&
               snapshot.connectionState != ConnectionState.done;
@@ -698,7 +724,7 @@ class _ProviderSearchFilterDialogState
             bottom: false,
             child: Column(
               children: [
-                _header(context),
+                _header(context, count),
                 if (widget.categories.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 6),
@@ -711,7 +737,7 @@ class _ProviderSearchFilterDialogState
                       ? _cards(context, options)
                       : _noFiltersNote(context),
                 ),
-                _applyBar(context),
+                _applyBar(context, count),
               ],
             ),
           );
