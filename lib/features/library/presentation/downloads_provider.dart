@@ -367,6 +367,58 @@ final class _DownloadProjectionMetadata {
   final MultimediaItem item;
   final Episode? episode;
   final MangaChapter? chapter;
+
+  LogicalDownloadRecordV2? _lastRecord;
+  DownloadTransportSnapshot? _lastSnapshot;
+  DownloadItem? _lastRow;
+
+  DownloadItem project(
+    Map<String, dynamic> metadata,
+    LogicalDownloadRecordV2 record,
+    DownloadTransportSnapshot? snapshot,
+  ) {
+    // Each accepted event changes one transport snapshot, not the full
+    // download library. Keep only the latest row in the existing metadata
+    // cache, which is cleared on a durable metadata refresh.
+    final previous = identical(record, _lastRecord) ? _lastRow : null;
+    if (previous != null && identical(snapshot, _lastSnapshot)) {
+      return previous;
+    }
+    final trackingUrl =
+        previous?.trackingUrl ??
+        _trackingUrlFor(metadata, item, episode, chapter);
+    final row = DownloadItem(
+      // This is a display-only task, not the transport's mutable writer.
+      task:
+          previous?.task ??
+          _presentationTaskFor(record, trackingUrl: trackingUrl),
+      status: _taskStatusFor(record, snapshot),
+      progress: _progressFor(record, snapshot),
+      item: item,
+      episode: episode,
+      chapter: chapter,
+      mediaKind: record.mediaKind,
+      logicalId: record.logicalId.value,
+      artworkMetadataVerified:
+          previous?.artworkMetadataVerified ??
+          downloadArtworkMetadataMatchesRecordV2(metadata, record),
+      timestamp:
+          previous?.timestamp ??
+          (metadata['timestamp'] as int?) ??
+          record.updatedAtMillis,
+      trackingUrl: trackingUrl,
+      destinationPath: record.destinationPath,
+      parallelChunks: record.parallelChunks,
+      activeConnections: snapshot?.activeConnections ?? 0,
+      transferredBytes: snapshot?.transferredBytes,
+      totalBytes: snapshot?.totalBytes ?? record.expectedBytes,
+      completedPages: snapshot?.completedPages,
+      totalPages: snapshot?.totalPages,
+    );
+    _lastRecord = record;
+    _lastSnapshot = snapshot;
+    return _lastRow = row;
+  }
 }
 
 @Riverpod(keepAlive: true)
@@ -547,38 +599,10 @@ class DownloadsNotifier extends _$DownloadsNotifier {
           metadataByTaskId[record.taskId];
       if (metadata == null || metadata['item'] is! Map) continue;
 
-      final parsed = _parsedMetadata.putIfAbsent(
+      final parsed = _parsedMetadata[metadata] ??= _DownloadProjectionMetadata(
         metadata,
-        () => _DownloadProjectionMetadata(metadata),
       );
-      final item = parsed.item;
-      final episode = parsed.episode;
-      final chapter = parsed.chapter;
-      final trackingUrl = _trackingUrlFor(metadata, item, episode, chapter);
-      final task = _presentationTaskFor(record, trackingUrl: trackingUrl);
-      final projected = DownloadItem(
-        task: task,
-        status: _taskStatusFor(record, snapshot),
-        progress: _progressFor(record, snapshot),
-        item: item,
-        episode: episode,
-        chapter: chapter,
-        mediaKind: record.mediaKind,
-        logicalId: record.logicalId.value,
-        artworkMetadataVerified: downloadArtworkMetadataMatchesRecordV2(
-          metadata,
-          record,
-        ),
-        timestamp: (metadata['timestamp'] as int?) ?? record.updatedAtMillis,
-        trackingUrl: trackingUrl,
-        destinationPath: record.destinationPath,
-        parallelChunks: record.parallelChunks,
-        activeConnections: snapshot?.activeConnections ?? 0,
-        transferredBytes: snapshot?.transferredBytes,
-        totalBytes: snapshot?.totalBytes ?? record.expectedBytes,
-        completedPages: snapshot?.completedPages,
-        totalPages: snapshot?.totalPages,
-      );
+      final projected = parsed.project(metadata, record, snapshot);
       if (_isRemovalPending(projected)) continue;
       items.add(projected);
       if (projected.status == TaskStatus.complete &&

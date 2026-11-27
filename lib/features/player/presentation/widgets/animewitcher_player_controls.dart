@@ -140,7 +140,6 @@ class AnimeWitcherPlayerControlsState
   PlayerController? _touchSpeedController;
 
   late bool _isPlaying;
-  late Duration _position;
   late Duration _duration;
 
   final List<StreamSubscription<dynamic>> _subscriptions = [];
@@ -207,7 +206,7 @@ class AnimeWitcherPlayerControlsState
           isTv: _isTv,
           isDesktop: Platform.isMacOS || Platform.isWindows || Platform.isLinux,
           getDuration: () => _duration,
-          getPosition: () => _position,
+          getPosition: _positionAtSwipeStart,
           canSeek: () => ref.read(playerControllerProvider).canSeek,
           getMaxVolumeLevel: () =>
               ref.read(playerControllerProvider).supportsVolumeBoost
@@ -288,7 +287,6 @@ class AnimeWitcherPlayerControlsState
       );
     }
     _isPlaying = widget.player.state.playing;
-    _position = widget.player.state.position;
     _duration = widget.player.state.duration;
 
     // OPTIMIZATION: Removed setState calls for position/buffering - now using StreamBuilder widgets
@@ -317,10 +315,6 @@ class AnimeWitcherPlayerControlsState
         }
         _syncPipSession();
       }),
-      // Position: No setState needed - StreamBuilder in PlayerProgressBar handles UI
-      widget.player.stream.position.listen((val) {
-        _position = val; // Update local cache for seek calculations
-      }),
       // Duration: Only setState when transitioning from zero (to show controls)
       widget.player.stream.duration.listen((val) {
         final oldDuration = _duration;
@@ -348,9 +342,8 @@ class AnimeWitcherPlayerControlsState
     // The short controller animates the entrance; a separate one-second timer
     // keeps the cumulative seek value visible between repeated seeks.
 
-    // Bridge video_view state into local cache so seek calculations and
-    // the loading guard stay correct when ExoPlayer is active.
-    widget.videoViewController?.position.addListener(_onVvPosition);
+    // Observe native playback/metadata for the hide timer, load state and
+    // orientation. Clock position is read on demand for seek swipes.
     widget.videoViewController?.playbackState.addListener(_onVvPlaybackState);
     widget.videoViewController?.mediaInfo.addListener(_onVvMediaInfo);
     widget.videoViewController?.videoSize.addListener(_updateOrientation);
@@ -438,7 +431,6 @@ class AnimeWitcherPlayerControlsState
 
   @override
   void dispose() {
-    widget.videoViewController?.position.removeListener(_onVvPosition);
     widget.videoViewController?.playbackState.removeListener(
       _onVvPlaybackState,
     );
@@ -856,11 +848,6 @@ class AnimeWitcherPlayerControlsState
   }
 
   // --- video_view bridge listeners ---
-  void _onVvPosition() {
-    final ms = widget.videoViewController?.position.value ?? 0;
-    _position = Duration(milliseconds: ms);
-  }
-
   void _onVvPlaybackState() {
     final state = widget.videoViewController?.playbackState.value;
     final playing = state == vv.VideoControllerPlaybackState.playing;
@@ -906,6 +893,16 @@ class AnimeWitcherPlayerControlsState
 
   void _togglePlay() {
     unawaited(ref.read(playerControllerProvider.notifier).togglePlayPause());
+  }
+
+  // Seek swipes only need one position at gesture start. Read the active
+  // engine then rather than subscribing to every backend clock event.
+  Duration _positionAtSwipeStart() {
+    final controller = widget.videoViewController;
+    if (controller != null && ref.read(playerControllerProvider).useExoPlayer) {
+      return Duration(milliseconds: controller.position.value);
+    }
+    return widget.player.state.position;
   }
 
   void _seekRelative(Duration amount) {

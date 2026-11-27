@@ -188,42 +188,43 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
   String _query = '';
   SearchDomain _domain = SearchDomain.anime;
   ProviderSearchFilters _filters = const ProviderSearchFilters();
+  Future<void>? _scheduledReload;
 
   @override
   SearchAggregateState build() {
+    ref.onDispose(() {
+      _generation++;
+      _scheduledReload = null;
+    });
     ref.listen(searchQueryProvider, (previous, next) {
       _query = next;
       // A new search drops what was shown — the catalogue an empty search
       // browses, or the last search — so it is not on screen as if it were
       // the answer while the new one loads.
-      _reload(clearExisting: previous?.trim() != next.trim());
+      _scheduleReload(clearExisting: previous?.trim() != next.trim());
     });
-    ref.listen(searchProviderFiltersProvider, (_, next) {
-      _filters = next;
-      _reload();
-    });
+    ref.listen(searchProviderFiltersProvider, (_, _) => _scheduleReload());
     ref.listen(searchDomainProvider, (_, next) {
       _domain = next;
-      _reload(clearExisting: true);
+      _scheduleReload(clearExisting: true);
     });
     // An account switch must immediately hide the previous account's items.
     // A failed replacement request must never reveal its cached results.
     ref.listen(
       accountDataRevisionProvider,
-      (_, _) => _reload(clearExisting: true),
+      (_, _) => _scheduleReload(clearExisting: true),
     );
     ref.listen(activeProviderProvider, (previous, next) {
       if (previous?.packageName == next?.packageName) return;
       if (_domain == SearchDomain.anime ||
           _domain == SearchDomain.characters ||
           _domain == SearchDomain.all) {
-        _reload(clearExisting: true);
+        _scheduleReload(clearExisting: true);
       }
     });
     _query = ref.read(searchQueryProvider);
     _domain = ref.read(searchDomainProvider);
-    _filters = ref.read(searchProviderFiltersProvider);
-    Future.microtask(_reload);
+    _scheduleReload(initial: true);
     return const SearchAggregateState(isLoading: true);
   }
 
@@ -345,21 +346,52 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     );
   }
 
-  Future<void> _reload({bool clearExisting = false}) async {
+  Future<void> _scheduleReload({
+    bool clearExisting = false,
+    bool initial = false,
+  }) {
+    const cleared = SearchAggregateState(isLoading: true);
+    final scheduled = _scheduledReload;
+    if (scheduled != null) {
+      if (clearExisting) state = cleared;
+      return scheduled;
+    }
+
+    // The filter sheet may change the category, reset its filters and apply
+    // the selected ones in the same turn. Invalidate old results immediately
+    // but start the first page only after those inputs have settled.
     final generation = ++_generation;
+    final reload = Future<void>.microtask(() async {
+      if (!ref.mounted || generation != _generation) return;
+      // Reading also flushes the domain-dependent defaults when no widget has
+      // read them yet. Keep the scheduled reload visible to that listener.
+      _filters = ref.read(searchProviderFiltersProvider);
+      _scheduledReload = null;
+      await _loadFirstPage(generation);
+    });
+    _scheduledReload = reload;
+    if (!initial) {
+      state = clearExisting
+          ? cleared
+          : state.copyWith(
+              isLoading: true,
+              isLoadingMore: false,
+              hasMore: false,
+              nextOffset: 0,
+              clearError: true,
+            );
+    }
+    return reload;
+  }
+
+  bool _isCurrent(int generation, SearchDomain domain) =>
+      ref.mounted && generation == _generation && domain == _domain;
+
+  Future<void> _loadFirstPage(int generation) async {
     final requestDomain = _domain;
-    state = clearExisting
-        ? const SearchAggregateState(isLoading: true)
-        : state.copyWith(
-            isLoading: true,
-            isLoadingMore: false,
-            hasMore: false,
-            nextOffset: 0,
-            clearError: true,
-          );
     final provider = _provider();
     if (provider == null) {
-      if (generation == _generation) {
+      if (_isCurrent(generation, requestDomain)) {
         state = const SearchAggregateState();
       }
       return;
@@ -368,14 +400,14 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     try {
       if (requestDomain == SearchDomain.all) {
         final everything = await _loadEverything(provider);
-        if (generation != _generation || requestDomain != _domain) return;
+        if (!_isCurrent(generation, requestDomain)) return;
         state = everything;
         return;
       }
 
       if (requestDomain == SearchDomain.characters) {
         final page = await _loadCharacterPage(provider, 0);
-        if (generation != _generation || requestDomain != _domain) return;
+        if (!_isCurrent(generation, requestDomain)) return;
         state = SearchAggregateState(
           characters: page.items,
           isLoading: false,
@@ -386,7 +418,7 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
       }
 
       final page = await _loadPage(provider, 0, requestDomain);
-      if (generation != _generation || requestDomain != _domain) return;
+      if (!_isCurrent(generation, requestDomain)) return;
       state = SearchAggregateState(
         results: page.items.isEmpty
             ? const <ProviderSearchResult>[]
@@ -403,7 +435,7 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
       );
     } catch (e) {
       debugPrint('[SEARCH PAGE] initial load failed: $e');
-      if (generation == _generation && requestDomain == _domain) {
+      if (_isCurrent(generation, requestDomain)) {
         // Keep the last rendered cards on transient network failures. Show the
         // recoverable empty state only when there is nothing left to display.
         final hasCards =
@@ -431,7 +463,7 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     try {
       if (requestDomain == SearchDomain.characters) {
         final page = await _loadCharacterPage(provider, state.nextOffset);
-        if (generation != _generation || requestDomain != _domain) return;
+        if (!_isCurrent(generation, requestDomain)) return;
         final seen = <String>{};
         final merged = <Actor>[];
         for (final item in <Actor>[...state.characters, ...page.items]) {
@@ -452,7 +484,7 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
       }
 
       final page = await _loadPage(provider, state.nextOffset, requestDomain);
-      if (generation != _generation || requestDomain != _domain) return;
+      if (!_isCurrent(generation, requestDomain)) return;
       final current = state.results.isEmpty
           ? const <MultimediaItem>[]
           : state.results.first.results;
@@ -481,7 +513,7 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
       );
     } catch (e) {
       debugPrint('[SEARCH PAGE] load more failed: $e');
-      if (generation == _generation && requestDomain == _domain) {
+      if (_isCurrent(generation, requestDomain)) {
         state = state.copyWith(isLoadingMore: false);
       }
     }
@@ -489,7 +521,7 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
 
   Future<void> retry() {
     _provider()?.prepareForNetworkRetry();
-    return _reload();
+    return _scheduleReload();
   }
 }
 

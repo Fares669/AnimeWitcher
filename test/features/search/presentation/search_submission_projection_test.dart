@@ -6,8 +6,10 @@ import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/providers/device_info_provider.dart';
 import 'package:animewitcher/core/router/app_router.dart';
+import 'package:animewitcher/core/services/artwork_fallback_service.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/core/utils/artwork_host_fallback.dart';
+import 'package:animewitcher/features/search/presentation/search_domain.dart';
 import 'package:animewitcher/features/search/presentation/search_provider.dart';
 import 'package:animewitcher/features/search/presentation/search_screen.dart';
 import 'package:animewitcher/features/search/presentation/widgets/search_result_section.dart';
@@ -115,6 +117,64 @@ class _Source extends AnimeWitcherProvider {
   }
 }
 
+class _FilterSource extends _Source {
+  final mangaRequests = <ProviderSearchFilters>[];
+  final mangaResponses = <Completer<ProviderMediaPage>>[];
+
+  @override
+  Set<ProviderType> get supportedTypes => const {
+    ProviderType.anime,
+    ProviderType.manga,
+  };
+
+  @override
+  Future<ProviderSearchFilterOptions> getSearchFilterOptions() async =>
+      const ProviderSearchFilterOptions(types: ['TV']);
+
+  @override
+  Future<ProviderSearchFilterOptions> getMangaSearchFilterOptions() async =>
+      const ProviderSearchFilterOptions(genres: ['Action']);
+
+  @override
+  Future<ProviderMediaPage> searchPage(
+    String query,
+    ProviderSearchFilters filters, {
+    int offset = 0,
+    int limit = 30,
+    CancelToken? cancelToken,
+  }) async => ProviderMediaPage(
+    items: [_work('old-anime')],
+    nextOffset: 1,
+    hasMore: false,
+  );
+
+  @override
+  Future<ProviderMediaPage> searchMangaPage(
+    String query,
+    ProviderSearchFilters filters, {
+    int offset = 0,
+    int limit = 30,
+    CancelToken? cancelToken,
+  }) {
+    expect(query, isEmpty);
+    expect(offset, 0);
+    mangaRequests.add(filters);
+    final response = Completer<ProviderMediaPage>();
+    mangaResponses.add(response);
+    return response.future;
+  }
+}
+
+class _OfflineArtwork extends ArtworkFallbackService {
+  _OfflineArtwork(StorageService storage) : super(Dio(), storage);
+
+  @override
+  Future<({String? cover, String? banner})> mangaArtwork({
+    int? malId,
+    String title = '',
+  }) async => (cover: null, banner: null);
+}
+
 class _Manager extends ExtensionManager {
   _Manager(this.source);
   final AnimeWitcherProvider source;
@@ -140,9 +200,13 @@ Future<({ProviderContainer container, List<DetailsRouteExtra> opened})> _mount(
     malArtworkUnreachable.value = oldUnreachable;
     tester.view.reset();
   });
+  final storage = MemoryStorageService();
   final container = ProviderContainer(
     overrides: [
-      storageServiceProvider.overrideWithValue(MemoryStorageService()),
+      storageServiceProvider.overrideWithValue(storage),
+      artworkFallbackServiceProvider.overrideWithValue(
+        _OfflineArtwork(storage),
+      ),
       extensionManagerProvider.overrideWith(() => _Manager(source)),
       activeProviderProvider.overrideWithValue(source),
       deviceProfileProvider.overrideWith((_) async => const DeviceProfile()),
@@ -178,6 +242,92 @@ Future<({ProviderContainer container, List<DetailsRouteExtra> opened})> _mount(
 }
 
 void main() {
+  testWidgets(
+    'applying a new search category and filters queries only the final catalog',
+    (tester) async {
+      final source = _FilterSource();
+      final harness = await _mount(tester, source);
+      tester.view.physicalSize = const Size(412, 760);
+      final container = harness.container;
+      container
+          .read(searchProviderFiltersProvider.notifier)
+          .set(const ProviderSearchFilters(types: {'TV'}, sort: 'favorites'));
+      final section = find.byType(SearchResultSection);
+      await pumpUntil(
+        tester,
+        () => section.evaluate().isNotEmpty,
+        'original anime section',
+      );
+      expect(
+        tester.widget<SearchResultSection>(section).results.single.url,
+        _work('old-anime').url,
+      );
+
+      await tester.tap(find.byTooltip('الفلاتر'));
+      final mangaCategory = find.byKey(const ValueKey('filterCategory-manga'));
+      await pumpUntil(
+        tester,
+        () => mangaCategory.hitTestable().evaluate().isNotEmpty,
+        'manga category in the filter sheet',
+      );
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.tap(mangaCategory);
+      final genre = find.text('Action');
+      await pumpUntil(
+        tester,
+        () => genre.hitTestable().evaluate().isNotEmpty,
+        'manga genre options',
+      );
+      await tester.tap(genre);
+      await tester.pump();
+      expect(source.mangaRequests, isEmpty);
+      await tester.tap(find.byKey(const ValueKey('filterApply')));
+      await pumpUntil(
+        tester,
+        () => source.mangaRequests.isNotEmpty,
+        'filter apply starts a manga request',
+      );
+      await tester.pump(const Duration(milliseconds: 450));
+
+      final loading = container.read(searchPagedResultsProvider);
+      expect(container.read(searchDomainProvider), SearchDomain.manga);
+      expect(loading.isLoading, isTrue);
+      expect(loading.results, isEmpty, reason: 'do not show old anime');
+      final finalRequest = source.mangaRequests.last;
+      expect(finalRequest.types, isEmpty);
+      expect(finalRequest.genres, {'Action'});
+      expect(finalRequest.sort, 'favorites');
+
+      final work = _work('filtered-manga')
+          .copyWith(contentType: MultimediaContentType.manga);
+      source.mangaResponses.last.complete(
+        ProviderMediaPage(items: [work], nextOffset: 1, hasMore: false),
+      );
+      // Any obsolete requests in the baseline finish after the real response.
+      for (final stale in source.mangaResponses.take(
+        source.mangaResponses.length - 1,
+      )) {
+        stale.complete(
+          const ProviderMediaPage(items: [], nextOffset: 0, hasMore: false),
+        );
+      }
+      await pumpUntil(
+        tester,
+        () => section.evaluate().isNotEmpty,
+        'final selected manga is shown',
+      );
+      expect(tester.widget<SearchResultSection>(section).results, [work]);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      expect(
+        source.mangaRequests,
+        hasLength(1),
+        reason: 'one Apply must not query intermediate filters',
+      );
+    },
+  );
+
   testWidgets(
     'committed pasted query and paging never traverse its obsolete suggestions',
     (tester) async {

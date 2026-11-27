@@ -84,6 +84,12 @@ class _NoScrollbarBehavior extends ScrollBehavior {
 
 class _HomeScreenState extends ConsumerState<HomeScreen>
     with AutomaticKeepAliveClientMixin, SingleTickerProviderStateMixin {
+  static const _rankingRails = <(MalRanking, String, String)>[
+    (MalRanking.airing, 'Trending now', 'رائج الآن'),
+    (MalRanking.top, 'Top rated', 'الأفضل'),
+    (MalRanking.popular, 'Most watched', 'الأكثر مشاهدة'),
+  ];
+
   final ScrollController _scrollController = ScrollController();
   final ValueNotifier<bool> _showBottomFade = ValueNotifier(false);
   final _refreshIndicatorKey = GlobalKey<RefreshIndicatorState>();
@@ -103,10 +109,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       duration: kThemeAnimationDuration,
     );
     _scrollController.addListener(_onScroll);
-    // The search page's MyAnimeList rows take seconds to gather; started
-    // here, they are usually ready by the time search is opened.
-    for (final ranking in MalRanking.values) {
-      ref.read(malRankingProvider(ranking).future).ignore();
+    // Preload only the rankings Home can display, directly in the provider
+    // each rail watches. Hidden rankings don't need to run at startup.
+    for (final (ranking, _, _) in _rankingRails) {
+      ref.read(homeMalRankingPageProvider(ranking).future).ignore();
     }
     // Once home has had the network to itself for a while, the manga tab's
     // first page is fetched too, so the tab opens already filled.
@@ -143,7 +149,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   Future<void> _refresh() {
     if (_refreshFuture != null) return _refreshFuture!;
     ref.invalidate(secondaryLatestEpisodesProvider);
-    for (final ranking in MalRanking.values) {
+    for (final (ranking, _, _) in _rankingRails) {
       ref.invalidate(homeMalRankingPageProvider(ranking));
     }
     return _refreshFuture =
@@ -407,12 +413,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     }
     final load = ref.watch(malRankingLoaderProvider);
     final rails = <Widget>[];
-    for (final (ranking, english, arabic)
-        in const <(MalRanking, String, String)>[
-          (MalRanking.airing, 'Trending now', 'رائج الآن'),
-          (MalRanking.top, 'Top rated', 'الأفضل'),
-          (MalRanking.popular, 'Most watched', 'الأكثر مشاهدة'),
-        ]) {
+    for (final (ranking, english, arabic) in _rankingRails) {
       final page = ref.watch(homeMalRankingPageProvider(ranking)).value;
       if (page == null || (page.items.isEmpty && !page.hasMore)) continue;
       final items = page.items;

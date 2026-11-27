@@ -381,10 +381,10 @@ class _PlayerProgressBarState extends ConsumerState<PlayerProgressBar> {
   }
 }
 
-/// Keeps the latest clock snapshot even when the chrome is transparent, so
-/// showing it again never waits for a new backend event (e.g. paused playback).
-/// Only this builder is dirtied by clock events; gesture and provider state
-/// stay mounted, and other playback listeners are independent.
+/// Listens to the backend clock only while the chrome can be seen.
+/// Reopening it reads the current snapshot without waiting for a new backend
+/// event (e.g. paused playback). Gesture state stays mounted, and other
+/// playback listeners are independent.
 class _ProgressClock extends StatefulWidget {
   const _ProgressClock({
     super.key,
@@ -412,12 +412,12 @@ class _ProgressClockState extends State<_ProgressClock> {
   Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
   Duration _buffer = Duration.zero;
-  bool _updatesEnabled = true;
+  bool _listening = false;
 
   @override
-  void initState() {
-    super.initState();
-    _attach();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncListening();
   }
 
   @override
@@ -427,11 +427,26 @@ class _ProgressClockState extends State<_ProgressClock> {
         (widget.videoViewController == null &&
             oldWidget.player != widget.player)) {
       _detach(oldWidget);
+      _syncListening();
+    }
+  }
+
+  void _syncListening() {
+    final enabled =
+        context
+            .dependOnInheritedWidgetOfExactType<_PlayerTimelineVisibility>()
+            ?.updatesEnabled ??
+        true;
+    if (enabled == _listening) return;
+    if (enabled) {
       _attach();
+    } else {
+      _detach(widget);
     }
   }
 
   void _attach() {
+    _listening = true;
     final controller = widget.videoViewController;
     if (controller != null) {
       _position = Duration(milliseconds: controller.position.value);
@@ -457,7 +472,7 @@ class _ProgressClockState extends State<_ProgressClock> {
   void _listen(Stream<Duration> stream, ValueChanged<Duration> save) {
     void receive(Duration value) {
       save(value);
-      if (_updatesEnabled) setState(() {});
+      setState(() {});
     }
 
     _subscriptions.add(
@@ -479,10 +494,12 @@ class _ProgressClockState extends State<_ProgressClock> {
     if (position == _position && duration == _duration) return;
     _position = position;
     _duration = duration;
-    if (_updatesEnabled) setState(() {});
+    setState(() {});
   }
 
   void _detach(_ProgressClock oldWidget) {
+    if (!_listening) return;
+    _listening = false;
     oldWidget.videoViewController?.position.removeListener(_onVideoViewUpdate);
     oldWidget.videoViewController?.mediaInfo.removeListener(_onVideoViewUpdate);
     for (final subscription in _subscriptions) {
@@ -498,14 +515,8 @@ class _ProgressClockState extends State<_ProgressClock> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    _updatesEnabled =
-        context
-            .dependOnInheritedWidgetOfExactType<_PlayerTimelineVisibility>()
-            ?.updatesEnabled ??
-        true;
-    return widget.builder(context, _duration, _position, _buffer);
-  }
+  Widget build(BuildContext context) =>
+      widget.builder(context, _duration, _position, _buffer);
 }
 
 class PlayerPlayPauseButton extends StatelessWidget {

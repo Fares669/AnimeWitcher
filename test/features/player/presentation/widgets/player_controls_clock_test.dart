@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:animewitcher/features/player/presentation/player_controller.dart';
+import 'package:animewitcher/features/player/presentation/player_gesture_handler.dart';
 import 'package:animewitcher/features/player/presentation/player_platform_service.dart';
 import 'package:animewitcher/features/player/presentation/widgets/animewitcher_player_controls.dart';
 import 'package:animewitcher/features/player/presentation/widgets/player_ltr.dart';
@@ -53,6 +54,29 @@ class _Controller extends PlayerController {
   }
 }
 
+// Count a delivery to each subscriber, not just each backend event.
+class _CountedDurationStream extends StreamView<Duration> {
+  _CountedDurationStream(super.stream);
+
+  int deliveries = 0;
+
+  @override
+  StreamSubscription<Duration> listen(
+    void Function(Duration)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) => super.listen(
+    (value) {
+      deliveries++;
+      onData?.call(value);
+    },
+    onError: onError,
+    onDone: onDone,
+    cancelOnError: cancelOnError,
+  );
+}
+
 class _FixtureMediaKit extends mk.PlatformPlayer {
   _FixtureMediaKit() : super(configuration: const mk.PlayerConfiguration()) {
     state = state.copyWith(
@@ -60,7 +84,49 @@ class _FixtureMediaKit extends mk.PlatformPlayer {
       duration: const Duration(seconds: 18),
       buffer: const Duration(seconds: 5),
     );
+
+    final streams = stream;
+    positionEvents = _CountedDurationStream(streams.position);
+    durationEvents = _CountedDurationStream(streams.duration);
+    bufferEvents = _CountedDurationStream(streams.buffer);
+    stream = mk.PlayerStream(
+      streams.playlist,
+      streams.playing,
+      streams.completed,
+      positionEvents,
+      durationEvents,
+      streams.volume,
+      streams.rate,
+      streams.pitch,
+      streams.buffering,
+      streams.bufferingPercentage,
+      bufferEvents,
+      streams.playlistMode,
+      streams.shuffle,
+      streams.audioParams,
+      streams.videoParams,
+      streams.audioBitrate,
+      streams.audioDevice,
+      streams.audioDevices,
+      streams.track,
+      streams.tracks,
+      streams.width,
+      streams.height,
+      streams.subtitle,
+      streams.log,
+      streams.error,
+    );
   }
+
+  late final _CountedDurationStream positionEvents;
+  late final _CountedDurationStream durationEvents;
+  late final _CountedDurationStream bufferEvents;
+
+  ({int position, int duration, int buffer}) get deliveries => (
+    position: positionEvents.deliveries,
+    duration: durationEvents.deliveries,
+    buffer: bufferEvents.deliveries,
+  );
 
   void tick(int ms, {int? durationMs, int? bufferMs}) {
     final position = Duration(milliseconds: ms);
@@ -223,6 +289,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // Duration, position and buffer all change while the chrome is hidden.
+      final before = source.deliveries;
       final work = await _clockWork(tester, (i) {
         source.tick(
           4300 + i * 350,
@@ -230,6 +297,22 @@ void main() {
           bufferMs: 9500 + i * 400,
         );
       }, 24);
+      final after = source.deliveries;
+      expect(
+        (
+          position: after.position - before.position,
+          duration: after.duration - before.duration,
+          buffer: after.buffer - before.buffer,
+        ),
+        // The parent still needs duration changes to reveal chrome on load.
+        (position: 0, duration: 24, buffer: 0),
+        reason: 'Do not deliver clock events to invisible seek controls.',
+      );
+
+      final gestures = ProviderScope.containerOf(
+        tester.element(find.byType(AnimeWitcherPlayerControls)),
+      ).read(playerGestureHandlerProvider.notifier);
+      expect(gestures.getPosition?.call(), source.state.position);
 
       await tester.tapAt(_showPoint);
       await tester.pump();
@@ -270,6 +353,8 @@ void main() {
       controller.useVideoView(true);
       await tester.pumpAndSettle();
       expect(find.text('0:05 / 0:29'), findsOneWidget);
+      expect(videoView.position.listeners.length, 1);
+      expect(videoView.mediaInfo.listeners.length, 2);
       expect(
         identical(tester.state(_seekBar), mediaKitState),
         isFalse,
@@ -278,6 +363,8 @@ void main() {
 
       await tester.tapAt(_hidePoint);
       await tester.pumpAndSettle();
+      expect(videoView.position.listeners, isEmpty);
+      expect(videoView.mediaInfo.listeners.length, 1);
       final work = await _clockWork(tester, (i) {
         videoView.tick(7000 + i * 500, durationMs: 36000 + i * 600);
         source.tick(
@@ -286,13 +373,32 @@ void main() {
           bufferMs: 5500 + i * 120,
         );
       }, 12);
+      final gestures = ProviderScope.containerOf(
+        tester.element(find.byType(AnimeWitcherPlayerControls)),
+      ).read(playerGestureHandlerProvider.notifier);
+      expect(
+        gestures.getPosition?.call(),
+        Duration(milliseconds: videoView.position.value),
+        reason: 'Gesture seed reads the active backend even while hidden.',
+      );
 
       await tester.tapAt(_showPoint);
       await tester.pumpAndSettle();
       expect(find.text('0:12 / 0:42'), findsOneWidget);
+      expect(videoView.position.listeners.length, 1);
+      expect(videoView.mediaInfo.listeners.length, 2);
+
+      // Switching backends while hidden still attaches only on reveal.
+      await tester.tapAt(_hidePoint);
+      await tester.pumpAndSettle();
       controller.useVideoView(false);
       await tester.pumpAndSettle();
+      expect(videoView.position.listeners, isEmpty);
+      expect(videoView.mediaInfo.listeners.length, 1);
+      await tester.tapAt(_showPoint);
+      await tester.pumpAndSettle();
       expect(find.text('0:07 / 0:23'), findsOneWidget);
+      expect(gestures.getPosition?.call(), source.state.position);
 
       // Interrupt a fade-out and verify the clock stays live on reveal.
       await tester.tapAt(_hidePoint);

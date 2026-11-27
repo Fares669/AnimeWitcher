@@ -46,6 +46,27 @@ class _SeekController extends PlayerController {
 class _GestureSessionProbe extends PlayerGestureHandler {
   final detached = <int?>[];
 
+  int get retainedCallbacks => <Object?>[
+    getSettings,
+    getDuration,
+    getPosition,
+    canSeek,
+    getMaxVolumeLevel,
+    onInteraction,
+    onHideControls,
+    onSeekRelative,
+    onSeekTo,
+    getVolumeLevel,
+    setVolumeLevel,
+    onVolumeChange,
+    toggleMuteLevel,
+    onDoubleTapAnimationStart,
+  ].nonNulls.length;
+
+  void simulateLateDetach(int session) {
+    super.detachDeviceControls(session: session);
+  }
+
   @override
   void detachDeviceControls({int? session}) {
     detached.add(session);
@@ -243,6 +264,14 @@ Future<void> _exerciseBack(
           ];
           expect(focusNodes.where(_isDisposed), isEmpty);
 
+          expect(gestures.retainedCallbacks, 14);
+          // Simulate late disposal of an earlier route after this one opens.
+          // It must not detach the new controls or their callbacks.
+          if (gestures.detached.isNotEmpty) {
+            gestures.simulateLateDetach(gestures.detached.last!);
+            expect(gestures.retainedCallbacks, 14);
+          }
+
           // Use the visible control, not direct widget removal.
           await tester.tap(find.byType(AppBackButton));
           expect(back, isNotNull);
@@ -266,6 +295,12 @@ Future<void> _exerciseBack(
                 'Framework exception: $error',
           );
           expect(gestures.detached.last, isNotNull);
+          expect(
+            gestures.retainedCallbacks,
+            0,
+            reason:
+                'The kept-alive gesture provider must release route closures.',
+          );
           expect(pipCalls, isEmpty);
           expect(player.state.playing, isFalse);
           expect(find.byType(AnimeWitcherPlayerControls), findsNothing);

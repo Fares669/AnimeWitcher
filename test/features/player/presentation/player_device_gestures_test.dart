@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:animewitcher/features/player/presentation/player_gesture_handler.dart';
+import 'package:animewitcher/features/settings/presentation/player_settings_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -182,6 +183,27 @@ void main() {
       expect(container.read(playerGestureHandlerProvider).osdValue, 1 / 3);
     },
   );
+
+  test('double tap awaiting settings cannot seek after detach', () async {
+    final settings = Completer<PlayerSettings>();
+    handler.getSettings = () => settings.future;
+    handler.getDuration = () => const Duration(minutes: 3);
+    var seeks = 0;
+    handler.onSeekRelative = (_) async {
+      seeks++;
+    };
+
+    final oldTap = handler.handleDoubleTap(const Offset(450, 100), 600);
+    handler.detachDeviceControls();
+    // A newly attached route can supply a different seek callback before
+    // the earlier tap's settings read has returned.
+    handler.onSeekRelative = (_) async {
+      seeks++;
+    };
+    settings.complete(const PlayerSettings());
+    await oldTap;
+    expect(seeks, 0);
+  });
 
   test('closing controls drops pending writes', () async {
     await startBrightness();

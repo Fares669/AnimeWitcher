@@ -49,6 +49,8 @@ class CompletedDownloadEpisodeCard extends ConsumerStatefulWidget {
 
 class _CompletedDownloadEpisodeCardState
     extends ConsumerState<CompletedDownloadEpisodeCard> {
+  static const _thumbnailWidth = 140.0;
+
   late Future<File?> _artwork;
 
   @override
@@ -367,7 +369,7 @@ class _CompletedDownloadEpisodeCardState
         ClipRRect(
           borderRadius: BorderRadius.circular(8),
           child: SizedBox(
-            width: 140,
+            width: _thumbnailWidth,
             child: AspectRatio(
               aspectRatio: 16 / 9,
               child: FutureBuilder<File?>(
@@ -376,7 +378,10 @@ class _CompletedDownloadEpisodeCardState
                   final local = snapshot.data;
                   if (local != null) {
                     return ArtworkDecode(
-                      paintedWidth: 140,
+                      // Retain the saved original on disk, but size its
+                      // in-memory decode to the fixed episode tile.
+                      paintedWidth: _thumbnailWidth,
+                      sizeHighQualityToDisplay: true,
                       builder: (context, decodeWidth) => Image.file(
                         local,
                         fit: BoxFit.cover,
@@ -462,7 +467,8 @@ class _CompletedDownloadEpisodeCardState
       return const ThumbnailErrorPlaceholder();
     }
     return ArtworkDecode(
-      paintedWidth: 140,
+      paintedWidth: _thumbnailWidth,
+      sizeHighQualityToDisplay: true,
       builder: (context, decodeWidth) => CachedNetworkImage(
         imageUrl: imageUrl,
         fit: BoxFit.cover,
