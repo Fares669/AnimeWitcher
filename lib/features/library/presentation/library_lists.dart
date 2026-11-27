@@ -2,6 +2,7 @@
 /// navigation is configured, shared by desktop and phone.
 library;
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
@@ -122,14 +123,30 @@ List<HistoryItem> sortLibraryHistory(
 List<MultimediaItem> filterLibraryTitles(
   Iterable<MultimediaItem> items,
   String query,
-) {
-  final words = query.toLowerCase().split(RegExp(r'\s+'))
-    ..removeWhere((word) => word.isEmpty);
-  if (words.isEmpty) return items.toList();
-  return items.where((item) {
-    final title = item.title.toLowerCase();
-    return words.every(title.contains);
-  }).toList();
+) => LibraryTitleQuery(query).filter(items);
+
+class LibraryTitleQuery {
+  LibraryTitleQuery(String query)
+    : _words = query.toLowerCase().split(_wordSeparator)
+        ..removeWhere((word) => word.isEmpty);
+
+  static final _wordSeparator = RegExp(r'\s+');
+  final List<String> _words;
+
+  bool sameWordsAs(LibraryTitleQuery other) => listEquals(_words, other._words);
+
+  /// If each old word occurs inside a new word, every new match must have
+  /// been an old match. Widening or replacing a term may restore other titles.
+  bool narrows(LibraryTitleQuery previous) =>
+      previous._words.every((old) => _words.any((word) => word.contains(old)));
+
+  List<MultimediaItem> filter(Iterable<MultimediaItem> items) {
+    if (_words.isEmpty) return items.toList();
+    return items.where((item) {
+      final title = item.title.toLowerCase();
+      return _words.every(title.contains);
+    }).toList();
+  }
 }
 
 /// The phone shelves' settings from the filter sheet, kept between visits.

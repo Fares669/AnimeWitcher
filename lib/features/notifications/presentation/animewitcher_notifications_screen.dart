@@ -304,11 +304,86 @@ class _NotificationsState
     child: Center(child: Text(text, textAlign: TextAlign.center)),
   );
 
-  Widget _row(AnimeWitcherNotification item) {
+  Widget _row(AnimeWitcherNotification item) => _NotificationRow(
+    key: ValueKey(item.path),
+    item: item,
+    busy: _pending.contains(item.path),
+    onAction: _act,
+  );
+}
+
+// The sliver owns this state; there is no separate inbox-wide row cache.
+// The avatar and message do not depend on clicked or a pending write. Keep
+// their widgets stable but recompute the relative time when the row builds.
+class _NotificationRow extends StatefulWidget {
+  const _NotificationRow({
+    required super.key,
+    required this.item,
+    required this.busy,
+    required this.onAction,
+  });
+
+  final AnimeWitcherNotification item;
+  final bool busy;
+  final void Function(AnimeWitcherNotification item, String action) onAction;
+
+  @override
+  State<_NotificationRow> createState() => _NotificationRowState();
+}
+
+class _NotificationRowState extends State<_NotificationRow> {
+  late Widget _message = _buildMessage(widget.item);
+  late Widget _avatar = _NotificationAvatar(
+    photoUrl: widget.item.actorPhotoUrl,
+  );
+
+  @override
+  void didUpdateWidget(covariant _NotificationRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final old = oldWidget.item;
+    final item = widget.item;
+    if (identical(old, item)) return;
+    if (old.type != item.type ||
+        old.actorName != item.actorName ||
+        old.contextName != item.contextName) {
+      _message = _buildMessage(item);
+    }
+    if (old.actorPhotoUrl != item.actorPhotoUrl) {
+      _avatar = _NotificationAvatar(photoUrl: item.actorPhotoUrl);
+    }
+  }
+
+  Widget _buildMessage(AnimeWitcherNotification item) {
+    final action = item.actionText;
+    return Text.rich(
+      TextSpan(
+        children: action == null
+            ? [TextSpan(text: item.message)]
+            : [
+                TextSpan(
+                  text: item.actorName,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                TextSpan(text: ' $action'),
+                if (item.contextName != null)
+                  TextSpan(
+                    text: ' • ${item.contextName}',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+              ],
+      ),
+      maxLines: 3,
+      overflow: TextOverflow.ellipsis,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final item = widget.item;
+    final busy = widget.busy;
+    final onAction = widget.onAction;
     final colors = Theme.of(context).colorScheme;
-    final busy = _pending.contains(item.path);
     return Card(
-      key: ValueKey(item.path),
       margin: const EdgeInsets.only(bottom: 10),
       elevation: 0,
       color: item.clicked
@@ -316,62 +391,19 @@ class _NotificationsState
           : colors.primaryContainer.withValues(alpha: 0.25),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: busy ? null : () => _act(item, 'open'),
+        onTap: busy ? null : () => onAction(item, 'open'),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(6, 14, 14, 14),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              CircleAvatar(
-                radius: 23,
-                backgroundColor: colors.surfaceContainerHighest,
-                foregroundColor: colors.onSurfaceVariant,
-                child: item.actorPhotoUrl == null
-                    ? const Icon(Icons.person_outline_rounded)
-                    : ClipOval(
-                        child: Image(
-                          image: avatarImage(
-                            context,
-                            item.actorPhotoUrl,
-                            radius: 23,
-                          )!,
-                          width: 46,
-                          height: 46,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) =>
-                              const Icon(Icons.person_outline_rounded),
-                        ),
-                      ),
-              ),
+              _avatar,
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text.rich(
-                      TextSpan(
-                        children: item.actionText == null
-                            ? [TextSpan(text: item.message)]
-                            : [
-                                TextSpan(
-                                  text: item.actorName,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                                TextSpan(text: ' ${item.actionText}'),
-                                if (item.contextName != null)
-                                  TextSpan(
-                                    text: ' • ${item.contextName}',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                              ],
-                      ),
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                    _message,
                     const SizedBox(height: 8),
                     Text(
                       formatArabicRelativeTime(item.date),
@@ -393,7 +425,7 @@ class _NotificationsState
                 PopupMenuButton<String>(
                   tooltip: 'خيارات الإشعار',
                   icon: const Icon(Icons.more_vert_rounded),
-                  onSelected: (action) => _act(item, action),
+                  onSelected: (action) => onAction(item, action),
                   itemBuilder: (_) => [
                     if (!item.clicked)
                       const PopupMenuItem(
@@ -407,6 +439,34 @@ class _NotificationsState
           ),
         ),
       ),
+    );
+  }
+}
+
+class _NotificationAvatar extends StatelessWidget {
+  const _NotificationAvatar({required this.photoUrl});
+
+  final String? photoUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return CircleAvatar(
+      radius: 23,
+      backgroundColor: colors.surfaceContainerHighest,
+      foregroundColor: colors.onSurfaceVariant,
+      child: photoUrl == null
+          ? const Icon(Icons.person_outline_rounded)
+          : ClipOval(
+              child: Image(
+                image: avatarImage(context, photoUrl, radius: 23)!,
+                width: 46,
+                height: 46,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) =>
+                    const Icon(Icons.person_outline_rounded),
+              ),
+            ),
     );
   }
 }

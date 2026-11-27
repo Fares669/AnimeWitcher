@@ -1369,8 +1369,10 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     return '';
   }
 
+  // The News feed only reads its decoded records and timestamps. Reuse typed
+  // JSON maps while preserving normalization for legacy payloads.
   DateTime? _newsDate(dynamic raw) {
-    final source = _map(raw);
+    final source = _readHitMap(raw);
     dynamic value = source.isEmpty
         ? raw
         : source['_seconds'] ??
@@ -1378,7 +1380,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
               source['timestamp'] ??
               source['value'];
     if (value is Map) {
-      final nested = _map(value);
+      final nested = _readHitMap(value);
       value =
           nested['_seconds'] ??
           nested['seconds'] ??
@@ -1403,7 +1405,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   }
 
   NewsItem? _newsItem(dynamic raw) {
-    final source = _map(raw);
+    final source = _readHitMap(raw);
     final id = _firstText(source, const <String>[
       'objectID',
       'docId',

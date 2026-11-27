@@ -1,4 +1,8 @@
 import 'dart:async';
+import 'dart:ui' as ui;
+
+import 'package:crypto/crypto.dart';
+import 'package:flutter/rendering.dart';
 
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_account_models.dart';
@@ -33,6 +37,9 @@ class _Service extends AnimeWitcherAccountService {
   int deleted = 0;
   int clicked = 0;
   Completer<void>? deleting;
+  Completer<void>? marking;
+  int badge = 7;
+  int badgeLoads = 0;
   AnimeWitcherComment? target;
   AnimeWitcherAccountException? targetError;
   String user = 'p';
@@ -47,7 +54,11 @@ class _Service extends AnimeWitcherAccountService {
     ),
   );
   @override
-  Future<int> loadNotificationCount() async => 7;
+  Future<int> loadNotificationCount() async {
+    badgeLoads++;
+    return badge;
+  }
+
   @override
   Future<AnimeWitcherNotificationPage> loadNotifications({
     FirestoreDocument? cursor,
@@ -76,6 +87,7 @@ class _Service extends AnimeWitcherAccountService {
   @override
   Future<void> markNotificationClicked(String path) async {
     if (failWrite) throw Exception('offline');
+    await marking?.future;
     clicked++;
   }
 
@@ -124,14 +136,26 @@ Widget _app(
   _Service service, {
   Widget home = const AnimeWitcherNotificationsScreen(),
   NotificationService? toasts,
+  Key? screenBoundary,
 }) => ProviderScope(
   overrides: [
     animeWitcherAccountServiceProvider.overrideWithValue(service),
     animeWitcherAccountControllerProvider.overrideWith(_Account.new),
     if (toasts != null) notificationServiceProvider.overrideWithValue(toasts),
   ],
-  child: MaterialApp(theme: ThemeData.dark(), home: home),
+  child: MaterialApp(
+    theme: ThemeData.dark(),
+    home: home,
+    builder: screenBoundary == null
+        ? null
+        : (context, child) =>
+              RepaintBoundary(key: screenBoundary, child: child),
+  ),
 );
+typedef _RowParts = ({Text message, Text time, CircleAvatar avatar, Card card});
+
+const _stockReplay = bool.fromEnvironment('AW_C19_NOTIFICATIONS_STOCK');
+
 void main() {
   testWidgets('unavailable target uses the shared error pill, not a SnackBar', (
     tester,
@@ -382,6 +406,229 @@ void main() {
       await tester.pump();
       expect(find.textContaining('سارة'), findsNothing);
       expect(service.seen, 0);
+    },
+  );
+  testWidgets(
+    'badge to inbox preserves Arabic presentation while writes are pending',
+    (tester) async {
+      tester.view.physicalSize = const Size(460, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      final notice = List.generate(
+        6,
+        (i) => AnimeWitcherNotification(
+          path: 'users/p/notifications/n$i',
+          type: 'review_like',
+          clicked: false,
+          actorName: 'المستخدم رقم ${i + 1}',
+          contextName: 'الحلقة ${i + 1}',
+          date: DateTime(2023, 11, i + 1, 12),
+        ),
+      );
+      final service = _Service()
+        ..items = notice
+        ..marking = Completer<void>()
+        ..deleting = Completer<void>();
+      const screenBoundary = ValueKey('notification-inbox-pixel-boundary');
+      await tester.pumpWidget(
+        _app(
+          service,
+          home: const Scaffold(body: AccountNotificationsButton()),
+          screenBoundary: screenBoundary,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('7'), findsOneWidget);
+      await tester.tap(find.byType(AccountNotificationsButton));
+      await tester.pumpAndSettle();
+
+      Map<String, _RowParts> visibleRows(
+        Iterable<AnimeWitcherNotification> rows,
+      ) {
+        final result = <String, _RowParts>{};
+        for (final item in rows) {
+          final row = find.byKey(ValueKey(item.path));
+          expect(row.hitTestable(), findsOneWidget);
+          final text = tester.widgetList<Text>(
+            find.descendant(of: row, matching: find.byType(Text)),
+          );
+          final message = text.singleWhere((x) => x.textSpan != null);
+          final time = text.singleWhere(
+            (x) => x.data?.endsWith('/2023') ?? false,
+          );
+          final avatar = tester.widget<CircleAvatar>(
+            find.descendant(of: row, matching: find.byType(CircleAvatar)),
+          );
+          final rowWidget = tester.widget(row);
+          final card = rowWidget is Card
+              ? rowWidget
+              : tester.widget<Card>(
+                  find.descendant(of: row, matching: find.byType(Card)),
+                );
+          expect(
+            message.textSpan?.toPlainText(),
+            '${item.actorName} أعجب بـمراجعتك • ${item.contextName}',
+          );
+          expect(time.data, endsWith('11/2023'));
+          expect(Directionality.of(tester.element(row)), TextDirection.rtl);
+          result[item.path] = (
+            message: message,
+            time: time,
+            avatar: avatar,
+            card: card,
+          );
+        }
+        double? previous;
+        for (final item in rows) {
+          final top = tester.getTopLeft(find.byKey(ValueKey(item.path))).dy;
+          if (previous != null) expect(top, greaterThan(previous));
+          previous = top;
+        }
+        return result;
+      }
+
+      Future<void> act(AnimeWitcherNotification item, String label) async {
+        final row = find.byKey(ValueKey(item.path));
+        await tester.tap(
+          find.descendant(
+            of: row,
+            matching: find.byType(PopupMenuButton<String>),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(label));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 350));
+      }
+
+      Future<String> pixels() async {
+        final renderer = tester.renderObject<RenderRepaintBoundary>(
+          find.byKey(screenBoundary),
+        );
+        final digest = await tester.runAsync(() async {
+          final image = await renderer.toImage();
+          try {
+            final data = (await image.toByteData(
+              format: ui.ImageByteFormat.rawRgba,
+            ))!;
+            return sha256.convert(data.buffer.asUint8List()).toString();
+          } finally {
+            image.dispose();
+          }
+        });
+        return digest!;
+      }
+
+      final first = visibleRows(notice);
+      final initialPixels = await pixels();
+      expect(service.seen, 1);
+      expect(service.loads, 1);
+      final firstColor = first[notice.first.path]!.card.color;
+      await act(notice.first, 'تمت المشاهدة');
+      final duringRead = visibleRows(notice);
+      expect(service.clicked, 0);
+      expect(
+        find.descendant(
+          of: find.byKey(ValueKey(notice.first.path)),
+          matching: find.byType(CircularProgressIndicator),
+        ),
+        findsOneWidget,
+      );
+      final refreshButton = find.byWidgetPredicate(
+        (widget) => widget is IconButton && widget.tooltip == 'تحديث',
+      );
+      expect(tester.widget<IconButton>(refreshButton).onPressed, isNull);
+      service.marking!.complete();
+      await tester.pumpAndSettle();
+      final afterRead = visibleRows(notice);
+      expect(service.clicked, 1);
+      expect(afterRead[notice.first.path]!.card.color, isNot(firstColor));
+      final readPixels = await pixels();
+
+      await act(notice.last, 'حذف');
+      final duringDelete = visibleRows(notice);
+      expect(service.deleted, 0);
+      service.deleting!.complete();
+      await tester.pumpAndSettle();
+      final afterDelete = visibleRows(notice.take(5));
+      expect(service.deleted, 1);
+      expect(find.byKey(ValueKey(notice.last.path)), findsNothing);
+      final deletePixels = await pixels();
+      expect(readPixels, isNot(initialPixels));
+      expect(deletePixels, isNot(readPixels));
+
+      var messages = 0;
+      var avatars = 0;
+      var timestamps = 0;
+      var unchangedCards = 0;
+      for (final (before, after) in [
+        (first, duringRead),
+        (duringRead, afterRead),
+        (afterRead, duringDelete),
+        (duringDelete, afterDelete),
+      ]) {
+        for (final e in after.entries) {
+          final old = before[e.key]!;
+          if (!identical(old.message, e.value.message)) messages++;
+          if (!identical(old.avatar, e.value.avatar)) avatars++;
+          if (!identical(old.time, e.value.time)) timestamps++;
+          if (old.card.color == e.value.card.color) unchangedCards++;
+        }
+      }
+      debugPrint(
+        'C19_NOTIFICATIONS messages=$messages avatars=$avatars '
+        'timestamps=$timestamps unchangedColors=$unchangedCards '
+        'initial=$initialPixels read=$readPixels delete=$deletePixels',
+      );
+      expect(messages, _stockReplay ? 23 : 0);
+      expect(avatars, _stockReplay ? 23 : 0);
+      expect(timestamps, 23);
+      expect(unchangedCards, 22);
+
+      expect(service.loads, 1);
+      expect(service.seen, 1);
+      service.items = [
+        AnimeWitcherNotification(
+          path: notice.first.path,
+          type: 'review_reply',
+          clicked: false,
+          actorName: 'اسم بعد التحديث',
+        ),
+        ...notice.skip(1).take(4),
+      ];
+      await tester.tap(refreshButton);
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('اسم بعد التحديث رد على مراجعتك'),
+        findsOneWidget,
+      );
+      expect(find.textContaining(notice.first.actorName), findsNothing);
+      expect(service.loads, 2);
+      expect(service.seen, 2);
+      final beforeReturn = service.badgeLoads;
+      service.badge = 8;
+      Navigator.of(tester.element(find.byType(AnimeWitcherNotificationsScreen)))
+          .pop();
+      await tester.pumpAndSettle();
+      expect(service.badgeLoads, greaterThan(beforeReturn));
+      expect(find.text('8'), findsOneWidget);
+      final badgeLoads = service.badgeLoads;
+      service.badge = 9;
+      for (final state in [
+        AppLifecycleState.inactive,
+        AppLifecycleState.hidden,
+        AppLifecycleState.paused,
+        AppLifecycleState.hidden,
+        AppLifecycleState.inactive,
+        AppLifecycleState.resumed,
+      ]) {
+        tester.binding.handleAppLifecycleStateChanged(state);
+      }
+      await tester.pumpAndSettle();
+      expect(service.badgeLoads, badgeLoads + 1);
+      expect(find.text('9'), findsOneWidget);
     },
   );
 }

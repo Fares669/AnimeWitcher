@@ -279,7 +279,7 @@ class _PlayerProgressBarState extends ConsumerState<PlayerProgressBar> {
       key: ValueKey(videoViewController != null),
       player: widget.player,
       videoViewController: videoViewController,
-      builder: (context, duration, samples) {
+      builder: (context, duration, signals) {
         final durationMs = duration.inMilliseconds.toDouble();
         final fixedPosition = _dragValue == null
             ? null
@@ -298,7 +298,7 @@ class _PlayerProgressBarState extends ConsumerState<PlayerProgressBar> {
             else
               _TimelineTime(
                 duration: duration,
-                samples: samples,
+                position: signals.position,
                 fixedPosition: fixedPosition,
                 showRemaining: showRemaining,
                 builder: (position) => _buildTimeHeader(
@@ -311,7 +311,7 @@ class _PlayerProgressBarState extends ConsumerState<PlayerProgressBar> {
             SizedBox(
               height: 36,
               child: _SeekBar(
-                samples: samples,
+                signals: signals,
                 fixedValue: _dragValue,
                 durationMs: durationMs,
                 min: 0.0,
@@ -349,21 +349,24 @@ class _PlayerProgressBarState extends ConsumerState<PlayerProgressBar> {
   }
 }
 
-typedef _ProgressSample = ({Duration position, Duration buffer});
+typedef _ProgressSignals = ({
+  ValueListenable<Duration> position,
+  ValueListenable<Duration> buffer,
+});
 
 /// The readout only changes at displayed-second boundaries. Unlike the
 /// visual playhead this never needs to follow every backend position sample.
 class _TimelineTime extends StatefulWidget {
   const _TimelineTime({
     required this.duration,
-    required this.samples,
+    required this.position,
     required this.fixedPosition,
     required this.showRemaining,
     required this.builder,
   });
 
   final Duration duration;
-  final ValueListenable<_ProgressSample> samples;
+  final ValueListenable<Duration> position;
   final Duration? fixedPosition;
   final bool showRemaining;
   final Widget Function(Duration position) builder;
@@ -373,8 +376,10 @@ class _TimelineTime extends StatefulWidget {
 }
 
 class _TimelineTimeState extends State<_TimelineTime> {
-  Duration get _position =>
-      widget.fixedPosition ?? widget.samples.value.position;
+  Duration get _position => widget.fixedPosition ?? widget.position.value;
+
+  ValueListenable<Duration>? get _livePosition =>
+      widget.fixedPosition == null ? widget.position : null;
 
   late int _second;
 
@@ -394,22 +399,26 @@ class _TimelineTimeState extends State<_TimelineTime> {
   void initState() {
     super.initState();
     _second = _displayedSecond();
-    widget.samples.addListener(_onSample);
+    _livePosition?.addListener(_onSample);
   }
 
   @override
   void didUpdateWidget(_TimelineTime oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.samples != widget.samples) {
-      oldWidget.samples.removeListener(_onSample);
-      widget.samples.addListener(_onSample);
+    final previous = oldWidget.fixedPosition == null
+        ? oldWidget.position
+        : null;
+    final next = _livePosition;
+    if (previous != next) {
+      previous?.removeListener(_onSample);
+      next?.addListener(_onSample);
     }
     _second = _displayedSecond();
   }
 
   @override
   void dispose() {
-    widget.samples.removeListener(_onSample);
+    _livePosition?.removeListener(_onSample);
     super.dispose();
   }
 
@@ -434,7 +443,7 @@ class _ProgressClock extends StatefulWidget {
   final Widget Function(
     BuildContext context,
     Duration duration,
-    ValueListenable<_ProgressSample> samples,
+    _ProgressSignals signals,
   )
   builder;
 
@@ -445,10 +454,12 @@ class _ProgressClock extends StatefulWidget {
 class _ProgressClockState extends State<_ProgressClock> {
   final _subscriptions = <StreamSubscription<Duration>>[];
   Duration _duration = Duration.zero;
-  final _samples = ValueNotifier<_ProgressSample>((
-    position: Duration.zero,
-    buffer: Duration.zero,
-  ));
+  // Position ticks must not invalidate buffered geometry (or vice versa).
+  // Keep each signal stable across ticks, and supply the same snapshots to
+  // independently painted track parts.
+  final _position = ValueNotifier(Duration.zero);
+  final _buffer = ValueNotifier(Duration.zero);
+  late final _ProgressSignals _signals = (position: _position, buffer: _buffer);
   bool _listening = false;
 
   @override
@@ -489,10 +500,8 @@ class _ProgressClockState extends State<_ProgressClock> {
       _duration = Duration(
         milliseconds: controller.mediaInfo.value?.duration ?? 0,
       );
-      _samples.value = (
-        position: Duration(milliseconds: controller.position.value),
-        buffer: Duration.zero,
-      );
+      _position.value = Duration(milliseconds: controller.position.value);
+      _buffer.value = Duration.zero;
       controller.position.addListener(_onVideoViewUpdate);
       controller.mediaInfo.addListener(_onVideoViewUpdate);
       return;
@@ -500,19 +509,12 @@ class _ProgressClockState extends State<_ProgressClock> {
 
     final state = widget.player.state;
     _duration = state.duration;
-    _samples.value = (position: state.position, buffer: state.buffer);
+    _position.value = state.position;
+    _buffer.value = state.buffer;
     final stream = widget.player.stream;
-    _listen(
-      stream.position,
-      (value) =>
-          _samples.value = (position: value, buffer: _samples.value.buffer),
-    );
+    _listen(stream.position, (value) => _position.value = value);
     _listen(stream.duration, _setDuration);
-    _listen(
-      stream.buffer,
-      (value) =>
-          _samples.value = (position: _samples.value.position, buffer: value),
-    );
+    _listen(stream.buffer, (value) => _buffer.value = value);
   }
 
   void _listen(Stream<Duration> stream, ValueChanged<Duration> save) {
@@ -533,10 +535,7 @@ class _ProgressClockState extends State<_ProgressClock> {
     _setDuration(
       Duration(milliseconds: controller.mediaInfo.value?.duration ?? 0),
     );
-    _samples.value = (
-      position: Duration(milliseconds: controller.position.value),
-      buffer: Duration.zero,
-    );
+    _position.value = Duration(milliseconds: controller.position.value);
   }
 
   void _detach(_ProgressClock oldWidget) {
@@ -553,13 +552,14 @@ class _ProgressClockState extends State<_ProgressClock> {
   @override
   void dispose() {
     _detach(widget);
-    _samples.dispose();
+    _position.dispose();
+    _buffer.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) =>
-      widget.builder(context, _duration, _samples);
+      widget.builder(context, _duration, _signals);
 }
 
 class PlayerPlayPauseButton extends StatelessWidget {
@@ -1002,7 +1002,7 @@ class _TrackInterval {
 }
 
 class _SeekBar extends StatefulWidget {
-  final ValueListenable<_ProgressSample> samples;
+  final _ProgressSignals signals;
   final double? fixedValue;
   final double durationMs;
   final double min;
@@ -1018,7 +1018,7 @@ class _SeekBar extends StatefulWidget {
   final ValueChanged<double>? onChangeEnd;
 
   const _SeekBar({
-    required this.samples,
+    required this.signals,
     required this.fixedValue,
     required this.durationMs,
     required this.min,
@@ -1035,13 +1035,13 @@ class _SeekBar extends StatefulWidget {
   });
 
   double get value =>
-      (fixedValue ?? samples.value.position.inMilliseconds.toDouble()).clamp(
+      (fixedValue ?? signals.position.value.inMilliseconds.toDouble()).clamp(
         min,
         max,
       );
 
   _TrackMotion motion(double width) => (
-    samples: samples,
+    signals: signals,
     fixedValue: fixedValue,
     min: min,
     max: max,
@@ -1620,9 +1620,9 @@ class _SeekBarState extends State<_SeekBar> {
   }
 }
 
-/// Stable seek geometry; [samples] changes paint, not widget layout.
+/// Stable seek geometry; its signals change paint, not widget layout.
 typedef _TrackMotion = ({
-  ValueListenable<_ProgressSample> samples,
+  _ProgressSignals signals,
   double? fixedValue,
   double min,
   double max,
@@ -1630,16 +1630,23 @@ typedef _TrackMotion = ({
   double width,
 });
 
+extension on _TrackMotion {
+  // A drag or D-pad preview has a fixed playhead. Playback still updates
+  // its snapshot, but it can no longer change that playhead's pixels.
+  ValueListenable<Duration>? get livePlayhead =>
+      fixedValue == null ? signals.position : null;
+}
+
 double _trackExtent(_TrackMotion motion, {required bool buffered}) {
   if (buffered) {
     return motion.durationMs > 0
-        ? (motion.samples.value.buffer.inMilliseconds / motion.durationMs)
+        ? (motion.signals.buffer.value.inMilliseconds / motion.durationMs)
                   .clamp(0.0, 1.0) *
               motion.width
         : 0.0;
   }
   final value =
-      motion.fixedValue ?? motion.samples.value.position.inMilliseconds;
+      motion.fixedValue ?? motion.signals.position.value.inMilliseconds;
   final range = motion.max - motion.min;
   return range > 0
       ? ((value - motion.min) / range).clamp(0.0, 1.0) * motion.width
@@ -1648,7 +1655,7 @@ double _trackExtent(_TrackMotion motion, {required bool buffered}) {
 
 class _TimelineClipper extends CustomClipper<RRect> {
   _TimelineClipper(this.motion, this.start, {required this.buffered})
-    : super(reclip: motion.samples);
+    : super(reclip: buffered ? motion.signals.buffer : motion.livePlayhead);
 
   final _TrackMotion motion;
   final double start;
@@ -1698,11 +1705,12 @@ class _RenderPlayheadOffset extends RenderProxyBox {
 
   set motion(_TrackMotion value) {
     if (value == _motion) return;
-    final oldSamples = _motion.samples;
+    final previous = _motion.livePlayhead;
     _motion = value;
-    if (attached && oldSamples != value.samples) {
-      oldSamples.removeListener(markNeedsPaint);
-      value.samples.addListener(markNeedsPaint);
+    final next = value.livePlayhead;
+    if (attached && previous != next) {
+      previous?.removeListener(markNeedsPaint);
+      next?.addListener(markNeedsPaint);
     }
     markNeedsPaint();
   }
@@ -1710,12 +1718,12 @@ class _RenderPlayheadOffset extends RenderProxyBox {
   @override
   void attach(PipelineOwner owner) {
     super.attach(owner);
-    _motion.samples.addListener(markNeedsPaint);
+    _motion.livePlayhead?.addListener(markNeedsPaint);
   }
 
   @override
   void detach() {
-    _motion.samples.removeListener(markNeedsPaint);
+    _motion.livePlayhead?.removeListener(markNeedsPaint);
     super.detach();
   }
 

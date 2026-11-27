@@ -132,7 +132,7 @@ class _AnimeWitcherRepliesScreenState
       final updated = await service.toggleCommentLike(reply);
       if (!mounted) return;
       final index = _pager.items.indexWhere((item) => item.path == reply.path);
-      if (index >= 0) setState(() => _pager.items[index] = updated);
+      if (index >= 0) setState(() => _pager.replaceAt(index, updated));
     } catch (error) {
       if (mounted) {
         showCommentMessage(_replyErrorText(error), isError: true);

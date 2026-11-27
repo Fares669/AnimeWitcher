@@ -19,25 +19,22 @@ class CountdownUnitVisibility {
   final bool showSeconds;
 
   factory CountdownUnitVisibility.fromRemaining(Duration remaining) {
-    if (remaining <= Duration.zero) {
-      return const CountdownUnitVisibility(
-        showDays: false,
-        showHours: false,
-        showMinutes: false,
-        showSeconds: false,
-      );
-    }
-
-    final days = remaining.inDays;
-    final hours = remaining.inHours.remainder(24);
-    final minutes = remaining.inMinutes.remainder(60);
-
+    final count = visibleCountFor(remaining);
     return CountdownUnitVisibility(
-      showDays: days > 0,
-      showHours: hours > 0 || days > 0,
-      showMinutes: minutes > 0 || hours > 0 || days > 0,
-      showSeconds: true,
+      showDays: count >= 4,
+      showHours: count >= 3,
+      showMinutes: count >= 2,
+      showSeconds: count >= 1,
     );
+  }
+
+  /// The number of trailing units to display, without allocating a record.
+  static int visibleCountFor(Duration remaining) {
+    if (remaining <= Duration.zero) return 0;
+    if (remaining.inDays > 0) return 4;
+    if (remaining.inHours > 0) return 3;
+    if (remaining.inMinutes > 0) return 2;
+    return 1;
   }
 
   int get visibleCount =>

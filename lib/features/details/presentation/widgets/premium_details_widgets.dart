@@ -240,14 +240,31 @@ class NextAiringWidget extends StatefulWidget {
   State<NextAiringWidget> createState() => _NextAiringWidgetState();
 }
 
+enum _CountdownUnit {
+  days('يوم', ValueKey('countdown-days')),
+  hours('ساعة', ValueKey('countdown-hours')),
+  minutes('دقيقة', ValueKey('countdown-minutes')),
+  seconds('ثانية', ValueKey('countdown-seconds'));
+
+  const _CountdownUnit(this.label, this.key);
+
+  final String label;
+  final Key key;
+
+  int valueIn(Duration remaining) => switch (this) {
+    days => remaining.inDays,
+    hours => remaining.inHours.remainder(24),
+    minutes => remaining.inMinutes.remainder(60),
+    seconds => remaining.inSeconds.remainder(60),
+  };
+}
+
 class _NextAiringWidgetState extends State<NextAiringWidget> {
   Timer? _timer;
-  late Duration _remaining;
-
-  DateTime get _airingDate => DateTime.fromMillisecondsSinceEpoch(
-    widget.nextAiring.unixTime * 1000,
-    isUtc: true,
-  );
+  final _values = [
+    for (final _ in _CountdownUnit.values) ValueNotifier<int>(0),
+  ];
+  late int _visibleCount;
 
   @override
   void initState() {
@@ -263,40 +280,59 @@ class _NextAiringWidgetState extends State<NextAiringWidget> {
     }
   }
 
-  Duration _calculateRemaining() {
-    final difference = _airingDate.difference(DateTime.now().toUtc());
+  Duration _calculateRemaining(DateTime airingDate) {
+    final difference = airingDate.difference(DateTime.now().toUtc());
     return difference.isNegative ? Duration.zero : difference;
+  }
+
+  int _updateUnitValues(Duration remaining) {
+    final count = CountdownUnitVisibility.visibleCountFor(remaining);
+    final units = _CountdownUnit.values;
+    for (var index = units.length - count; index < units.length; index++) {
+      _values[index].value = units[index].valueIn(remaining);
+    }
+    return count;
   }
 
   void _startCountdown() {
     _timer?.cancel();
-    _remaining = _calculateRemaining();
-    if (_remaining == Duration.zero) return;
+    final airingDate = DateTime.fromMillisecondsSinceEpoch(
+      widget.nextAiring.unixTime * 1000,
+      isUtc: true,
+    );
+    _visibleCount = _updateUnitValues(_calculateRemaining(airingDate));
+    if (_visibleCount == 0) return;
 
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      final remaining = _calculateRemaining();
       if (!mounted) return;
 
-      setState(() => _remaining = remaining);
-      if (remaining == Duration.zero) _timer?.cancel();
+      // Most ticks change only the seconds text, not the heading, labels or
+      // card layout. Rebuild the row only when a leading unit disappears.
+      final count = _updateUnitValues(_calculateRemaining(airingDate));
+      if (count != _visibleCount) setState(() => _visibleCount = count);
+      if (count == 0) _timer?.cancel();
     });
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    for (final value in _values) {
+      value.dispose();
+    }
     super.dispose();
   }
 
-  Widget _buildCountdownCard(
-    BuildContext context, {
-    Key? key,
-    required String value,
-    required String label,
-  }) {
-    final colors = Theme.of(context).colorScheme;
+  Widget _buildCountdownCard(BuildContext context, int index) {
+    final unit = _CountdownUnit.values[index];
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final valueStyle = theme.textTheme.headlineSmall?.copyWith(
+      fontWeight: FontWeight.w800,
+      height: 1,
+    );
     return Container(
-      key: key,
+      key: unit.key,
       constraints: const BoxConstraints(minHeight: 72),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
       decoration: BoxDecoration(
@@ -309,21 +345,23 @@ class _NextAiringWidgetState extends State<NextAiringWidget> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Text(
-            value,
-            textDirection: TextDirection.ltr,
-            textAlign: TextAlign.center,
-            maxLines: 1,
-            style: Theme.of(context).textTheme.headlineSmall
-                ?.copyWith(fontWeight: FontWeight.w800, height: 1),
+          ValueListenableBuilder<int>(
+            valueListenable: _values[index],
+            builder: (context, value, child) => Text(
+              value.toString(),
+              textDirection: TextDirection.ltr,
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              style: valueStyle,
+            ),
           ),
           const SizedBox(height: 6),
           Text(
-            label,
+            unit.label,
             textAlign: TextAlign.center,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+            style: theme.textTheme.labelMedium?.copyWith(
               color: colors.onSurfaceVariant,
               fontWeight: FontWeight.w600,
             ),
@@ -334,41 +372,13 @@ class _NextAiringWidgetState extends State<NextAiringWidget> {
   }
 
   Widget _buildCountdownRow(BuildContext context) {
-    final visibility = CountdownUnitVisibility.fromRemaining(_remaining);
-    final days = _remaining.inDays.toString();
-    final hours = _remaining.inHours.remainder(24).toString();
-    final minutes = _remaining.inMinutes.remainder(60).toString();
-    final seconds = _remaining.inSeconds.remainder(60).toString();
-
-    final cards = <Widget>[
-      if (visibility.showDays)
-        _buildCountdownCard(
-          context,
-          key: const ValueKey('countdown-days'),
-          value: days,
-          label: 'يوم',
-        ),
-      if (visibility.showHours)
-        _buildCountdownCard(
-          context,
-          key: const ValueKey('countdown-hours'),
-          value: hours,
-          label: 'ساعة',
-        ),
-      if (visibility.showMinutes)
-        _buildCountdownCard(
-          context,
-          key: const ValueKey('countdown-minutes'),
-          value: minutes,
-          label: 'دقيقة',
-        ),
-      if (visibility.showSeconds)
-        _buildCountdownCard(
-          context,
-          key: const ValueKey('countdown-seconds'),
-          value: seconds,
-          label: 'ثانية',
-        ),
+    final cards = [
+      for (
+        var index = _CountdownUnit.values.length - _visibleCount;
+        index < _CountdownUnit.values.length;
+        index++
+      )
+        _buildCountdownCard(context, index),
     ];
 
     return Directionality(
@@ -418,7 +428,7 @@ class _NextAiringWidgetState extends State<NextAiringWidget> {
             ),
           ),
           const SizedBox(height: 10),
-          if (_remaining == Duration.zero)
+          if (_visibleCount == 0)
             Text(
               _detailsText(
                 context,

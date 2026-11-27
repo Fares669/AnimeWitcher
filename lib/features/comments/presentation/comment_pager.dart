@@ -1,3 +1,5 @@
+import 'dart:collection';
+
 import 'package:flutter/widgets.dart';
 
 import '../../../core/account/animewitcher_comment_models.dart';
@@ -9,7 +11,25 @@ import '../../../core/utils/request_generation.dart';
 /// with the loading, cursor and error state in one place. Widgets
 /// own the setState calls and pass their own page fetch.
 class CommentPager {
-  List<AnimeWitcherComment> items = <AnimeWitcherComment>[];
+  List<AnimeWitcherComment> _items = <AnimeWitcherComment>[];
+  late List<AnimeWitcherComment> _view = UnmodifiableListView(_items);
+  List<AnimeWitcherComment> get items => _view;
+
+  // Needed only past the first page and while there are still pages to append.
+  Set<String>? _paths;
+
+  void replaceAt(int index, AnimeWitcherComment replacement) {
+    if (_paths != null && replacement.path != _items[index].path) {
+      _paths = null;
+    }
+    _items[index] = replacement;
+  }
+
+  void removePath(String path) {
+    _items.removeWhere((item) => item.path == path);
+    _paths?.remove(path);
+  }
+
   FirestoreDocument? cursor;
   bool loadingInitial = true;
   bool loadingMore = false;
@@ -43,7 +63,10 @@ class CommentPager {
     try {
       final page = await fetch(null);
       if (!_generation.isCurrent(generation)) return false;
-      items = page.items;
+      // Never retain a mutable alias to the provider's page.
+      _items = page.items.toList();
+      _view = UnmodifiableListView(_items);
+      _paths = null;
       cursor = page.cursor;
       hasMore = page.hasMore;
       loadingInitial = false;
@@ -69,11 +92,8 @@ class CommentPager {
     try {
       final page = await fetch(cursor);
       if (!_generation.isCurrent(generation)) return false;
-      final existing = items.map((item) => item.path).toSet();
-      final additions = page.items
-          .where((item) => existing.add(item.path))
-          .toList(growable: false);
-      items = <AnimeWitcherComment>[...items, ...additions];
+      if (page.items.isNotEmpty) _append(page.items);
+      if (!page.hasMore) _paths = null;
       cursor = page.cursor;
       hasMore = page.hasMore;
       loadingMore = false;
@@ -84,6 +104,21 @@ class CommentPager {
       loadError = error;
       onError?.call(error);
       return true;
+    }
+  }
+
+  void _append(List<AnimeWitcherComment> incoming) {
+    final existing = _paths ??= _items.map((item) => item.path).toSet();
+    final start = _items.length;
+    try {
+      for (final item in incoming) {
+        if (existing.add(item.path)) _items.add(item);
+      }
+    } catch (_) {
+      // As with a failed fetch, keep the previously committed page intact.
+      _items.removeRange(start, _items.length);
+      _paths = null;
+      rethrow;
     }
   }
 }

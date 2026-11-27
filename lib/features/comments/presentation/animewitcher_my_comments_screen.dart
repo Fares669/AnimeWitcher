@@ -183,7 +183,7 @@ class _AnimeWitcherMyCommentsScreenState
           .deleteOwnComment(comment);
       if (!_currentPager(pager)) return;
       setState(() {
-        _pager.items.removeWhere((item) => item.path == comment.path);
+        _pager.removePath(comment.path);
       });
       showCommentMessage('تم حذف التعليق.');
     } catch (error) {
@@ -243,7 +243,7 @@ class _AnimeWitcherMyCommentsScreenState
   void _replaceComment(AnimeWitcherComment updated) {
     final index = _pager.items.indexWhere((item) => item.path == updated.path);
     if (index < 0) return;
-    setState(() => _pager.items[index] = updated);
+    setState(() => _pager.replaceAt(index, updated));
   }
 
   void _setBusy(String path, bool busy) {

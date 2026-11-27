@@ -542,6 +542,168 @@ void main() {
     }
   });
 
+  testWidgets('position and buffer invalidate only their played track parts', (
+    tester,
+  ) async {
+    final source = _FixtureMediaKit()
+      ..tick(3000, durationMs: 120000, bufferMs: 42000);
+    final player = mk.Player(platformPlayer: source);
+    final key = GlobalKey();
+    final controller = _Controller(
+      segments: [
+        SkipSegment(startTime: 15, endTime: 27, type: SkipType.intro),
+        SkipSegment(startTime: 31.5, endTime: 35.8, type: SkipType.recap),
+        SkipSegment(startTime: 100, endTime: 120, type: SkipType.outro),
+      ],
+    );
+
+    try {
+      await _mount(tester, player, controller, paintBoundaryKey: key);
+      await tester.tapAt(_showPoint);
+      await tester.pumpAndSettle();
+      final track = tester.getRect(_seekTrack);
+      final seekState = tester.state(_seekBar);
+      final boundary = tester.renderObject<RenderRepaintBoundary>(
+        find.byKey(key),
+      );
+      final theme = Theme.of(tester.element(_seekBar)).colorScheme;
+
+      Future<({int played, int buffered, int thumb, int frames})> measure(
+        void Function(int) tick,
+      ) async {
+        final played = <RenderClipRRect>[];
+        final buffered = <RenderClipRRect>[];
+        final clips = find.descendant(
+          of: _seekBar,
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is ClipRRect &&
+                widget.clipper.runtimeType.toString() == '_TimelineClipper',
+          ),
+        );
+        for (final clip in clips.evaluate()) {
+          final widget = clip.widget as ClipRRect;
+          final renderObject = clip.renderObject as RenderClipRRect;
+          final box = widget.child as ColoredBox;
+          (box.color == Colors.white.withValues(alpha: 0.25)
+                  ? buffered
+                  : played)
+              .add(renderObject);
+        }
+        expect(played.length, 6);
+        expect(buffered.length, 6);
+        final playheadOffset = tester.renderObject<RenderBox>(
+          find.descendant(
+            of: _seekBar,
+            matching: find.byWidgetPredicate(
+              (widget) => widget.runtimeType.toString() == '_PlayheadOffset',
+            ),
+          ),
+        );
+
+        var playedDirty = 0;
+        var bufferedDirty = 0;
+        var thumbDirty = 0;
+        var frames = 0;
+        for (var i = 1; i <= 18; i++) {
+          expect(played.every((part) => !part.debugNeedsPaint), isTrue);
+          expect(buffered.every((part) => !part.debugNeedsPaint), isTrue);
+          expect(playheadOffset.debugNeedsPaint, isFalse, reason: 'tick $i');
+          expect(tester.binding.hasScheduledFrame, isFalse);
+          tick(i);
+          await tester.idle();
+          playedDirty += played.where((part) => part.debugNeedsPaint).length;
+          bufferedDirty += buffered
+              .where((part) => part.debugNeedsPaint)
+              .length;
+          if (playheadOffset.debugNeedsPaint) thumbDirty++;
+          if (tester.binding.hasScheduledFrame) frames++;
+          await tester.pump();
+        }
+        return (
+          played: playedDirty,
+          buffered: bufferedDirty,
+          thumb: thumbDirty,
+          frames: frames,
+        );
+      }
+
+      Color sample(ByteData rgba, ui.Image shot, double ratio, {int dy = 0}) {
+        final center = boundary.globalToLocal(track.center);
+        final start = boundary.globalToLocal(track.topLeft).dx;
+        final x = (start + track.width * ratio).round();
+        final offset = (shot.width * (center.dy.round() + dy) + x) * 4;
+        return Color.fromARGB(
+          rgba.getUint8(offset + 3),
+          rgba.getUint8(offset),
+          rgba.getUint8(offset + 1),
+          rgba.getUint8(offset + 2),
+        );
+      }
+
+      // The player is visible and advancing; the same render objects persist.
+      final positionWork = await measure((i) => source.tick(42000 + i * 60));
+      final bufferWork = await measure(
+        (i) => source.tick(43080, bufferMs: 68000 + i * 60),
+      );
+      final frame = boundary.toImageSync();
+      try {
+        final rgba = (await tester.runAsync(
+          () => frame.toByteData(format: ui.ImageByteFormat.rawRgba),
+        ))!;
+        expect(sample(rgba, frame, 43080 / 120000, dy: 4), theme.primary);
+        expect(sample(rgba, frame, .12), theme.primary);
+        expect(sample(rgba, frame, .45), isNot(sample(rgba, frame, .93)));
+      } finally {
+        frame.dispose();
+      }
+      expect(find.text('0:43 / 2:00'), findsOneWidget);
+
+      final drag = await tester.startGesture(
+        Offset(track.left + track.width * .43, track.center.dy),
+      );
+      await drag.moveBy(Offset(track.width * .06, 0));
+      await tester.pumpAndSettle();
+      await drag.moveBy(Offset(track.width * .06, 0));
+      await tester.pumpAndSettle();
+      final labels = find.descendant(
+        of: find.byType(PlayerProgressBar),
+        matching: find.byWidgetPredicate(
+          (widget) =>
+              widget is Text && (widget.data?.endsWith(' / 2:00') ?? false),
+        ),
+      );
+      final heldLabel = tester.widget<Text>(labels).data;
+      final scrubWork = await measure((i) => source.tick(45000 + i * 60));
+      expect(tester.widget<Text>(labels).data, heldLabel);
+      expect(controller.seeks, isEmpty);
+
+      // Buffer progress keeps invalidating only its own track during a scrub.
+      final scrubBufferWork = await measure(
+        (i) => source.tick(46080, bufferMs: 70000 + i * 50),
+      );
+      expect(tester.widget<Text>(labels).data, heldLabel);
+      await drag.up();
+      await tester.pumpAndSettle();
+      expect(controller.seeks.single.inMilliseconds, closeTo(66000, 3));
+      expect(tester.widget<Text>(labels).data, '0:46 / 2:00');
+      expect(tester.state(_seekBar), same(seekState));
+      expect(tester.getRect(_seekTrack), track);
+      debugPrint(
+        'C19 real player clip invalidations: '
+        'position=$positionWork buffer=$bufferWork '
+        'heldPosition=$scrubWork heldBuffer=$scrubBufferWork',
+      );
+      expect(positionWork, (played: 108, buffered: 0, thumb: 18, frames: 18));
+      expect(bufferWork, (played: 0, buffered: 108, thumb: 0, frames: 18));
+      expect(scrubWork, (played: 0, buffered: 0, thumb: 0, frames: 0));
+      expect(scrubBufferWork, (played: 0, buffered: 108, thumb: 0, frames: 18));
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await player.dispose();
+    }
+  });
+
   testWidgets('TV seek steps and drag use the latest clock without relayout', (
     tester,
   ) async {
