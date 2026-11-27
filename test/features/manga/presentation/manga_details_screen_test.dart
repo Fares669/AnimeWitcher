@@ -11,6 +11,8 @@ import 'package:animewitcher/core/storage/secure_token_storage.dart';
 import 'package:animewitcher/features/library/presentation/library_media_kind.dart';
 import 'package:animewitcher/features/library/presentation/library_provider.dart';
 import 'package:animewitcher/features/library/presentation/library_state.dart';
+import 'package:animewitcher/features/details/presentation/widgets/details_desktop_hero.dart';
+import 'package:animewitcher/features/manga/presentation/widgets/manga_chapter_list.dart';
 import 'package:animewitcher/features/manga/presentation/widgets/manga_chapter_row.dart';
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
@@ -257,8 +259,13 @@ final class _MembershipLibrary extends Library {
 }
 
 final class _MangaDetailsDownloadFeed extends DownloadsNotifier {
+  int _starts = 0;
+
   @override
-  Future<List<DownloadItem>> build() async => const [];
+  Future<List<DownloadItem>> build() async {
+    _starts++;
+    return const [];
+  }
 
   void publishRows(List<DownloadItem> rows) => state = AsyncData(rows);
 
@@ -398,6 +405,152 @@ void _usePhoneWindow(WidgetTester tester) {
 }
 
 void main() {
+  for (final phone in [true, false]) {
+    testWidgets(
+      'Manga Details isolates its hero from download updates (phone=$phone)',
+      (tester) async {
+        if (phone) {
+          _usePhoneWindow(tester);
+        } else {
+          tester.view.physicalSize = const Size(1280, 900);
+          tester.view.devicePixelRatio = 1;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+        }
+        final source = _MangaProvider(chapterCount: 1600);
+        final downloads = _MangaDetailsDownloadFeed();
+        final opened = <String>[];
+        await tester.pumpWidget(
+          _app(
+            source,
+            downloadFeed: downloads,
+            onOpenChapter: (chapter) => opened.add(chapter.id),
+          ),
+        );
+        await _pumpUntil(tester, () => source.detailsFinished);
+        await tester.pumpAndSettle();
+
+        final heroFinder = find.byType(DetailsDesktopHero);
+        final chapterListFinder = find.byType(MangaChapterList);
+        final toggle = find.byKey(const ValueKey('manga-chapters-toggle'));
+        final genre = find.byKey(const ValueKey('manga-genre-Action'));
+        DetailsDesktopHero hero() => tester.widget(heroFinder);
+        MangaChapterList list() => tester.widget(chapterListFinder);
+
+        final coldStarts = downloads._starts;
+        // Another part of the app can start a download independently. The
+        // closed Details route still must not start watching those updates.
+        final scope = ProviderScope.containerOf(tester.element(heroFinder));
+        await scope.read(downloadsProvider.future);
+        await tester.pumpAndSettle();
+        const ticks = 6;
+
+        Future<({int hero, int story, int actions, int lists})> burst({
+          required bool chaptersVisible,
+        }) async {
+          var heroChanges = 0;
+          var storyChanges = 0;
+          var actionChanges = 0;
+          var listChanges = 0;
+          for (var tick = 1; tick <= ticks; tick++) {
+            final before = hero();
+            final beforeList = chaptersVisible ? list() : null;
+            downloads.publishProgress(tick / (ticks + 1));
+            await tester.pump(const Duration(milliseconds: 100));
+            final after = hero();
+            if (!identical(before, after)) heroChanges++;
+            if (!identical(before.story, after.story)) storyChanges++;
+            if (!identical(before.heroActions, after.heroActions)) {
+              actionChanges++;
+            }
+            if (chaptersVisible && !identical(beforeList, list())) {
+              listChanges++;
+            }
+          }
+          return (
+            hero: heroChanges,
+            story: storyChanges,
+            actions: actionChanges,
+            lists: listChanges,
+          );
+        }
+
+        final collapsed = await burst(chaptersVisible: false);
+        expect(chapterListFinder, findsNothing);
+        expect(source.chaptersCalls, 0);
+        expect(genre, findsOneWidget);
+
+        Future<void> toggleList() async {
+          await Scrollable.ensureVisible(tester.element(toggle), alignment: .2);
+          await tester.pumpAndSettle();
+          await tester.tap(toggle.hitTestable());
+          await tester.pumpAndSettle();
+        }
+
+        await toggleList();
+        expect(chapterListFinder, findsOneWidget);
+        final downloaded = find.byKey(
+          const ValueKey('manga-chapter-filter-downloaded'),
+        );
+        await Scrollable.ensureVisible(
+          tester.element(downloaded),
+          alignment: .2,
+        );
+        await tester.pumpAndSettle();
+        final scroll = Scrollable.of(tester.element(downloaded)).position;
+        final beforeUpdates = scroll.pixels;
+        final expanded = await burst(chaptersVisible: true);
+        expect(scroll.pixels, beforeUpdates);
+
+        await tester.tap(downloaded.hitTestable());
+        await tester.pumpAndSettle();
+        Finder row(String id) =>
+            find.byKey(ValueKey<String>('manga-chapter-row-$id'));
+        expect(row('3'), findsNothing);
+        final completion = _TrackedChapterDownload(
+          counter: _ChapterDownloadReadCounter(),
+          taskId: 'route-local-chapter',
+          url: ' chapter://3 ',
+        );
+        final heroAtCompletion = hero();
+        downloads.publishRows([completion]);
+        await tester.pumpAndSettle();
+        final completionKeptHero = identical(heroAtCompletion, hero());
+        expect(row('3'), findsOneWidget);
+        await Scrollable.ensureVisible(tester.element(row('3')), alignment: .5);
+        await tester.pumpAndSettle();
+        await tester.tap(row('3').hitTestable());
+        await tester.pumpAndSettle();
+        expect(opened, ['3']);
+
+        await toggleList();
+        expect(chapterListFinder, findsNothing);
+        final closedAgain = await burst(chaptersVisible: false);
+        downloads.publishRows([completion]);
+        await tester.pumpAndSettle();
+        await toggleList();
+        await Scrollable.ensureVisible(
+          tester.element(downloaded),
+          alignment: .2,
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(downloaded.hitTestable());
+        await tester.pumpAndSettle();
+        expect(row('3'), findsOneWidget);
+        expect(source.detailsCalls, 1);
+        expect(source.chaptersCalls, 1);
+
+        expect(coldStarts, 0);
+        expect(collapsed, (hero: 0, story: 0, actions: 0, lists: 0));
+        expect(expanded.hero, 0);
+        expect(expanded.story, 0);
+        expect(expanded.actions, 0);
+        expect(closedAgain, (hero: 0, story: 0, actions: 0, lists: 0));
+        expect(completionKeptHero, isTrue);
+      },
+    );
+  }
+
   for (final phone in [true, false]) {
     testWidgets(
       'Manga Details does not rescan download history for each chapter '

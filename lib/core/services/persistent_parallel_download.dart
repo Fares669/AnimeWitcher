@@ -3,6 +3,7 @@ import 'download_diagnostic_log.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:path/path.dart' as p;
@@ -16,6 +17,7 @@ import 'download_telemetry.dart';
 import '../utils/download_file_digest.dart';
 import '../utils/download_resume.dart';
 import '../utils/local_file_io.dart';
+import '../utils/parallel_assembly_writer.dart';
 
 /// Child connections can report progress independently and in bursts. The
 /// logical episode, Flutter UI and iOS continued-processing task all publish
@@ -37,6 +39,9 @@ const int kParallelAssemblyStorageReserveBytes = 8 * 1024 * 1024;
 // File.openRead uses 64 KiB blocks. Larger bounded reads cut asynchronous
 // file operations during assembly without buffering a complete range.
 const int _parallelAssemblyReadBytes = 256 * 1024;
+
+// Small assemblies do not justify starting a separate copy worker.
+const int _parallelAssemblyWorkerThresholdBytes = 16 * 1024 * 1024;
 
 enum ParallelAssemblyFailureReason { insufficientStorage }
 
@@ -5307,10 +5312,37 @@ class PersistentParallelDownload {
     onUpdate(TaskProgressUpdate(session.task, 1, session.size, 0, Duration.zero));
 
     RandomAccessFile? output;
+    ParallelAssemblyWriter? writer;
+    Future<void> closeStaging() async {
+      final worker = writer;
+      final file = output;
+      writer = null;
+      output = null;
+      if (worker != null) {
+        await worker.close();
+      } else {
+        await file?.close();
+      }
+    }
     try {
-      output = await staging.open(mode: FileMode.write);
-      await output.truncate(session.size);
-      await output.setPosition(0);
+      if (session.size >= _parallelAssemblyWorkerThresholdBytes) {
+        try {
+          writer = await ParallelAssemblyWriter.tryOpen(
+            staging.path,
+            session.size,
+            _parallelAssemblyReadBytes,
+          );
+        } on IsolateSpawnException {
+          // Before the worker opens staging, keep the original async path if
+          // the VM cannot start another isolate.
+        }
+      }
+      if (writer == null) {
+        final file = await staging.open(mode: FileMode.write);
+        output = file;
+        await file.truncate(session.size);
+        await file.setPosition(0);
+      }
       var assembledBytes = 0;
       for (final part in session.parts) {
         final file = File(await part.task.filePath());
@@ -5319,10 +5351,20 @@ class PersistentParallelDownload {
           return;
         }
         if (!await _hasAssemblyHeadroom(session, target, remainingBytes: 0)) {
-          await output!.close();
-          output = null;
+          await closeStaging();
           await _handleAssemblyStorageFailure(session, staging);
           return;
+        }
+        final worker = writer;
+        if (worker != null) {
+          final copied = await worker.copy(file.path, part.size);
+          if (session.deleted) return;
+          if (!copied) {
+            await _pause(session);
+            return;
+          }
+          assembledBytes += part.size;
+          continue;
         }
         var remainingPartBytes = part.size;
         final input = await file.open();
@@ -5352,21 +5394,25 @@ class PersistentParallelDownload {
         await _pause(session);
         return;
       }
-      await output!.flush();
+      final worker = writer;
+      if (worker != null) {
+        await worker.flush();
+      } else {
+        await output!.flush();
+      }
     } on FileSystemException catch (error) {
       if (!_isInsufficientStorageError(error)) {
         await _pause(session);
         return;
       }
       try {
-        await output?.close();
+        await closeStaging();
       } catch (_) {}
-      output = null;
       await _handleAssemblyStorageFailure(session, staging, error: error);
       return;
     } finally {
       try {
-        await output?.close();
+        await closeStaging();
       } catch (_) {}
     }
     if (session.deleted) return;

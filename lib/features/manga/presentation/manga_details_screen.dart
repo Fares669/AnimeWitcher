@@ -809,7 +809,6 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     BuildContext context, {
     required MultimediaItem item,
     required MangaDetailsState state,
-    required List<DownloadItem> downloads,
     required Library? libraryNotifier,
     required bool isFavorite,
     required LibraryCategory? currentCategory,
@@ -918,49 +917,59 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
                   ),
                 ),
               ),
-              data: (chapters) => MangaChapterList(
-                embedded: true,
-                chapters: chapters,
-                transition: _chaptersReveal,
-                revealKey: const ValueKey<String>('manga-chapters-reveal'),
-                topAction: Align(
-                  alignment: AlignmentDirectional.centerStart,
-                  child: Consumer(
-                    builder: (context, ref, child) => _readPill(
-                      context,
-                      ref.watch(
-                        _mangaDetailsResumeTargetProvider(widget.item.url),
+              // Subscribe only once the chapter list is mounted. Download
+              // snapshots don't change the manga's hero or metadata.
+              data: (chapters) => Consumer(
+                builder: (_, chapterRef, _) => MangaChapterList(
+                  embedded: true,
+                  chapters: chapters,
+                  transition: _chaptersReveal,
+                  revealKey: const ValueKey<String>('manga-chapters-reveal'),
+                  topAction: Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: Consumer(
+                      builder: (context, ref, child) => _readPill(
+                        context,
+                        ref.watch(
+                          _mangaDetailsResumeTargetProvider(widget.item.url),
+                        ),
+                        open,
                       ),
-                      open,
                     ),
                   ),
-                ),
-                onSelectionBarChanged: (bar) {
-                  if (!mounted || identical(_chapterSelectionBar, bar)) return;
-                  setState(() => _chapterSelectionBar = bar);
-                },
-                downloads: downloads,
-                onDeleteDownload: (download) =>
-                    unawaited(confirmAndRemoveDownload(context, ref, download)),
-                onOpen: open,
-                onDownload:
-                    widget.onDownloadChapter ??
-                    (chapter) => unawaited(controller.downloadChapter(chapter)),
-                onDownloadSelected: (selected) async {
-                  final customDownload = widget.onDownloadChapter;
-                  if (customDownload == null) {
-                    return controller.downloadChapters(selected);
-                  }
-                  var failed = 0;
-                  for (final chapter in selected) {
-                    try {
-                      customDownload(chapter);
-                    } catch (_) {
-                      failed++;
+                  onSelectionBarChanged: (bar) {
+                    if (!mounted || identical(_chapterSelectionBar, bar)) {
+                      return;
                     }
-                  }
-                  return failed;
-                },
+                    setState(() => _chapterSelectionBar = bar);
+                  },
+                  downloads:
+                      chapterRef.watch(downloadsProvider).value ??
+                      const <DownloadItem>[],
+                  onDeleteDownload: (download) => unawaited(
+                    confirmAndRemoveDownload(context, ref, download),
+                  ),
+                  onOpen: open,
+                  onDownload:
+                      widget.onDownloadChapter ??
+                      (chapter) =>
+                          unawaited(controller.downloadChapter(chapter)),
+                  onDownloadSelected: (selected) async {
+                    final customDownload = widget.onDownloadChapter;
+                    if (customDownload == null) {
+                      return controller.downloadChapters(selected);
+                    }
+                    var failed = 0;
+                    for (final chapter in selected) {
+                      try {
+                        customDownload(chapter);
+                      } catch (_) {
+                        failed++;
+                      }
+                    }
+                    return failed;
+                  },
+                ),
               ),
             ),
           SliverToBoxAdapter(
@@ -994,8 +1003,6 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     );
     final item = mangaDetailsItemWithCustomCover(baseItem, customCover);
     _ensureUserRatingLoaded(item);
-    final downloads =
-        ref.watch(downloadsProvider).value ?? const <DownloadItem>[];
 
     Library? libraryNotifier;
     var isFavorite = false;
@@ -1024,7 +1031,6 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
       context,
       item: item,
       state: state,
-      downloads: downloads,
       libraryNotifier: libraryNotifier,
       isFavorite: isFavorite,
       currentCategory: currentCategory,

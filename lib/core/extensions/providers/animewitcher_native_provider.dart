@@ -5553,22 +5553,48 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         .toList(growable: false);
   }
 
-  Map<String, dynamic> _aniZipEpisodeFor(
-    Map<String, dynamic> payload,
-    int number,
+  Object? _aniZipArtworkValue(Map<String, dynamic> item) =>
+      item['image'] ??
+      item['imageUrl'] ??
+      item['image_url'] ??
+      item['thumbnail'];
+
+  Object? Function(int) _aniZipEpisodeArtworkLookup(
+    Map<String, dynamic> episodes,
   ) {
-    if (number <= 0) return <String, dynamic>{};
-    final episodes = _map(payload['episodes']);
-    final direct = _map(episodes['$number']);
-    if (direct.isNotEmpty) return direct;
-    for (final raw in episodes.values) {
-      final item = _map(raw);
-      final absolute = _positiveInt(
-        item['absoluteEpisodeNumber'] ?? item['absolute_episode_number'],
-      );
-      if (absolute == number) return item;
-    }
-    return <String, dynamic>{};
+    Map<int, Object?>? byAbsolute;
+    Iterator<dynamic>? remaining;
+
+    return (number) {
+      if (number <= 0) return null;
+      final direct = _map(episodes['$number']);
+      // A nonempty exact key wins even if it has no usable artwork.
+      if (direct.isNotEmpty) return _aniZipArtworkValue(direct);
+
+      // All-hit payloads never allocate the index or scan absolute numbers.
+      // Resume a scan only as far as a miss needs, keeping the first entry
+      // for each number (including a first entry with no image).
+      if (byAbsolute == null) {
+        byAbsolute = <int, Object?>{};
+        remaining = episodes.values.iterator;
+      }
+      final index = byAbsolute!;
+      if (index.containsKey(number)) return index[number];
+
+      final entries = remaining;
+      if (entries == null) return null;
+      while (entries.moveNext()) {
+        final item = _map(entries.current);
+        final absolute = _positiveInt(
+          item['absoluteEpisodeNumber'] ?? item['absolute_episode_number'],
+        );
+        if (absolute <= 0 || index.containsKey(absolute)) continue;
+        final image = index[absolute] = _aniZipArtworkValue(item);
+        if (absolute == number) return image;
+      }
+      remaining = null;
+      return null;
+    };
   }
 
   List<Episode> _animeWitcherEpisodeMetadata(
@@ -5618,18 +5644,17 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         _aniZipUrl + '?mal_id=' + Uri.encodeQueryComponent('$malId'),
         timeout: _aniZipTimeout,
       );
-      if (payload == null || _map(payload['episodes']).isEmpty) {
+      if (payload == null) {
         return _animeWitcherEpisodeMetadata(route, resolvedRecords);
       }
+      final episodes = _map(payload['episodes']);
+      if (episodes.isEmpty) {
+        return _animeWitcherEpisodeMetadata(route, resolvedRecords);
+      }
+      final artworkFor = _aniZipEpisodeArtworkLookup(episodes);
       final output = <Episode>[];
       for (final record in resolvedRecords) {
-        final aniZip = _aniZipEpisodeFor(payload, record.number);
-        final image = _text(
-          aniZip['image'] ??
-              aniZip['imageUrl'] ??
-              aniZip['image_url'] ??
-              aniZip['thumbnail'],
-        );
+        final image = _text(artworkFor(record.number));
         output.add(
           Episode(
             name: record.title,

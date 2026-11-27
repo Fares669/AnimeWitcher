@@ -60,6 +60,39 @@ Future<void> _setAnime4k(BuildContext context, WidgetRef ref, bool on) async {
   }
 }
 
+/// The same ordered, localized groups for the full Settings list and the
+/// desktop More sidebar, without building the rows to get their titles.
+enum SettingsSection {
+  general,
+  player,
+  reader,
+  downloads,
+  images,
+  appData,
+  about;
+
+  String title(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    return switch (this) {
+      SettingsSection.general => l10n.general,
+      SettingsSection.player => l10n.player,
+      SettingsSection.reader => appText(
+        context,
+        english: 'Reader',
+        arabic: 'القارئ',
+      ),
+      SettingsSection.downloads => l10n.downloads,
+      SettingsSection.images => appText(
+        context,
+        english: 'Images',
+        arabic: 'الصور',
+      ),
+      SettingsSection.appData => l10n.appData,
+      SettingsSection.about => l10n.about,
+    };
+  }
+}
+
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
@@ -77,7 +110,7 @@ class SettingsScreen extends ConsumerWidget {
   }
 
   Widget _buildSettingsList(BuildContext context, WidgetRef ref, bool isTv) {
-    // The sections watch what they need themselves.
+    // Preserve the full Settings list on the standalone route.
     return Center(
       child: ConstrainedBox(
         // Settings rows are single-column text; letting them stretch across a
@@ -102,42 +135,30 @@ class SettingsScreen extends ConsumerWidget {
   /// instead, rather than a link to them.
   static const readerGroupKey = ValueKey<String>('settings-reader-group');
 
-  /// Every group on this screen, in order, for a shell that lists them
-  /// separately. Public so the More sidebar can offer each one by name.
-  List<Widget> settingsSections(
+  /// Build only the selected group for a pane in More.
+  static Widget buildSection(
     BuildContext context,
-    WidgetRef ref, {
-    bool isTv = false,
-  }) => _settingsSections(context, ref, isTv);
+    WidgetRef ref,
+    SettingsSection section,
+  ) => const SettingsScreen()
+      ._settingsSections(context, ref, false, section: section)
+      .single;
 
-  /// Every group on this screen, in order.
-  ///
-  /// The handset reads them as one long page; a window wide enough for two
-  /// panes shows the chosen one beside a list of their names, which is the
-  /// difference between scrolling past five sections to reach the sixth and
-  /// going straight to it.
   List<Widget> _settingsSections(
     BuildContext context,
     WidgetRef ref,
-    bool isTv,
-  ) {
-    final versionAsync = ref.watch(appVersionProvider);
-    final generalSettings = ref.watch(generalSettingsProvider);
-    final animeDataSettings = ref.watch(animeDataSourceSettingsProvider);
-    final activeCatalog = ref.watch(activeProviderProvider);
-    final installedProviders = ref.watch(extensionManagerProvider);
-    final latestEpisodes = ref.watch(latestEpisodesSettingsProvider);
-
-    final playerSettings =
-        ref.watch(playerSettingsProvider).asData?.value ??
-        const PlayerSettings();
-
+    bool isTv, {
+    SettingsSection? section,
+  }) {
     final l10n = AppLocalizations.of(context)!;
 
-    return <Widget>[
-      const SizedBox(height: LayoutConstants.spacingXs),
-      SettingsGroup(
-        title: l10n.general,
+    SettingsGroup general() {
+      final generalSettings = ref.watch(generalSettingsProvider);
+      final activeCatalog = ref.watch(activeProviderProvider);
+      final installedProviders = ref.watch(extensionManagerProvider);
+      final latestEpisodes = ref.watch(latestEpisodesSettingsProvider);
+      return SettingsGroup(
+        title: SettingsSection.general.title(context),
         children: [
           SettingsTile(
             icon: Icons.dark_mode_rounded,
@@ -339,10 +360,15 @@ class SettingsScreen extends ConsumerWidget {
               isLast: true,
             ),
         ],
-      ),
-      const SizedBox(height: LayoutConstants.spacingLg),
-      SettingsGroup(
-        title: l10n.player,
+      );
+    }
+
+    SettingsGroup player() {
+      final playerSettings =
+          ref.watch(playerSettingsProvider).asData?.value ??
+          const PlayerSettings();
+      return SettingsGroup(
+        title: SettingsSection.player.title(context),
         children: [
           SettingsTile(
             icon: Icons.smart_display_rounded,
@@ -588,11 +614,13 @@ class SettingsScreen extends ConsumerWidget {
             onTap: () => showPlayerControlsDialog(context, ref),
           ),
         ],
-      ),
-      const SizedBox(height: LayoutConstants.spacingLg),
-      SettingsGroup(
+      );
+    }
+
+    SettingsGroup reader() {
+      return SettingsGroup(
         key: SettingsScreen.readerGroupKey,
-        title: appText(context, english: 'Reader', arabic: 'القارئ'),
+        title: SettingsSection.reader.title(context),
         children: [
           SettingsTile(
             icon: Icons.chrome_reader_mode_rounded,
@@ -614,11 +642,13 @@ class SettingsScreen extends ConsumerWidget {
             ),
           ),
         ],
-      ),
-      const SizedBox(height: LayoutConstants.spacingLg),
+      );
+    }
 
-      SettingsGroup(
-        title: l10n.downloads,
+    SettingsGroup downloads() {
+      final generalSettings = ref.watch(generalSettingsProvider);
+      return SettingsGroup(
+        title: SettingsSection.downloads.title(context),
         children: [
           SettingsTile(
             icon: Icons.low_priority_rounded,
@@ -671,10 +701,13 @@ class SettingsScreen extends ConsumerWidget {
             ),
           ),
         ],
-      ),
-      const SizedBox(height: LayoutConstants.spacingLg),
-      SettingsGroup(
-        title: appText(context, english: 'Images', arabic: 'الصور'),
+      );
+    }
+
+    SettingsGroup images() {
+      final animeDataSettings = ref.watch(animeDataSourceSettingsProvider);
+      return SettingsGroup(
+        title: SettingsSection.images.title(context),
         children: [
           SettingsTile(
             icon: Icons.image_rounded,
@@ -750,10 +783,12 @@ class SettingsScreen extends ConsumerWidget {
                 .setArtworkFallback(!animeDataSettings.artworkFallback),
           ),
         ],
-      ),
-      const SizedBox(height: LayoutConstants.spacingLg),
-      SettingsGroup(
-        title: l10n.appData,
+      );
+    }
+
+    SettingsGroup appData() {
+      return SettingsGroup(
+        title: SettingsSection.appData.title(context),
         children: [
           if (!kIsWeb)
             _ClearCacheTile(onTap: () => showClearCacheDialog(context, ref)),
@@ -765,10 +800,13 @@ class SettingsScreen extends ConsumerWidget {
             onTap: () => showFactoryResetDialog(context, ref),
           ),
         ],
-      ),
-      const SizedBox(height: LayoutConstants.spacingLg),
-      SettingsGroup(
-        title: l10n.about,
+      );
+    }
+
+    SettingsGroup about() {
+      final versionAsync = ref.watch(appVersionProvider);
+      return SettingsGroup(
+        title: SettingsSection.about.title(context),
         children: [
           SettingsTile(
             icon: Icons.language_rounded,
@@ -836,7 +874,27 @@ class SettingsScreen extends ConsumerWidget {
             isLast: true,
           ),
         ],
-      ),
+      );
+    }
+
+    SettingsGroup buildGroup(SettingsSection value) => switch (value) {
+      SettingsSection.general => general(),
+      SettingsSection.player => player(),
+      SettingsSection.reader => reader(),
+      SettingsSection.downloads => downloads(),
+      SettingsSection.images => images(),
+      SettingsSection.appData => appData(),
+      SettingsSection.about => about(),
+    };
+
+    if (section != null) return [buildGroup(section)];
+    return <Widget>[
+      const SizedBox(height: LayoutConstants.spacingXs),
+      for (final value in SettingsSection.values) ...[
+        if (value != SettingsSection.general)
+          const SizedBox(height: LayoutConstants.spacingLg),
+        buildGroup(value),
+      ],
     ];
   }
 }

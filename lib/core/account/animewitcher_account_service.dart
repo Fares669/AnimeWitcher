@@ -2877,6 +2877,12 @@ class AnimeWitcherAccountService {
     } else {
       await _flushPendingLibraryDeletes(profile);
     }
+    if (_storage.canSkipPendingLibraryUpload(
+      accountUid: profile.uid,
+      manga: manga,
+    )) {
+      return;
+    }
     for (final item in _storage.getLibraryItems()) {
       if (!_isCurrentProfile(profile)) return;
       if ((item.contentType == MultimediaContentType.manga) != manga) continue;

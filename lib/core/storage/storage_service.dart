@@ -62,7 +62,8 @@ class StorageService {
     return worker.run(operation, <Object?>[kDownloadMetadataBox, ...arguments]);
   }
 
-  late Box<dynamic> _libraryBox;
+  Box<dynamic>? _openedLibraryBox;
+  Box<dynamic> get _libraryBox => _openedLibraryBox!;
   late Box<dynamic> _settingsBox;
   late Box<dynamic> _extensionsBox;
   late Box<dynamic> _historyBox;
@@ -78,7 +79,7 @@ class StorageService {
     final supportDir = await getApplicationSupportDirectory();
     Hive.init(supportDir.path);
 
-    _libraryBox = await _safeOpenBox(kLibraryBox);
+    _openedLibraryBox = await _safeOpenBox(kLibraryBox);
     _settingsBox = await _safeOpenBox(kSettingsBox);
     _extensionsBox = await _safeOpenBox(kExtensionsBox);
     await _downloadMetadata('hive.safeOpen', []);
@@ -495,6 +496,59 @@ class StorageService {
       title: (row['title'] as String?) ?? '',
       updatedAt: (row['updatedAt'] as num?)?.toInt() ?? 0,
     ), _storedLibraryContentType(row));
+  }
+
+  /// A cheap, conservative answer for a background upload after its deletes
+  /// have settled. If any row may be dirty, keep the normal sorted snapshot
+  /// and its fresh per-item checks after each asynchronous upload.
+  bool canSkipPendingLibraryUpload({
+    required String accountUid,
+    required bool manga,
+  }) {
+    final box = _openedLibraryBox;
+    if (box == null) return false;
+    for (final row in box.values) {
+      if (row is! Map) continue;
+      final type = row['type'] ?? row['contentType'];
+      final updatedAt = row['updatedAt'];
+      final url = row['url'];
+      // Leave exceptional or ambiguous legacy projection data to the original
+      // path. We only need to rule out every possible candidate, not to choose
+      // which duplicate would win the normal projection.
+      if (url is! String? ||
+          row['title'] is! String? ||
+          row['posterUrl'] is! String? ||
+          row['bannerUrl'] is! String? ||
+          row['description'] is! String? ||
+          row['catalogType'] is! String? ||
+          row['provider'] is! String? ||
+          row['year'] is! int? ||
+          updatedAt is! int? ||
+          type is! String?) {
+        return false;
+      }
+      if (url != null) {
+        try {
+          // The normal projection and its metadata lookups must see the same
+          // first row. Leave noncanonical aliases to that exact path.
+          if (_canonicalMediaUrl(url) != url) return false;
+        } on FormatException {
+          return false;
+        }
+      }
+      final owner = row['animeWitcherSyncedUid'];
+      if (owner is String && owner.isNotEmpty && owner.trim() == owner) {
+        if (owner != accountUid) continue;
+        final syncedAt = row['animeWitcherSyncedAt'];
+        if (updatedAt is int && syncedAt is int && updatedAt <= syncedAt) {
+          continue;
+        }
+      }
+      final isManga =
+          MultimediaItem.parseContentType(type) == MultimediaContentType.manga;
+      if (isManga == manga) return false;
+    }
+    return true;
   }
 
   List<MultimediaItem> getLibraryItems({String? category}) => [

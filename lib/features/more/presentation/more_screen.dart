@@ -29,38 +29,22 @@ import 'more_sidebar_shell.dart';
 class MoreScreen extends ConsumerWidget {
   const MoreScreen({super.key});
 
-  /// One sidebar row per settings group, drawn from the settings screen
-  /// itself so the two cannot list different things.
-  List<MoreDestination> _settingsDestinations(
-    BuildContext context,
-    WidgetRef ref,
-  ) {
-    const icons = <IconData>[
-      Icons.tune_rounded,
-      Icons.play_circle_outline_rounded,
-      // The reader group, which arrived after this list was written and
-      // shifted every icon below it one row down.
-      Icons.chrome_reader_mode_rounded,
-      Icons.download_rounded,
-      Icons.image_outlined,
-      Icons.storage_rounded,
-      Icons.info_outline_rounded,
-    ];
-
-    final groups = const SettingsScreen()
-        .settingsSections(context, ref)
-        .whereType<SettingsGroup>()
-        .toList(growable: false);
-
-    return <MoreDestination>[
-      for (var i = 0; i < groups.length; i++)
-        MoreDestination(
-          icon: i < icons.length ? icons[i] : Icons.settings_rounded,
-          label: groups[i].title,
-          builder: (_) => _SettingsGroupPane(index: i),
-        ),
-    ];
-  }
+  List<MoreDestination> _settingsDestinations(BuildContext context) => [
+    for (final section in SettingsSection.values)
+      MoreDestination(
+        icon: switch (section) {
+          SettingsSection.general => Icons.tune_rounded,
+          SettingsSection.player => Icons.play_circle_outline_rounded,
+          SettingsSection.reader => Icons.chrome_reader_mode_rounded,
+          SettingsSection.downloads => Icons.download_rounded,
+          SettingsSection.images => Icons.image_outlined,
+          SettingsSection.appData => Icons.storage_rounded,
+          SettingsSection.about => Icons.info_outline_rounded,
+        },
+        label: section.title(context),
+        builder: (_) => _SettingsGroupPane(section: section),
+      ),
+  ];
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -164,7 +148,7 @@ class MoreScreen extends ConsumerWidget {
               // it is for.
               MoreDestinationGroup(
                 heading: moreHeadingApp(context),
-                items: _settingsDestinations(context, ref),
+                items: _settingsDestinations(context),
               ),
               MoreDestinationGroup(
                 heading: 'Witanime',
@@ -464,18 +448,12 @@ class _ReaderGroupInline extends StatelessWidget {
 }
 
 class _SettingsGroupPane extends ConsumerWidget {
-  const _SettingsGroupPane({required this.index});
+  const _SettingsGroupPane({required this.section});
 
-  final int index;
+  final SettingsSection section;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final groups = const SettingsScreen()
-        .settingsSections(context, ref)
-        .whereType<SettingsGroup>()
-        .toList(growable: false);
-    if (index >= groups.length) return const SizedBox.shrink();
-
     // Settings rows are a label at one end and its value at the other. Left
     // to fill a 1600-point pane they put the two on opposite sides of the
     // desk, so they keep to the shared reading measure.
@@ -491,15 +469,15 @@ class _SettingsGroupPane extends ConsumerWidget {
           MediaQuery.viewPaddingOf(context).bottom + 96,
         ),
         children: [
-          if (groups[index].key == SettingsScreen.readerGroupKey)
-            _ReaderGroupInline(title: groups[index].title)
+          if (section == SettingsSection.reader)
+            _ReaderGroupInline(title: section.title(context))
           else
-            groups[index],
+            SettingsScreen.buildSection(context, ref, section),
         ],
       ),
     );
 
-    final previews = _previewsFor(context, ref, index);
+    final previews = _previewsFor(context, ref);
     return LayoutBuilder(
       builder: (context, constraints) {
         // The preview sits beside the settings only where both fit; a
@@ -534,11 +512,11 @@ class _SettingsGroupPane extends ConsumerWidget {
   /// they move as the rows beside them are changed: home and an anime page
   /// for the general group. The player is pictured in the first-launch setup
   /// only; its group, like the others, keeps the full width here.
-  List<Widget> _previewsFor(BuildContext context, WidgetRef ref, int index) {
+  List<Widget> _previewsFor(BuildContext context, WidgetRef ref) {
     final caption = 'معاينة مباشرة';
-    final theme = ref.watch(appThemeStyleProvider);
-    switch (index) {
-      case 0:
+    switch (section) {
+      case SettingsSection.general:
+        final theme = ref.watch(appThemeStyleProvider);
         final layout = effectiveAppLayout(
           stored: ref.watch(appLayoutStyleProvider),
           isDesktopPlatform: appLayoutsAvailable(context),

@@ -104,6 +104,8 @@ class _GlobalStatisticsScreenState extends ConsumerState<GlobalStatisticsScreen>
                           ),
                           ranking: ranking,
                           loadPage: _loadPage,
+                          tabs: _tabController,
+                          tabIndex: index,
                         );
                       },
                     ),
@@ -122,11 +124,15 @@ class _RankingPage extends StatefulWidget {
     super.key,
     required this.ranking,
     required this.loadPage,
+    required this.tabs,
+    required this.tabIndex,
   });
 
   final AnimeWitcherGlobalRanking ranking;
 
   final _RankingPageLoader loadPage;
+  final TabController tabs;
+  final int tabIndex;
 
   @override
   State<_RankingPage> createState() => _RankingPageState();
@@ -136,9 +142,11 @@ class _RankingPageState extends State<_RankingPage>
     with AutomaticKeepAliveClientMixin<_RankingPage> {
   static const int _pageSize = animeWitcherRankingPageSize;
   static const double _loadMoreThreshold = 900;
+  static const int _appendIndexMinItems = _pageSize * 4;
 
   final ScrollController _scrollController = ScrollController();
   final List<MultimediaItem> _items = <MultimediaItem>[];
+  Set<String>? _appendKeys;
   int _nextOffset = 0;
   bool _hasMore = true;
   bool _initialLoading = true;
@@ -153,11 +161,13 @@ class _RankingPageState extends State<_RankingPage>
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
+    widget.tabs.addListener(_dropUnselectedIndex);
     _loadInitial();
   }
 
   @override
   void dispose() {
+    widget.tabs.removeListener(_dropUnselectedIndex);
     _scrollController
       ..removeListener(_onScroll)
       ..dispose();
@@ -170,17 +180,45 @@ class _RankingPageState extends State<_RankingPage>
     return '${item.id}|${item.title}';
   }
 
+  void _dropUnselectedIndex() {
+    if (widget.tabs.index != widget.tabIndex) _appendKeys = null;
+  }
+
   void _replaceItems(List<MultimediaItem> incoming) {
+    _appendKeys = null;
     _items
       ..clear()
       ..addAll(incoming);
   }
 
-  void _appendItems(List<MultimediaItem> incoming) {
-    final existing = _items.map(_itemKey).toSet();
-    for (final item in incoming) {
-      if (existing.add(_itemKey(item))) _items.add(item);
+  void _appendItems(List<MultimediaItem> incoming, {required bool hasMore}) {
+    final saved = _appendKeys;
+    _appendKeys = null;
+    final existing = saved ?? <String>{};
+    // The index is worth retaining only for deeper scrolling on the current
+    // tab. Keep the first page intact and drop the index at a fresh page zero,
+    // on leaving the tab, or when no more pages can reuse it.
+    var retain =
+        hasMore &&
+        widget.tabs.index == widget.tabIndex &&
+        _items.length + incoming.length >= _appendIndexMinItems;
+    if (saved == null) {
+      for (final item in _items) {
+        existing.add(_itemKey(item));
+        // Providers can override getters on subclasses. Keep re-reading those
+        // keys on later appends, exactly as the uncached path did.
+        retain = retain && item.runtimeType == MultimediaItem;
+      }
     }
+    for (final item in incoming) {
+      if (existing.add(_itemKey(item))) {
+        _items.add(item);
+        retain = retain && item.runtimeType == MultimediaItem;
+      }
+    }
+    _appendKeys = retain && _items.length >= _appendIndexMinItems
+        ? existing
+        : null;
   }
 
   Future<void> _loadInitial() async {
@@ -231,10 +269,11 @@ class _RankingPageState extends State<_RankingPage>
       final nextOffset = page.nextOffset > requestedOffset
           ? page.nextOffset
           : requestedOffset + _pageSize;
+      final hasMore = page.hasMore && page.nextOffset > requestedOffset;
       setState(() {
-        _appendItems(page.items);
+        _appendItems(page.items, hasMore: hasMore);
         _nextOffset = nextOffset;
-        _hasMore = page.hasMore && page.nextOffset > requestedOffset;
+        _hasMore = hasMore;
         _loadingMore = false;
       });
       _maybeFillViewport();
