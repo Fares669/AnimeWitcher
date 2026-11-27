@@ -291,6 +291,10 @@ final class DownloadManagerV2 {
 
     final records = await _store.all()
       ..sort((a, b) => a.updatedAtMillis.compareTo(b.updatedAtMillis));
+    final obsoleteGenerations = _indexObsoleteRecoveredGenerations(
+      records,
+      byTaskId.keys,
+    );
     final startupDestinationOwners = <String, DownloadLogicalId>{};
     final startupDestinationKeys = <DownloadLogicalId, String>{};
     final indexingErrors = <DownloadLogicalId, Object>{};
@@ -345,29 +349,20 @@ final class DownloadManagerV2 {
       }
 
       try {
-        final olderParents = <int, String>{};
-        for (final recovered in rehydrated) {
-          final identity = parseDownloadTaskIdentityV2(recovered.taskId);
-          if (identity == null ||
-              identity.logicalId != record.logicalId ||
-              identity.generation >= record.generation)
-            continue;
-          olderParents[identity.generation] = taskIdForGeneration(
-            identity.logicalId,
-            identity.generation,
-          );
-        }
-        for (final generation in olderParents.keys.toList()..sort()) {
-          final id = olderParents[generation]!;
-          startupOwnership = await _exactHandle(id);
-          if (startupOwnership == null) continue;
-          await _settleObsoleteHandle(
-            startupOwnership,
-            cancelEvenIfFinal: false,
-          );
-          await _gateway.removeTracking(id);
-          _forgetHandle(id);
-          startupOwnership = null;
+        final older = obsoleteGenerations.remove(record.logicalId);
+        if (older != null) {
+          for (final generation in older.toList()..sort()) {
+            final id = taskIdForGeneration(record.logicalId, generation);
+            startupOwnership = await _exactHandle(id);
+            if (startupOwnership == null) continue;
+            await _settleObsoleteHandle(
+              startupOwnership,
+              cancelEvenIfFinal: false,
+            );
+            await _gateway.removeTracking(id);
+            _forgetHandle(id);
+            startupOwnership = null;
+          }
         }
         if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
           await _pauseUnavailableProviderHandle(byTaskId[record.taskId]);
@@ -769,6 +764,32 @@ final class DownloadManagerV2 {
     }
     await _publishRecords();
     _scheduleAdmissionPromotion();
+  }
+
+  // Recovered task IDs are a startup snapshot. Index only obsolete
+  // generations (including chapter generations witnessed by page children),
+  // instead of parsing every recovered ID again for every stored record.
+  static Map<DownloadLogicalId, Set<int>> _indexObsoleteRecoveredGenerations(
+    List<LogicalDownloadRecordV2> records,
+    Iterable<String> recoveredTaskIds,
+  ) {
+    final cutoffs = <DownloadLogicalId, int>{
+      for (final record in records)
+        if (record.generation > 1) record.logicalId: record.generation,
+    };
+    final obsolete = <DownloadLogicalId, Set<int>>{};
+    if (cutoffs.isEmpty) return obsolete;
+    for (final taskId in recoveredTaskIds) {
+      final identity = parseDownloadTaskIdentityV2(taskId);
+      if (identity == null) continue;
+      final currentGeneration = cutoffs[identity.logicalId];
+      if (currentGeneration == null ||
+          identity.generation >= currentGeneration) {
+        continue;
+      }
+      (obsolete[identity.logicalId] ??= <int>{}).add(identity.generation);
+    }
+    return obsolete;
   }
 
   Future<void> _publishLocalReadiness() async {

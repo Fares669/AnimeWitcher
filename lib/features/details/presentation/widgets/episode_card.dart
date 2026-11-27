@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
@@ -17,8 +16,6 @@ import 'package:animewitcher/features/comments/presentation/anime3rb_comments_sc
 import 'package:animewitcher/features/comments/presentation/animewitcher_comments_screen.dart';
 import 'package:animewitcher/core/storage/history_repository.dart';
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
-import 'package:animewitcher/core/utils/download_progress_data.dart'
-    show DownloadProgressData;
 import 'package:animewitcher/core/utils/localized_text.dart';
 import 'package:animewitcher/core/utils/artwork_quality.dart';
 import 'package:animewitcher/core/utils/episode_label.dart';
@@ -35,6 +32,7 @@ import '../details_controller.dart';
 import '../download_launcher.dart';
 import '../downloaded_file_provider.dart';
 import 'episode_action_chip.dart';
+import 'episode_download_index.dart';
 import 'download_progress_dialog.dart';
 import 'download_management_dialog.dart';
 import 'witanime_report_dialog.dart';
@@ -219,26 +217,15 @@ class EpisodeCard extends HookConsumerWidget {
       }
     }
 
-    final downloads =
-        ref.watch(downloadsProvider).value ?? const <DownloadItem>[];
-    final completedDownload = completedEpisodeDownload(
-      downloads,
-      parentItem,
-      episode,
-    );
     final episodeTrackingUrl = episode.url.trim();
-    final activeDownload = downloads.firstWhereOrNull((item) {
-      final matchesEpisode =
-          item.trackingUrl.trim() == episodeTrackingUrl ||
-          (item.episode?.url.trim() ?? '') == episodeTrackingUrl;
-      if (!matchesEpisode ||
-          !sameDownloadProvider(item.item, parentItem) ||
-          item.item.url.trim() != parentItem.url.trim())
-        return false;
-      return item.status != TaskStatus.complete &&
-          item.status != TaskStatus.canceled;
-    });
-    final isDownloading = activeDownload != null;
+    final downloadIndex = episodeDownloadsForDetailsProvider(
+      episodeDownloadScope(parentItem),
+    );
+    final (:completed, :active) = ref.watch(
+      downloadIndex.select((index) => index.forEpisode(episodeTrackingUrl)),
+    );
+    final isDownloading = active != null;
+    final completedDownload = completed;
 
     final detailsState = ref.watch(
       detailsControllerProvider(detailsControllerKey(parentItem)),
@@ -248,22 +235,31 @@ class EpisodeCard extends HookConsumerWidget {
     final isSelectionMode = detailsState.selectedEpisodeKeys.isNotEmpty;
     final isSelected = detailsState.selectedEpisodeKeys.contains(selectionKey);
 
-    final progressMap = ref.watch(downloadProgressProvider);
-    final logicalId = activeDownload?.logicalId?.trim();
-    final downloadIdentity = logicalId != null && logicalId.isNotEmpty
-        ? logicalId
-        : episode.url;
-    final hasOwnedProgressIdentity =
-        (logicalId != null && logicalId.isNotEmpty) ||
-        progressMap[episode.url]?.taskId == activeDownload?.id;
-    final candidateProgress = logicalId != null && logicalId.isNotEmpty
-        ? progressMap[logicalId]
-        : null;
-    final downloadProgressData = candidateProgress?.taskId == activeDownload?.id
-        ? candidateProgress
-        : null;
-    final downloadProgress =
-        downloadProgressData?.progress ?? activeDownload?.progress ?? 0.0;
+    final logicalId = active?.logicalId?.trim();
+    final hasLogicalId = logicalId != null && logicalId.isNotEmpty;
+    final downloadIdentity = hasLogicalId ? logicalId : episode.url;
+    var hasOwnedProgressIdentity = hasLogicalId;
+    var downloadProgress = active?.progress ?? 0.0;
+    TaskStatus? downloadProgressStatus;
+    if (active != null) {
+      if (hasLogicalId) {
+        final (progress, status) = ref.watch(
+          downloadProgressProvider.select((items) {
+            final item = items[logicalId];
+            if (item == null || item.taskId != active.id) return (null, null);
+            return (item.progress, item.status);
+          }),
+        );
+        downloadProgress = progress ?? downloadProgress;
+        downloadProgressStatus = status;
+      } else {
+        hasOwnedProgressIdentity = ref.watch(
+          downloadProgressProvider.select(
+            (items) => items[episode.url]?.taskId == active.id,
+          ),
+        );
+      }
+    }
 
     final fileKey = downloadedFileKey(parentItem, episode: episode);
     // Each visible row resolves its file asynchronously. Watching the whole
@@ -563,7 +559,7 @@ class EpisodeCard extends HookConsumerWidget {
                         downloadedFile,
                         isDownloading,
                         downloadProgress,
-                        downloadProgressData,
+                        downloadProgressStatus,
                         downloadIdentity,
                         hasOwnedProgressIdentity,
                         details,
@@ -605,7 +601,7 @@ class EpisodeCard extends HookConsumerWidget {
     File? downloadedFile,
     bool isDownloading,
     double downloadProgress,
-    DownloadProgressData? downloadProgressData,
+    TaskStatus? downloadProgressStatus,
     String downloadIdentity,
     bool hasOwnedProgressIdentity,
     MultimediaItem? details,
@@ -619,7 +615,7 @@ class EpisodeCard extends HookConsumerWidget {
       downloadedFile,
       isDownloading,
       downloadProgress,
-      downloadProgressData,
+      downloadProgressStatus,
       downloadIdentity,
       hasOwnedProgressIdentity,
       details,
@@ -720,7 +716,7 @@ class EpisodeCard extends HookConsumerWidget {
     File? downloadedFile,
     bool isDownloading,
     double downloadProgress,
-    DownloadProgressData? downloadProgressData,
+    TaskStatus? downloadProgressStatus,
     String downloadIdentity,
     bool hasOwnedProgressIdentity,
     MultimediaItem? details,
@@ -773,7 +769,7 @@ class EpisodeCard extends HookConsumerWidget {
         },
         child: Padding(
           padding: const EdgeInsets.all(4.0),
-          child: downloadProgressData?.status == TaskStatus.paused
+          child: downloadProgressStatus == TaskStatus.paused
               ? Icon(
                   Icons.pause_rounded,
                   size: 16,

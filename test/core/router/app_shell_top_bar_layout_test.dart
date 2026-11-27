@@ -1,0 +1,394 @@
+import 'dart:async';
+
+import 'package:animewitcher/core/account/account_providers.dart';
+import 'package:animewitcher/core/account/animewitcher_account_models.dart';
+import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
+import 'package:animewitcher/core/extensions/base_provider.dart';
+import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
+import 'package:animewitcher/core/navigation/app_layout_style.dart';
+import 'package:animewitcher/core/navigation/taskbar_destination.dart';
+import 'package:animewitcher/core/providers/device_info_provider.dart';
+import 'package:animewitcher/core/router/app_router.dart';
+import 'package:animewitcher/core/storage/library_category.dart';
+import 'package:animewitcher/core/storage/settings_repository.dart';
+import 'package:animewitcher/core/storage/storage_service.dart';
+import 'package:animewitcher/features/home/presentation/home_provider.dart';
+import 'package:animewitcher/features/home/presentation/home_screen.dart';
+import 'package:animewitcher/features/home/presentation/home_state.dart';
+import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
+import 'package:animewitcher/features/library/presentation/downloads_screen.dart';
+import 'package:animewitcher/features/library/presentation/history_provider.dart';
+import 'package:animewitcher/features/library/presentation/library_media_kind.dart';
+import 'package:animewitcher/features/library/presentation/library_provider.dart';
+import 'package:animewitcher/features/library/presentation/library_screen.dart';
+import 'package:animewitcher/features/library/presentation/library_state.dart';
+import 'package:animewitcher/features/onboarding/first_run_setup_screen.dart';
+import 'package:animewitcher/features/search/data/mal_rankings.dart';
+import 'package:animewitcher/features/search/presentation/search_screen.dart';
+import 'package:animewitcher/features/settings/presentation/general_settings_provider.dart';
+import 'package:animewitcher/features/settings/presentation/settings_screen.dart';
+import 'package:animewitcher/l10n/generated/app_localizations.dart';
+import 'package:animewitcher/shared/widgets/app_navigation_bars.dart';
+import 'package:background_downloader/background_downloader.dart';
+import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
+// The app shell uses Flutter's MaterialApp and navigation widgets.
+// ignore: deprecated_member_use
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
+import 'package:visibility_detector/visibility_detector.dart';
+
+import '../../support/memory_storage_service.dart';
+
+MultimediaItem _item(String title) => MultimediaItem(
+  title: title,
+  url: 'https://example.test/series/${Uri.encodeComponent(title)}',
+  posterUrl: '',
+  contentType: MultimediaContentType.anime,
+);
+
+class _Home extends HomeData {
+  @override
+  HomeState build() => HomeSuccess({
+    for (var row = 0; row < 14; row++)
+      'Fixture catalogue rail $row': [
+        for (var i = 0; i < 12; i++) _item('Home card $row:$i'),
+      ],
+  });
+}
+
+class _Account extends AnimeWitcherAccountController {
+  @override
+  Future<AnimeWitcherAccountSnapshot> build() async =>
+      const AnimeWitcherAccountSnapshot();
+}
+
+class _Resume extends ContinueWatchingNotifier {
+  @override
+  List<HistoryItem> build() => const <HistoryItem>[];
+}
+
+class _History extends WatchHistory {
+  @override
+  List<HistoryItem> build() => const <HistoryItem>[];
+}
+
+class _Library extends Library {
+  int refreshes = 0;
+  final items = [for (var i = 0; i < 30; i++) _item('Library card $i')];
+
+  @override
+  LibraryState build() =>
+      LibrarySuccess(items, LibraryCategory.watching, LibraryMediaKind.anime);
+
+  @override
+  List<MultimediaItem> itemsForCategory(
+    LibraryMediaKind kind,
+    LibraryCategory category,
+  ) => kind == LibraryMediaKind.anime && category == LibraryCategory.watching
+      ? items
+      : const <MultimediaItem>[];
+
+  @override
+  Map<LibraryMediaKind, Map<LibraryCategory, int?>> categoryCounts({
+    required bool witanimeAnime,
+  }) => {
+    LibraryMediaKind.anime: {LibraryCategory.watching: items.length},
+  };
+
+  @override
+  Future<void> refreshVisibleFromServer({
+    LibraryCategory? category,
+    LibraryMediaKind? mediaKind,
+  }) async {
+    refreshes++;
+  }
+}
+
+class _Downloads extends DownloadsNotifier {
+  @override
+  Future<List<DownloadItem>> build() async => [
+    for (var i = 0; i < 12; i++)
+      DownloadItem(
+        task: DownloadTask(
+          taskId: 'fixture-$i',
+          url: 'https://example.test/file/$i',
+          filename: '$i.mp4',
+        ),
+        status: TaskStatus.running,
+        progress: 0.35,
+        item: _item('Download card $i'),
+        episode: Episode(
+          name: 'Episode 1',
+          url: 'https://example.test/series/$i/1',
+          episode: 1,
+        ),
+        timestamp: i,
+      ),
+  ];
+}
+
+class _LayoutProbe extends SingleChildRenderObjectWidget {
+  const _LayoutProbe({
+    required super.key,
+    required this.onLayout,
+    required super.child,
+  });
+
+  final ValueChanged<BoxConstraints> onLayout;
+
+  @override
+  RenderProxyBox createRenderObject(BuildContext context) =>
+      _RenderLayoutProbe(onLayout);
+}
+
+class _RenderLayoutProbe extends RenderProxyBox {
+  _RenderLayoutProbe(this.onLayout);
+  final ValueChanged<BoxConstraints> onLayout;
+
+  @override
+  void performLayout() {
+    onLayout(constraints);
+    super.performLayout();
+  }
+}
+
+// The real Home carousel can keep requesting frames. Give each navigation
+// transition the same number of frames instead of waiting for a quiet app.
+Future<void> _pumpNavigation(WidgetTester tester) async {
+  await tester.pump();
+  for (var frame = 0; frame < 4; frame++) {
+    await tester.pump(const Duration(milliseconds: 64));
+  }
+}
+
+const _measurementSwitches = 12;
+
+void main() {
+  for (final (layout, tablet) in <(AppLayoutStyle, bool)>[
+    (AppLayoutStyle.topBar, false),
+    (AppLayoutStyle.topBar, true),
+    (AppLayoutStyle.sideRail, false),
+    (AppLayoutStyle.dock, false),
+  ]) {
+    testWidgets('${layout.name}, ${tablet ? 'tablet notch' : 'desktop'} keeps '
+        'warm branch viewports and offstage state on tab switches', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = tablet
+          ? TargetPlatform.android
+          : TargetPlatform.linux;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      tester.view.physicalSize = const Size(1280, 860);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
+      final visibility = VisibilityDetectorController.instance;
+      final originalInterval = visibility.updateInterval;
+      visibility.updateInterval = Duration.zero;
+      addTearDown(() => visibility.updateInterval = originalInterval);
+
+      final storage = MemoryStorageService()
+        ..settings[FirstRunSetup.storageKey] = 'done'
+        ..settings[AppLayoutStyleNotifier.storageKey] = layout.name;
+      final dio = Dio()
+        ..interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) => handler.reject(
+              DioException(
+                requestOptions: options,
+                error: StateError(
+                  'No catalogue transport in the shell fixture',
+                ),
+              ),
+            ),
+          ),
+        );
+      final catalogue = AnimeWitcherNativeProvider(
+        dio,
+        SettingsRepository(storage),
+      );
+      final library = _Library();
+      final layouts = <(String, BoxConstraints)>[];
+      final pages = <String, Widget>{
+        '/home': const HomeScreen(),
+        '/search': const SearchScreen(),
+        '/library': const LibraryScreen(),
+        '/downloads': const DownloadsScreen(),
+        '/settings': const SettingsScreen(),
+      };
+      final router = GoRouter(
+        initialLocation: '/home',
+        routes: [
+          StatefulShellRoute(
+            navigatorContainerBuilder:
+                ($appShellRouteData as StatefulShellRoute)
+                    .navigatorContainerBuilder,
+            builder: const AppShellRouteData().builder,
+            branches: [
+              for (final MapEntry(:key, :value) in pages.entries)
+                StatefulShellBranch(
+                  routes: [
+                    GoRoute(
+                      path: key,
+                      pageBuilder: (_, state) => NoTransitionPage<void>(
+                        key: state.pageKey,
+                        child: _LayoutProbe(
+                          key: ValueKey(key),
+                          onLayout: (constraints) =>
+                              layouts.add((key, constraints)),
+                          child: value,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+          GoRoute(
+            path: '/fixture-details',
+            pageBuilder: (_, state) => const NoTransitionPage<void>(
+              child: SizedBox.expand(key: ValueKey('full-page-route')),
+            ),
+          ),
+        ],
+      );
+      addTearDown(router.dispose);
+
+      const notch = 28.0;
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            storageServiceProvider.overrideWithValue(storage),
+            generalSettingsProvider.overrideWithBuild(
+              (_, _) => const GeneralSettings(),
+            ),
+            deviceProfileProvider.overrideWith(
+              (_) async => const DeviceProfile(),
+            ),
+            animeWitcherAccountControllerProvider.overrideWith(_Account.new),
+            activeProviderProvider.overrideWithValue(catalogue),
+            extensionManagerProvider.overrideWithValue([catalogue]),
+            homeDataProvider.overrideWith(_Home.new),
+            continueWatchingProvider.overrideWith(_Resume.new),
+            watchHistoryProvider.overrideWith(_History.new),
+            libraryProvider.overrideWith(() => library),
+            downloadsProvider.overrideWith(_Downloads.new),
+            homeMalRankingPageProvider.overrideWith(
+              (_, _) async => const ProviderMediaPage(
+                items: [],
+                nextOffset: 0,
+                hasMore: false,
+              ),
+            ),
+          ],
+          child: MaterialApp.router(
+            routerConfig: router,
+            locale: const Locale('en'),
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            builder: (context, child) {
+              const insets = EdgeInsets.only(top: notch);
+              return MediaQuery(
+                data: MediaQuery.of(context).copyWith(
+                  padding: tablet ? insets : EdgeInsets.zero,
+                  viewPadding: tablet ? insets : EdgeInsets.zero,
+                  disableAnimations: true,
+                ),
+                child: child!,
+              );
+            },
+          ),
+        ),
+      );
+      await _pumpNavigation(tester);
+
+      final inset = layout == AppLayoutStyle.topBar
+          ? AppTopBar.height + (tablet ? notch : 0)
+          : 0;
+      void expectPane(String path) {
+        final pane = find.byKey(ValueKey(path)).hitTestable();
+        expect(pane, findsOneWidget);
+        final y = path == '/home' ? 0.0 : inset.toDouble();
+        expect(tester.getTopLeft(pane).dy, y);
+        if (path != '/home') {
+          expect(tester.getSize(pane).height, 860 - y);
+        }
+      }
+
+      expectPane('/home');
+      final home = tester.state(find.byType(HomeScreen));
+      final homeScroll = tester
+          .widget<CustomScrollView>(
+            find.descendant(
+              of: find.byType(HomeScreen),
+              matching: find.byType(CustomScrollView),
+            ),
+          )
+          .controller!;
+      homeScroll.jumpTo(250);
+      await _pumpNavigation(tester);
+
+      // Warm real app screens once. Branches not yet visited must remain lazy.
+      expect(find.byType(SearchScreen, skipOffstage: false), findsNothing);
+      for (final path in pages.keys.skip(1)) {
+        router.go(path);
+        await _pumpNavigation(tester);
+        expectPane(path);
+      }
+      expect(library.refreshes, greaterThan(0));
+
+      router.go('/home');
+      await _pumpNavigation(tester);
+      expectPane('/home');
+      expect(tester.state(find.byType(HomeScreen)), same(home));
+      expect(homeScroll.offset, 250);
+      final libraryRefreshes = library.refreshes;
+      layouts.clear();
+      final layoutTags = <String, int>{};
+      for (var i = 0; i < _measurementSwitches; i++) {
+        final path = i.isEven ? '/search' : '/home';
+        final destination = i.isEven
+            ? TaskbarDestination.search
+            : TaskbarDestination.home;
+        final control = find.byIcon(destination.icon).hitTestable();
+        await tester.tap(control.first);
+        await _pumpNavigation(tester);
+        expectPane(path);
+      }
+      expect(library.refreshes, libraryRefreshes);
+      for (final (path, _) in layouts) {
+        layoutTags.update(path, (count) => count + 1, ifAbsent: () => 1);
+      }
+      // Changing the visible page must not change any warm branch viewport.
+      expect(layoutTags, isEmpty);
+      for (final path in pages.keys) {
+        final branch = find.byKey(ValueKey(path), skipOffstage: false);
+        expect(branch, findsOneWidget);
+        expect(
+          TickerMode.valuesOf(tester.element(branch)).enabled,
+          path == '/home',
+        );
+      }
+
+      // Non-shell details must cover the top bar; Back reveals the same
+      // scroll position and state, not a remounted Home.
+      unawaited(router.push<void>('/fixture-details'));
+      await _pumpNavigation(tester);
+      final details = find.byKey(const ValueKey('full-page-route'));
+      expect(tester.getTopLeft(details), Offset.zero);
+      expect(tester.getSize(details), const Size(1280, 860));
+      router.pop();
+      await _pumpNavigation(tester);
+      expect(tester.state(find.byType(HomeScreen)), same(home));
+      expect(homeScroll.offset, 250);
+      expectPane('/home');
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+}

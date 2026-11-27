@@ -6,9 +6,6 @@ library;
 import 'package:flutter/material.dart';
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
-import 'package:animewitcher/core/storage/episode_watch_repository.dart';
-
-import '../../../library/presentation/downloads_provider.dart';
 
 /// Which episodes the list shows.
 enum EpisodeListFilter { all, unwatched, downloaded }
@@ -90,30 +87,6 @@ final Listenable episodeBrowseListenable = Listenable.merge(<Listenable>[
   episodeRangeIndex,
   episodeListFilter,
 ]);
-
-/// [ordered] as the list shows it, reading watched and downloaded the way
-/// the episode cards do.
-List<Episode> browseEpisodesFor({
-  required MultimediaItem parentItem,
-  required List<Episode> ordered,
-  required List<List<Episode>> ranges,
-  required EpisodeWatchRepository watchRepository,
-  required List<DownloadItem> downloads,
-}) {
-  final filter = episodeListFilter.value;
-  final rangeIndex = episodeRangeIndex.value;
-  if (filter == EpisodeListFilter.all && rangeIndex == null) return ordered;
-  return browseEpisodes(
-    ordered: ordered,
-    rangeIndex: rangeIndex,
-    ranges: ranges,
-    filter: filter,
-    isWatched: (episode) =>
-        episodeIsWatchedFor(watchRepository, parentItem, episode),
-    isDownloaded: (episode) =>
-        completedEpisodeDownload(downloads, parentItem, episode) != null,
-  );
-}
 
 /// The block menu, when the series runs past one block, and the filter
 /// chips beside it.

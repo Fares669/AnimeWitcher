@@ -547,7 +547,8 @@ _pumpHome(
   final router = GoRouter(
     initialLocation: '/home',
     routes: [
-      StatefulShellRoute.indexedStack(
+      StatefulShellRoute(
+        navigatorContainerBuilder: AppScaffold.buildBranchContainer,
         builder: (context, state, shell) => AppScaffold(navigationShell: shell),
         branches: [
           StatefulShellBranch(

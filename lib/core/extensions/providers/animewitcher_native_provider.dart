@@ -310,6 +310,14 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     );
   }
 
+  // Browse/search hits are read-only. The JSON decoder already gives typed
+  // maps; don't clone them (and their nested fields) during projection.
+  // Keep [_map] for mutations and for non-JSON/platform map compatibility.
+  Map<String, dynamic> _readHitMap(dynamic raw) {
+    if (raw is Map<String, dynamic>) return raw;
+    return _map(raw);
+  }
+
   List<dynamic> _list(dynamic raw) {
     raw = _decodeData(raw);
     return raw is List ? raw : const <dynamic>[];
@@ -1474,51 +1482,56 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         normalized == 'فلر';
   }
 
+  static final _htmlTag = RegExp(r'<[^>]+>');
+
   String _decodeHtml(dynamic value) {
     final text = _unescape.convert(_text(value));
-    return text.replaceAll(RegExp(r'<[^>]+>'), '').trim();
+    return (text.contains('<') ? text.replaceAll(_htmlTag, '') : text).trim();
   }
 
   String _lastPathSegment(String value) {
-    final parts = value.split('/').where((part) => part.isNotEmpty).toList();
-    return parts.isEmpty ? '' : parts.last;
+    var end = value.length;
+    while (end > 0 && value.codeUnitAt(end - 1) == 47) {
+      end--;
+    }
+    if (end == 0) return '';
+    final start = value.lastIndexOf('/', end - 1) + 1;
+    return value.substring(start, end);
   }
 
   String _animeIdFromHit(Map<String, dynamic> source) {
-    final anime = _map(source['anime']);
-    final series = _map(source['series']);
+    final primary = _firstText(source, const <String>[
+      'anime_id',
+      'animeId',
+      'parent_anime_id',
+      'parentAnimeId',
+      'series_id',
+      'seriesId',
+    ]);
+    if (primary.isNotEmpty) return primary;
+
+    final anime = _firstText(_readHitMap(source['anime']), const <String>[
+      'anime_id',
+      'animeId',
+      'id',
+      'name',
+    ]);
+    if (anime.isNotEmpty) return anime;
+    final series = _firstText(_readHitMap(source['series']), const <String>[
+      'anime_id',
+      'id',
+      'name',
+    ]);
+    if (series.isNotEmpty) return series;
+
     final docRef = _text(source['doc_ref'] ?? source['docRef']);
-    final docId = docRef.isEmpty ? '' : _lastPathSegment(docRef);
-    final candidates = <dynamic>[
-      source['anime_id'],
-      source['animeId'],
-      source['parent_anime_id'],
-      source['parentAnimeId'],
-      source['series_id'],
-      source['seriesId'],
-      anime['anime_id'],
-      anime['animeId'],
-      anime['id'],
-      anime['name'],
-      series['anime_id'],
-      series['id'],
-      series['name'],
-      docId,
-      source['objectID'],
-      source['id'],
-      source['path'],
-    ];
-    for (final candidate in candidates) {
-      final value = _text(candidate);
-      if (value.isNotEmpty) return value;
-    }
-    return '';
+    final docId = _lastPathSegment(docRef).trim();
+    if (docId.isNotEmpty) return docId;
+    return _firstText(source, const <String>['objectID', 'id', 'path']);
   }
 
   String _makeAnimeUrl(Map<String, dynamic> hit) {
-    // Keep one stable URL for an anime regardless of which Algolia index it
-    // came from (recent episodes, search, season lists, etc.). Embedded hit
-    // payloads made the same anime look like different items throughout the app.
+    // Keep one stable URL for an anime regardless of its Algolia index.
     final animeId = _animeIdFromHit(hit);
     return '$_baseUrl/watch/${safeEncodeUriComponent(animeId)}';
   }
@@ -1571,36 +1584,58 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     List<dynamic> candidates, {
     List<dynamic> lastResort = const <dynamic>[],
   }) {
-    final urls = preferReachableArtwork(candidates.map(_text));
-    if (urls.isNotEmpty) return urls.first;
-    final fallback = preferReachableArtwork(lastResort.map(_text));
-    return fallback.isEmpty ? '' : fallback.first;
+    final preferAlternate = malArtworkUnreachable.value;
+    String first(Iterable<dynamic> alternatives) {
+      var firstMal = '';
+      for (final raw in alternatives) {
+        final url = _text(raw);
+        if (url.isEmpty) continue;
+        if (!preferAlternate || !isMalArtworkUrl(url)) return url;
+        if (firstMal.isEmpty) firstMal = url;
+      }
+      return firstMal;
+    }
+
+    final url = first(candidates);
+    return url.isEmpty ? first(lastResort) : url;
   }
 
-  String _highestQualityPosterFromHit(Map<String, dynamic> source) {
-    final poster = _map(source['poster']);
-    final candidates = <dynamic>[
-      for (final key in _largePosterKeys) poster[key],
-      _aniListPosterFromHit(source),
-      source['poster_uri'],
-      poster['medium'],
-    ];
-    return _pickArtwork(candidates, lastResort: <dynamic>[source['cover_uri']]);
+  String _highestQualityPosterFromHit(
+    Map<String, dynamic> source, {
+    Map<String, dynamic>? poster,
+  }) {
+    final fields = poster ?? _readHitMap(source['poster']);
+    return _pickArtwork(
+      <dynamic>[
+        for (final key in _largePosterKeys) fields[key],
+        _aniListPosterFromHit(source),
+        source['poster_uri'],
+        fields['medium'],
+      ],
+      lastResort: <dynamic>[source['cover_uri']],
+    );
   }
 
   String _posterFromHit(Map<String, dynamic> source) {
     if (_useHighQualityPosters) return _highestQualityPosterFromHit(source);
-    final poster = _map(source['poster']);
+    return _standardPosterFromHit(source, _readHitMap(source['poster']));
+  }
+
+  String _standardPosterFromHit(
+    Map<String, dynamic> source,
+    Map<String, dynamic> poster,
+  ) {
     // Catalog cards keep the lighter artwork when the setting is off.
-    // `poster_url_aniList` sits below `poster.large` so it cannot replace a
-    // stored large URL, and it never precedes `poster_uri`.
-    final candidates = <dynamic>[
-      source['poster_uri'],
-      poster['medium'],
-      poster['large'],
-      _aniListPosterFromHit(source),
-    ];
-    return _pickArtwork(candidates, lastResort: <dynamic>[source['cover_uri']]);
+    // AniList sits below poster.large and never precedes poster_uri.
+    return _pickArtwork(
+      <dynamic>[
+        source['poster_uri'],
+        poster['medium'],
+        poster['large'],
+        _aniListPosterFromHit(source),
+      ],
+      lastResort: <dynamic>[source['cover_uri']],
+    );
   }
 
   /// The wide cover art, and nothing else. [_coverFromHit] falls back to a
@@ -1611,10 +1646,10 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     // The hero draws this the full width of the window, so it asks the CDN
     // for the size the image was uploaded at rather than the thumbnail-sized
     // rendition the catalog's own URL requests.
-    return storyblokAtStoredWidth(
-      _pickArtwork(<dynamic>[source['cover_uri']]),
-      maxWidth: storyblokBannerWidth,
-    );
+    final cover = _text(source['cover_uri']);
+    return cover.isEmpty
+        ? cover
+        : storyblokAtStoredWidth(cover, maxWidth: storyblokBannerWidth);
   }
 
   String _coverFromHit(Map<String, dynamic> source) {
@@ -1635,14 +1670,20 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         value.contains('movie');
   }
 
-  String? _catalogTypeFromHit(Map<String, dynamic> source) {
-    final details = _map(source['details']);
+  String? _catalogTypeFromHit(
+    Map<String, dynamic> source, [
+    Map<String, dynamic>? hitDetails,
+  ]) {
+    final details = hitDetails ?? _readHitMap(source['details']);
     final raw = _text(source['type'] ?? details['type']);
     return raw.isEmpty ? null : raw;
   }
 
-  bool _isDubbedHit(Map<String, dynamic> source) {
-    final details = _map(source['details']);
+  bool _isDubbedHit(
+    Map<String, dynamic> source, [
+    Map<String, dynamic>? hitDetails,
+  ]) {
+    final details = hitDetails ?? _readHitMap(source['details']);
     final raw = source['dubbed'] ?? details['dubbed'];
     if (raw == true || raw == 1) return true;
     final value = _text(raw).toLowerCase();
@@ -1652,46 +1693,58 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         value.contains('dub');
   }
 
-  ShowStatus _statusFromHit(Map<String, dynamic> source) {
-    final details = _map(source['details']);
+  static final _finishedStatus = RegExp(
+    r'مكتمل|منتهي|finished|completed',
+    caseSensitive: false,
+  );
+  static final _upcomingStatus = RegExp(
+    r'قادم|لم يعرض|لم يتم عرضه|لم يتم بثه بعد|لم يبث|upcoming|not yet',
+    caseSensitive: false,
+  );
+
+  ShowStatus _statusFromHit(
+    Map<String, dynamic> source, [
+    Map<String, dynamic>? hitDetails,
+  ]) {
+    final details = hitDetails ?? _readHitMap(source['details']);
     final raw = _text(
       details['state'] ??
           details['status'] ??
           source['state'] ??
           source['status'],
     ).toLowerCase();
-    if (RegExp(
-      r'مكتمل|منتهي|finished|completed',
-      caseSensitive: false,
-    ).hasMatch(raw)) {
-      return ShowStatus.completed;
-    }
-    if (RegExp(
-      r'قادم|لم يعرض|لم يتم عرضه|لم يتم بثه بعد|لم يبث|upcoming|not yet',
-      caseSensitive: false,
-    ).hasMatch(raw)) {
-      return ShowStatus.upcoming;
-    }
+    if (_finishedStatus.hasMatch(raw)) return ShowStatus.completed;
+    if (_upcomingStatus.hasMatch(raw)) return ShowStatus.upcoming;
     return ShowStatus.ongoing;
   }
 
-  int? _yearFromHit(Map<String, dynamic> source) {
-    final details = _map(source['details']);
-    final match = RegExp(r'\b(19|20)\d{2}\b')
-        .firstMatch(_text(details['year'] ?? source['year']));
+  static final _catalogYear = RegExp(r'\b(19|20)\d{2}\b');
+  static final _catalogDigits = RegExp(r'\d+');
+
+  int? _yearFromHit(
+    Map<String, dynamic> source, [
+    Map<String, dynamic>? hitDetails,
+  ]) {
+    final details = hitDetails ?? _readHitMap(source['details']);
+    final match = _catalogYear.firstMatch(
+      _text(details['year'] ?? source['year']),
+    );
     return match == null ? null : int.tryParse(match.group(0)!);
   }
 
   List<String> _stringList(dynamic raw) {
-    return _list(raw)
-        .map<String>((value) => _text(value))
-        .where((value) => value.isNotEmpty)
-        .toSet()
-        .toList(growable: false);
+    final values = _list(raw);
+    if (values.isEmpty) return const <String>[];
+    final textValues = <String>{};
+    for (final value in values) {
+      final text = _text(value);
+      if (text.isNotEmpty) textValues.add(text);
+    }
+    return textValues.toList(growable: false);
   }
 
-  int _malId(Map<String, dynamic> source) {
-    final details = _map(source['details']);
+  int _malId(Map<String, dynamic> source, [Map<String, dynamic>? hitDetails]) {
+    final details = hitDetails ?? _readHitMap(source['details']);
     final raw =
         source['mal_id'] ??
         source['malId'] ??
@@ -1699,11 +1752,16 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         details['mal_id'] ??
         details['malId'] ??
         details['malID'];
-    final match = RegExp(r'\d+').firstMatch(_text(raw));
+    final match = _catalogDigits.firstMatch(_text(raw));
     return match == null ? 0 : (int.tryParse(match.group(0)!) ?? 0);
   }
 
-  MultimediaItem _mapHit(Map<String, dynamic> source, {bool recent = false}) {
+  MultimediaItem _mapHit(
+    Map<String, dynamic> source, {
+    bool recent = false,
+    String? url,
+    List<String>? tags,
+  }) {
     final title = _text(
       source['name'] ?? source['english_title'] ?? source['objectID'],
     );
@@ -1727,8 +1785,8 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     // a list reached the player and the artwork layer without a MyAnimeList
     // id to look anything up with.
     final hitSync = <String, String>{};
-    final hitDetails = _map(source['details']);
-    final hitRating = _map(source['rating']);
+    final hitDetails = _readHitMap(source['details']);
+    final hitRating = _readHitMap(source['rating']);
     void putHitSync(String key, dynamic raw) {
       final value = _text(raw);
       if (value.isNotEmpty) hitSync[key] = value;
@@ -1754,7 +1812,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     );
     putHitSync('awScore', hitRating['rate']);
 
-    final hitMalId = _malId(source);
+    final hitMalId = _malId(source, hitDetails);
     if (hitMalId > 0) {
       hitSync['malId'] = '$hitMalId';
       hitSync['mal_id'] = '$hitMalId';
@@ -1763,7 +1821,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     // from it has only a name to identify the anime by. The Arabic name is a
     // transliteration and matches poorly; the English one the catalog stores
     // alongside it is what other services actually know the anime as.
-    final hitEnglishTitle = _firstText(_map(source['details']), const <String>[
+    final hitEnglishTitle = _firstText(hitDetails, const <String>[
       'english_title',
       'englishTitle',
       'en_title',
@@ -1783,12 +1841,16 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       hitSync['anilist_id'] = hitAniListId;
     }
 
+    final poster = _readHitMap(source['poster']);
+    final fullPoster = _highestQualityPosterFromHit(source, poster: poster);
     return MultimediaItem(
       title: title.isEmpty ? 'AnimeWitcher' : title,
-      url: _makeAnimeUrl(source),
+      url: url ?? _makeAnimeUrl(source),
       syncData: hitSync.isEmpty ? null : hitSync,
-      posterUrl: _posterFromHit(source),
-      fullPosterUrl: _highestQualityPosterFromHit(source),
+      posterUrl: _useHighQualityPosters
+          ? fullPoster
+          : _standardPosterFromHit(source, poster),
+      fullPosterUrl: fullPoster,
       // The hero shows this wide, and a poster stretched to that shape is
       // both cropped to a sliver and blown up past its resolution. The
       // catalog's cover art is the banner-shaped image meant for it.
@@ -1798,16 +1860,16 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
           ? MultimediaContentType.movie
           : MultimediaContentType.anime,
       provider: packageName,
-      year: _yearFromHit(source),
-      status: _statusFromHit(source),
-      tags: _stringList(source['tags']),
+      year: _yearFromHit(source, hitDetails),
+      status: _statusFromHit(source, hitDetails),
+      tags: tags ?? _stringList(source['tags']),
       source: 'AnimeWitcher Native',
       episodeBadge: episodeBadge,
-      catalogType: _catalogTypeFromHit(source),
+      catalogType: _catalogTypeFromHit(source, hitDetails),
       publishedAt: recent
           ? _newsDate(source['date'] ?? source['created_at'])
           : null,
-      isDubbed: _isDubbedHit(source),
+      isDubbed: _isDubbedHit(source, hitDetails),
     );
   }
 
@@ -1985,19 +2047,30 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     bool recent = false,
     bool applyEcchiFilter = true,
   }) async {
-    final maps = hits.map(_map).where((hit) => hit.isNotEmpty).toList();
+    final Iterable<Map<String, dynamic>> maps;
     if (recent && _useHighQualityPosters) {
-      await _fillLargePosters(maps);
+      // Enrichment writes fresh poster fields. Don't mutate transport or
+      // cached rows that may be reused under another artwork setting.
+      final editable = hits.map(_map).where((hit) => hit.isNotEmpty).toList();
+      await _fillLargePosters(editable);
+      maps = editable;
+    } else {
+      maps = hits.map(_readHitMap);
     }
+    final hideEcchi = applyEcchiFilter && hidesEcchiInDiscovery;
     final seen = <String>{};
     final output = <MultimediaItem>[];
     for (final hit in maps) {
-      final item = _mapHit(hit, recent: recent);
-      if (item.title.trim().isEmpty || item.url.trim().isEmpty) continue;
-      if (!seen.add(item.url)) continue;
-      output.add(item);
+      if (hit.isEmpty) continue;
+      final url = _makeAnimeUrl(hit);
+      if (!seen.add(url)) continue;
+      // Keep the first row for each stable URL, even if it is filtered out.
+      // A later incomplete duplicate must not bypass the privacy preference.
+      final tags = _stringList(hit['tags']);
+      if (hideEcchi && _containsEcchiTag(tags)) continue;
+      output.add(_mapHit(hit, recent: recent, url: url, tags: tags));
     }
-    return applyEcchiFilter ? _filterEcchiItems(output) : output;
+    return applyEcchiFilter ? output.toList(growable: false) : output;
   }
 
   /// Applies the account-level content preference only to discovery results.
@@ -2011,9 +2084,13 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         .toList(growable: false);
   }
 
+  static final _catalogTagSeparator = RegExp(r'[,|/]+');
+  static final _arabicDiacritics = RegExp(r'[\u064B-\u065F\u0670]');
+  static final _tagWhitespace = RegExp(r'[\s_-]+');
+
   bool _containsEcchiTag(Iterable<String> tags) {
     for (final tag in tags) {
-      for (final part in tag.split(RegExp(r'[,|/]+'))) {
+      for (final part in tag.split(_catalogTagSeparator)) {
         if (_isEcchiTag(part)) return true;
       }
     }
@@ -2024,12 +2101,12 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     final normalized = value
         .trim()
         .toLowerCase()
-        .replaceAll(RegExp(r'[\u064B-\u065F\u0670]'), '')
+        .replaceAll(_arabicDiacritics, '')
         .replaceAll('إ', 'ا')
         .replaceAll('أ', 'ا')
         .replaceAll('آ', 'ا')
         .replaceAll('ى', 'ي')
-        .replaceAll(RegExp(r'[\s_-]+'), '');
+        .replaceAll(_tagWhitespace, '');
     return normalized == 'ecchi' || normalized == 'ايتشي';
   }
 

@@ -1,12 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ffi';
 import 'dart:io';
 import 'dart:math';
 import 'dart:ui' as ui;
 
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
@@ -1334,73 +1332,54 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
       sampleSize: tile.sampleSize,
       cropBorders: widget.cropBorders,
     );
-    ffiImageDecoder.decodeRegionAsync(params, cancelToken: tile).then((result) {
-      if (result == null) {
-        // No decoder to ask: free the tile so the next refresh asks again,
-        // rather than it waiting on a decode that never comes.
-        tile.loading = false;
+    unawaited(() async {
+      final result = await ffiImageDecoder.decodeRegionAsync(
+        params,
+        cancelToken: tile,
+      );
+      if (!currentGrid()) {
+        result?.dispose();
         return;
       }
-      if (result.pointerAddress != null) {
-        final int left = fileRect.left.toInt();
-        final int top = fileRect.top.toInt();
-        final int right = fileRect.right.toInt();
-        final int bottom = fileRect.bottom.toInt();
-        final int destWidth = (right - left) ~/ tile.sampleSize;
-        final int destHeight = (bottom - top) ~/ tile.sampleSize;
-
-        final pointer = Pointer<Uint8>.fromAddress(result.pointerAddress!);
-        final bytes = pointer.asTypedList(destWidth * destHeight * 4);
-
-        if (!currentGrid()) {
-          calloc.free(pointer);
-          return;
-        }
-
-        try {
-          ui.decodeImageFromPixels(
-            bytes,
-            destWidth,
-            destHeight,
-            ui.PixelFormat.rgba8888,
-            (ui.Image img) {
-              calloc.free(pointer);
-              if (!currentGrid()) {
-                img.dispose();
-                return;
-              }
-              tile.image = img;
-              tile.loading = false;
-              _tilesRevision++;
-              if (_loadState != LoadState.completed) {
-                _loadState = LoadState.completed;
-                _notifyStateChanged();
-                widget.onReady?.call();
-                widget.onImageLoaded?.call(_sWidth, _sHeight);
-              }
-              _scheduleBatchRebuild();
-            },
-          );
-        } catch (e) {
-          calloc.free(pointer);
-          tile.loading = false;
-          if (currentGrid()) {
-            setState(() {});
-          }
-        }
-      } else {
+      if (result?.pointerAddress == null) {
         tile.loading = false;
-        if (!currentGrid()) return;
-        final msg = result.error ?? 'Unknown error';
-        if (msg != 'Cancelled') {
+        final message = result?.error;
+        if (message != null && message != 'Cancelled') {
           if (kDebugMode) {
-            debugPrint('SubsamplingScaleImageView: Tile decoding failed: $msg');
+            debugPrint(
+              'SubsamplingScaleImageView: Tile decoding failed: $message',
+            );
           }
-          widget.onTileError?.call(msg);
+          widget.onTileError?.call(message);
         }
+        return;
       }
-    });
+      final ui.Image image;
+      try {
+        image = await result!.consumeImage();
+      } catch (error) {
+        if (!currentGrid()) return;
+        tile.loading = false;
+        widget.onTileError?.call(error.toString());
+        return;
+      }
+      if (!currentGrid()) {
+        image.dispose();
+        return;
+      }
+      tile.image = image;
+      tile.loading = false;
+      _tilesRevision++;
+      if (_loadState != LoadState.completed) {
+        _loadState = LoadState.completed;
+        _notifyStateChanged();
+        widget.onReady?.call();
+        widget.onImageLoaded?.call(_sWidth, _sHeight);
+      }
+      _scheduleBatchRebuild();
+    }());
   }
+
   // ── Batch Rebuild ──────────────────────────────────────────────────────────
 
   /// Coalesces multiple tile-completion setState calls into a single rebuild

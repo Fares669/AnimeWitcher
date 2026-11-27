@@ -12,10 +12,10 @@ import 'package:animewitcher/shared/widgets/custom_widgets.dart';
 import 'package:animewitcher/shared/widgets/paged_rail.dart';
 
 import '../details_controller.dart';
-import '../../../library/presentation/downloads_provider.dart';
 
 import 'episode_card.dart';
 import 'episode_browse.dart';
+import 'episode_download_index.dart';
 import 'episode_search.dart';
 import 'episode_view_mode.dart';
 import 'details_hero_actions.dart';
@@ -115,6 +115,38 @@ _EpisodePresentation _useEpisodePresentation(
   );
   memo.value = (source: episodes, options: options, projection: projection);
   return projection;
+}
+
+List<Episode> _browseDetailsEpisodes(
+  WidgetRef ref, {
+  required MultimediaItem parentItem,
+  required _EpisodePresentation presentation,
+}) {
+  final filter = episodeListFilter.value;
+  final range = episodeRangeIndex.value;
+  if (filter == EpisodeListFilter.all && range == null) {
+    return presentation.ordered;
+  }
+  EpisodeWatchRepository? watchRepository;
+  EpisodeDownloadMembership? completed;
+  if (filter == EpisodeListFilter.unwatched) {
+    ref.watch(episodeWatchRevisionProvider);
+    watchRepository = ref.watch(episodeWatchRepositoryProvider);
+  } else if (filter == EpisodeListFilter.downloaded) {
+    completed = ref.watch(
+      episodeDownloadsForDetailsProvider(episodeDownloadScope(parentItem))
+          .select((index) => index.completedEpisodes),
+    );
+  }
+  return browseEpisodes(
+    ordered: presentation.ordered,
+    rangeIndex: range,
+    ranges: presentation.ranges,
+    filter: filter,
+    isWatched: (episode) =>
+        episodeIsWatchedFor(watchRepository!, parentItem, episode),
+    isDownloaded: (episode) => completed!.contains(episode.url.trim()),
+  );
 }
 
 /// What the play button should say for [itemUrl] right now.
@@ -488,28 +520,20 @@ class SliverDetailsEpisodeList extends HookConsumerWidget {
     if (isMovie || episodes.isEmpty) {
       return const SliverToBoxAdapter(child: SizedBox.shrink());
     }
-    ref.watch(episodeWatchRevisionProvider);
-    final watchRepository = ref.watch(episodeWatchRepositoryProvider);
-    final downloads =
-        ref.watch(downloadsProvider).value ?? const <DownloadItem>[];
-
     return ListenableBuilder(
       listenable: episodeBrowseListenable,
-      builder: (context, _) {
-        final displayedEpisodes = browseEpisodesFor(
-          parentItem: parentItem,
-          ordered: presentation.ordered,
-          ranges: presentation.ranges,
-          watchRepository: watchRepository,
-          downloads: downloads,
-        );
-        return _buildSliverEpisodes(
+      builder: (_, _) => Consumer(
+        builder: (context, ref, _) => _buildSliverEpisodes(
           context,
           presentation: presentation,
-          displayedEpisodes: displayedEpisodes,
+          displayedEpisodes: _browseDetailsEpisodes(
+            ref,
+            parentItem: parentItem,
+            presentation: presentation,
+          ),
           details: detailsState.item ?? detailsState.details.asData?.value,
-        );
-      },
+        ),
+      ),
     );
   }
 
@@ -819,41 +843,37 @@ class DetailsDesktopEpisodeColumn extends HookConsumerWidget {
         const <Episode>[];
     final presentation = _useEpisodePresentation(episodes, detailsState);
     if (isMovie || episodes.isEmpty) return const SizedBox.shrink();
-    ref.watch(episodeWatchRevisionProvider);
-    final watchRepository = ref.watch(episodeWatchRepositoryProvider);
-    final downloads =
-        ref.watch(downloadsProvider).value ?? const <DownloadItem>[];
-
     return ListenableBuilder(
       listenable: Listenable.merge(<Listenable>[
         episodeSearchQuery,
         episodeBrowseListenable,
       ]),
-      builder: (context, _) {
-        final query = episodeSearchQuery.value;
-        final browsed = browseEpisodesFor(
-          parentItem: parentItem,
-          ordered: presentation.ordered,
-          ranges: presentation.ranges,
-          watchRepository: watchRepository,
-          downloads: downloads,
-        );
-        final search = EpisodeSearchQuery(query);
-        final displayedEpisodes = search.isEmpty
-            ? browsed
-            : browsed
-                  .where(
-                    (episode) => search.matches(episode.episode, episode.name),
-                  )
-                  .toList(growable: false);
-        return _buildEpisodesSection(
-          context,
-          displayedEpisodes,
-          query,
-          presentation: presentation,
-          details: detailsState.item ?? detailsState.details.asData?.value,
-        );
-      },
+      builder: (_, _) => Consumer(
+        builder: (context, ref, _) {
+          final query = episodeSearchQuery.value;
+          final browsed = _browseDetailsEpisodes(
+            ref,
+            parentItem: parentItem,
+            presentation: presentation,
+          );
+          final search = EpisodeSearchQuery(query);
+          final displayedEpisodes = search.isEmpty
+              ? browsed
+              : browsed
+                    .where(
+                      (episode) =>
+                          search.matches(episode.episode, episode.name),
+                    )
+                    .toList(growable: false);
+          return _buildEpisodesSection(
+            context,
+            displayedEpisodes,
+            query,
+            presentation: presentation,
+            details: detailsState.item ?? detailsState.details.asData?.value,
+          );
+        },
+      ),
     );
   }
 

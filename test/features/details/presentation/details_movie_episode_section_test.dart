@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -151,6 +152,27 @@ final class _ProjectionDownloads extends DownloadsNotifier {
   void publish(List<DownloadItem> items) => state = AsyncData(items);
 }
 
+final class _CountedDownloads extends ListBase<DownloadItem> {
+  _CountedDownloads(this.items);
+  final List<DownloadItem> items;
+  int reads = 0;
+
+  @override
+  int get length => items.length;
+  @override
+  set length(int length) =>
+      throw UnsupportedError('immutable Downloads fixture');
+  @override
+  DownloadItem operator [](int index) {
+    reads++;
+    return items[index];
+  }
+
+  @override
+  void operator []=(int index, DownloadItem value) =>
+      throw UnsupportedError('immutable Downloads fixture');
+}
+
 final class _ProjectionFiles extends DownloadedFiles {
   @override
   Map<String, File?> build() => {};
@@ -275,6 +297,211 @@ Future<void> _tapProjection(WidgetTester tester, Finder button) async {
 }
 
 void main() {
+  for (final wide in [false, true]) {
+    testWidgets(
+      'Details isolates other series downloads on ${wide ? 'desktop' : 'phone'}',
+      (tester) async {
+        tester.view.physicalSize = wide
+            ? const Size(1360, 1050)
+            : const Size(430, 1000);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        addTearDown(resetEpisodeBrowse);
+        addTearDown(() => episodeViewMode.value = EpisodeViewMode.list);
+        final item = _projectionItem();
+        final downloads = _ProjectionDownloads();
+        final foreign = item.copyWith(
+          url: 'https://example.test/foreign',
+          provider: 'test.other',
+        );
+        final otherProvider = item.copyWith(provider: 'test.not-native');
+        final first = item.episodes!.firstWhere(
+          (ep) => ep.episode == 1 && ep.dubStatus == DubStatus.subbed,
+        );
+        final sameHistoryItem = item.copyWith(provider: 'Local');
+        DownloadItem row(
+          int i,
+          MultimediaItem parent,
+          Episode episode,
+          TaskStatus status, {
+          double progress = 0,
+          String? alias,
+        }) => DownloadItem(
+          task: DownloadTask(
+            taskId: 'fixture-$i',
+            url: 'https://example.test/video.mp4',
+            filename: 'fixture.mp4',
+          ),
+          item: parent,
+          episode: episode,
+          trackingUrl: alias ?? episode.url,
+          timestamp: i,
+          status: status,
+          progress: progress,
+        );
+
+        final foreignRows = [
+          for (var i = 0; i < 1500; i++)
+            row(
+              i,
+              foreign,
+              first.copyWith(url: 'foreign://$i'),
+              TaskStatus.complete,
+            ),
+        ];
+        // The same URL on another provider must never promote its row.
+        final wrongProvider = row(
+          2001,
+          otherProvider,
+          first,
+          TaskStatus.complete,
+        );
+        final container = ProviderContainer(
+          overrides: [
+            storageServiceProvider.overrideWithValue(_Storage()),
+            detailsControllerProvider(item.url)
+                .overrideWith(() => _ProjectionDetails(item)),
+            libraryProvider.overrideWith(_EmptyLibrary.new),
+            watchHistoryProvider.overrideWith(_ProjectionHistory.new),
+            episodeWatchRepositoryProvider.overrideWithValue(
+              _ProjectionWatch(),
+            ),
+            logicalDownloadStoreV2Provider.overrideWithValue(
+              InMemoryLogicalDownloadStoreV2(),
+            ),
+            downloadsProvider.overrideWith(() => downloads),
+            downloadedFilesProvider.overrideWith(_ProjectionFiles.new),
+            episodeSortAscendingProvider.overrideWith(_ProjectionSort.new),
+          ],
+        );
+        addTearDown(container.dispose);
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(
+              locale: const Locale('ar'),
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              theme: ThemeData.dark(),
+              home: Builder(
+                builder: (context) => Scaffold(
+                  body: TextButton(
+                    onPressed: () => Navigator.of(context).push<void>(
+                      MaterialPageRoute<void>(
+                        builder: (_) => DetailsScreen(item: item),
+                      ),
+                    ),
+                    child: const Text('Open measured Details'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await container.read(downloadsProvider.future);
+        final initial = _CountedDownloads([...foreignRows, wrongProvider]);
+        downloads.publish(initial);
+        await tester.tap(find.text('Open measured Details'));
+        await tester.pumpAndSettle();
+        await _tapProjection(tester, _projectionKey('details-episodes-toggle'));
+        final firstCard = find.byKey(ValueKey(first.url));
+        await _positionProjection(tester, firstCard);
+        final visibleCardsBefore = find.byType(EpisodeCard).evaluate().length;
+        expect(visibleCardsBefore, greaterThan(1));
+        expect(_shownProjection(tester).first, 0);
+        expect(
+          find.descendant(
+            of: firstCard,
+            matching: find.byIcon(Icons.delete_outline_rounded),
+          ),
+          findsNothing,
+        );
+
+        var builds = 0;
+        debugOnRebuildDirtyWidget = (element, _) {
+          if (element.widget is EpisodeCard) builds++;
+        };
+        addTearDown(() => debugOnRebuildDirtyWidget = null);
+        var unrelatedReads = 0;
+        for (var tick = 1; tick <= 8; tick++) {
+          final snapshot = _CountedDownloads([
+            ...foreignRows,
+            wrongProvider,
+            row(2000, foreign, first, TaskStatus.running, progress: tick / 10),
+          ]);
+          downloads.publish(snapshot);
+          await tester.pump();
+          unrelatedReads += snapshot.reads;
+        }
+        final unrelatedBuilds = builds;
+        final initialReads = initial.reads;
+        final active = row(2002, item, first, TaskStatus.running, progress: .6);
+        downloads.publish([...foreignRows, wrongProvider, active]);
+        await tester.pump();
+        expect(
+          find.descendant(of: firstCard, matching: find.text('60%')),
+          findsOneWidget,
+        );
+        final complete = row(
+          2002,
+          sameHistoryItem,
+          first.copyWith(url: 'legacy://renamed'),
+          TaskStatus.complete,
+          progress: 1,
+          alias: first.url,
+        );
+        downloads.publish([...foreignRows, wrongProvider, complete]);
+        await tester.pumpAndSettle();
+        expect(
+          find.descendant(
+            of: firstCard,
+            matching: find.byIcon(Icons.delete_outline_rounded),
+          ),
+          findsOneWidget,
+        );
+        expect(find.text('60%'), findsNothing);
+
+        final filters = _projectionKey('episode-filter-downloaded');
+        await _tapProjection(tester, filters);
+        expect(_shownProjection(tester), [1]);
+        downloads.publish([...foreignRows, wrongProvider]);
+        await tester.pumpAndSettle();
+        expect(_shownProjection(tester), isEmpty);
+        await _tapProjection(tester, _projectionKey('episode-filter-all'));
+
+        // A real user scroll, then route-pop, must preserve the catalog.
+        final cards = find.byType(EpisodeCard);
+        final shownCards = cards.hitTestable();
+        if (shownCards.evaluate().isEmpty) {
+          await _positionProjection(tester, cards.first);
+        }
+        List<String> visibleUrls() => tester
+            .widgetList<EpisodeCard>(shownCards)
+            .map((card) => card.episode.url)
+            .toList();
+        final cardsBeforeScroll = visibleUrls();
+        await tester.drag(shownCards.last, const Offset(0, -520));
+        await tester.pumpAndSettle();
+        final cardsAfterScroll = visibleUrls();
+        expect(cardsBeforeScroll, isNotEmpty);
+        expect(cardsAfterScroll, isNotEmpty);
+        expect(cardsAfterScroll, isNot(cardsBeforeScroll));
+        tester.state<NavigatorState>(find.byType(Navigator)).pop();
+        await tester.pumpAndSettle();
+        expect(find.text('Open measured Details'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+        debugOnRebuildDirtyWidget = null;
+
+        // Read each snapshot once, not once per mounted card or alias,
+        // and don't relayout these rows when another series progresses.
+        expect(initialReads, foreignRows.length + 1);
+        expect(unrelatedReads, 8 * (foreignRows.length + 2));
+        expect(unrelatedBuilds, 0);
+      },
+    );
+  }
+
   testWidgets(
     'portrait episode selection keeps its still but quality still updates',
     (tester) async {

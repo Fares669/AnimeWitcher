@@ -5,11 +5,9 @@ import 'dart:ui' as ui;
 
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
-import 'package:animewitcher/features/manga/reader/subsampling/ffi_image_decoder.dart';
 import 'package:animewitcher/features/manga/reader/subsampling/subsampling_scale_image_view.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_page_image.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_zoomable_page.dart';
-import 'package:ffi/ffi.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -217,7 +215,7 @@ void main() {
           expect(rgba.sublist(0, 8), [100, 50, 25, 128, 18, 60, 160, 255]);
           expect(rgba.sublist(rgba.length - 4), [100, 50, 25, 128]);
         } finally {
-          calloc.free(buffer);
+          result.dispose();
         }
       },
     );

@@ -66,7 +66,8 @@ void main() {
     final settings = _Settings();
     final router = GoRouter(
       routes: [
-        StatefulShellRoute.indexedStack(
+        StatefulShellRoute(
+          navigatorContainerBuilder: AppScaffold.buildBranchContainer,
           builder: (_, _, shell) => AppScaffold(navigationShell: shell),
           branches: [
             StatefulShellBranch(

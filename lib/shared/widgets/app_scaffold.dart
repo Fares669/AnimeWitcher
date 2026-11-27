@@ -54,8 +54,64 @@ class AppScaffold extends ConsumerStatefulWidget {
   final StatefulNavigationShell navigationShell;
   const AppScaffold({super.key, required this.navigationShell});
 
+  /// Keeps each branch's viewport independent of which tab is selected.
+  static Widget buildBranchContainer(
+    BuildContext context,
+    StatefulNavigationShell shell,
+    List<Widget> children,
+  ) =>
+      _AppBranchViewports(currentIndex: shell.currentIndex, children: children);
+
   @override
   ConsumerState<AppScaffold> createState() => _AppScaffoldState();
+}
+
+class _TopBarBranchInset extends InheritedWidget {
+  const _TopBarBranchInset({required this.top, required super.child});
+
+  final double top;
+
+  static double of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_TopBarBranchInset>()?.top ??
+      0;
+
+  @override
+  bool updateShouldNotify(_TopBarBranchInset oldWidget) => oldWidget.top != top;
+}
+
+class _AppBranchViewports extends StatelessWidget {
+  const _AppBranchViewports({
+    required this.currentIndex,
+    required this.children,
+  });
+
+  final int currentIndex;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final top = _TopBarBranchInset.of(context);
+    final home = TaskbarDestination.home.branchIndex;
+    // Preserve go_router's default layout and ticker/visibility semantics.
+    // Give each retained navigator a stable height: Offstage still lays out
+    // its child when constraints change, even though the child doesn't paint.
+    return IndexedStack(
+      index: currentIndex,
+      children: [
+        for (var index = 0; index < children.length; index++)
+          Offstage(
+            offstage: index != currentIndex,
+            child: TickerMode(
+              enabled: index == currentIndex,
+              child: Padding(
+                padding: EdgeInsets.only(top: index == home ? 0 : top),
+                child: children[index],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
 }
 
 class _AppScaffoldState extends ConsumerState<AppScaffold> {
@@ -210,9 +266,9 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
     }
 
     if (layout == AppLayoutStyle.topBar) {
-      // Home runs its artwork up under the bar; every other page starts
-      // below it. Only the padding changes between them, so the shell keeps
-      // its place in the tree and no branch loses its state on a switch.
+      // Home runs its artwork under the bar; every other branch starts below
+      // it. Reserve that inset within each navigator's viewport, not around
+      // the whole shell, so switching tabs does not resize the warm branches.
       final overArtwork = currentIndex == TaskbarDestination.home.branchIndex;
       return withSideMenu(
         Scaffold(
@@ -220,10 +276,8 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
           body: Stack(
             children: [
               Positioned.fill(
-                child: Padding(
-                  padding: EdgeInsets.only(
-                    top: overArtwork ? 0 : AppTopBar.totalHeight(context),
-                  ),
+                child: _TopBarBranchInset(
+                  top: AppTopBar.totalHeight(context),
                   child: widget.navigationShell,
                 ),
               ),
