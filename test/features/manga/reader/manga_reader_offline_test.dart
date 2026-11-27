@@ -104,6 +104,69 @@ void main() {
     expect(controller.pages.single.imageUrl, good.uri.toString());
   });
 
+
+  test(
+    'offline page matching keeps exact names and validates on re-open',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('aw_manga_exact_');
+      addTearDown(() => dir.delete(recursive: true));
+      final temporary = File('${dir.path}/0001.tmp');
+      await temporary.writeAsBytes(tinyMangaJpeg);
+      await File('${dir.path}/00001.jpg').writeAsBytes(tinyMangaJpeg);
+      await Directory('${dir.path}/0001.png').create();
+      if (!Platform.isWindows) {
+        // Even a link to another file in the same chapter is not a page entry.
+        await Link('${dir.path}/0001.jpeg').create(temporary.path);
+      }
+
+      await MangaChapterManifestV2(
+        version: MangaChapterManifestV2.currentVersion,
+        mangaId: 'm1',
+        chapterId: '1',
+        pageCount: 1,
+        completedIndexes: const {0},
+        isComplete: true,
+        pageDigests: {0: await MangaChapterManifestV2.pageDigest(temporary)},
+      ).writeTo(dir);
+
+      final provider = _Provider();
+      final controller = MangaReaderController(
+        provider: provider,
+        progressRepository: MangaReadingRepository(_MemoryStorage()),
+        manga: MultimediaItem(
+          title: 'Manga',
+          url: 'manga://m1',
+          posterUrl: '',
+          contentType: MultimediaContentType.manga,
+        ),
+        chapter: const MangaChapter(
+          id: '1',
+          mangaId: 'm1',
+          url: 'chapter://1',
+          name: 'Chapter 1',
+        ),
+        chapters: const [],
+        localChapterDirectory: dir.path,
+      );
+      addTearDown(controller.close);
+
+      await controller.load();
+      expect(controller.pages, isEmpty);
+      expect(provider.pageCalls, 1);
+
+      final page = File('${dir.path}/0001.jpg');
+      await page.writeAsBytes(tinyMangaJpeg);
+      await controller.load();
+      expect(controller.pages.single.imageUrl, page.uri.toString());
+      expect(provider.pageCalls, 1);
+
+      await page.writeAsBytes(tinyMangaPng);
+      await controller.load();
+      expect(controller.pages, isEmpty);
+      expect(provider.pageCalls, 2);
+    },
+  );
+
   test('reader prefers complete local manga chapter without network', () async {
     final dir = await Directory.systemTemp.createTemp('aw_manga_offline_');
     addTearDown(() => dir.delete(recursive: true));

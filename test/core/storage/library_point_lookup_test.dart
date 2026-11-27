@@ -1,6 +1,11 @@
 import 'dart:io';
 
+import 'package:animewitcher/core/account/animewitcher_account_service.dart';
+import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/storage/download_persistence_worker.dart';
+import 'package:animewitcher/core/storage/library_category.dart';
+import 'package:animewitcher/core/storage/library_repository.dart';
+import 'package:animewitcher/core/storage/secure_token_storage.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -110,6 +115,121 @@ void main() {
       expect(storage.isInLibrary(canonical), isFalse);
       expect(storage.getLibraryItemSyncedAccountUid(alias), isNull);
       expect(storage.getLibraryItemUpdatedAt(alias), 0);
+    },
+  );
+
+  test(
+    'exact item lookup matches the projected URL and first canonical row',
+    () async {
+      const canonical = 'https://animewitcher.com/watch/duplicate';
+      const alias =
+          ' HTTP://WWW.ANIMEWITCHER.COM/watch/duplicate/extra?fake=x ';
+      const malformed = 'http://[not-a-host';
+      const external = 'https://example.test/series/2?q=x';
+      await box.putAll({
+        'a-first': {
+          ..._row(alias, updatedAt: 1, category: 'watching'),
+          'title': 'First legacy',
+          'posterUrl': 'https://example.test/first.jpg',
+          'type': 'manga',
+          'provider': 'legacy-provider',
+          'status': 'completed',
+        },
+        'b-other': {
+          ..._row(canonical, updatedAt: 100),
+          'title': 'Later canonical',
+          'type': 'anime',
+          'provider': 'canonical-provider',
+        },
+        'c-invalid-uri': _row('  $malformed  '),
+        'd-external': _row(external),
+        'e-empty': _row(' '),
+      });
+
+      final all = storage.getLibraryItems();
+      for (final url in [
+        canonical,
+        alias,
+        malformed,
+        external,
+        '',
+        'missing',
+      ]) {
+        final old = all.where((item) => item.url == url).firstOrNull;
+        expect(storage.getLibraryItemByExactUrl(url)?.toJson(), old?.toJson());
+      }
+      expect(
+        storage.getLibraryItemByExactUrl(canonical)?.title,
+        'First legacy',
+      );
+
+      // Direct Hive updates, including in-place URL changes, are visible to
+      // the next lookup. Weak URL normalization is not a cached membership.
+      final legacy = box.get('a-first') as Map;
+      legacy['url'] = 'https://animewitcher.com/watch/rekeyed';
+      expect(
+        storage.getLibraryItemByExactUrl(canonical)?.title,
+        'Later canonical',
+      );
+      expect(
+        storage.getLibraryItemByExactUrl(legacy['url'] as String)?.provider,
+        'legacy-provider',
+      );
+      await box.delete('b-other');
+      expect(storage.getLibraryItemByExactUrl(canonical), isNull);
+    },
+  );
+
+  test(
+    'repository mutations keep first-winner status and manga ownership',
+    () async {
+      const animeUrl = 'https://animewitcher.com/watch/status';
+      const mangaUrl = 'https://animewitcher.com/manga/chapters';
+      await box.putAll({
+        'a-anime-first': {
+          ..._row('$animeUrl/extra?legacy=1', category: 'watching'),
+          'type': 'anime',
+          'title': 'First status',
+          'status': 'ongoing',
+        },
+        'b-anime-newer': {
+          ..._row(animeUrl, updatedAt: 100, category: 'watching'),
+          'title': 'Newer duplicate',
+          'type': 'anime',
+          'status': 'completed',
+        },
+        'c-manga-first': {
+          ..._row(mangaUrl, category: 'watching'),
+          'type': 'manga',
+        },
+        'd-manga-newer': {
+          ..._row(mangaUrl, updatedAt: 100, category: 'watching'),
+          'type': 'anime',
+        },
+      });
+      final account = AnimeWitcherAccountService(
+        storage: storage,
+        secureStorage: SecureTokenStorage(storage),
+      );
+      final repository = LibraryRepository(storage, account);
+      await repository.moveToCategory(animeUrl, LibraryCategory.completed);
+      expect(storage.getLibraryItemCategory(animeUrl), 'watching');
+
+      expect(
+        storage.getLibraryItemByExactUrl(mangaUrl)?.contentType,
+        MultimediaContentType.manga,
+      );
+      await expectLater(
+        repository.removeFromLibrary(mangaUrl),
+        throwsStateError,
+      );
+      await expectLater(repository.clearCategory(mangaUrl), throwsStateError);
+      await expectLater(
+        repository.moveToCategory(mangaUrl, LibraryCategory.continueLater),
+        throwsStateError,
+      );
+      expect(storage.getLibraryItemCategory(mangaUrl), 'watching');
+      expect(storage.getLibraryItems().length, 2);
     },
   );
 

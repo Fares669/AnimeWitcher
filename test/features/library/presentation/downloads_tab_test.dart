@@ -7,6 +7,10 @@ import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 import 'package:animewitcher/core/services/download_concurrency.dart';
 import 'package:animewitcher/core/services/download_v2/download_continued_processing_v2.dart';
+import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
+import 'package:animewitcher/core/services/download_v2/download_manager_v2.dart';
+import 'package:animewitcher/core/services/download_v2/download_v2_provider.dart';
+import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
 import 'package:animewitcher/core/utils/download_progress_data.dart';
 import 'package:animewitcher/core/utils/artwork_quality.dart';
 import 'package:animewitcher/features/library/presentation/download_progress_v2_provider.dart';
@@ -29,6 +33,7 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:path/path.dart' as p;
 
+import '../../../core/services/download_v2/download_v2_test_support.dart';
 import '../../../support/test_fonts.dart';
 import '../../../support/debug_shots.dart';
 import '../../../support/widget_completion.dart';
@@ -234,6 +239,57 @@ class _StubDownloadsNotifier extends DownloadsNotifier {
   }
 }
 
+// The fixture mounts the real progress projection, but never starts transport.
+class _UnusedDownloader extends Fake implements BackgroundDownloaderGateway {}
+
+class _BrowseReads {
+  int logical = 0;
+  int mediaUrl = 0;
+
+  void clear() {
+    logical = 0;
+    mediaUrl = 0;
+  }
+}
+
+class _MeasuredDownload extends DownloadItem {
+  _MeasuredDownload({
+    required super.task,
+    required super.status,
+    required super.progress,
+    required super.item,
+    required super.timestamp,
+    required super.logicalId,
+    required this.reads,
+  });
+
+  final _BrowseReads reads;
+
+  @override
+  String? get logicalId {
+    reads.logical++;
+    return super.logicalId;
+  }
+}
+
+class _MeasuredSeries extends MultimediaItem {
+  _MeasuredSeries(this.reads, String poster, {String title = 'Archived series'})
+    : super(
+        title: title,
+        url: 'https://animewitcher.test/archive',
+        posterUrl: poster,
+        contentType: MultimediaContentType.anime,
+      );
+
+  final _BrowseReads reads;
+
+  @override
+  String get url {
+    reads.mediaUrl++;
+    return super.url;
+  }
+}
+
 class _StubEpisodeSortAscendingNotifier extends EpisodeSortAscendingNotifier {
   _StubEpisodeSortAscendingNotifier(this._value, this._onRead);
 
@@ -259,13 +315,17 @@ Widget _downloadsApp(
   NotificationService? notificationService,
   _StubDownloadsNotifier? notifier,
   Map<String, DownloadProgressData>? progressData,
+  DownloadManagerV2? manager,
   bool openDownloadsScreen = false,
 }) {
   Widget home = openDownloadsScreen
       ? const DownloadsScreen()
       : Scaffold(
           bottomNavigationBar: withTaskbar
-              ? const SizedBox(height: 80, child: ColoredBox(color: Colors.purple))
+              ? const SizedBox(
+                  height: 80,
+                  child: ColoredBox(color: Colors.purple),
+                )
               : null,
           body: RepaintBoundary(
             key: ValueKey('downloads-tab-root'),
@@ -288,6 +348,7 @@ Widget _downloadsApp(
       ),
       if (progressData != null)
         downloadProgressProvider.overrideWith((ref) => progressData),
+      if (manager != null) downloadManagerV2Provider.overrideWithValue(manager),
       if (notificationService != null)
         notificationServiceProvider.overrideWithValue(notificationService),
       episodeSortAscendingProvider.overrideWith(
@@ -630,6 +691,269 @@ void main() {
     expect(secondCard, findsOneWidget);
     expect(find.byKey(const ValueKey('completed-v2')), findsOneWidget);
     expect(firstCard, findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'Downloads default progress ticks preserve grouped artwork and avoid rebuilding history',
+    (tester) async {
+      tester.view.physicalSize = const Size(430, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await _prepareArtworkStorage(tester);
+
+      const logical = 'browse-progress';
+      const posterUrl = 'https://example.invalid/archived-poster.png';
+      const savedId = 'browse-archive-0';
+      final folder = Directory(
+        p.join(
+          _artworkFixtureRoot.path,
+          'download_artwork_v2',
+          sha256.convert(utf8.encode(savedId)).toString(),
+        ),
+      );
+      final saved = File(p.join(folder.path, 'poster.img'));
+      await tester.runAsync(() async {
+        await folder.create(recursive: true);
+        final pictureRecorder = ui.PictureRecorder();
+        ui.Canvas(pictureRecorder)
+            .drawColor(const Color(0xff146c9a), ui.BlendMode.src);
+        final picture = pictureRecorder.endRecording();
+        final image = await picture.toImage(160, 240);
+        picture.dispose();
+        final png = (await image.toByteData(format: ui.ImageByteFormat.png))!;
+        image.dispose();
+        await saved.writeAsBytes(
+          png.buffer.asUint8List(png.offsetInBytes, png.lengthInBytes),
+        );
+      });
+
+      final reads = _BrowseReads();
+      final manager = DownloadManagerV2(
+        store: InMemoryLogicalDownloadStoreV2(),
+        gateway: _UnusedDownloader(),
+        sourceResolver: StaticSourceResolverV2(),
+      );
+      addTearDown(manager.dispose);
+      final series = _MeasuredSeries(reads, posterUrl);
+      _MeasuredDownload active(
+        double progress, {
+        TaskStatus status = TaskStatus.running,
+      }) => _MeasuredDownload(
+        task: _task(taskId: 'browse-live', filename: 'live.mp4'),
+        status: status,
+        progress: progress,
+        item: _blackTorch(),
+        timestamp: 1500,
+        logicalId: logical,
+        reads: reads,
+      );
+      final archive = List<_MeasuredDownload>.generate(
+        1200,
+        (i) => _MeasuredDownload(
+          task: _task(taskId: 'browse-done-$i', filename: 'archive-$i.mp4'),
+          status: TaskStatus.complete,
+          progress: 1,
+          item: series,
+          timestamp: 1400 - i,
+          logicalId: 'browse-archive-$i',
+          reads: reads,
+        ),
+      );
+      final notifier = _StubDownloadsNotifier([active(.02), ...archive]);
+      await tester.pumpWidget(
+        _downloadsApp(
+          [],
+          notifier: notifier,
+          manager: manager,
+          openDownloadsScreen: true,
+        ),
+      );
+      await tester.pumpAndSettle();
+      final live = find.byKey(const ValueKey('browse-live'));
+      final retainedNetwork = find.byWidgetPredicate(
+        (widget) =>
+            widget is CachedNetworkImage && widget.imageUrl == posterUrl,
+      );
+
+      reads.clear();
+      for (var i = 0; i < 16; i++) {
+        notifier.publish([
+          active(
+            (i + 1) / 20,
+            status: i == 15 ? TaskStatus.paused : TaskStatus.running,
+          ),
+          ...archive,
+        ]);
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      final activeReads = reads.logical;
+      expect(
+        find.descendant(of: live, matching: find.text('0×  80%')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.descendant(
+          of: live,
+          matching: find.widgetWithIcon(IconButton, Icons.play_arrow_rounded),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(notifier.resumedIds, ['browse-live']);
+
+      // The live row's status comes from the actual progress projection.
+      notifier.publish([active(.8, status: TaskStatus.failed), ...archive]);
+      await tester.pumpAndSettle();
+      final retry = find.descendant(
+        of: live,
+        matching: find.widgetWithIcon(IconButton, Icons.refresh_rounded),
+      );
+      expect(retry, findsOneWidget);
+      await tester.tap(retry);
+      await tester.pumpAndSettle();
+      expect(notifier.retriedIds, ['browse-live']);
+
+      await tester.tap(find.text('المكتملة'));
+      await tester.pumpAndSettle();
+      await _awaitArtworkLookups(tester);
+      final findArtwork = find.byWidgetPredicate((widget) {
+        if (widget is! Image) return false;
+        final provider = widget.image;
+        final source = provider is ResizeImage
+            ? provider.imageProvider
+            : provider;
+        return source is FileImage && source.file.path == saved.path;
+      });
+      expect(findArtwork, findsOneWidget);
+      for (
+        var i = 0;
+        i < 60 &&
+            find
+                .descendant(
+                  of: findArtwork,
+                  matching: find.byWidgetPredicate(
+                    (w) => w is RawImage && w.image != null,
+                  ),
+                )
+                .evaluate()
+                .isEmpty;
+        i++
+      ) {
+        await tester.pump(const Duration(milliseconds: 16));
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+      }
+      final raw = find.descendant(
+        of: findArtwork,
+        matching: find.byWidgetPredicate(
+          (w) => w is RawImage && w.image != null,
+        ),
+      );
+      final before = tester.widget<RawImage>(raw).image!;
+      final pixels = (await tester.runAsync(before.toByteData))!;
+      expect(pixels.getUint32(0), 0x146c9aff);
+      expect(retainedNetwork, findsNothing);
+
+      reads.clear();
+      for (var i = 0; i < 16; i++) {
+        notifier.publish([active((i + 1) / 20), ...archive]);
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      final completedLogicalReads = reads.logical;
+      final groupedUrlReads = reads.mediaUrl;
+      expect(find.text('Archived series'), findsOneWidget);
+      expect(tester.widget<RawImage>(raw).image, same(before));
+      expect(retainedNetwork, findsNothing);
+      expect(tester.takeException(), isNull);
+      // Active tiles still use the shared progress projection. The ordinary
+      // Completed frame does not touch that full map or regroup visible rows.
+      expect(activeReads, lessThan(30000));
+      expect(completedLogicalReads, lessThan(80));
+      expect(groupedUrlReads, 0);
+      // A genuinely changed completed row with the same IDs must not keep
+      // stale metadata. Keep all rows on the same group identity, but update
+      // the first (cover) record used to represent it on screen.
+      notifier.publish([
+        active(.8),
+        _MeasuredDownload(
+          task: archive.first.task,
+          status: TaskStatus.complete,
+          progress: 1,
+          item: _MeasuredSeries(
+            reads,
+            posterUrl,
+            title: 'Updated archive title',
+          ),
+          timestamp: archive.first.timestamp,
+          logicalId: savedId,
+          reads: reads,
+        ),
+        ...archive.skip(1),
+      ]);
+      await tester.pumpAndSettle();
+      expect(find.text('Updated archive title'), findsOneWidget);
+      expect(find.text('Archived series'), findsNothing);
+      expect(tester.widget<RawImage>(raw).image, same(before));
+      expect(retainedNetwork, findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets('Downloads resets structural reuse for duplicates and legacy', (
+    tester,
+  ) async {
+    final a = _item(
+      taskId: 'cache-first',
+      timestamp: 1,
+      logicalId: 'cache-one',
+      status: TaskStatus.running,
+    );
+    DownloadItem sibling(String? logical, TaskStatus status) => _item(
+      taskId: 'cache-second',
+      timestamp: 2,
+      logicalId: logical,
+      status: status,
+    );
+    final notifier = _StubDownloadsNotifier([
+      a,
+      sibling('cache-two', TaskStatus.paused),
+    ]);
+    await tester.pumpWidget(
+      _downloadsApp(
+        [],
+        notifier: notifier,
+        progressData: const {},
+        openDownloadsScreen: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+    final first = find.byKey(const ValueKey('cache-first'));
+    final second = find.byKey(const ValueKey('cache-second'));
+    expect(first, findsOneWidget);
+    expect(second, findsOneWidget);
+    notifier.publish([a, sibling('cache-one', TaskStatus.paused)]);
+    await tester.pumpAndSettle();
+    expect(first, findsOneWidget);
+    expect(second, findsNothing);
+    notifier.publish([a, sibling(null, TaskStatus.paused)]);
+    await tester.pumpAndSettle();
+    expect(first, findsOneWidget);
+    expect(second, findsOneWidget);
+    // Legacy rows without logical IDs use the original URL/file graph.
+    final legacyFirst = _item(
+      taskId: 'cache-first',
+      timestamp: 1,
+      status: TaskStatus.paused,
+    );
+    notifier.publish([legacyFirst, sibling(null, TaskStatus.failed)]);
+    await tester.pumpAndSettle();
+    expect(first, findsOneWidget);
+    expect(second, findsNothing);
+    notifier.publish([legacyFirst, sibling(null, TaskStatus.running)]);
+    await tester.pumpAndSettle();
+    expect(first, findsNothing);
+    expect(second, findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

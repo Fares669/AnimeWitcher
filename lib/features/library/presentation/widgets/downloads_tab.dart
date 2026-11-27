@@ -6,6 +6,7 @@ import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/app_side_menu.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -37,7 +38,6 @@ import 'completed_download_chapter_card.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../../../core/utils/file_size_formatter.dart';
-import '../../../../core/utils/download_progress_data.dart';
 import '../../../../shared/widgets/loading_indicator.dart';
 import '../../../../shared/widgets/underline_segment_tabs.dart';
 
@@ -123,6 +123,39 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
   final Set<String> _selectedIds = <String>{};
   bool _bulkInFlight = false;
   int _tabIndex = 0;
+  List<DownloadItem>? _uniqueDownloadRows;
+
+  List<DownloadItem> _visibleRowsFor(List<DownloadItem> rows) {
+    final previous = _uniqueDownloadRows;
+    if (identical(previous, rows)) return rows;
+    if (previous != null && previous.length == rows.length) {
+      // With unique task IDs and one nonempty logical identity per row the
+      // duplicate resolver cannot change visibility or order. A transfer tick
+      // only replaces its own row. Keep fresh rows for controls and artwork.
+      var sameIdentities = true;
+      for (var i = 0; i < rows.length; i++) {
+        if (!identical(rows[i], previous[i]) &&
+            (rows[i].id != previous[i].id ||
+                rows[i].logicalId != previous[i].logicalId)) {
+          sameIdentities = false;
+          break;
+        }
+      }
+      if (sameIdentities) {
+        _uniqueDownloadRows = rows;
+        return rows;
+      }
+    }
+    final visible = collapseDuplicateDownloads(rows).visible;
+    final ids = <String>{};
+    final unique =
+        visible.length == rows.length &&
+        rows.every(
+          (row) => row.logicalId?.trim().isNotEmpty == true && ids.add(row.id),
+        );
+    _uniqueDownloadRows = unique ? rows : null;
+    return unique ? rows : visible;
+  }
 
   void _toggleSelected(DownloadItem item) {
     setState(() {
@@ -381,25 +414,28 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
   Widget build(BuildContext context) {
     super.build(context);
     final downloadsAsync = ref.watch(downloadsProvider);
-    final activeProgress = ref.watch(downloadProgressProvider);
     final l10n = AppLocalizations.of(context)!;
 
     // Keep local completed rows available through refreshes and transport errors.
-    final visibleDownloads = collapseDuplicateDownloads(
+    final visibleDownloads = _visibleRowsFor(
       downloadsAsync.hasValue
           ? downloadsAsync.value ?? const <DownloadItem>[]
           : const <DownloadItem>[],
-    ).visible;
+    );
     final active = <DownloadItem>[];
     final completed = <DownloadItem>[];
     for (final item in visibleDownloads) {
       (isActiveDownloadStatus(item.status) ? active : completed).add(item);
     }
     final currentDownloads = _tabIndex == 0 ? active : completed;
-    final selected = currentDownloads
-        .where((item) => _selectedIds.contains(item.id))
-        .toList();
-    final currentSelectedIds = selected.map((item) => item.id).toSet();
+    final selected = _selectedIds.isEmpty
+        ? const <DownloadItem>[]
+        : currentDownloads
+              .where((item) => _selectedIds.contains(item.id))
+              .toList();
+    final currentSelectedIds = selected.isEmpty
+        ? const <String>{}
+        : selected.map((item) => item.id).toSet();
     final canPause = selected.any((item) => _canPauseDownload(item.status));
     final canResume = selected.any((item) => item.status == TaskStatus.paused);
     final controllableActive = active.where(
@@ -551,7 +587,6 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
                             skipLoadingOnReload: false,
                             data: (_) => _ActiveDownloadsList(
                               items: active,
-                              activeProgress: activeProgress,
                               emptyMessage: l10n.noDownloadsYet,
                               selectedIds: currentSelectedIds,
                               onToggleSelection: _toggleSelected,
@@ -672,14 +707,12 @@ class _DownloadsEmptyState extends StatelessWidget {
 class _ActiveDownloadsList extends StatelessWidget {
   const _ActiveDownloadsList({
     required this.items,
-    required this.activeProgress,
     required this.emptyMessage,
     required this.selectedIds,
     required this.onToggleSelection,
   });
 
   final List<DownloadItem> items;
-  final Map<String, DownloadProgressData> activeProgress;
   final String emptyMessage;
   final Set<String> selectedIds;
   final ValueChanged<DownloadItem> onToggleSelection;
@@ -698,24 +731,9 @@ class _ActiveDownloadsList extends StatelessWidget {
         separatorBuilder: (context, index) => const SizedBox(height: 16),
         itemBuilder: (context, index) {
           final download = items[index];
-          final logicalId = download.logicalId?.trim();
-          final trackingUrl = download.task.metaData.isNotEmpty
-              ? download.task.metaData
-              : download.task.url;
-          final progressData = logicalId?.isNotEmpty == true
-              ? activeProgress[logicalId]
-              : activeProgress[trackingUrl];
-          final double displayProgress =
-              progressData?.progress ?? download.progress;
-          final TaskStatus displayStatus =
-              progressData?.status ?? download.status;
-
           return _DownloadItemTile(
             key: ValueKey(download.id),
             item: download,
-            progress: displayProgress,
-            status: displayStatus,
-            progressData: progressData,
             selecting: selectedIds.isNotEmpty,
             selected: selectedIds.contains(download.id),
             onToggleSelection: () => onToggleSelection(download),
@@ -726,7 +744,7 @@ class _ActiveDownloadsList extends StatelessWidget {
   }
 }
 
-class _CompletedDownloadsList extends StatelessWidget {
+class _CompletedDownloadsList extends StatefulWidget {
   const _CompletedDownloadsList({
     required this.items,
     required this.emptyMessage,
@@ -742,14 +760,30 @@ class _CompletedDownloadsList extends StatelessWidget {
   final ValueChanged<List<DownloadItem>> onToggleGroupSelection;
 
   @override
-  Widget build(BuildContext context) {
-    if (items.isEmpty) {
-      return _DownloadsEmptyState(message: emptyMessage);
-    }
+  State<_CompletedDownloadsList> createState() =>
+      _CompletedDownloadsListState();
+}
 
-    final Map<String, List<DownloadItem>> grouped = {};
-    final List<String> keys = [];
-    for (final item in items) {
+class _CompletedDownloadsListState extends State<_CompletedDownloadsList> {
+  late List<MapEntry<String, List<DownloadItem>>> _groups;
+
+  @override
+  void initState() {
+    super.initState();
+    _groupRows();
+  }
+
+  @override
+  void didUpdateWidget(covariant _CompletedDownloadsList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Committed rows keep their identity on another transfer's progress tick.
+    // Rebuild the groups only for a genuinely new completed snapshot.
+    if (!listEquals(oldWidget.items, widget.items)) _groupRows();
+  }
+
+  void _groupRows() {
+    final grouped = <String, List<DownloadItem>>{};
+    for (final item in widget.items) {
       final mediaIdentity =
           item.item.tmdbId?.toString() ??
           (item.item.url.trim().isNotEmpty
@@ -759,27 +793,30 @@ class _CompletedDownloadsList extends StatelessWidget {
           ? downloadProviderScopeV2(item.item.provider) ?? ''
           : '';
       final key = '${item.mediaKind.name}:$source:$mediaIdentity';
-      if (!grouped.containsKey(key)) {
-        keys.add(key);
-        grouped[key] = [];
-      }
-      grouped[key]!.add(item);
+      grouped.putIfAbsent(key, () => []).add(item);
     }
+    _groups = grouped.entries.toList(growable: false);
+  }
 
+  @override
+  Widget build(BuildContext context) {
+    if (_groups.isEmpty) {
+      return _DownloadsEmptyState(message: widget.emptyMessage);
+    }
     return Directionality(
       textDirection: TextDirection.ltr,
       child: ListView.separated(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
-        itemCount: keys.length,
+        itemCount: _groups.length,
         separatorBuilder: (context, index) => const SizedBox(height: 16),
         itemBuilder: (context, index) {
-          final key = keys[index];
+          final group = _groups[index];
           return _GroupedDownloadTile(
-            key: ValueKey(key),
-            items: grouped[key]!,
-            selectedIds: selectedIds,
-            onToggleSelection: onToggleSelection,
-            onToggleGroupSelection: onToggleGroupSelection,
+            key: ValueKey(group.key),
+            items: group.value,
+            selectedIds: widget.selectedIds,
+            onToggleSelection: widget.onToggleSelection,
+            onToggleGroupSelection: widget.onToggleGroupSelection,
           );
         },
       ),
@@ -833,7 +870,8 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
   @override
   void didUpdateWidget(covariant _GroupedDownloadTile oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (_posterKey(oldWidget.items) != _posterKey(items)) {
+    if (!identical(oldWidget.items, items) &&
+        _posterKey(oldWidget.items) != _posterKey(items)) {
       _startPosterLookup();
     }
   }
@@ -1234,9 +1272,6 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
 
 class _DownloadItemTile extends ConsumerStatefulWidget {
   final DownloadItem item;
-  final double progress;
-  final TaskStatus status;
-  final DownloadProgressData? progressData;
   final bool selecting;
   final bool selected;
   final VoidCallback onToggleSelection;
@@ -1244,9 +1279,6 @@ class _DownloadItemTile extends ConsumerStatefulWidget {
   const _DownloadItemTile({
     super.key,
     required this.item,
-    required this.progress,
-    required this.status,
-    this.progressData,
     required this.selecting,
     required this.selected,
     required this.onToggleSelection,
@@ -1261,9 +1293,6 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
   bool _deleteInFlight = false;
 
   DownloadItem get item => widget.item;
-  double get progress => widget.progress;
-  TaskStatus get status => widget.status;
-  DownloadProgressData? get progressData => widget.progressData;
 
   (String, Color)? _posterInputs;
   Widget? _posterWidget;
@@ -1302,6 +1331,30 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context)!;
+    final logicalId = item.logicalId?.trim();
+    final progressKey = logicalId?.isNotEmpty == true
+        ? logicalId!
+        : item.task.metaData.isNotEmpty
+        ? item.task.metaData
+        : item.task.url;
+    final progressData = ref.watch(
+      downloadProgressProvider.select((rows) {
+        final data = rows[progressKey];
+        // The shared projection allocates the data object on every emission.
+        // Compare only what this row actually uses.
+        return data == null
+            ? null
+            : (
+                data.progress,
+                data.status,
+                data.totalSize,
+                data.completedPages,
+                data.totalPages,
+              );
+      }),
+    );
+    final progress = progressData?.$1 ?? item.progress;
+    final status = progressData?.$2 ?? item.status;
     final chunkProgress = ref.watch(
       downloadChunkProgressProvider,
     )[item.task.taskId];
@@ -1397,7 +1450,13 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
                   children: [
                     Expanded(
                       child: Text(
-                        _downloadedSizeText(context),
+                        _downloadedSizeText(
+                          context,
+                          progress,
+                          progressData?.$3,
+                          progressData?.$4,
+                          progressData?.$5,
+                        ),
                         textDirection: TextDirection.ltr,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -1451,7 +1510,7 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
                         icon: const Icon(Icons.pause_rounded),
                         onPressed: _controlInFlight || _deleteInFlight
                             ? null
-                            : _controlDownload,
+                            : () => _controlDownload(status),
                         visualDensity: VisualDensity.compact,
                       ),
                     if (isPaused || isFailed)
@@ -1470,7 +1529,7 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
                         ),
                         onPressed: _controlInFlight || _deleteInFlight
                             ? null
-                            : _controlDownload,
+                            : () => _controlDownload(status),
                         visualDensity: VisualDensity.compact,
                       ),
                     if (isDone)
@@ -1530,7 +1589,7 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
     );
   }
 
-  Future<void> _controlDownload() async {
+  Future<void> _controlDownload(TaskStatus status) async {
     if (_controlInFlight || _deleteInFlight) return;
     setState(() => _controlInFlight = true);
     final notifications = ref.read(notificationServiceProvider);
@@ -1547,17 +1606,22 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
     }
   }
 
-  String _downloadedSizeText(BuildContext context) {
-    final data = progressData;
+  String _downloadedSizeText(
+    BuildContext context,
+    double progress,
+    int? totalBytes,
+    int? completedPages,
+    int? totalPages,
+  ) {
     if (item.mediaKind == DownloadMediaKind.mangaChapter) {
       return formatDownloadPageCount(
-        completedPages: data?.completedPages ?? item.completedPages,
-        totalPages: data?.totalPages ?? item.totalPages,
+        completedPages: completedPages ?? item.completedPages,
+        totalPages: totalPages ?? item.totalPages,
         pageLabel: appText(context, english: 'pages', arabic: 'صفحة'),
       );
     }
     return formatDownloadSizePair(
-      totalBytes: data?.totalSize ?? -1,
+      totalBytes: totalBytes ?? -1,
       progress: progress,
     );
   }

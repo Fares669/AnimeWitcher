@@ -82,11 +82,11 @@ class _BrowseFixture {
     dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) {
-          void respond(Object result) {
+          void respond(Object result, {int statusCode = 200}) {
             handler.resolve(
               Response<dynamic>(
                 requestOptions: options,
-                statusCode: 200,
+                statusCode: statusCode,
                 data: result,
               ),
             );
@@ -122,6 +122,10 @@ class _BrowseFixture {
               filters: query['filters']!,
               limit: int.parse(query['hitsPerPage']!),
             ));
+            if (failAppend && page > 0) {
+              respond(const {}, statusCode: 503);
+              return;
+            }
             respond({'hits': pages[page], 'nbPages': pages.length});
           } else {
             // Reject every unmodeled request rather than hitting a backend.
@@ -135,6 +139,7 @@ class _BrowseFixture {
   final List<List<Map<String, dynamic>>> pages;
   final bool hidden;
   final bool quality;
+  bool failAppend = false;
   final dio = Dio();
   final requests = <_Browse>[];
 
@@ -225,6 +230,106 @@ void main() {
         expect(fixture.requests, hasLength(2));
         expect(work.descriptions, 120);
         expect(work.copiedMaps, 0);
+      },
+    );
+  }
+
+  for (final season in [true, false]) {
+    testWidgets(
+      '${season ? "Seasons" : "Coming Soon"} holds a failed tail until Retry',
+      (tester) async {
+        final fixture = _BrowseFixture(
+          pages: [
+            for (var page = 0; page < 2; page++)
+              [
+                for (var i = 0; i < 60; i++)
+                  {
+                    'objectID': 'retry-$page-$i',
+                    'name': 'Retry fixture $page title $i',
+                  },
+              ],
+          ],
+        )..failAppend = true;
+        addTearDown(fixture.dio.close);
+        tester.view.physicalSize = const Size(410, 860);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              activeProviderProvider.overrideWithValue(fixture.provider),
+            ],
+            child: MaterialApp(
+              home: season ? const SeasonsScreen() : const ComingSoonScreen(),
+            ),
+          ),
+        );
+        await _pump(tester);
+        expect(
+          find.text('Retry fixture 0 title 0').hitTestable(),
+          findsWidgets,
+        );
+        final view = tester.widget<ScrollView>(
+          find
+              .byWidgetPredicate(
+                (widget) =>
+                    widget is ScrollView &&
+                    widget.controller?.hasClients == true,
+              )
+              .hitTestable()
+              .first,
+        );
+        final position = view.controller!.position;
+        final firstOffset = position.maxScrollExtent - 90;
+        position.jumpTo(firstOffset);
+        await _pump(tester);
+        int appendAttempts() =>
+            fixture.requests.where((request) => request.page == 1).length;
+        // The native client's four host attempts in one failed page load.
+        expect(appendAttempts(), 4);
+
+        final gesture = await tester.startGesture(const Offset(200, 500));
+        for (var i = 0; i < 16; i++) {
+          await gesture.moveBy(Offset(0, i.isEven ? -36 : 36));
+          await tester.pump(const Duration(milliseconds: 32));
+        }
+        await gesture.up();
+        await _pump(tester);
+        expect((position.pixels - firstOffset).abs(), lessThan(80));
+
+        expect(appendAttempts(), 4);
+        expect(
+          fixture.requests.where((request) => request.page == 0),
+          hasLength(1),
+        );
+
+        // Leave the 503 in place while bringing the actual footer on screen.
+        position.jumpTo(position.maxScrollExtent);
+        await _pump(tester);
+        final retry = find.byTooltip('إعادة المحاولة').hitTestable();
+        expect(retry, findsOneWidget);
+        final attemptsBeforeRetry = appendAttempts();
+
+        fixture.failAppend = false;
+        await tester.tap(retry);
+        await _pump(tester);
+        expect(appendAttempts(), attemptsBeforeRetry + 1);
+        expect(
+          fixture.requests.where((request) => request.page == 0),
+          hasLength(1),
+        );
+        expect(retry, findsNothing);
+
+        position.jumpTo(position.maxScrollExtent - 1);
+        await _pump(tester);
+        final visible = tester.widgetList<MultimediaCard>(
+          find.byType(MultimediaCard).hitTestable(),
+        );
+        expect(
+          visible.map((card) => card.title),
+          contains('Retry fixture 1 title 59'),
+        );
+        expect(appendAttempts(), attemptsBeforeRetry + 1);
       },
     );
   }

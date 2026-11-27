@@ -305,22 +305,29 @@ class MangaReaderController extends ChangeNotifier {
       return const <MangaPage>[];
     }
 
-    final files = <File>[];
+    // Keep directory order within each prefix, including alternate extensions.
+    // Looking up exact prefixes avoids rescanning all filenames for every page,
+    // without retaining paths or integrity decisions across opens.
+    final filesByPrefix = <String, List<File>>{};
     await for (final entity in directory.list(followLinks: false)) {
-      if (entity is File &&
-          p.basename(entity.path) != MangaChapterManifestV2.fileName &&
-          !entity.path.endsWith('.tmp')) {
-        files.add(entity);
+      if (entity is! File) continue;
+      final name = p.basename(entity.path);
+      if (name == MangaChapterManifestV2.fileName || name.endsWith('.tmp')) {
+        continue;
       }
+      final separator = name.indexOf('.');
+      if (separator < 4) continue;
+      (filesByPrefix[name.substring(0, separator)] ??= <File>[]).add(entity);
     }
 
     final pages = <MangaPage>[];
     for (var index = 0; index < manifest.pageCount; index++) {
       final prefix = (index + 1).toString().padLeft(4, '0');
+      final candidates = filesByPrefix[prefix];
+      if (candidates == null) return const <MangaPage>[];
       File? pageFile;
-      for (final file in files) {
-        if (p.basename(file.path).startsWith('$prefix.') &&
-            await manifest.isPageValid(index, file)) {
+      for (final file in candidates) {
+        if (await manifest.isPageValid(index, file)) {
           pageFile = file;
           break;
         }

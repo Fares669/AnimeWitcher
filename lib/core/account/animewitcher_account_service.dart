@@ -3626,27 +3626,57 @@ class AnimeWitcherAccountService {
   // Watched episodes and resume positions
   // -------------------------------------------------------------------------
 
+  // A successful full refresh remains authoritative, including its deletions.
+  // Most lists are unchanged, so reuse their ordered ID sets instead of
+  // allocating a new hash table for every watched series on foreground sync.
+  static Set<String> _watchedIds(Object? raw, Set<String>? previous) {
+    if (raw is! List<Object?> || raw.isEmpty) return const <String>{};
+    if (previous != null && previous.length == raw.length) {
+      var index = 0;
+      var matches = true;
+      for (final id in previous) {
+        if (raw[index++].toString() != id) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) return previous;
+    }
+    return raw.map((value) => value.toString()).toSet();
+  }
+
   Future<void> _syncWatchedMangaChapters() async {
     final profile = _profile!;
+    final generation = _sessionGeneration;
     final docs = await _authenticated(
       (token) => _firestore.listDocuments(
         'users/${profile.documentId}/chapters_watched',
         token,
       ),
     );
-    if (!_isCurrentProfile(profile)) return;
+    if (generation != _sessionGeneration || !_isCurrentProfile(profile)) {
+      return;
+    }
 
-    _watchedMangaChapterCache.clear();
     _loadedWatchedManga.clear();
     for (final document in docs) {
-      final raw = document.fields['chapters_watched'];
-      _watchedMangaChapterCache[document.id] = raw is List
-          ? raw.map((value) => value.toString()).toSet()
-          : <String>{};
-      _loadedWatchedManga.add(document.id);
+      final id = document.id;
+      _watchedMangaChapterCache[id] = _watchedIds(
+        document.fields['chapters_watched'],
+        _watchedMangaChapterCache[id],
+      );
+      _loadedWatchedManga.add(id);
+    }
+    if (_watchedMangaChapterCache.length != _loadedWatchedManga.length) {
+      _watchedMangaChapterCache.removeWhere(
+        (id, _) => !_loadedWatchedManga.contains(id),
+      );
     }
 
     await _pendingStorageWrite;
+    if (generation != _sessionGeneration || !_isCurrentProfile(profile)) {
+      return;
+    }
     await _flushPendingMangaWatched(profile);
   }
 
@@ -3824,34 +3854,40 @@ class AnimeWitcherAccountService {
 
   Future<void> _syncWatchedEpisodes() async {
     final profile = _profile!;
-    await _primeWatchedEpisodeCache();
-    if (!_isCurrentProfile(profile)) return;
-    await _pendingStorageWrite;
-    await _flushPendingWatched(profile);
-  }
-
-  Future<void> _primeWatchedEpisodeCache() async {
-    final profile = _profile!;
+    final generation = _sessionGeneration;
     final docs = await _authenticated(
       (token) => _firestore.listDocuments(
         'users/${profile.documentId}/episodes_watched',
         token,
       ),
     );
-    if (!_isCurrentProfile(profile)) return;
-    _watchedEpisodeCache.clear();
+    if (generation != _sessionGeneration || !_isCurrentProfile(profile)) {
+      return;
+    }
     _allEpisodesWatchedAnime.clear();
     _loadedWatchedAnime.clear();
     for (final document in docs) {
-      final values = document.fields['episodes_watched'];
-      _watchedEpisodeCache[document.id] = values is List
-          ? values.map((value) => value.toString()).toSet()
-          : <String>{};
+      final id = document.id;
+      _watchedEpisodeCache[id] = _watchedIds(
+        document.fields['episodes_watched'],
+        _watchedEpisodeCache[id],
+      );
       if (document.fields['all_eps_watched'] == true) {
-        _allEpisodesWatchedAnime.add(document.id);
+        _allEpisodesWatchedAnime.add(id);
       }
-      _loadedWatchedAnime.add(document.id);
+      _loadedWatchedAnime.add(id);
     }
+    if (_watchedEpisodeCache.length != _loadedWatchedAnime.length) {
+      _watchedEpisodeCache.removeWhere(
+        (id, _) => !_loadedWatchedAnime.contains(id),
+      );
+    }
+
+    await _pendingStorageWrite;
+    if (generation != _sessionGeneration || !_isCurrentProfile(profile)) {
+      return;
+    }
+    await _flushPendingWatched(profile);
   }
 
   Future<Set<String>> watchedEpisodeIds(

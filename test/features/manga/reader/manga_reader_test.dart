@@ -294,18 +294,21 @@ void main() {
   setUpAll(() {
     VisibilityDetectorController.instance.updateInterval = Duration.zero;
   });
-  final preloadWidths = ValueVariant<int>({6, 2});
+  final webtoonFixtures = ValueVariant<({int preloadWidth, int count})>({
+    (preloadWidth: 6, count: 8),
+    (preloadWidth: 2, count: 8),
+    (preloadWidth: 2, count: 192),
+  });
   testWidgets('Webtoon resumes a completed chapter and persists physical scroll', (
     tester,
   ) async {
-    final preloadWidth = preloadWidths.currentValue!;
+    final (:preloadWidth, :count) = webtoonFixtures.currentValue!;
     const chapter = MangaChapter(
       id: 'plain-webtoon-chapter',
       mangaId: 'plain-webtoon-manga',
       url: 'https://example.test/webtoon/chapter',
       name: 'Plain Webtoon chapter',
     );
-    const count = 8;
     const resume = 3;
     final dir = Directory.systemTemp.createTempSync('webtoon_offsets_');
     addTearDown(() => dir.delete(recursive: true));
@@ -328,8 +331,8 @@ void main() {
         pageCount: count,
         completedIndexes: digests.keys.toSet(),
         isComplete: true,
-        // The app's legacy downloaded-chapter path is valid without saved
-        // hashes. The fixture independently checks every encoded hash.
+        // Exercise both legacy chapters and integrity-checked downloads.
+        pageDigests: count > 8 ? digests : const <int, String>{},
       ).writeTo(dir);
     });
     final provider = _ReaderProvider(emptyPages: true);
@@ -381,10 +384,13 @@ void main() {
 
     int? savedPage() => progress.get(chapter.mangaId, chapter.id)?.pageIndex;
     Future<void> eventually(String stage, bool Function() ready) async {
-      for (var i = 0; i < 480; i++) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 6)),
-        );
+      // A hashed chapter performs sequential async filesystem checks. Give
+      // each real IO completion a fake-clock turn before counting paint.
+      final openingHashedChapter = count > 8 && stage == 'local chapter open';
+      final turns = openingHashedChapter ? 2048 : 480;
+      final delay = Duration(milliseconds: openingHashedChapter ? 2 : 6);
+      for (var i = 0; i < turns; i++) {
+        await tester.runAsync(() => Future<void>.delayed(delay));
         await tester.pump(const Duration(milliseconds: 32));
         if (ready()) {
           debugPrint('Webtoon fixture: $stage ready; saved=${savedPage()}');
@@ -446,13 +452,21 @@ void main() {
 
     await tester.pumpWidget(app());
     await tester.pumpAndSettle();
-    debugPrint('Webtoon fixture: open legacy local chapter count=$count resume=$resume');
+    debugPrint('Webtoon fixture: open local chapter count=$count resume=$resume');
     await tester.tap(launcher);
     await eventually('local chapter open', () => webtoon.evaluate().isNotEmpty);
     final state = tester.state(webtoon);
     final initial = tester.widget<MangaWebtoonReader>(webtoon);
     expect(initial.initialPage, resume);
     expect(initial.pages, hasLength(count));
+    expect(
+      initial.pages.map((page) => page.imageUrl),
+      [
+        for (var i = 0; i < count; i++)
+          File('${dir.path}/${(i + 1).toString().padLeft(4, '0')}.gif')
+              .uri.toString(),
+      ],
+    );
     expect(initial.doublePage, isFalse);
     expect(initial.sectionDividers, isEmpty);
     expect(initial.settings.showPageGaps, isTrue);
@@ -512,7 +526,7 @@ void main() {
         expect(await MangaChapterManifestV2.pageDigest(file), digests[i]);
       }
     });
-  }, variant: preloadWidths);
+  }, variant: webtoonFixtures);
 
   test('reader exposes webtoon, paged LTR and paged RTL modes', () {
     expect(MangaReaderMode.values, <MangaReaderMode>[

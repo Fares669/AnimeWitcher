@@ -202,12 +202,8 @@ class LibraryRepository {
     );
   }
 
-  MultimediaItem? _findItem(String url) {
-    for (final item in _storageService.getLibraryItems()) {
-      if (item.url == url) return item;
-    }
-    return null;
-  }
+  MultimediaItem? _findItem(String url) =>
+      _storageService.getLibraryItemByExactUrl(url);
 
   void _requireMangaCloudSession() {
     if (!_accountService.isSignedIn) {

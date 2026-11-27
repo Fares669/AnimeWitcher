@@ -479,6 +479,24 @@ class StorageService {
     return raw == null ? null : _storedLibraryCategory(raw);
   }
 
+  /// The item whose projected library URL exactly matches [url].
+  ///
+  /// [getLibraryItems] deduplicates in Hive order before sorting. The sort
+  /// cannot change the winner for a URL, so point reads can reuse that first
+  /// live row without hydrating or sorting unrelated cards. Like the old
+  /// list-based lookup, [url] itself is not normalized for equality.
+  MultimediaItem? getLibraryItemByExactUrl(String url) {
+    if (url.isEmpty || _canonicalMediaUrl(url) != url) return null;
+    final row = _firstLibraryRow(url);
+    if (row == null) return null;
+    return _hydrateLibraryCard((
+      row: row,
+      url: url,
+      title: (row['title'] as String?) ?? '',
+      updatedAt: (row['updatedAt'] as num?)?.toInt() ?? 0,
+    ), _storedLibraryContentType(row));
+  }
+
   List<MultimediaItem> getLibraryItems({String? category}) => [
     for (final card in _orderedLibraryRows(category))
       _hydrateLibraryCard(card, _storedLibraryContentType(card.row)),
