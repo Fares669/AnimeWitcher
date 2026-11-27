@@ -192,7 +192,7 @@ void main() {
     },
   );
 
-  testWidgets('page image state survives leaving the viewport', (tester) async {
+  testWidgets('far-offscreen page releases state and remounts on return', (tester) async {
     final page = MangaPage(
       index: 0,
       imageUrl: Uri.file('/definitely-missing/aw-reader-page.gif').toString(),
@@ -224,11 +224,13 @@ void main() {
 
     controller.jumpTo(2400);
     await tester.pump();
+    expect(before.mounted, isFalse);
     controller.jumpTo(0);
     await tester.pump();
 
     final after = tester.state<State<StatefulWidget>>(find.byKey(pageKey));
-    expect(identical(after, before), isTrue);
+    expect(identical(after, before), isFalse);
+    expect(after.mounted, isTrue);
   });
 
 

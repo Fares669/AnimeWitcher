@@ -76,8 +76,9 @@ class MangaPageImage extends StatefulWidget {
   State<MangaPageImage> createState() => _MangaPageImageState();
 }
 
-class _MangaPageImageState extends State<MangaPageImage>
-    with AutomaticKeepAliveClientMixin<MangaPageImage> {
+// The reader viewport already keeps neighbouring pages ready. Retaining
+// every visited image here also pins its native decoder and decoded tiles.
+class _MangaPageImageState extends State<MangaPageImage> {
   ImageStream? _sizeStream;
   ImageStreamListener? _sizeListener;
   Size? _imageSize;
@@ -225,11 +226,7 @@ class _MangaPageImageState extends State<MangaPageImage>
   }
 
   @override
-  bool get wantKeepAlive => true;
-
-  @override
   Widget build(BuildContext context) {
-    super.build(context);
     final uri = Uri.tryParse(widget.page.imageUrl);
     final localFile = uri != null && uri.scheme == 'file'
         ? File.fromUri(uri)

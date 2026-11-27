@@ -81,6 +81,51 @@ void main() {
     expect(gradient.colors.first, skeletonSurface);
   });
 
+  testWidgets('long skeleton keeps its layout and stops scheduling frames', (
+    tester,
+  ) async {
+    const key = ValueKey('bounded-catalog-shimmer');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: ShimmerPlaceholder.rectangular(
+              key: key,
+              width: 120,
+              height: 180,
+            ),
+          ),
+        ),
+      ),
+    );
+    final box = find.byKey(key);
+    expect(find.byType(Shimmer), findsOneWidget);
+    final geometry = tester.getRect(box);
+    await tester.pump(const Duration(milliseconds: 1000));
+    expect(find.byType(Shimmer), findsOneWidget);
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.byType(Shimmer), findsNothing);
+    expect(tester.getRect(box), geometry);
+    await tester.pump();
+    expect(tester.binding.transientCallbackCount, 0);
+    expect(tester.binding.hasScheduledFrame, isFalse);
+  });
+
+  testWidgets('reduced motion renders a static skeleton immediately', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(disableAnimations: true),
+          child: ShimmerPlaceholder.rectangular(width: 120, height: 180),
+        ),
+      ),
+    );
+    expect(find.byType(ShimmerPlaceholder), findsOneWidget);
+    expect(find.byType(Shimmer), findsNothing);
+  });
+
   testWidgets('anime skeleton renders poster, name and metadata lines', (
     tester,
   ) async {
