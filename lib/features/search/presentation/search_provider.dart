@@ -183,7 +183,79 @@ final searchClearRequestProvider =
       SearchClearRequestNotifier.new,
     );
 
+// A published list remains an independent snapshot. The identity index only
+// belongs to the latest list and is discarded on reload or at the last page.
+class _SearchPageIndex<T> {
+  List<T>? _rows;
+  Set<String>? _keys;
+
+  void reset() {
+    _rows = null;
+    _keys = null;
+  }
+
+  List<T> append(
+    List<T> current,
+    List<T> incoming,
+    String Function(T) keyOf, {
+    required bool hasMore,
+  }) {
+    final saved = identical(_rows, current) ? _keys : null;
+    late final List<T> merged;
+    late final Set<String> keys;
+    if (saved == null) {
+      // The initial page is rendered as received. On the first append, keep
+      // its first occurrence of each key, exactly like later pages.
+      keys = <String>{};
+      merged = <T>[];
+      void collect(List<T> items) {
+        for (final item in items) {
+          if (keys.add(keyOf(item))) merged.add(item);
+        }
+      }
+
+      collect(current);
+      collect(incoming);
+    } else {
+      final additions = <T>[];
+      final addedKeys = <String>{};
+      for (final item in incoming) {
+        final key = keyOf(item);
+        if (!saved.contains(key) && addedKeys.add(key)) additions.add(item);
+      }
+      // Keep the old list intact for readers holding a previous state.
+      merged = additions.isEmpty ? current : <T>[...current, ...additions];
+      keys = saved;
+      if (hasMore) keys.addAll(addedKeys);
+    }
+
+    if (hasMore) {
+      _rows = merged;
+      _keys = keys;
+    } else {
+      reset();
+    }
+    return merged;
+  }
+}
+
+String _mediaPageKey(MultimediaItem item) {
+  final url = item.url.trim();
+  return url.isNotEmpty
+      ? url
+      : '${item.provider ?? ''}|${item.title.trim().toLowerCase()}|${item.year ?? ''}';
+}
+
+String _characterPageKey(Actor item) {
+  final id = item.id?.trim() ?? '';
+  return id.isNotEmpty
+      ? id
+      : '${item.name.trim().toLowerCase()}|${item.image ?? ''}';
+}
+
 class PagedSearchNotifier extends Notifier<SearchAggregateState> {
+  final _mediaIndex = _SearchPageIndex<MultimediaItem>();
+  final _characterIndex = _SearchPageIndex<Actor>();
   int _generation = 0;
   String _query = '';
   SearchDomain _domain = SearchDomain.anime;
@@ -195,6 +267,8 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     ref.onDispose(() {
       _generation++;
       _scheduledReload = null;
+      _mediaIndex.reset();
+      _characterIndex.reset();
     });
     ref.listen(searchQueryProvider, (previous, next) {
       _query = next;
@@ -361,6 +435,8 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     // the selected ones in the same turn. Invalidate old results immediately
     // but start the first page only after those inputs have settled.
     final generation = ++_generation;
+    _mediaIndex.reset();
+    _characterIndex.reset();
     final reload = Future<void>.microtask(() async {
       if (!ref.mounted || generation != _generation) return;
       // Reading also flushes the domain-dependent defaults when no widget has
@@ -464,15 +540,12 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
       if (requestDomain == SearchDomain.characters) {
         final page = await _loadCharacterPage(provider, state.nextOffset);
         if (!_isCurrent(generation, requestDomain)) return;
-        final seen = <String>{};
-        final merged = <Actor>[];
-        for (final item in <Actor>[...state.characters, ...page.items]) {
-          final id = item.id?.trim() ?? '';
-          final key = id.isNotEmpty
-              ? id
-              : '${item.name.trim().toLowerCase()}|${item.image ?? ''}';
-          if (seen.add(key)) merged.add(item);
-        }
+        final merged = _characterIndex.append(
+          state.characters,
+          page.items,
+          _characterPageKey,
+          hasMore: page.hasMore,
+        );
         state = SearchAggregateState(
           characters: merged,
           isLoading: false,
@@ -488,14 +561,12 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
       final current = state.results.isEmpty
           ? const <MultimediaItem>[]
           : state.results.first.results;
-      final seen = <String>{};
-      final merged = <MultimediaItem>[];
-      for (final item in <MultimediaItem>[...current, ...page.items]) {
-        final key = item.url.trim().isNotEmpty
-            ? item.url.trim()
-            : '${item.provider ?? ''}|${item.title.trim().toLowerCase()}|${item.year ?? ''}';
-        if (seen.add(key)) merged.add(item);
-      }
+      final merged = _mediaIndex.append(
+        current,
+        page.items,
+        _mediaPageKey,
+        hasMore: page.hasMore,
+      );
       state = SearchAggregateState(
         results: merged.isEmpty
             ? const <ProviderSearchResult>[]

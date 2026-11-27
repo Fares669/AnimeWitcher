@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_account_service.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
+import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
+import 'package:background_downloader/background_downloader.dart';
 import 'package:animewitcher/core/storage/secure_token_storage.dart';
 import 'package:animewitcher/features/library/presentation/library_media_kind.dart';
 import 'package:animewitcher/features/library/presentation/library_provider.dart';
@@ -16,6 +18,7 @@ import 'package:animewitcher/core/services/artwork_fallback_service.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/core/storage/manga_reading_repository.dart';
 import 'package:animewitcher/features/manga/presentation/manga_details_screen.dart';
+import 'package:animewitcher/features/manga/presentation/manga_details_controller.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_cover_provider.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings_provider.dart';
@@ -45,6 +48,7 @@ final class _MangaProvider extends AnimeWitcherProvider {
   final int? chapterCount;
   final String chapterName;
 
+  List<MangaChapter>? _replacementChapters;
   int detailsCalls = 0;
   int chaptersCalls = 0;
   bool detailsFinished = false;
@@ -110,6 +114,8 @@ final class _MangaProvider extends AnimeWitcherProvider {
   Future<List<MangaChapter>> getMangaChapters(String url) async {
     chaptersCalls += 1;
     chaptersStartedBeforeDetailsFinished = !detailsFinished;
+    final replacement = _replacementChapters;
+    if (replacement != null) return replacement;
     final count = chapterCount;
     if (count != null) {
       return <MangaChapter>[
@@ -151,8 +157,13 @@ final class _MangaDetailsReadingStorage extends StorageService {
   final Map<String, String> values = <String, String>{};
   final Map<String, Object?> playerSettings = <String, Object?>{};
 
+  int readingLookups = 0;
+
   @override
-  String? getString(String key) => values[key];
+  String? getString(String key) {
+    if (key.startsWith('manga_progress:')) readingLookups++;
+    return values[key];
+  }
 
   @override
   Future<void> setString(String key, String? value) async {
@@ -195,9 +206,15 @@ final class _MembershipAccount extends AnimeWitcherAccountService {
     favorite: true,
   );
   int reads = 0;
+  bool _signedIn = true;
+  final _cloudRead = <String>{};
 
   @override
-  bool get isSignedIn => true;
+  bool get isSignedIn => _signedIn;
+
+  @override
+  bool isMangaChapterWatchedCached(String mangaId, String chapterId) =>
+      _signedIn && mangaId == 'm1' && _cloudRead.contains(chapterId);
 
   @override
   String get accountUid => 'manga-account';
@@ -237,10 +254,39 @@ final class _MembershipLibrary extends Library {
   }) async {}
 }
 
+final class _MangaDetailsDownloadFeed extends DownloadsNotifier {
+  @override
+  Future<List<DownloadItem>> build() async => const [];
+
+  void publishProgress(double progress) {
+    state = AsyncData([
+      DownloadItem(
+        task: DownloadTask(
+          taskId: 'other-download',
+          url: 'https://example.test/fixture.mp4',
+          filename: 'fixture.mp4',
+        ),
+        item: MultimediaItem(
+          title: 'Other anime',
+          url: 'https://example.test/other',
+          posterUrl: '',
+          contentType: MultimediaContentType.anime,
+        ),
+        timestamp: 1,
+        status: TaskStatus.running,
+        progress: progress,
+      ),
+    ]);
+  }
+}
+
 Widget _app(
   AnimeWitcherProvider provider, {
   MangaReadingRepository? progressRepository,
   _MembershipAccount? account,
+  _MangaDetailsReadingStorage? readingStorage,
+  _MangaDetailsDownloadFeed? downloadFeed,
+  ValueChanged<MangaChapter>? onOpenChapter,
 }) => ProviderScope(
   overrides: [
     extensionManagerProvider.overrideWith(() => _Manager(provider)),
@@ -249,22 +295,29 @@ Widget _app(
       libraryProvider.overrideWith(_MembershipLibrary.new),
     ],
     artworkFallbackServiceProvider.overrideWithValue(_NoArtwork()),
-    storageServiceProvider.overrideWithValue(_MangaDetailsReadingStorage()),
+    storageServiceProvider.overrideWithValue(
+      readingStorage ?? _MangaDetailsReadingStorage(),
+    ),
+    if (downloadFeed != null)
+      downloadsProvider.overrideWith(() => downloadFeed),
     mangaReaderSettingsProvider.overrideWith(
       _MangaDetailsReaderSettingsNotifier.new,
     ),
     mangaReaderCustomCoversProvider.overrideWith(
       _MangaDetailsEmptyCoverNotifier.new,
     ),
-    mangaReadingRepositoryProvider.overrideWithValue(
-      progressRepository ?? MangaReadingRepository(_MangaDetailsReadingStorage()),
-    ),
+    if (readingStorage == null || progressRepository != null)
+      mangaReadingRepositoryProvider.overrideWithValue(
+        progressRepository ??
+            MangaReadingRepository(_MangaDetailsReadingStorage()),
+      ),
   ],
   child: MaterialApp(
     locale: const Locale('ar'),
     localizationsDelegates: AppLocalizations.localizationsDelegates,
     supportedLocales: AppLocalizations.supportedLocales,
     home: MangaDetailsScreen(
+      onOpenChapter: onOpenChapter,
       item: MultimediaItem(
         title: 'Solo Leveling',
         url: 'https://animewitcher.com/manga/m1',
@@ -301,6 +354,115 @@ void _usePhoneWindow(WidgetTester tester) {
 }
 
 void main() {
+  testWidgets('Manga Details keeps reading work scoped to reading changes', (
+    tester,
+  ) async {
+    _usePhoneWindow(tester);
+    const count = 1600;
+    const tickCount = 8;
+    final source = _MangaProvider(chapterCount: count);
+    final storage = _MangaDetailsReadingStorage();
+    final account = _MembershipAccount(storage);
+    final feed = _MangaDetailsDownloadFeed();
+    final opened = <String>[];
+    await tester.pumpWidget(
+      _app(
+        source,
+        readingStorage: storage,
+        account: account,
+        downloadFeed: feed,
+        onOpenChapter: (chapter) => opened.add(chapter.id),
+      ),
+    );
+    await _pumpUntil(tester, () => source.detailsFinished);
+    final toggle = find.byKey(const ValueKey('manga-chapters-toggle'));
+    await Scrollable.ensureVisible(tester.element(toggle), alignment: .25);
+    await tester.pump();
+    expect(toggle.hitTestable(), findsOneWidget);
+    await tester.tap(toggle.hitTestable());
+    final readPill = find.byKey(const ValueKey('manga-read-pill'));
+    await _pumpUntil(tester, () => readPill.evaluate().isNotEmpty);
+    await Scrollable.ensureVisible(tester.element(readPill), alignment: .25);
+    await tester.pump(const Duration(milliseconds: 260));
+    expect(readPill.hitTestable(), findsOneWidget);
+    expect(find.text('ابدأ القراءة'), findsOneWidget);
+    expect(source.chaptersCalls, 1);
+    final routeScope = ProviderScope.containerOf(tester.element(readPill));
+    final firstOffset = Scrollable.of(tester.element(readPill)).position.pixels;
+    storage.readingLookups = 0;
+    for (var tick = 0; tick < tickCount; tick++) {
+      feed.publishProgress((tick + 1) / 10);
+      await tester.pump(const Duration(milliseconds: 90));
+    }
+    expect(
+      Scrollable.of(tester.element(readPill)).position.pixels,
+      firstOffset,
+    );
+    expect(find.text('ابدأ القراءة'), findsOneWidget);
+    expect(source.chaptersCalls, 1);
+    // Visible chapter rows still rebuild to display download actions, but
+    // unrelated transport ticks must not re-read every chapter's progress.
+    expect(storage.readingLookups, lessThan(240));
+
+    account._cloudRead.add('9');
+    routeScope.read(accountDataRevisionProvider.notifier).bump();
+    await tester.pump();
+    expect(find.text('اقرأ · الفصل 1'), findsOneWidget);
+
+    account._signedIn = false;
+    routeScope.read(accountDataRevisionProvider.notifier).bump();
+    await tester.pump();
+    expect(find.text('ابدأ القراءة'), findsOneWidget);
+
+    await routeScope
+        .read(mangaReadingRepositoryProvider)
+        .save(
+          const MangaReadingProgress(
+            mangaId: 'm1',
+            chapterId: '1',
+            pageIndex: 3,
+            pageCount: 20,
+            updatedAt: 1,
+          ),
+        );
+    await tester.pump();
+    expect(find.text('تابع · الفصل 1'), findsOneWidget);
+    await tester.tap(readPill.hitTestable());
+    await tester.pump();
+    expect(opened, ['1']);
+
+    source._replacementChapters = const [
+      MangaChapter(
+        id: 'new',
+        mangaId: 'm1',
+        url: 'chapter://new',
+        name: 'فصل أحدث',
+        number: 0.5,
+      ),
+      MangaChapter(
+        id: '1',
+        mangaId: 'm1',
+        url: 'chapter://1',
+        name: 'الفصل 1',
+        number: 1,
+      ),
+    ];
+    await routeScope
+        .read(
+          mangaDetailsControllerProvider('https://animewitcher.com/manga/m1')
+              .notifier,
+        )
+        .loadChaptersOnDemand(forceReload: true);
+    await tester.pump();
+    expect(source.chaptersCalls, 2);
+    expect(find.text('ابدأ القراءة'), findsOneWidget);
+    await Scrollable.ensureVisible(tester.element(readPill), alignment: .25);
+    await tester.pump();
+    await tester.tap(readPill.hitTestable());
+    await tester.pump();
+    expect(opened, ['1', 'new']);
+  });
+
   testWidgets('manga details refreshes server membership after reopening', (
     tester,
   ) async {
@@ -438,7 +600,9 @@ void main() {
     // The name in the header, not the small one on the poster's stand-in.
     final title = find.byWidgetPredicate(
       (widget) =>
-          widget is Text && widget.data == 'Solo Leveling' && widget.maxLines == 3,
+          widget is Text &&
+          widget.data == 'Solo Leveling' &&
+          widget.maxLines == 3,
     );
     expect(title, findsOneWidget);
 
@@ -529,17 +693,21 @@ void main() {
       final progressRepository = MangaReadingRepository(
         _MangaDetailsReadingStorage(),
       );
-      await progressRepository.save(const MangaReadingProgress(
-        mangaId: 'm1',
-        chapterId: '12.5',
-        pageIndex: 2,
-        pageCount: 20,
-        updatedAt: 1,
-      ));
-      await tester.pumpWidget(_app(
-        _MangaProvider(chapterName: chapterName),
-        progressRepository: progressRepository,
-      ));
+      await progressRepository.save(
+        const MangaReadingProgress(
+          mangaId: 'm1',
+          chapterId: '12.5',
+          pageIndex: 2,
+          pageCount: 20,
+          updatedAt: 1,
+        ),
+      );
+      await tester.pumpWidget(
+        _app(
+          _MangaProvider(chapterName: chapterName),
+          progressRepository: progressRepository,
+        ),
+      );
       await _pumpUntil(
         tester,
         () => find

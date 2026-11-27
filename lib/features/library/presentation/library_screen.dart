@@ -159,14 +159,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                         _recent = true;
                         _characters = false;
                       });
-                      // Server history is fetched on demand, not each time
-                      // the user opens a cached anime/manga library shelf.
-                      unawaited(
-                        ref
-                            .read(watchHistoryProvider.notifier)
-                            .refreshFromServer()
-                            .catchError((Object _) {}),
-                      );
                     },
                     onSelect: (listKind, listCategory) {
                       setState(() {

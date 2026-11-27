@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
@@ -114,6 +115,93 @@ class _Source extends AnimeWitcherProvider {
     }
     if (offset == 30) return secondPage.future;
     throw StateError('Unexpected page offset $offset');
+  }
+}
+
+class _PagingSource extends _Source {
+  static const pageSize = 30;
+  static const pageCount = 24;
+  int identityReads = 0;
+  bool measureIdentity = false;
+  final responses = <int, Completer<ProviderMediaPage>>{};
+  final published = <MultimediaItem>[];
+
+  MultimediaItem newWork(int key, String title) =>
+      _TrackedWork(this, key, title);
+
+  @override
+  Future<ProviderMediaPage> searchPage(
+    String query,
+    ProviderSearchFilters filters, {
+    int offset = 0,
+    int limit = pageSize,
+    CancelToken? cancelToken,
+  }) async {
+    if (query.isEmpty) {
+      return const ProviderMediaPage(items: [], nextOffset: 0, hasMore: false);
+    }
+    expect(query, _link);
+    expect(limit, pageSize);
+    expect(offset % pageSize, 0);
+    committedCalls.add((query, offset));
+    if (offset == 0) {
+      final result = page(0);
+      return result;
+    }
+    final response = Completer<ProviderMediaPage>();
+    responses[offset] = response;
+    return response.future;
+  }
+
+  ProviderMediaPage page(int offset) {
+    final rows = [
+      if (offset > 0) newWork(0, 'duplicate replacement'),
+      for (var i = offset > 0 ? 1 : 0; i < pageSize; i++)
+        newWork(offset + i, 'عمل ${offset + i}'),
+    ];
+    published.addAll(offset == 0 ? rows : rows.skip(1));
+    final next = offset + pageSize;
+    return ProviderMediaPage(
+      items: rows,
+      nextOffset: next,
+      hasMore: next < pageCount * pageSize,
+    );
+  }
+}
+
+class _TrackedWork extends MultimediaItem {
+  _TrackedWork(this._source, int key, String title)
+    : super(
+        title: title,
+        url: 'https://fixture.invalid/catalog/paged-$key',
+        posterUrl: '',
+        contentType: MultimediaContentType.anime,
+        provider: 'fixture.search-submission',
+      );
+
+  final _PagingSource _source;
+
+  @override
+  String get url {
+    if (_source.measureIdentity) _source.identityReads++;
+    return super.url;
+  }
+}
+
+class _ActorPagingSource extends _Source {
+  @override
+  bool get supportsCharacters => true;
+
+  final actorPages = <(String, int), Completer<ProviderCharacterPage>>{};
+
+  @override
+  Future<ProviderCharacterPage> searchCharacterPage(
+    String query, {
+    int page = 0,
+  }) {
+    final response = Completer<ProviderCharacterPage>();
+    actorPages[(query, page)] = response;
+    return response.future;
   }
 }
 
@@ -453,6 +541,197 @@ void main() {
         0,
         reason: 'superseded suggestion lists must not be traversed during active paging',
       );
+    },
+  );
+
+  testWidgets(
+    'real Search scroll does not re-index the retained catalog on each page',
+    (tester) async {
+      final source = _PagingSource();
+      final harness = await _mount(tester, source);
+      final field = find.byType(TextField);
+      await tester.enterText(field, _typedLink);
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      final sectionFinder = find.byType(SearchResultSection);
+      await pumpUntil(
+        tester,
+        () => sectionFinder.evaluate().isNotEmpty,
+        'first committed catalog page',
+      );
+      SearchResultSection section() =>
+          tester.widget<SearchResultSection>(sectionFinder);
+      final first = section().results;
+      expect(first, orderedEquals(source.published));
+
+      final scroll = find
+          .descendant(
+            of: find.byType(CustomScrollView),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      final position = tester.state<ScrollableState>(scroll).position;
+      const pageSize = _PagingSource.pageSize;
+      for (var page = 1; page < _PagingSource.pageCount; page++) {
+        final offset = page * pageSize;
+        position.jumpTo(position.maxScrollExtent);
+        await pumpUntil(
+          tester,
+          () => source.responses.containsKey(offset),
+          'real scroll requested page $page',
+        );
+        expect(
+          harness.container.read(searchPagedResultsProvider).isLoadingMore,
+          isTrue,
+        );
+        final response = source.page(offset);
+        source.measureIdentity = true;
+        source.responses[offset]!.complete(response);
+        // Let the real notifier publish before a widget frame can read URLs
+        // for card keys. Only work in the append itself is counted.
+        await Future<void>.value();
+        await Future<void>.value();
+        source.measureIdentity = false;
+        expect(
+          harness.container.read(searchPagedResultsProvider).isLoadingMore,
+          isFalse,
+        );
+        await pumpUntil(
+          tester,
+          () => section().results.length == source.published.length,
+          'published page $page',
+        );
+      }
+
+      expect(first, hasLength(pageSize), reason: 'previous list unchanged');
+      expect(section().results, orderedEquals(source.published));
+      expect(section().results.first, same(first.first));
+      expect(source.committedCalls, [
+        for (var p = 0; p < _PagingSource.pageCount; p++) (_link, p * pageSize),
+      ]);
+      expect(find.byType(PhoneSuggestionBox), findsNothing);
+      final last = source.published.last;
+      final lastCard = find.byKey(ValueKey(last.url));
+      position.jumpTo(position.maxScrollExtent);
+      await pumpUntil(
+        tester,
+        () => lastCard.evaluate().isNotEmpty,
+        'appended card appears at end',
+      );
+      await tester.ensureVisible(lastCard);
+      await tester.pump();
+      await tester.tap(lastCard);
+      await pumpUntil(
+        tester,
+        () => harness.opened.isNotEmpty,
+        'routed appended work',
+      );
+      expect(harness.opened.last.item, same(last));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+
+      expect(source.identityReads, _PagingSource.pageCount * pageSize);
+    },
+  );
+
+  test(
+    'character index preserves first winners and resets for account change',
+    () async {
+      final source = _ActorPagingSource();
+      final container = ProviderContainer(
+        overrides: [
+          activeProviderProvider.overrideWithValue(source),
+          extensionManagerProvider.overrideWith(() => _Manager(source)),
+        ],
+      );
+      addTearDown(container.dispose);
+      container
+          .read(searchDomainProvider.notifier)
+          .set(SearchDomain.characters);
+      final query = container.read(searchQueryProvider.notifier);
+      query.set('actors');
+      final notifier = container.read(searchPagedResultsProvider.notifier);
+      Future<void> flush() => Future<void>.delayed(Duration.zero);
+      await flush();
+      final first = Actor(id: '  first  ', name: 'First');
+      final sameId = Actor(id: 'first', name: 'Ignored id duplicate');
+      final fallback = Actor(name: ' No Id ', image: 'test://same');
+      final sameFallback = Actor(name: 'no id', image: 'test://same');
+      final differentImage = Actor(name: 'no id', image: 'test://different');
+      final last = Actor(id: 'last', name: 'Last');
+      source.actorPages[('actors', 0)]!.complete(
+        ProviderCharacterPage(
+          items: [first, sameId, fallback, sameFallback],
+          page: 0,
+          hasMore: true,
+        ),
+      );
+      await flush();
+      final initial = container.read(searchPagedResultsProvider).characters;
+      expect(initial, [first, sameId, fallback, sameFallback]);
+
+      final stageOne = notifier.loadMore();
+      source.actorPages[('actors', 1)]!.complete(
+        ProviderCharacterPage(
+          items: [fallback, differentImage],
+          page: 1,
+          hasMore: true,
+        ),
+      );
+      await stageOne;
+      final previous = container.read(searchPagedResultsProvider).characters;
+      expect(previous, [first, fallback, differentImage]);
+      expect(initial, [first, sameId, fallback, sameFallback]);
+
+      // A transient append failure leaves retry offset and current rows intact.
+      final failing = notifier.loadMore();
+      source.actorPages[('actors', 2)]!.completeError(StateError('offline'));
+      await failing;
+      expect(
+        container.read(searchPagedResultsProvider).characters,
+        same(previous),
+      );
+      expect(container.read(searchPagedResultsProvider).nextOffset, 2);
+
+      final stageTwo = notifier.loadMore();
+      source.actorPages[('actors', 2)]!.complete(
+        ProviderCharacterPage(items: [sameId, last], page: 2, hasMore: true),
+      );
+      await stageTwo;
+      expect(container.read(searchPagedResultsProvider).characters, [
+        first,
+        fallback,
+        differentImage,
+        last,
+      ]);
+      expect(previous, [first, fallback, differentImage]);
+
+      final stale = notifier.loadMore();
+      final obsolete = source.actorPages[('actors', 3)]!;
+      container.read(accountDataRevisionProvider.notifier).bump();
+      expect(container.read(searchPagedResultsProvider).characters, isEmpty);
+      await flush();
+      final newFirst = Actor(id: 'first', name: 'New account');
+      source.actorPages[('actors', 0)]!.complete(
+        ProviderCharacterPage(items: [newFirst], page: 0, hasMore: true),
+      );
+      await flush();
+      obsolete.complete(
+        ProviderCharacterPage(
+          items: [Actor(id: 'not-visible', name: 'Previous account only')],
+          page: 3,
+          hasMore: false,
+        ),
+      );
+      await stale;
+      final current = notifier.loadMore();
+      source.actorPages[('actors', 1)]!.complete(
+        ProviderCharacterPage(items: [sameId, last], page: 1, hasMore: false),
+      );
+      await current;
+      final state = container.read(searchPagedResultsProvider);
+      expect(state.characters, [newFirst, last]);
+      expect(state.hasMore, isFalse);
     },
   );
 

@@ -22,6 +22,64 @@ import 'logical_download_store_v2.dart';
 import 'manga_chapter_manifest_v2.dart';
 import 'manga_chapter_transport_v2.dart';
 
+typedef _CanonicalPathInput = ({String original, String absolute});
+typedef _CanonicalPathResult = ({String? key, Object? error});
+
+// Worker entry points capture only path data, never the manager or gateway.
+Future<String> _readCanonicalPath(_CanonicalPathInput input) =>
+    runLocalFileIo(() => _canonicalPathOnDisk(input));
+
+Future<_CanonicalPathResult> _tryCanonicalPath(
+  _CanonicalPathInput input,
+) async {
+  try {
+    return (key: await _readCanonicalPath(input), error: null);
+  } catch (error) {
+    return (key: null, error: error);
+  }
+}
+
+Future<List<_CanonicalPathResult>> _canonicalPathBatch(
+  List<_CanonicalPathInput> inputs,
+) => runLocalFileIo(() {
+  final results = <_CanonicalPathResult>[];
+  for (final input in inputs) {
+    try {
+      results.add((key: _canonicalPathOnDisk(input), error: null));
+    } catch (error) {
+      results.add((key: null, error: error));
+    }
+  }
+  return results;
+});
+
+String _canonicalPathOnDisk(_CanonicalPathInput input) {
+  var ancestor = p.normalize(input.absolute);
+  final missing = <String>[];
+  while (FileSystemEntity.typeSync(ancestor, followLinks: false) ==
+      FileSystemEntityType.notFound) {
+    try {
+      File(ancestor).resolveSymbolicLinksSync();
+      break;
+    } on FileSystemException catch (error) {
+      // Only proven missing components may be appended to a resolved key.
+      if (![2, 3].contains(error.osError?.errorCode)) rethrow;
+    }
+    final parent = p.dirname(ancestor);
+    if (parent == ancestor) {
+      throw FileSystemException(
+        'No existing destination ancestor',
+        input.original,
+      );
+    }
+    missing.insert(0, p.basename(ancestor));
+    ancestor = parent;
+  }
+  final resolved = File(ancestor).resolveSymbolicLinksSync();
+  final canonical = p.normalize(p.joinAll([resolved, ...missing]));
+  return Platform.isWindows ? canonical.toLowerCase() : canonical;
+}
+
 /// Application request for one logical episode download.
 ///
 /// Transport URLs and headers are deliberately absent. Every fresh generation
@@ -299,17 +357,50 @@ final class DownloadManagerV2 {
     final startupDestinationKeys = <DownloadLogicalId, String>{};
     final indexingErrors = <DownloadLogicalId, Object>{};
     // Preserve oldest-owner precedence before reconciling video rows first.
+    // This pass builds a read-only snapshot, not authority for a later delete
+    // or write. Resolve each path independently in order, without starting an
+    // isolate per saved row. Mutation paths still recheck the filesystem.
+    const destinationBatchSize = 64;
+    final batchIds = <DownloadLogicalId>[];
+    final batchPaths = <_CanonicalPathInput>[];
+    Future<void> indexBatch() async {
+      if (batchPaths.isEmpty) return;
+      List<_CanonicalPathResult> results;
+      try {
+        results = await _canonicalPathBatch(batchPaths);
+      } catch (_) {
+        // If a worker cannot start/send this batch, keep per-record recovery
+        // semantics instead of treating all 64 destinations as failed.
+        results = [
+          for (final path in batchPaths) await _tryCanonicalPath(path),
+        ];
+      }
+      for (var i = 0; i < results.length; i++) {
+        final id = batchIds[i];
+        final result = results[i];
+        if (result.key case final String key) {
+          startupDestinationKeys[id] = key;
+          startupDestinationOwners.putIfAbsent(key, () => id);
+        } else {
+          indexingErrors[id] = result.error!;
+        }
+      }
+      batchIds.clear();
+      batchPaths.clear();
+    }
+
     for (final record in records) {
       _rememberRecord(record);
       if (record.intent == DownloadUserIntent.canceled) continue;
       try {
-        final key = await _canonicalDestinationPath(record.destinationPath);
-        startupDestinationKeys[record.logicalId] = key;
-        startupDestinationOwners.putIfAbsent(key, () => record.logicalId);
+        batchPaths.add(await _canonicalPathInput(record.destinationPath));
+        batchIds.add(record.logicalId);
       } catch (error) {
         indexingErrors[record.logicalId] = error;
       }
+      if (batchPaths.length == destinationBatchSize) await indexBatch();
     }
+    await indexBatch();
     final recoveries = <Future<void> Function()>[];
     for (final record in [
       ...records.where(
@@ -3030,36 +3121,18 @@ final class DownloadManagerV2 {
     await _publishRecords();
   }
 
-  Future<String> _canonicalDestinationPath(String destinationPath) async {
+  Future<_CanonicalPathInput> _canonicalPathInput(
+    String destinationPath,
+  ) async {
     final file = !p.isAbsolute(destinationPath) && !Platform.isIOS
         ? File(p.absolute(destinationPath))
         : await _destinationFile(destinationPath);
-    return runLocalFileIo(() {
-      var ancestor = p.normalize(file.absolute.path);
-      final missing = <String>[];
-      while (FileSystemEntity.typeSync(ancestor, followLinks: false) ==
-          FileSystemEntityType.notFound) {
-        try {
-          File(ancestor).resolveSymbolicLinksSync();
-          break;
-        } on FileSystemException catch (error) {
-          // Only proven missing components may be appended to a resolved key.
-          if (![2, 3].contains(error.osError?.errorCode)) rethrow;
-        }
-        final parent = p.dirname(ancestor);
-        if (parent == ancestor) {
-          throw FileSystemException(
-            'No existing destination ancestor',
-            destinationPath,
-          );
-        }
-        missing.insert(0, p.basename(ancestor));
-        ancestor = parent;
-      }
-      final resolved = File(ancestor).resolveSymbolicLinksSync();
-      final canonical = p.normalize(p.joinAll([resolved, ...missing]));
-      return Platform.isWindows ? canonical.toLowerCase() : canonical;
-    });
+    return (original: destinationPath, absolute: file.absolute.path);
+  }
+
+  Future<String> _canonicalDestinationPath(String destinationPath) async {
+    final input = await _canonicalPathInput(destinationPath);
+    return _readCanonicalPath(input);
   }
 
   Future<LogicalDownloadRecordV2?> _findDestinationConflict(

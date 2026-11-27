@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:animewitcher/features/player/presentation/player_controller.dart';
 import 'package:animewitcher/features/player/presentation/player_gesture_handler.dart';
@@ -12,6 +13,7 @@ import 'package:animewitcher/features/skip/data/skip_service.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart' as mk;
@@ -186,8 +188,18 @@ Future<void> _mount(
   mk.Player player,
   _Controller controller, {
   vv.VideoController? videoView,
+  GlobalKey? paintBoundaryKey,
 }) async {
   _mockVolume(tester);
+  final controls = PlayerLtr(
+    child: AnimeWitcherPlayerControls(
+      player: player,
+      videoViewController: videoView,
+      platformService: PlayerPlatformService(nativePip: false),
+      title: 'Offline fixture',
+      onBackPointer: () {},
+    ),
+  );
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
@@ -199,15 +211,9 @@ Future<void> _mount(
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
-          body: PlayerLtr(
-            child: AnimeWitcherPlayerControls(
-              player: player,
-              videoViewController: videoView,
-              platformService: PlayerPlatformService(nativePip: false),
-              title: 'Offline fixture',
-              onBackPointer: () {},
-            ),
-          ),
+          body: paintBoundaryKey == null
+              ? controls
+              : RepaintBoundary(key: paintBoundaryKey, child: controls),
         ),
       ),
     ),
@@ -417,6 +423,198 @@ void main() {
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
       videoView.dispose();
+      await player.dispose();
+    }
+  });
+
+  testWidgets('visible clock moves its playhead without rebuilding the track', (
+    tester,
+  ) async {
+    final source = _FixtureMediaKit()
+      ..tick(3000, durationMs: 120000, bufferMs: 42000);
+    final player = mk.Player(platformPlayer: source);
+    final key = GlobalKey();
+    final controller = _Controller(
+      segments: [
+        SkipSegment(startTime: 15, endTime: 27, type: SkipType.intro),
+        SkipSegment(startTime: 31.5, endTime: 35.8, type: SkipType.recap),
+        SkipSegment(startTime: 100, endTime: 120, type: SkipType.outro),
+      ],
+    );
+    final previousHook = debugOnRebuildDirtyWidget;
+    try {
+      await _mount(tester, player, controller, paintBoundaryKey: key);
+      await tester.tapAt(_showPoint);
+      await tester.pumpAndSettle();
+      final track = tester.getRect(_seekTrack);
+      final state = tester.state(_seekBar);
+      final theme = Theme.of(tester.element(_seekBar)).colorScheme;
+      final boundary = tester.renderObject<RenderRepaintBoundary>(
+        find.byKey(key),
+      );
+      expect(find.text('0:03 / 2:00'), findsOneWidget);
+
+      // Large deliberate jumps provide unambiguous played, buffered and
+      // untouched pixel samples without rounding at an interval boundary.
+      Future<void> paintAt(int ms, int bufferMs) async {
+        source.tick(ms, bufferMs: bufferMs);
+        await tester.idle();
+        await tester.pump();
+        final shot = boundary.toImageSync();
+        try {
+          final data = await tester.runAsync(
+            () => shot.toByteData(format: ui.ImageByteFormat.rawRgba),
+          );
+          expect(data, isNotNull);
+          final centerY = boundary.globalToLocal(track.center).dy.round();
+          final trackOrigin = boundary.globalToLocal(track.topLeft).dx;
+          Color sample(double ratio, {int dy = 0}) {
+            final x = (trackOrigin + track.width * ratio).round();
+            final offset = (shot.width * (centerY + dy) + x) * 4;
+            return Color.fromARGB(
+              data!.getUint8(offset + 3),
+              data.getUint8(offset),
+              data.getUint8(offset + 1),
+              data.getUint8(offset + 2),
+            );
+          }
+
+          // 4 px from the centre is outside the bar (5 px) but within the
+          // 14 px circular playhead. Verify both positions on the real track.
+          expect(sample(ms / 120000, dy: 4), theme.primary);
+          expect(sample(0.12), theme.primary);
+          expect(sample(0.45), isNot(sample(0.93)));
+        } finally {
+          shot.dispose();
+        }
+      }
+
+      await paintAt(42000, 68000);
+      await paintAt(64000, 88000);
+      expect(find.text('1:04 / 2:00'), findsOneWidget);
+      expect(tester.getRect(_seekTrack), track);
+
+      source.tick(3000, bufferMs: 43000);
+      await tester.idle();
+      await tester.pump();
+      var seekBuilds = 0;
+      var labelBuilds = 0;
+      debugOnRebuildDirtyWidget = (element, built) {
+        previousHook?.call(element, built);
+        if (element.widget.runtimeType.toString() == '_SeekBar') seekBuilds++;
+        if (element.widget case Text(data: final String text)
+            when text.endsWith(' / 2:00')) {
+          labelBuilds++;
+        }
+      };
+      final before = source.deliveries;
+      for (var i = 1; i <= 96; i++) {
+        source.tick(3000 + i * 33, bufferMs: 43000 + i * 25);
+        await tester.idle();
+        await tester.pump();
+      }
+      debugOnRebuildDirtyWidget = previousHook;
+      final after = source.deliveries;
+      expect(after.position - before.position, 192);
+      expect(after.buffer - before.buffer, 96);
+      expect(seekBuilds, 0);
+      expect(labelBuilds, 3);
+      expect(find.text('0:06 / 2:00'), findsOneWidget);
+
+      await tester.tap(find.text('0:06 / 2:00'));
+      await tester.pumpAndSettle();
+      expect(find.text('-1:53 / 2:00'), findsOneWidget);
+      source.tick(7001, bufferMs: 46000);
+      await tester.idle();
+      await tester.pump();
+      expect(find.text('-1:52 / 2:00'), findsOneWidget);
+
+      await tester.tapAt(
+        Offset(track.left + track.width * .55, track.center.dy),
+      );
+      await tester.pump();
+      expect(controller.seeks.single.inMilliseconds, closeTo(66000, 2));
+      expect(tester.state(_seekBar), same(state));
+    } finally {
+      debugOnRebuildDirtyWidget = previousHook;
+      await tester.pumpWidget(const SizedBox.shrink());
+      await player.dispose();
+    }
+  });
+
+  testWidgets('TV seek steps and drag use the latest clock without relayout', (
+    tester,
+  ) async {
+    final source = _FixtureMediaKit()
+      ..tick(21030, durationMs: 120000, bufferMs: 50000);
+    final player = mk.Player(platformPlayer: source);
+    final controller = _Controller();
+    final focus = FocusNode(debugLabel: 'test scrubber');
+    var seekStarts = 0;
+    var seekEnds = 0;
+    try {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            playerControllerProvider.overrideWith(() => controller),
+            playerSettingsProvider.overrideWith(_Settings.new),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: PlayerLtr(
+                child: PlayerProgressBar(
+                  player: player,
+                  isTv: true,
+                  focusNode: focus,
+                  onSeekStart: () => seekStarts++,
+                  onSeekEnd: () => seekEnds++,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      focus.requestFocus();
+      await tester.pumpAndSettle();
+      expect(focus.hasFocus, isTrue);
+      expect(find.text('0:21 / 2:00'), findsOneWidget);
+
+      source.tick(22950);
+      await tester.idle();
+      await tester.pump();
+      // The playback can advance again during the debounce without
+      // overwriting the viewer's chosen target.
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(find.text('0:52 / 2:00'), findsOneWidget);
+      source.tick(23020);
+      await tester.idle();
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.text('0:52 / 2:00'), findsOneWidget);
+      expect(controller.seeks, isEmpty);
+      await tester.pump(const Duration(milliseconds: 301));
+      expect(controller.seeks, [const Duration(milliseconds: 52950)]);
+      expect(find.text('0:23 / 2:00'), findsOneWidget);
+      expect((seekStarts, seekEnds), (1, 1));
+
+      final rect = tester.getRect(_seekTrack);
+      final drag = await tester.startGesture(
+        Offset(rect.left + rect.width * .4, rect.center.dy),
+      );
+      await drag.moveBy(Offset(rect.width * .08, 0));
+      await tester.pump();
+      await drag.moveBy(Offset(rect.width * .1, 0));
+      await tester.pump();
+      await drag.up();
+      await tester.pumpAndSettle();
+      expect(controller.seeks.length, greaterThanOrEqualTo(2));
+      expect(controller.seeks.last.inMilliseconds, closeTo(69600, 55));
+      expect(seekStarts, seekEnds);
+      expect(focus.hasFocus, isTrue);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      focus.dispose();
       await player.dispose();
     }
   });

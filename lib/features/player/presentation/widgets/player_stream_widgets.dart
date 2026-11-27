@@ -1,6 +1,8 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:lucide_icons_flutter/lucide_icons_200.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -161,6 +163,7 @@ class _PlayerProgressBarState extends ConsumerState<PlayerProgressBar> {
 
   Widget _buildTimeHeader({
     required bool isLive,
+    required bool showRemaining,
     required Duration duration,
     required Duration displayDuration,
   }) {
@@ -201,22 +204,10 @@ class _PlayerProgressBarState extends ConsumerState<PlayerProgressBar> {
       );
     }
 
-    final currentText = _formatDuration(displayDuration);
-    final remainingText = _formatRemaining(duration, displayDuration);
-    final durationText = _formatDuration(duration);
-    // Persisted across sessions — once a user toggles to remaining-time
-    // they almost always want it always. Stored in PlayerSettings so it
-    // survives episode change, source change, and app restart.
-    final showRemaining =
-        ref.watch(
-          playerSettingsProvider.select(
-            (s) => s.asData?.value.showRemainingTime,
-          ),
-        ) ??
-        false;
-    final label = showRemaining
-        ? '$remainingText / $durationText'
-        : '$currentText / $durationText';
+    final shown = showRemaining
+        ? _formatRemaining(duration, displayDuration)
+        : _formatDuration(displayDuration);
+    final label = '$shown / ${_formatDuration(duration)}';
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: _sliderTrackInset),
@@ -273,112 +264,157 @@ class _PlayerProgressBarState extends ConsumerState<PlayerProgressBar> {
         : null;
     final isLive = ref.watch(playerControllerProvider.select((s) => s.isLive));
 
+    final showRemaining =
+        !isLive &&
+        (ref.watch(
+              playerSettingsProvider.select(
+                (s) => s.asData?.value.showRemainingTime,
+              ),
+            ) ??
+            false);
+
     return _ProgressClock(
       // Keep the existing reset of backend-local gestures on engine switches,
       // but never remount the track on a visibility-only transition.
       key: ValueKey(videoViewController != null),
       player: widget.player,
       videoViewController: videoViewController,
-      builder: (context, duration, position, buffer) {
+      builder: (context, duration, samples) {
         final durationMs = duration.inMilliseconds.toDouble();
-        final displayValue = _dragValue ?? position.inMilliseconds.toDouble();
-        final displayDuration = _dragValue != null
-            ? Duration(milliseconds: _dragValue!.toInt())
-            : position;
-        final bufferRatio = durationMs > 0
-            ? (buffer.inMilliseconds / durationMs).clamp(0.0, 1.0)
-            : 0.0;
-
-        return _buildRow(
-          duration: duration,
-          durationMs: durationMs,
-          displayValue: displayValue,
-          displayDuration: displayDuration,
-          bufferRatio: bufferRatio,
-          canSeek: canSeek,
-          onSeekEnd: (value) => ref
-              .read(playerControllerProvider.notifier)
-              .seekTo(Duration(milliseconds: value.toInt())),
-          isLive: isLive,
-          skipSegments: skipSegments,
+        final fixedPosition = _dragValue == null
+            ? null
+            : Duration(milliseconds: _dragValue!.toInt());
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (isLive)
+              _buildTimeHeader(
+                isLive: true,
+                showRemaining: false,
+                duration: Duration.zero,
+                displayDuration: Duration.zero,
+              )
+            else
+              _TimelineTime(
+                duration: duration,
+                samples: samples,
+                fixedPosition: fixedPosition,
+                showRemaining: showRemaining,
+                builder: (position) => _buildTimeHeader(
+                  isLive: false,
+                  showRemaining: showRemaining,
+                  duration: duration,
+                  displayDuration: position,
+                ),
+              ),
+            SizedBox(
+              height: 36,
+              child: _SeekBar(
+                samples: samples,
+                fixedValue: _dragValue,
+                durationMs: durationMs,
+                min: 0.0,
+                max: durationMs > 0 ? durationMs : 1.0,
+                step: 30 * 1000.0, // D-pad Left/Right jump 30 seconds.
+                focusNode: _scrubFocusNode,
+                onArrowUp: widget.onArrowUp,
+                onArrowDown: widget.onArrowDown,
+                canSeek: canSeek,
+                skipSegments: skipSegments,
+                onChanged: canSeek
+                    ? (val) => setState(() => _dragValue = val)
+                    : null,
+                onChangeStart: canSeek
+                    ? (val) {
+                        widget.onSeekStart?.call();
+                        setState(() => _dragValue = val);
+                      }
+                    : null,
+                onChangeEnd: canSeek
+                    ? (val) {
+                        ref
+                            .read(playerControllerProvider.notifier)
+                            .seekTo(Duration(milliseconds: val.toInt()));
+                        widget.onSeekEnd?.call();
+                        setState(() => _dragValue = null);
+                      }
+                    : null,
+              ),
+            ),
+          ],
         );
       },
     );
   }
+}
 
-  Widget _buildRow({
-    required Duration duration,
-    required double durationMs,
-    required double displayValue,
-    required Duration displayDuration,
-    required double bufferRatio,
-    required bool canSeek,
-    required void Function(double val) onSeekEnd,
-    required List<SkipSegment> skipSegments,
-    bool isLive = false,
-  }) {
-    // Sizes to content (time row + the fixed-height track band) so it never
-    // overflows its slot — no magic outer height.
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildTimeHeader(
-          isLive: isLive,
-          duration: duration,
-          displayDuration: displayDuration,
-        ),
-        SizedBox(
-          height: 36,
-          child: _buildSlider(
-            durationMs: durationMs,
-            displayValue: displayValue,
-            canSeek: canSeek,
-            onSeekEnd: onSeekEnd,
-            bufferRatio: bufferRatio,
-            skipSegments: skipSegments,
-          ),
-        ),
-      ],
-    );
+typedef _ProgressSample = ({Duration position, Duration buffer});
+
+/// The readout only changes at displayed-second boundaries. Unlike the
+/// visual playhead this never needs to follow every backend position sample.
+class _TimelineTime extends StatefulWidget {
+  const _TimelineTime({
+    required this.duration,
+    required this.samples,
+    required this.fixedPosition,
+    required this.showRemaining,
+    required this.builder,
+  });
+
+  final Duration duration;
+  final ValueListenable<_ProgressSample> samples;
+  final Duration? fixedPosition;
+  final bool showRemaining;
+  final Widget Function(Duration position) builder;
+
+  @override
+  State<_TimelineTime> createState() => _TimelineTimeState();
+}
+
+class _TimelineTimeState extends State<_TimelineTime> {
+  Duration get _position =>
+      widget.fixedPosition ?? widget.samples.value.position;
+
+  late int _second;
+
+  int _displayedSecond() {
+    final position = _position;
+    if (!widget.showRemaining) return position.inSeconds.abs();
+    final remaining = widget.duration - position;
+    return remaining.isNegative ? 0 : remaining.inSeconds;
   }
 
-  Widget _buildSlider({
-    required double durationMs,
-    required double displayValue,
-    required bool canSeek,
-    required void Function(double val) onSeekEnd,
-    required double bufferRatio,
-    required List<SkipSegment> skipSegments,
-  }) {
-    final maxValue = durationMs > 0 ? durationMs : 1.0;
-    return _SeekBar(
-      value: displayValue.clamp(0, maxValue),
-      min: 0.0,
-      max: maxValue,
-      step: 30 * 1000.0, // D-pad Left/Right jumps 30 seconds on the remote
-      focusNode: _scrubFocusNode,
-      onArrowUp: widget.onArrowUp,
-      onArrowDown: widget.onArrowDown,
-      canSeek: canSeek,
-      bufferRatio: bufferRatio,
-      skipSegments: skipSegments,
-      onChanged: canSeek ? (val) => setState(() => _dragValue = val) : null,
-      onChangeStart: canSeek
-          ? (val) {
-              widget.onSeekStart?.call();
-              setState(() => _dragValue = val);
-            }
-          : null,
-      onChangeEnd: canSeek
-          ? (val) {
-              onSeekEnd(val);
-              widget.onSeekEnd?.call();
-              setState(() => _dragValue = null);
-            }
-          : null,
-    );
+  void _onSample() {
+    final second = _displayedSecond();
+    if (_second != second) setState(() => _second = second);
   }
+
+  @override
+  void initState() {
+    super.initState();
+    _second = _displayedSecond();
+    widget.samples.addListener(_onSample);
+  }
+
+  @override
+  void didUpdateWidget(_TimelineTime oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.samples != widget.samples) {
+      oldWidget.samples.removeListener(_onSample);
+      widget.samples.addListener(_onSample);
+    }
+    _second = _displayedSecond();
+  }
+
+  @override
+  void dispose() {
+    widget.samples.removeListener(_onSample);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.builder(_position);
 }
 
 /// Listens to the backend clock only while the chrome can be seen.
@@ -398,8 +434,7 @@ class _ProgressClock extends StatefulWidget {
   final Widget Function(
     BuildContext context,
     Duration duration,
-    Duration position,
-    Duration buffer,
+    ValueListenable<_ProgressSample> samples,
   )
   builder;
 
@@ -410,8 +445,10 @@ class _ProgressClock extends StatefulWidget {
 class _ProgressClockState extends State<_ProgressClock> {
   final _subscriptions = <StreamSubscription<Duration>>[];
   Duration _duration = Duration.zero;
-  Duration _position = Duration.zero;
-  Duration _buffer = Duration.zero;
+  final _samples = ValueNotifier<_ProgressSample>((
+    position: Duration.zero,
+    buffer: Duration.zero,
+  ));
   bool _listening = false;
 
   @override
@@ -449,52 +486,57 @@ class _ProgressClockState extends State<_ProgressClock> {
     _listening = true;
     final controller = widget.videoViewController;
     if (controller != null) {
-      _position = Duration(milliseconds: controller.position.value);
       _duration = Duration(
         milliseconds: controller.mediaInfo.value?.duration ?? 0,
       );
-      _buffer = Duration.zero;
+      _samples.value = (
+        position: Duration(milliseconds: controller.position.value),
+        buffer: Duration.zero,
+      );
       controller.position.addListener(_onVideoViewUpdate);
       controller.mediaInfo.addListener(_onVideoViewUpdate);
       return;
     }
 
     final state = widget.player.state;
-    _position = state.position;
     _duration = state.duration;
-    _buffer = state.buffer;
+    _samples.value = (position: state.position, buffer: state.buffer);
     final stream = widget.player.stream;
-    _listen(stream.position, (value) => _position = value);
-    _listen(stream.duration, (value) => _duration = value);
-    _listen(stream.buffer, (value) => _buffer = value);
+    _listen(
+      stream.position,
+      (value) =>
+          _samples.value = (position: value, buffer: _samples.value.buffer),
+    );
+    _listen(stream.duration, _setDuration);
+    _listen(
+      stream.buffer,
+      (value) =>
+          _samples.value = (position: _samples.value.position, buffer: value),
+    );
   }
 
   void _listen(Stream<Duration> stream, ValueChanged<Duration> save) {
-    void receive(Duration value) {
-      save(value);
-      setState(() {});
-    }
-
     _subscriptions.add(
       stream.listen(
-        receive,
-        onError: (Object _, StackTrace _) {
-          receive(Duration.zero);
-        },
+        save,
+        onError: (Object _, StackTrace _) => save(Duration.zero),
       ),
     );
   }
 
+  void _setDuration(Duration duration) {
+    if (_duration != duration) setState(() => _duration = duration);
+  }
+
   void _onVideoViewUpdate() {
     final controller = widget.videoViewController!;
-    final position = Duration(milliseconds: controller.position.value);
-    final duration = Duration(
-      milliseconds: controller.mediaInfo.value?.duration ?? 0,
+    _setDuration(
+      Duration(milliseconds: controller.mediaInfo.value?.duration ?? 0),
     );
-    if (position == _position && duration == _duration) return;
-    _position = position;
-    _duration = duration;
-    setState(() {});
+    _samples.value = (
+      position: Duration(milliseconds: controller.position.value),
+      buffer: Duration.zero,
+    );
   }
 
   void _detach(_ProgressClock oldWidget) {
@@ -511,12 +553,13 @@ class _ProgressClockState extends State<_ProgressClock> {
   @override
   void dispose() {
     _detach(widget);
+    _samples.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) =>
-      widget.builder(context, _duration, _position, _buffer);
+      widget.builder(context, _duration, _samples);
 }
 
 class PlayerPlayPauseButton extends StatelessWidget {
@@ -959,7 +1002,9 @@ class _TrackInterval {
 }
 
 class _SeekBar extends StatefulWidget {
-  final double value;
+  final ValueListenable<_ProgressSample> samples;
+  final double? fixedValue;
+  final double durationMs;
   final double min;
   final double max;
   final double step;
@@ -967,14 +1012,15 @@ class _SeekBar extends StatefulWidget {
   final VoidCallback? onArrowUp;
   final VoidCallback? onArrowDown;
   final bool canSeek;
-  final double bufferRatio;
   final List<SkipSegment> skipSegments;
   final ValueChanged<double>? onChanged;
   final ValueChanged<double>? onChangeStart;
   final ValueChanged<double>? onChangeEnd;
 
   const _SeekBar({
-    required this.value,
+    required this.samples,
+    required this.fixedValue,
+    required this.durationMs,
     required this.min,
     required this.max,
     required this.step,
@@ -982,12 +1028,26 @@ class _SeekBar extends StatefulWidget {
     this.onArrowUp,
     this.onArrowDown,
     required this.canSeek,
-    required this.bufferRatio,
     required this.skipSegments,
     this.onChanged,
     this.onChangeStart,
     this.onChangeEnd,
   });
+
+  double get value =>
+      (fixedValue ?? samples.value.position.inMilliseconds.toDouble()).clamp(
+        min,
+        max,
+      );
+
+  _TrackMotion motion(double width) => (
+    samples: samples,
+    fixedValue: fixedValue,
+    min: min,
+    max: max,
+    durationMs: durationMs,
+    width: width,
+  );
 
   @override
   State<_SeekBar> createState() => _SeekBarState();
@@ -1147,13 +1207,8 @@ class _SeekBarState extends State<_SeekBar> {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final trackWidth = constraints.maxWidth;
-            final double ratio = (widget.max > widget.min)
-                ? (widget.value - widget.min) / (widget.max - widget.min)
-                : 0.0;
-            final double progressWidth = (ratio * trackWidth).clamp(
-              0.0,
-              trackWidth,
-            );
+            final motion = widget.motion(trackWidth);
+            final progressWidth = _trackExtent(motion, buffered: false);
 
             // Calculate track intervals based on skip segments
             final List<_TrackInterval> intervals = [];
@@ -1387,22 +1442,16 @@ class _SeekBarState extends State<_SeekBar> {
                           ),
                         ),
 
-                      // 2. Buffer progress segments
-                      if (widget.bufferRatio > 0.0)
-                        for (int i = 0; i < visualIntervals.length; i++)
-                          _buildIntervalBuffer(
+                      // These fills keep their layout. Only their clip changes
+                      // on a position/buffer event.
+                      for (final buffered in const [true, false])
+                        for (var i = 0; i < visualIntervals.length; i++)
+                          _buildIntervalFill(
                             visualIntervals[i],
-                            trackWidth,
+                            motion,
                             intervalHeights[i],
+                            buffered: buffered,
                           ),
-
-                      // 3. Played progress segments
-                      for (int i = 0; i < visualIntervals.length; i++)
-                        _buildIntervalProgress(
-                          visualIntervals[i],
-                          progressWidth,
-                          intervalHeights[i],
-                        ),
 
                       // 3.5 Hover Vertical Line (only when hovered and not dragging)
                       if (_isTrackHovered && !_isDragging)
@@ -1497,22 +1546,28 @@ class _SeekBarState extends State<_SeekBar> {
                           );
                         }()),
 
-                      // 4. Scrubber Thumb (centered horizontally at progressWidth)
+                      // The thumb also follows the clock in paint. Its
+                      // independently animated hover/focus size is unchanged.
                       if (widget.canSeek)
                         Positioned(
-                          left: progressWidth,
-                          child: FractionalTranslation(
-                            translation: const Offset(-0.5, 0.0),
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 150),
-                              curve: const Cubic(0.4, 0.0, 0.2, 1.0),
-                              width: thumbWidth,
-                              height: thumbHeight,
-                              decoration: BoxDecoration(
-                                color: Theme.of(context).colorScheme.primary
-                                    .withValues(alpha: thumbOpacity),
-                                borderRadius: BorderRadius.circular(
-                                  thumbRadius,
+                          left: 0,
+                          child: IgnorePointer(
+                            child: _PlayheadOffset(
+                              motion: motion,
+                              child: FractionalTranslation(
+                                translation: const Offset(-0.5, 0.0),
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 150),
+                                  curve: const Cubic(0.4, 0.0, 0.2, 1.0),
+                                  width: thumbWidth,
+                                  height: thumbHeight,
+                                  decoration: BoxDecoration(
+                                    color: Theme.of(context).colorScheme.primary
+                                        .withValues(alpha: thumbOpacity),
+                                    borderRadius: BorderRadius.circular(
+                                      thumbRadius,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
@@ -1529,20 +1584,15 @@ class _SeekBarState extends State<_SeekBar> {
     );
   }
 
-  Widget _buildIntervalBuffer(
+  Widget _buildIntervalFill(
     _TrackInterval interval,
-    double trackWidth,
-    double height,
-  ) {
-    final double bufferX = widget.bufferRatio * trackWidth;
-    final double intervalBufferWidth = (bufferX - interval.start).clamp(
-      0.0,
-      interval.end - interval.start,
-    );
-    if (intervalBufferWidth <= 0.0) return const SizedBox.shrink();
+    _TrackMotion motion,
+    double height, {
+    required bool buffered,
+  }) {
     return Positioned(
       left: interval.start,
-      width: intervalBufferWidth,
+      width: interval.end - interval.start,
       child: Align(
         alignment: Alignment.center,
         child: AnimatedContainer(
@@ -1551,44 +1601,131 @@ class _SeekBarState extends State<_SeekBar> {
           height: height,
           width: double.infinity,
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(4.0),
-            child: Container(color: Colors.white.withValues(alpha: 0.25)),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildIntervalProgress(
-    _TrackInterval interval,
-    double progressWidth,
-    double height,
-  ) {
-    final double intervalProgressWidth = (progressWidth - interval.start).clamp(
-      0.0,
-      interval.end - interval.start,
-    );
-    if (intervalProgressWidth <= 0.0) return const SizedBox.shrink();
-    return Positioned(
-      left: interval.start,
-      width: intervalProgressWidth,
-      child: Align(
-        alignment: Alignment.center,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          curve: const Cubic(0.4, 0.0, 0.2, 1.0),
-          height: height,
-          width: double.infinity,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(4.0),
-            child: Container(
-              color: interval.isSkipSegment
+            clipper: _TimelineClipper(
+              motion,
+              interval.start,
+              buffered: buffered,
+            ),
+            child: ColoredBox(
+              color: buffered
+                  ? Colors.white.withValues(alpha: 0.25)
+                  : interval.isSkipSegment
                   ? HotstarPlayerStyle.skipSegment
                   : Theme.of(context).colorScheme.primary,
             ),
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Stable seek geometry; [samples] changes paint, not widget layout.
+typedef _TrackMotion = ({
+  ValueListenable<_ProgressSample> samples,
+  double? fixedValue,
+  double min,
+  double max,
+  double durationMs,
+  double width,
+});
+
+double _trackExtent(_TrackMotion motion, {required bool buffered}) {
+  if (buffered) {
+    return motion.durationMs > 0
+        ? (motion.samples.value.buffer.inMilliseconds / motion.durationMs)
+                  .clamp(0.0, 1.0) *
+              motion.width
+        : 0.0;
+  }
+  final value =
+      motion.fixedValue ?? motion.samples.value.position.inMilliseconds;
+  final range = motion.max - motion.min;
+  return range > 0
+      ? ((value - motion.min) / range).clamp(0.0, 1.0) * motion.width
+      : 0.0;
+}
+
+class _TimelineClipper extends CustomClipper<RRect> {
+  _TimelineClipper(this.motion, this.start, {required this.buffered})
+    : super(reclip: motion.samples);
+
+  final _TrackMotion motion;
+  final double start;
+  final bool buffered;
+
+  @override
+  RRect getClip(Size size) {
+    final width = (_trackExtent(motion, buffered: buffered) - start).clamp(
+      0.0,
+      size.width,
+    );
+    return RRect.fromRectAndRadius(
+      Rect.fromLTWH(0, 0, width, size.height),
+      const Radius.circular(4),
+    );
+  }
+
+  @override
+  bool shouldReclip(_TimelineClipper oldClipper) =>
+      oldClipper.motion != motion ||
+      oldClipper.start != start ||
+      oldClipper.buffered != buffered;
+}
+
+class _PlayheadOffset extends SingleChildRenderObjectWidget {
+  const _PlayheadOffset({required this.motion, required super.child});
+
+  final _TrackMotion motion;
+
+  @override
+  _RenderPlayheadOffset createRenderObject(BuildContext context) =>
+      _RenderPlayheadOffset(motion);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderPlayheadOffset renderObject,
+  ) => renderObject.motion = motion;
+}
+
+/// The thumb is decorative (the whole track handles pointer/keyboard input).
+/// Its translation cannot affect layout or hit testing.
+class _RenderPlayheadOffset extends RenderProxyBox {
+  _RenderPlayheadOffset(this._motion);
+
+  _TrackMotion _motion;
+
+  set motion(_TrackMotion value) {
+    if (value == _motion) return;
+    final oldSamples = _motion.samples;
+    _motion = value;
+    if (attached && oldSamples != value.samples) {
+      oldSamples.removeListener(markNeedsPaint);
+      value.samples.addListener(markNeedsPaint);
+    }
+    markNeedsPaint();
+  }
+
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    _motion.samples.addListener(markNeedsPaint);
+  }
+
+  @override
+  void detach() {
+    _motion.samples.removeListener(markNeedsPaint);
+    super.detach();
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    final thumb = child;
+    if (thumb == null) return;
+    context.paintChild(
+      thumb,
+      offset + Offset(_trackExtent(_motion, buffered: false), 0),
     );
   }
 }

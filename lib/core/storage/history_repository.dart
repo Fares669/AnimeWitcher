@@ -130,8 +130,9 @@ HistoryRepository historyRepository(Ref ref) {
 class HistoryRepository {
   final StorageService _storageService;
   final AnimeWitcherAccountService _accountService;
-  List<Map<String, dynamic>>? _indexedHistorySnapshot;
-  Map<(String, String?), HistoryItem> _historyByItem = {};
+  List<Map<String, dynamic>>? _historySnapshot;
+  List<HistoryItem> _projectedHistory = const [];
+  Map<(String, String?), HistoryItem>? _historyByItem;
 
   HistoryRepository(this._storageService, this._accountService);
 
@@ -326,20 +327,27 @@ class HistoryRepository {
     await _accountService.syncRecentWatched();
   }
 
+  // StorageService replaces the sorted snapshot after committing history
+  // mutations, including direct cloud writes that bypass this repository. An
+  // unrelated account revision or another view can reuse the same projection.
   List<HistoryItem> getWatchHistory() {
-    final rawItems = _storageService.getWatchHistory();
-    return rawItems.map((map) => HistoryItem.fromMap(map)).toList();
+    final rows = _storageService.getWatchHistory();
+    if (!identical(rows, _historySnapshot)) {
+      _projectedHistory = List<HistoryItem>.unmodifiable(
+        rows.map(HistoryItem.fromMap),
+      );
+      _historySnapshot = rows;
+      _historyByItem = null;
+    }
+    return _projectedHistory;
   }
 
-  // StorageService replaces the sorted snapshot after committing history
-  // mutations, including direct cloud writes that bypass this repository.
   HistoryItem? getWatchHistoryItem(MultimediaItem item) {
-    final rows = _storageService.getWatchHistory();
-    if (!identical(rows, _indexedHistorySnapshot)) {
+    final rows = getWatchHistory();
+    final index = _historyByItem ??= () {
       final byItem = <(String, String?), HistoryItem>{};
       final scopes = <String?, String?>{};
-      for (final row in rows) {
-        final entry = HistoryItem.fromMap(row);
+      for (final entry in rows) {
         final provider = entry.item.provider;
         final scope = scopes.putIfAbsent(
           provider,
@@ -347,10 +355,9 @@ class HistoryRepository {
         );
         byItem.putIfAbsent((entry.item.url, scope), () => entry);
       }
-      _historyByItem = byItem;
-      _indexedHistorySnapshot = rows;
-    }
-    return _historyByItem[(item.url, downloadProviderScopeV2(item.provider))];
+      return byItem;
+    }();
+    return index[(item.url, downloadProviderScopeV2(item.provider))];
   }
 
   int getPosition(String url) {

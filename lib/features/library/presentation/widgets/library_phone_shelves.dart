@@ -208,8 +208,6 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
     final category = tab.category;
     if (category != null) {
       unawaited(ref.read(libraryProvider.notifier).select(kind, category));
-    } else if (tab.key == LibraryShelfPrefs.recentKey) {
-      unawaited(_syncHistory());
     }
   }
 
@@ -222,6 +220,7 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
       return RecentWatchedBody(
         key: const ValueKey<String>('library-recent'),
         sort: _prefs.sort,
+        isActive: isActive,
       );
     }
     final category = tab.category!;

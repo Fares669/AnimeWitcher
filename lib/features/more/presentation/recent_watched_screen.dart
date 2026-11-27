@@ -36,42 +36,70 @@ class RecentWatchedBody extends ConsumerStatefulWidget {
     super.key,
     this.sort = LibrarySort.added,
     this.topPadding = 0,
+    this.isActive = true,
   });
 
   /// The library filter's order; "latest added" here is latest watched.
   final LibrarySort sort;
   final double topPadding;
 
+  /// A neighbouring phone tab can be mounted before it is selected.
+  final bool isActive;
+
   @override
   ConsumerState<RecentWatchedBody> createState() => _RecentWatchedBodyState();
 }
 
 class _RecentWatchedBodyState extends ConsumerState<RecentWatchedBody> {
-  bool _initialSyncRunning = true;
+  bool _initialSyncRunning = false;
+  int _refreshGeneration = 0;
+  List<HistoryItem>? _sortedSource;
+  LibrarySort? _sortedOrder;
+  List<HistoryItem> _sortedHistory = const [];
 
   @override
   void initState() {
     super.initState();
-    Future<void>.microtask(_refreshFromServer);
+    if (widget.isActive) _refreshOnEntry();
+  }
+
+  @override
+  void didUpdateWidget(covariant RecentWatchedBody oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isActive && !oldWidget.isActive) _refreshOnEntry();
+  }
+
+  void _refreshOnEntry() {
+    _initialSyncRunning = true;
+    Future<void>.microtask(() async {
+      if (mounted && widget.isActive) await _refreshFromServer();
+    });
   }
 
   Future<void> _refreshFromServer() async {
+    if (!mounted) return;
+    final generation = ++_refreshGeneration;
     try {
       await ref.read(watchHistoryProvider.notifier).refreshFromServer();
     } catch (_) {
       // Keep the last local snapshot available when the network/server is
       // temporarily unavailable. Pull-to-refresh can retry at any time.
     } finally {
-      if (mounted) setState(() => _initialSyncRunning = false);
+      if (mounted && generation == _refreshGeneration) {
+        setState(() => _initialSyncRunning = false);
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final history = sortLibraryHistory(
-      ref.watch(watchHistoryProvider),
-      widget.sort,
-    );
+    final source = ref.watch(watchHistoryProvider);
+    if (!identical(_sortedSource, source) || _sortedOrder != widget.sort) {
+      _sortedHistory = sortLibraryHistory(source, widget.sort);
+      _sortedSource = source;
+      _sortedOrder = widget.sort;
+    }
+    final history = _sortedHistory;
 
     return CatalogBody(
       topInset: widget.topPadding,

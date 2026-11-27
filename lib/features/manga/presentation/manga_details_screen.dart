@@ -38,6 +38,25 @@ import 'manga_resume_chapter.dart';
 import 'widgets/manga_chapter_list.dart';
 import 'widgets/manga_information_section.dart';
 
+/// Reading a long series is independent of download progress and the rest of
+/// the details screen. Re-project only when the chapter list or reading state
+/// changes, while the Read control needs its target.
+final _mangaDetailsResumeTargetProvider = Provider.autoDispose
+    .family<MangaResumeTarget?, String>((ref, itemUrl) {
+      final chapters = ref.watch(
+        mangaDetailsControllerProvider(itemUrl)
+            .select((state) => state.chapters.asData?.value),
+      );
+      if (chapters == null || chapters.isEmpty) return null;
+
+      ref.watch(mangaReadingRevisionProvider);
+      final repository = ref.watch(mangaReadingRepositoryProvider);
+      return mangaResumeTarget(
+        chapters,
+        (chapter) => repository.get(chapter.mangaId, chapter.id),
+      );
+    });
+
 @visibleForTesting
 MultimediaItem mangaDetailsItemWithCustomCover(
   MultimediaItem baseItem,
@@ -504,17 +523,9 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
   /// The white read pill: the chapter the reader is up to, named.
   Widget _readPill(
     BuildContext context,
-    List<MangaChapter>? chapters,
-    void Function(MangaChapter chapter) open,
+    MangaResumeTarget? target,
+    ValueChanged<MangaChapter> open,
   ) {
-    ref.watch(mangaReadingRevisionProvider);
-    final repository = ref.watch(mangaReadingRepositoryProvider);
-    final target = chapters == null
-        ? null
-        : mangaResumeTarget(
-            chapters,
-            (chapter) => repository.get(chapter.mangaId, chapter.id),
-          );
     final chapterName = target?.chapter.name ?? '';
     final label = switch (target?.kind) {
       null => appText(context, english: 'Read', arabic: 'اقرأ'),
@@ -914,7 +925,15 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
                 revealKey: const ValueKey<String>('manga-chapters-reveal'),
                 topAction: Align(
                   alignment: AlignmentDirectional.centerStart,
-                  child: _readPill(context, chapters, open),
+                  child: Consumer(
+                    builder: (context, ref, child) => _readPill(
+                      context,
+                      ref.watch(
+                        _mangaDetailsResumeTargetProvider(widget.item.url),
+                      ),
+                      open,
+                    ),
+                  ),
                 ),
                 onSelectionBarChanged: (bar) {
                   if (!mounted || identical(_chapterSelectionBar, bar)) return;
