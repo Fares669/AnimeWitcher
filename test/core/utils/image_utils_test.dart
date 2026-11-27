@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -134,6 +135,86 @@ void main() {
       },
     );
   }
+
+  test('near square and one-pixel posters preserve orientation', () async {
+    for (final (width, height, portrait) in [
+      (31, 30, false),
+      (30, 31, true),
+      (30, 30, true),
+      (2, 1, false),
+      (1, 2, true),
+    ]) {
+      final url = 'https://unused.invalid/probe-$width-$height.png';
+      final recorder = ui.PictureRecorder();
+      ui.Canvas(recorder)
+          .drawColor(const ui.Color(0xffb36c27), ui.BlendMode.src);
+      final picture = recorder.endRecording();
+      final image = picture.toImageSync(width, height);
+      picture.dispose();
+      try {
+        final data = (await image.toByteData(format: ui.ImageByteFormat.png))!;
+        await posterCacheManager.putFile(
+          url,
+          data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+          fileExtension: 'png',
+          maxAge: const Duration(hours: 1),
+        );
+      } finally {
+        image.dispose();
+      }
+      expect(await ImageUtils.isImagePortrait(url), portrait);
+      expect(requests[url], isNull);
+    }
+  });
+
+  test('EXIF orientation matches the original decoded frame', () async {
+    final bytes = base64Decode(
+      '/9j/4AAQSkZJRgABAQAAAQABAAD/4QAiRXhpZgAATU0AKgAAAAgAAQESAAMAAA'
+      'ABAAYAAAAAAAD/2wBDAAoHBwgHBgoICAgLCgoLDhgQDg0NDh0VFhEYIx8lJCIf'
+      'IiEmKzcvJik0KSEiMEExNDk7Pj4+JS5ESUM8SDc9Pjv/2wBDAQoLCw4NDhwQEB'
+      'w7KCIoOzs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7'
+      'Ozs7Ozs7Ozv/wAARCAAaACYDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAA'
+      'AAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAA'
+      'AAb/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCGAmVYAAAAAA'
+      'AAAA//2Q==',
+    );
+    const url = 'https://unused.invalid/probe-rotated-jpeg.jpg';
+    await posterCacheManager.putFile(
+      url,
+      bytes,
+      fileExtension: 'jpg',
+      maxAge: const Duration(hours: 1),
+    );
+    final codec = await ui.instantiateImageCodec(bytes);
+    try {
+      final frame = await codec.getNextFrame();
+      try {
+        expect(
+          await ImageUtils.isImagePortrait(url),
+          frame.image.height >= frame.image.width,
+        );
+      } finally {
+        frame.image.dispose();
+      }
+    } finally {
+      codec.dispose();
+    }
+  });
+
+  test('a broken encoded file still falls back to portrait', () async {
+    const url = 'https://unused.invalid/probe-broken.png';
+    // Truncated PNG header. Having encoded bytes in the shared disk cache
+    // is not by itself proof a frame can be displayed.
+    await posterCacheManager.putFile(
+      url,
+      Uint8List.fromList([137, 80, 78, 71, 13, 10, 26, 10]),
+      fileExtension: 'png',
+      maxAge: const Duration(hours: 1),
+    );
+    expect(await ImageUtils.isImagePortrait(url), isTrue);
+    expect(await ImageUtils.isImagePortrait(url), isTrue);
+    expect(requests[url], isNull);
+  });
 
   test(
     'portrait probe releases its own handle without disposing cached image',

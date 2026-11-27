@@ -9,6 +9,7 @@ import 'package:animewitcher/core/storage/settings_repository.dart';
 import 'package:animewitcher/features/more/presentation/global_statistics_screen.dart';
 import 'package:animewitcher/features/more/presentation/more_sidebar_shell.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+import 'package:animewitcher/shared/widgets/anime_catalog_shimmer.dart';
 import 'package:animewitcher/shared/widgets/multimedia_card.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -394,4 +395,76 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+  for (final size in [const Size(390, 844), const Size(1260, 900)]) {
+    testWidgets(
+      'keeps a pending ranking but only animates visible tabs at ${size.width}',
+      (tester) async {
+        final provider = _RankingProvider();
+        await _mount(tester, size, provider);
+        final all = provider.requests.single;
+        _finish(all, [
+          for (var i = 0; i < 24; i++) _row('initial rank $i'),
+        ], more: true);
+        await _frames(tester);
+
+        final saved = _position(tester);
+        saved.jumpTo(saved.maxScrollExtent);
+        await _frames(tester, 2);
+        final pending = provider.requests.last;
+        expect(
+          (pending.ranking, pending.offset, pending.limit),
+          (AnimeWitcherGlobalRanking.all, 24, 24),
+        );
+        saved.jumpTo(saved.maxScrollExtent);
+        await _frames(tester, 2);
+
+        final skeleton = find.byType(AnimePosterShimmer, skipOffstage: false);
+        bool tickersEnabled() => skeleton.evaluate().any(TickerMode.of);
+        Future<int> sampleTicks() async {
+          var callbacks = 0;
+          for (var i = 0; i < 5; i++) {
+            await tester.pump(const Duration(milliseconds: 16));
+            callbacks += tester.binding.transientCallbackCount;
+          }
+          return callbacks;
+        }
+
+        expect(skeleton, findsWidgets);
+        expect(tickersEnabled(), isTrue);
+        final visible = await sampleTicks();
+        expect(visible, greaterThan(0));
+        final selectedPixels = saved.pixels;
+
+        await _choose(tester, AnimeWitcherGlobalRanking.continuing);
+        final other = provider.requests.last;
+        expect(
+          (other.ranking, other.offset),
+          (AnimeWitcherGlobalRanking.continuing, 0),
+        );
+        _finish(other, [_row('other ranking loaded')], more: false);
+        await _frames(tester, 4);
+        expect(_visibleCard('other ranking loaded'), findsOneWidget);
+        expect(skeleton, findsWidgets);
+        final hiddenMode = tickersEnabled();
+        final hidden = await sampleTicks();
+        expect(provider.requests, hasLength(3));
+
+        await _choose(tester, AnimeWitcherGlobalRanking.all);
+        expect(_position(tester), same(saved));
+        expect(saved.pixels, selectedPixels);
+        expect(tickersEnabled(), isTrue);
+        final resumed = await sampleTicks();
+        expect(resumed, greaterThan(0));
+        expect(hiddenMode, isFalse);
+        expect(hidden, lessThan(visible ~/ 2));
+
+        _finish(pending, [_row('returned ranking result')], more: false);
+        await _frames(tester);
+        expect(_delegate(tester).estimatedChildCount, 25);
+        expect(_title(tester, 24), 'returned ranking result');
+        expect(provider.requests, [all, pending, other]);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
 }

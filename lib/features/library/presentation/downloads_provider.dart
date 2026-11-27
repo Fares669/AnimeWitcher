@@ -504,11 +504,44 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     _replaceMetadataSnapshot(await storage.getAllDownloadMetadata());
     if (!ref.mounted) return const <DownloadItem>[];
 
+    var recordsSubscriptionDisposed = false;
+    var metadataReloadInFlight = false;
+    var metadataReloadRequested = false;
+    Future<void> reloadMetadata() async {
+      metadataReloadInFlight = true;
+      try {
+        do {
+          metadataReloadRequested = false;
+          final metadata = await storage.getAllDownloadMetadata();
+          if (recordsSubscriptionDisposed || !ref.mounted) return;
+          _replaceMetadataSnapshot(metadata);
+          _refreshPresentationState();
+        } while (metadataReloadRequested &&
+            !recordsSubscriptionDisposed &&
+            ref.mounted);
+      } finally {
+        metadataReloadInFlight = false;
+        // A failed read must not strand a newer durable change. Preserve the
+        // existing error handling and still start its fresh read.
+        if (metadataReloadRequested &&
+            !recordsSubscriptionDisposed &&
+            ref.mounted) {
+          unawaited(reloadMetadata());
+        }
+      }
+    }
+
     _recordsSubscription = manager.records.listen(
       (records) {
-        if (!ref.mounted) return;
+        if (recordsSubscriptionDisposed || !ref.mounted) return;
         _records = records;
-        unawaited(_reloadMetadataAndRefresh());
+        // Serializing full storage reads bounds work for overlapping durable
+        // events without delaying the first read or losing later metadata.
+        if (metadataReloadInFlight) {
+          metadataReloadRequested = true;
+        } else {
+          unawaited(reloadMetadata());
+        }
       },
       onError: (Object error, StackTrace stack) {
         if (!ref.mounted) return;
@@ -553,6 +586,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     });
 
     ref.onDispose(() {
+      recordsSubscriptionDisposed = true;
       unawaited(_recordsSubscription?.cancel());
       unawaited(_presentationSubscription?.cancel());
       _durableRefreshTimer?.cancel();
@@ -572,14 +606,6 @@ class DownloadsNotifier extends _$DownloadsNotifier {
 
   void _refreshPresentationState() {
     state = AsyncData(_projectList());
-  }
-
-  Future<void> _reloadMetadataAndRefresh() async {
-    _replaceMetadataSnapshot(
-      await ref.read(storageServiceProvider).getAllDownloadMetadata(),
-    );
-    if (!ref.mounted) return;
-    _refreshPresentationState();
   }
 
   Future<void> _reloadDurableState() {

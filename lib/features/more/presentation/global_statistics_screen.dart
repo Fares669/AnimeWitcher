@@ -2,6 +2,7 @@ import 'more_sidebar_shell.dart';
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -147,6 +148,7 @@ class _RankingPageState extends State<_RankingPage>
   final ScrollController _scrollController = ScrollController();
   final List<MultimediaItem> _items = <MultimediaItem>[];
   Set<String>? _appendKeys;
+  late final ValueNotifier<bool> _tabTickerEnabled;
   int _nextOffset = 0;
   bool _hasMore = true;
   bool _initialLoading = true;
@@ -161,13 +163,17 @@ class _RankingPageState extends State<_RankingPage>
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
-    widget.tabs.addListener(_dropUnselectedIndex);
+    _tabTickerEnabled = ValueNotifier<bool>(_isTabVisible);
+    widget.tabs.addListener(_onTabChange);
+    widget.tabs.animation?.addListener(_updateTabTicker);
     _loadInitial();
   }
 
   @override
   void dispose() {
-    widget.tabs.removeListener(_dropUnselectedIndex);
+    widget.tabs.removeListener(_onTabChange);
+    widget.tabs.animation?.removeListener(_updateTabTicker);
+    _tabTickerEnabled.dispose();
     _scrollController
       ..removeListener(_onScroll)
       ..dispose();
@@ -180,8 +186,26 @@ class _RankingPageState extends State<_RankingPage>
     return '${item.id}|${item.title}';
   }
 
-  void _dropUnselectedIndex() {
+  bool get _isTabVisible {
+    final tabs = widget.tabs;
+    if (tabs.indexIsChanging) {
+      // TabBarView warps a multi-tab tap to just the outgoing and incoming
+      // pages. Animation values between their indices aren't visible pages.
+      return widget.tabIndex == tabs.previousIndex ||
+          widget.tabIndex == tabs.index;
+    }
+    // During a gesture, leave both partially visible tabs free to animate.
+    final position = tabs.animation?.value ?? tabs.index.toDouble();
+    return (position - widget.tabIndex).abs() < 1;
+  }
+
+  void _updateTabTicker() {
+    _tabTickerEnabled.value = _isTabVisible;
+  }
+
+  void _onTabChange() {
     if (widget.tabs.index != widget.tabIndex) _appendKeys = null;
+    _updateTabTicker();
   }
 
   void _replaceItems(List<MultimediaItem> incoming) {
@@ -312,7 +336,10 @@ class _RankingPageState extends State<_RankingPage>
   Widget build(BuildContext context) {
     super.build(context);
     if (_initialLoading && _items.isEmpty) {
-      return const AnimeCatalogShimmer();
+      return _rankingShimmerTicker(
+        _tabTickerEnabled,
+        const AnimeCatalogShimmer(),
+      );
     }
     if (_initialError != null && _items.isEmpty) {
       return _RankingError(onRetry: _loadInitial);
@@ -336,6 +363,7 @@ class _RankingPageState extends State<_RankingPage>
       controller: _scrollController,
       items: _items,
       ranking: widget.ranking,
+      shimmerTickerEnabled: _tabTickerEnabled,
       loadingMore: _loadingMore,
       loadMoreError: _loadMoreError != null,
       onLoadMoreRetry: _loadMore,
@@ -362,11 +390,23 @@ class _RankingTabs extends StatelessWidget {
   }
 }
 
+// The hidden ranking may keep its items and scroll position mounted, but its
+// loading effects only need ticks when visible. Keep refresh and real grid
+// animation/scroll controllers outside this private placeholder gate.
+Widget _rankingShimmerTicker(ValueListenable<bool> enabled, Widget child) =>
+    ValueListenableBuilder<bool>(
+      valueListenable: enabled,
+      child: child,
+      builder: (context, value, child) =>
+          TickerMode(enabled: value, child: child!),
+    );
+
 class _RankingGrid extends StatelessWidget {
   const _RankingGrid({
     required this.controller,
     required this.items,
     required this.ranking,
+    required this.shimmerTickerEnabled,
     required this.loadingMore,
     required this.loadMoreError,
     required this.onLoadMoreRetry,
@@ -377,6 +417,7 @@ class _RankingGrid extends StatelessWidget {
   final List<MultimediaItem> items;
   final AnimeWitcherGlobalRanking ranking;
 
+  final ValueListenable<bool> shimmerTickerEnabled;
   final bool loadingMore;
   final bool loadMoreError;
   final Future<void> Function() onLoadMoreRetry;
@@ -425,7 +466,10 @@ class _RankingGrid extends StatelessWidget {
           itemBuilder: (context, index) {
             if (index >= items.length) {
               if (loadingMore) {
-                return const AnimePosterShimmer();
+                return _rankingShimmerTicker(
+                  shimmerTickerEnabled,
+                  const AnimePosterShimmer(),
+                );
               }
               return Center(
                 child: TextButton.icon(

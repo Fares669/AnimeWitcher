@@ -55,7 +55,9 @@ class _AnimeWitcherAccountScreenState
     final snapshot = account.asData?.value;
     final profile = snapshot?.profile;
     final configured = AnimeWitcherAccountConfig.firebaseConfigured;
-    final busy = _submitting || account.isLoading || !configured;
+    // Missing configuration disables auth, but it is not ongoing work.
+    final inProgress = _submitting || account.isLoading;
+    final busy = inProgress || !configured;
     final canPop = Navigator.of(context).canPop();
     final asyncError = account.when<Object?>(
       data: (_) => null,
@@ -96,7 +98,7 @@ class _AnimeWitcherAccountScreenState
                   if (profile != null)
                     _buildSignedIn(profile, busy)
                   else
-                    _buildSignedOut(busy, asyncError),
+                    _buildSignedOut(busy, asyncError, inProgress: inProgress),
                   _anime3rbAccountTile(),
                   _witanimeAccountTile(),
                 ],
@@ -112,7 +114,11 @@ class _AnimeWitcherAccountScreenState
 
   Widget _witanimeAccountTile() => const WitanimeAccountSection();
 
-  Widget _buildSignedOut(bool busy, Object? asyncError) {
+  Widget _buildSignedOut(
+    bool busy,
+    Object? asyncError, {
+    required bool inProgress,
+  }) {
     final colors = Theme.of(context).colorScheme;
     final isCreate = _mode == _AccountFormMode.createAccount;
     return Column(
@@ -279,7 +285,7 @@ class _AnimeWitcherAccountScreenState
                   const SizedBox(height: LayoutConstants.spacingLg),
                   FilledButton.icon(
                     onPressed: busy ? null : _submitEmail,
-                    icon: busy
+                    icon: inProgress
                         ? const SizedBox.square(
                             dimension: 18,
                             child: CircularProgressIndicator(strokeWidth: 2),

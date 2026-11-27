@@ -5426,6 +5426,54 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     return output;
   }
 
+  // Only these remote fields feed _episodeRecord for a collection document.
+  // Skip recursive decoding for maps and lists that the catalog never uses.
+  static const _episodeCollectionFieldNames = <String>{
+    'doc_id',
+    'id',
+    'episode_id',
+    'name',
+    'episode_name',
+    'episodeName',
+    'episode_number',
+    'episodeNumber',
+    'episode',
+    'ep',
+    'number',
+    'sortOrder',
+    'sort_order',
+    'sort',
+    'title_translated',
+    'titleTranslated',
+    'title_ar',
+    'titleAr',
+    'arabic_title',
+    'arabicTitle',
+    'title_en',
+    'titleEn',
+    'title_english',
+    'titleEnglish',
+    'english_title',
+    'englishTitle',
+    'episode_title',
+    'episodeTitle',
+    'title',
+    'thumb_uri',
+    'image',
+    'image_url',
+    'poster',
+    'filler',
+    'is_filler',
+    'isFiller',
+  };
+
+  Map<String, dynamic> _episodeCollectionFields(dynamic raw) =>
+      <String, dynamic>{
+        for (final entry in _readHitMap(raw).entries)
+          if (_episodeCollectionFieldNames.contains(entry.key))
+            entry.key: _firestoreValue(entry.value),
+      };
+
   Future<({List<_EpisodeRecord> records, bool reachedServer})>
   _fetchEpisodeCollection(String animeId) async {
     final output = <_EpisodeRecord>[];
@@ -5444,7 +5492,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       final documents = _list(result.json['documents']);
       for (final rawDocument in documents) {
         final document = _map(rawDocument);
-        final fields = _firestoreFields(document['fields']);
+        final fields = _episodeCollectionFields(document['fields']);
         var id = _text(fields['doc_id']);
         if (id.isEmpty) {
           final name = _text(document['name']);
