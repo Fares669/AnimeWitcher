@@ -808,6 +808,7 @@ class _GroupedDownloadTile extends ConsumerStatefulWidget {
 
 class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
   late Future<File?> _poster;
+  late Future<bool> _showNetworkFallback;
   bool _deleteInFlight = false;
   List<DownloadItem> get items => widget.items;
 
@@ -826,24 +827,43 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
   @override
   void initState() {
     super.initState();
-    _poster = _loadPoster();
+    _startPosterLookup();
   }
 
   @override
   void didUpdateWidget(covariant _GroupedDownloadTile oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (_posterKey(oldWidget.items) != _posterKey(items)) {
-      _poster = _loadPoster();
+      _startPosterLookup();
     }
   }
 
-  Future<File?> _loadPoster() async {
+  void _startPosterLookup() {
+    final input = items;
+    final local = _findLocalPoster(input);
+    _poster = local.then((saved) => saved ?? _restorePoster(input));
+    // A retained poster should not start a second disk/network image decode.
+    // Bound the grace period so slow storage or a very large group cannot hold
+    // up the ordinary remote fallback.
+    _showNetworkFallback =
+        AppImageFallbacks.poster(input.first.item.posterUrl) == null
+        ? Future.value(false)
+        : local
+              .then((saved) => saved == null)
+              .timeout(const Duration(milliseconds: 60), onTimeout: () => true);
+  }
+
+  Future<File?> _findLocalPoster(List<DownloadItem> input) async {
     // A group's first row may lack artwork while another retained copy exists.
-    for (final item in items) {
+    for (final item in input) {
       final saved = await existingDownloadedPosterArtwork(_artworkId(item));
       if (saved != null) return saved;
     }
-    for (final item in items) {
+    return null;
+  }
+
+  Future<File?> _restorePoster(List<DownloadItem> input) async {
+    for (final item in input) {
       if (!item.artworkMetadataVerified) continue;
       final saved = await ensureDownloadedPosterArtwork(
         logicalId: _artworkId(item),
@@ -912,6 +932,7 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
                   sizeHighQualityToDisplay: true,
                   builder: (BuildContext context, int? decodeWidth) =>
                       FutureBuilder<File?>(
+                        key: ObjectKey(_poster),
                         future: _poster,
                         builder: (context, snapshot) {
                           final saved = snapshot.data;
@@ -927,18 +948,25 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
                                   _posterPlaceholder(theme),
                             );
                           }
-                          return CachedNetworkImage(
-                            imageUrl:
-                                AppImageFallbacks.poster(
-                                  firstItem.item.posterUrl,
-                                ) ??
-                                '',
-                            width: 80,
-                            height: 120,
-                            fit: BoxFit.cover,
-                            memCacheWidth: decodeWidth,
-                            filterQuality: FilterQuality.medium,
-                            errorWidget: (_, _, _) => _posterPlaceholder(theme),
+                          final url = AppImageFallbacks.poster(
+                            firstItem.item.posterUrl,
+                          );
+                          if (url == null) return _posterPlaceholder(theme);
+                          return FutureBuilder<bool>(
+                            future: _showNetworkFallback,
+                            builder: (context, fallback) =>
+                                fallback.data != true
+                                ? _posterPlaceholder(theme)
+                                : CachedNetworkImage(
+                                    imageUrl: url,
+                                    width: 80,
+                                    height: 120,
+                                    fit: BoxFit.cover,
+                                    memCacheWidth: decodeWidth,
+                                    filterQuality: FilterQuality.medium,
+                                    errorWidget: (_, _, _) =>
+                                        _posterPlaceholder(theme),
+                                  ),
                           );
                         },
                       ),

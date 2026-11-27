@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -18,6 +19,7 @@ import 'package:animewitcher/shared/widgets/underline_segment_tabs.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -53,9 +55,12 @@ Future<void> _prepareArtworkStorage(WidgetTester tester) async {
 }
 
 Future<void> _awaitArtworkLookups(WidgetTester tester) async {
-  for (final builder in tester.widgetList<FutureBuilder<File?>>(
-    find.byWidgetPredicate((widget) => widget is FutureBuilder<File?>),
-  )) {
+  final builders = tester
+      .widgetList<FutureBuilder<File?>>(
+        find.byWidgetPredicate((widget) => widget is FutureBuilder<File?>),
+      )
+      .toList();
+  for (final builder in builders) {
     final future = builder.future;
     if (future != null) {
       await pumpUntilFuture(
@@ -376,6 +381,81 @@ void main() {
       expect(ranked.extraCompleteRecords, orderedEquals([complete]));
     },
   );
+
+  testWidgets('retained series poster does not start the URL image', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1800);
+    tester.view.devicePixelRatio = 2;
+    addTearDown(tester.view.reset);
+    await _prepareArtworkStorage(tester);
+    final id = 'retained-group-poster';
+    const url = 'https://example.invalid/artwork-should-not-load.png';
+    final folder = Directory(
+      p.join(
+        _artworkFixtureRoot.path,
+        'download_artwork_v2',
+        sha256.convert(utf8.encode(id)).toString(),
+      ),
+    );
+    final poster = File(p.join(folder.path, 'poster.img'));
+    await tester.runAsync(() async {
+      await folder.create(recursive: true);
+      final recorder = ui.PictureRecorder();
+      ui.Canvas(recorder).drawColor(const Color(0xff2581bc), ui.BlendMode.src);
+      final picture = recorder.endRecording();
+      final img = await picture.toImage(200, 300);
+      picture.dispose();
+      final png = (await img.toByteData(format: ui.ImageByteFormat.png))!;
+      img.dispose();
+      await poster.writeAsBytes(
+        png.buffer.asUint8List(png.offsetInBytes, png.lengthInBytes),
+      );
+    });
+    final item = _item(
+      taskId: id,
+      timestamp: 1,
+      media: _blackTorch().copyWith(posterUrl: url),
+    );
+    final remote = find.byWidgetPredicate(
+      (widget) => widget is CachedNetworkImage && widget.imageUrl == url,
+    );
+    await tester.pumpWidget(
+      _downloadsApp([
+        item,
+        _itemTen(
+          taskId: 'other-active',
+          timestamp: 2,
+          status: TaskStatus.running,
+        ),
+      ]),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('المكتملة'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(FutureBuilder<File?>), findsOneWidget);
+    expect(
+      remote,
+      findsNothing,
+      reason: 'do not start a second image on the first frame',
+    );
+    await _awaitArtworkLookups(tester);
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(remote, findsNothing);
+    final image = find.byWidgetPredicate(
+      (widget) =>
+          widget is Image &&
+          widget.image is ResizeImage &&
+          (widget.image as ResizeImage).imageProvider is FileImage,
+    );
+    expect(image, findsOneWidget);
+    final file =
+        (tester.widget<Image>(image).image as ResizeImage).imageProvider
+            as FileImage;
+    expect(file.file.path, poster.path);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   testWidgets(
     'high-quality active and grouped artwork share a display-sized poster',

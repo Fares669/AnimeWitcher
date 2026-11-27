@@ -60,24 +60,22 @@ final class DownloadArtworkStoreV2 {
     });
   }
 
-  Future<Directory?> _childDirectory(
+  static Directory? _childDirectory(
     Directory parent,
     String leaf, {
-    bool create = false,
-  }) async {
-    return runLocalFileIo(() {
-      final directory = Directory(p.join(parent.path, leaf));
-      var type = FileSystemEntity.typeSync(directory.path, followLinks: false);
-      if (type == FileSystemEntityType.notFound && create) {
-        directory.createSync();
-        type = FileSystemEntity.typeSync(directory.path, followLinks: false);
-      }
-      if (type != FileSystemEntityType.directory ||
-          !p.equals(directory.resolveSymbolicLinksSync(), directory.path)) {
-        return null;
-      }
-      return directory;
-    });
+    required bool create,
+  }) {
+    final directory = Directory(p.join(parent.path, leaf));
+    var type = FileSystemEntity.typeSync(directory.path, followLinks: false);
+    if (type == FileSystemEntityType.notFound && create) {
+      directory.createSync();
+      type = FileSystemEntity.typeSync(directory.path, followLinks: false);
+    }
+    if (type != FileSystemEntityType.directory ||
+        !p.equals(directory.resolveSymbolicLinksSync(), directory.path)) {
+      return null;
+    }
+    return directory;
   }
 
   Future<Directory?> _ownedDirectory(
@@ -85,18 +83,24 @@ final class DownloadArtworkStoreV2 {
     bool create = false,
   }) async {
     if (kIsWeb || logicalId.trim().isEmpty) return null;
-    final support = await _support();
-    final root = await _childDirectory(
-      support,
-      'download_artwork_v2',
-      create: create,
-    );
-    if (root == null) return null;
-    return _childDirectory(
-      root,
-      sha256.convert(utf8.encode(logicalId)).toString(),
-      create: create,
-    );
+    final directory = await _supportDirectory().timeout(_fetchTimeout);
+    // Resolve the whole path in one worker round trip. Keep the same
+    // no-follow and canonical-path checks on both owned subdirectories.
+    return runLocalFileIo(() {
+      directory.createSync(recursive: true);
+      final support = Directory(directory.resolveSymbolicLinksSync());
+      final root = _childDirectory(
+        support,
+        'download_artwork_v2',
+        create: create,
+      );
+      if (root == null) return null;
+      return _childDirectory(
+        root,
+        sha256.convert(utf8.encode(logicalId)).toString(),
+        create: create,
+      );
+    });
   }
 
   Future<File?> legacyFileFor(String taskId) async {

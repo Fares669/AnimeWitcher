@@ -153,6 +153,129 @@ Future<void> _drainCompletion() async {
 }
 
 void main() {
+  for (final kind in ['banner', 'title', 'manga']) {
+    test(
+      '$kind artwork shares a sent query across repeated app reads',
+      () async {
+        final backend = _DioTransport();
+        final observer = _Observer();
+        final scope = _container(backend, observer);
+        addTearDown(backend.close);
+        addTearDown(scope.dispose);
+        const id = 196028743;
+        const title = 'Artwork flight fixture 743';
+        Future<Object?> ask(
+          ArtworkFallbackService service, {
+          bool lower = false,
+        }) => switch (kind) {
+          'banner' => service.bannerFor(id),
+          'title' => service.posterForTitle(
+            lower ? title.toLowerCase() : title,
+          ),
+          _ => service.mangaArtwork(malId: id, title: title),
+        };
+
+        final service = _service(scope);
+        final first = ask(service);
+        final request = await backend.nth(0);
+        await scope.pump();
+        var matches = 0;
+        for (var j = 0; j < 8; j++) {
+          if (identical(ask(_service(scope), lower: j.isEven), first))
+            matches++;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 85));
+        // Before the fix this was a second batch after the original was sent.
+        final count = backend.requests.length;
+        for (final req in backend.requests) {
+          req.handler.resolve(
+            Response<Map<String, dynamic>>(
+              requestOptions: req.options,
+              statusCode: 200,
+              data: {
+                'data': {
+                  'Page': {
+                    'media': [
+                      {
+                        'idMal': id,
+                        'bannerImage': _cover,
+                        'coverImage': {'extraLarge': _cover},
+                      },
+                    ],
+                  },
+                  'm0': {
+                    'media': [
+                      {
+                        'bannerImage': _cover,
+                        'coverImage': {'extraLarge': _cover},
+                      },
+                    ],
+                  },
+                  't0': {
+                    'media': [
+                      {
+                        'coverImage': {'extraLarge': _cover},
+                      },
+                    ],
+                  },
+                  'q0': {
+                    'media': [
+                      {
+                        'coverImage': {'extraLarge': _cover},
+                      },
+                    ],
+                  },
+                },
+              },
+            ),
+          );
+        }
+        final result = await first.timeout(_wait);
+        if (kind == 'manga') {
+          expect(result, (cover: _cover, banner: _cover));
+        } else {
+          expect(result, _cover);
+        }
+        expect(request.options.uri.host, 'graphql.anilist.co');
+        expect(count, 1);
+        expect(matches, 8);
+        await scope.pump();
+        expect(observer.unmounts, 1);
+      },
+    );
+  }
+
+  test(
+    'a banner-only query never requests a missing unasked-for cover',
+    () async {
+      const id = 196028745;
+      final backend = _DioTransport();
+      final scope = _container(backend, _Observer());
+      addTearDown(backend.close);
+      addTearDown(scope.dispose);
+      final result = _service(scope).bannerFor(id);
+      final request = await backend.nth(0);
+      request.assertQuery([id]);
+      request.handler.resolve(
+        Response<Map<String, dynamic>>(
+          requestOptions: request.options,
+          statusCode: 200,
+          data: {
+            'data': {
+              'Page': {
+                'media': [
+                  {'idMal': id, 'bannerImage': _cover},
+                ],
+              },
+            },
+          },
+        ),
+      );
+      expect(await result.timeout(_wait), _cover);
+      expect(backend.requests, hasLength(1));
+    },
+  );
+
   test(
     'a flushed anime ID shares only its own future and releases its lease',
     () async {
