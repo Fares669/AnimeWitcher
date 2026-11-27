@@ -221,9 +221,10 @@ final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
         final identity = await (_buildIdentity ??= _loadBuildIdentity());
         final encoded =
             '${jsonEncode(<String, Object?>{'schemaVersion': 1, ...identity, ...payload})}\n';
-        await _rotateIfNeeded(logDirectory, file, utf8.encode(encoded).length);
-        await file.writeAsString(
-          encoded,
+        final bytes = utf8.encode(encoded);
+        await _rotateIfNeeded(logDirectory, file, bytes.length);
+        await file.writeAsBytes(
+          bytes,
           mode: FileMode.append,
           // Diagnostics must never turn high-frequency progress into an fsync
           // workload on the same device that is writing video ranges. The file

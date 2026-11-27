@@ -1107,6 +1107,7 @@ class StorageService {
       'continue_watching_storage_v1_migrated';
   List<Map<String, dynamic>>? _cachedContinueWatching;
   bool _continueWatchingCacheDirty = true;
+  int _continueWatchingWritesInFlight = 0;
 
   Future<void> _migrateContinueWatchingStorage() async {
     if (_settingsBox.get(_kContinueWatchingMigrationV1, defaultValue: false) ==
@@ -1288,7 +1289,8 @@ class StorageService {
     String? syncedAccountUid,
     int? syncedAt,
   }) async {
-    final existing = _continueWatchingBox.get(_getKey(item.url));
+    final mainKey = _getKey(item.url);
+    final existing = _continueWatchingBox.get(mainKey);
     final previous = existing is Map
         ? Map<dynamic, dynamic>.from(existing)
         : const <dynamic, dynamic>{};
@@ -1332,14 +1334,60 @@ class StorageService {
         'animeWitcherSyncedAt': previous['animeWitcherSyncedAt'],
     };
 
-    await _continueWatchingBox.put(_getKey(item.url), entry);
     final isSeries =
         item.contentType == MultimediaContentType.series ||
         item.contentType == MultimediaContentType.anime;
-    if (isSeries && lastEpisodeUrl != null && lastEpisodeUrl.isNotEmpty) {
-      await _continueWatchingBox.put('EP_${_getKey(lastEpisodeUrl)}', entry);
+    final episodeKey =
+        isSeries && lastEpisodeUrl != null && lastEpisodeUrl.isNotEmpty
+        ? 'EP_${_getKey(lastEpisodeUrl)}'
+        : null;
+    // A remote import can return the exact already-saved entry on every
+    // foreground sync. Do not invalidate the list cache or rewrite the two
+    // Hive rows unless a value changed or an episode row must be repaired.
+    // Hive exposes in-flight values before they commit, so never take this
+    // shortcut while another Continue Watching write is still pending.
+    if (syncedAccountUid != null &&
+        syncedAt != null &&
+        syncedAt == timestamp &&
+        _continueWatchingWritesInFlight == 0 &&
+        _sameContinueWatchingRow(existing, entry)) {
+      final episode = episodeKey == null
+          ? null
+          : _continueWatchingBox.get(episodeKey);
+      if (episodeKey == null ||
+          identical(existing, episode) ||
+          _sameContinueWatchingRow(episode, entry)) {
+        return;
+      }
     }
-    _continueWatchingCacheDirty = true;
+
+    _continueWatchingWritesInFlight++;
+    try {
+      await _continueWatchingBox.put(mainKey, entry);
+      if (episodeKey != null) {
+        await _continueWatchingBox.put(episodeKey, entry);
+      }
+    } finally {
+      // A failed second put can still leave the main row changed.
+      _continueWatchingCacheDirty = true;
+      _continueWatchingWritesInFlight--;
+    }
+  }
+
+  static bool _sameContinueWatchingRow(
+    Object? raw,
+    Map<String, dynamic> entry,
+  ) {
+    if (raw is! Map || raw.length != entry.length) return false;
+    for (final field in entry.entries) {
+      final existing = raw[field.key];
+      if (existing.runtimeType != field.value.runtimeType ||
+          existing != field.value ||
+          (existing == null && !raw.containsKey(field.key))) {
+        return false;
+      }
+    }
+    return true;
   }
 
   Future<void> markContinueWatchingItemSynced(
@@ -1353,39 +1401,54 @@ class StorageService {
     final entry = Map<String, dynamic>.from(raw);
     entry['animeWitcherSyncedUid'] = accountUid;
     entry['animeWitcherSyncedAt'] = syncedAt;
-    await _continueWatchingBox.put(mainKey, entry);
+    _continueWatchingWritesInFlight++;
+    try {
+      await _continueWatchingBox.put(mainKey, entry);
 
-    final lastEpisodeUrl = entry['lastEpisodeUrl'] as String?;
-    if (lastEpisodeUrl != null && lastEpisodeUrl.isNotEmpty) {
-      final episodeKey = 'EP_${_getKey(lastEpisodeUrl)}';
-      final episodeRaw = _continueWatchingBox.get(episodeKey);
-      if (episodeRaw is Map) {
-        final episodeEntry = Map<String, dynamic>.from(episodeRaw);
-        episodeEntry['animeWitcherSyncedUid'] = accountUid;
-        episodeEntry['animeWitcherSyncedAt'] = syncedAt;
-        await _continueWatchingBox.put(episodeKey, episodeEntry);
+      final lastEpisodeUrl = entry['lastEpisodeUrl'] as String?;
+      if (lastEpisodeUrl != null && lastEpisodeUrl.isNotEmpty) {
+        final episodeKey = 'EP_${_getKey(lastEpisodeUrl)}';
+        final episodeRaw = _continueWatchingBox.get(episodeKey);
+        if (episodeRaw is Map) {
+          final episodeEntry = Map<String, dynamic>.from(episodeRaw);
+          episodeEntry['animeWitcherSyncedUid'] = accountUid;
+          episodeEntry['animeWitcherSyncedAt'] = syncedAt;
+          await _continueWatchingBox.put(episodeKey, episodeEntry);
+        }
       }
+    } finally {
+      _continueWatchingCacheDirty = true;
+      _continueWatchingWritesInFlight--;
     }
-    _continueWatchingCacheDirty = true;
   }
 
   Future<void> removeFromContinueWatching(String url) async {
-    final mainKey = _getKey(url);
-    await _continueWatchingBox.delete(mainKey);
-    final keysToDelete = <dynamic>[];
-    for (var i = 0; i < _continueWatchingBox.length; i++) {
-      final key = _continueWatchingBox.keyAt(i);
-      if (key is! String || !key.startsWith('EP_')) continue;
-      final raw = _continueWatchingBox.get(key);
-      if (raw is Map && raw['url'] == url) keysToDelete.add(key);
+    _continueWatchingWritesInFlight++;
+    try {
+      final mainKey = _getKey(url);
+      await _continueWatchingBox.delete(mainKey);
+      final keysToDelete = <dynamic>[];
+      for (var i = 0; i < _continueWatchingBox.length; i++) {
+        final key = _continueWatchingBox.keyAt(i);
+        if (key is! String || !key.startsWith('EP_')) continue;
+        final raw = _continueWatchingBox.get(key);
+        if (raw is Map && raw['url'] == url) keysToDelete.add(key);
+      }
+      await _continueWatchingBox.deleteAll(keysToDelete);
+    } finally {
+      _continueWatchingCacheDirty = true;
+      _continueWatchingWritesInFlight--;
     }
-    await _continueWatchingBox.deleteAll(keysToDelete);
-    _continueWatchingCacheDirty = true;
   }
 
   Future<void> clearAllContinueWatching() async {
-    await _continueWatchingBox.clear();
-    _continueWatchingCacheDirty = true;
+    _continueWatchingWritesInFlight++;
+    try {
+      await _continueWatchingBox.clear();
+    } finally {
+      _continueWatchingCacheDirty = true;
+      _continueWatchingWritesInFlight--;
+    }
   }
 
   List<Map<String, dynamic>> getContinueWatching() {

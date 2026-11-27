@@ -96,6 +96,112 @@ void main() {
   );
 
   test(
+    'deep completed archive rechecks live aliases in order before delete',
+    () async {
+      final fixture = await _fixture();
+      final ownerDir = await Directory(p.join(fixture.root.path, 'owner'))
+          .create();
+      final previousDir = await Directory(p.join(fixture.root.path, 'previous'))
+          .create();
+      const body = 'verified video bytes';
+      final target = await File(p.join(ownerDir.path, 'episode.mp4'))
+          .writeAsString(body);
+      await File(p.join(previousDir.path, 'episode.mp4')).writeAsString(body);
+      final ownerAlias = await Link(p.join(fixture.root.path, 'owner-alias'))
+          .create(previousDir.path);
+      final poison = await Link(p.join(fixture.root.path, 'unrelated-link'))
+          .create(p.join(fixture.root.path, 'initial.mp4'));
+      await File(p.join(fixture.root.path, 'initial.mp4')).writeAsString(body);
+      for (var i = 0; i < 130; i++) {
+        final duplicate = await File(
+          p.join(fixture.root.path, 'archive-$i.mp4'),
+        ).writeAsString(body);
+        await fixture.store.put(
+          _row(i, duplicate.path, completedBytes: body.length),
+        );
+      }
+      final owner = _row(
+        130,
+        p.join(ownerAlias.path, 'episode.mp4'),
+        completedBytes: body.length,
+      );
+      final invalidLater = _row(131, poison.path, completedBytes: body.length);
+      final removing = _row(132, target.path, completedBytes: body.length);
+      for (final row in [owner, invalidLater, removing]) {
+        await fixture.store.put(row);
+      }
+      await fixture.manager.initialize();
+
+      // No startup key can authorize this delete: the surviving owner's
+      // directory now aliases the claimant's path. The next row is a loop,
+      // so the existence of the first conflict must win over its later error.
+      await ownerAlias.update(ownerDir.path);
+      await poison.update(poison.path);
+      await fixture.manager.delete(
+        removing.logicalId,
+        expectedTaskId: removing.taskId,
+      );
+      expect(await target.readAsString(), body);
+      expect(
+        (await fixture.store.get(owner.logicalId))?.completedAtMillis,
+        owner.completedAtMillis,
+      );
+      expect(await fixture.store.get(removing.logicalId), isNull);
+      expect(fixture.resolver.calls, 0);
+    },
+    skip: Platform.isWindows ? 'Fixture needs unprivileged symlinks' : false,
+  );
+
+  test(
+    'an earlier live path error remains fatal before a later conflict',
+    () async {
+      final fixture = await _fixture();
+      final before = await File(p.join(fixture.root.path, 'before.mp4'))
+          .writeAsString('before');
+      final owner = await File(p.join(fixture.root.path, 'owner.mp4'))
+          .writeAsString('owner');
+      final poison = await Link(p.join(fixture.root.path, 'bad-alias'))
+          .create(before.path);
+      await fixture.store.put(_row(0, poison.path, completedBytes: 6));
+      await fixture.store.put(_row(1, owner.path, completedBytes: 5));
+      await fixture.manager.initialize();
+      await poison.update(poison.path);
+
+      final claimant = logicalDownloadIdFor(
+        animeId: 'offline-episode',
+        episodeKey: 'claimant',
+        variantKey: 'source',
+      );
+      await expectLater(
+        fixture.manager.start(
+          DownloadStartRequestV2(
+            logicalId: claimant,
+            mediaId: 'offline-episode',
+            unitKey: 'claimant',
+            variantKey: 'source',
+            destinationPath: owner.path,
+            sourceDescriptor: const {'providerId': 'fixture-only'},
+            allowPause: true,
+            retries: 1,
+            parallelChunks: 1,
+          ),
+        ),
+        throwsA(
+          isA<FileSystemException>().having(
+            (error) => error.path,
+            'first unavailable path',
+            poison.path,
+          ),
+        ),
+      );
+      expect(await owner.readAsString(), 'owner');
+      expect(await fixture.store.get(claimant), isNull);
+      expect(fixture.resolver.calls, 0);
+    },
+    skip: Platform.isWindows ? 'Fixture needs unprivileged symlinks' : false,
+  );
+
+  test(
     'delete resolves a retargeted symlink after startup to preserve its owner',
     () async {
       final fixture = await _fixture();
@@ -129,6 +235,7 @@ LogicalDownloadRecordV2 _row(
   int index,
   String path, {
   DownloadUserIntent intent = DownloadUserIntent.paused,
+  int? completedBytes,
 }) {
   final logicalId = logicalDownloadIdFor(
     animeId: 'offline-episode',
@@ -147,6 +254,8 @@ LogicalDownloadRecordV2 _row(
     destinationPath: path,
     sourceDescriptor: const {'providerId': 'fixture-only'},
     updatedAtMillis: index + 1,
+    completedAtMillis: completedBytes == null ? null : index + 1,
+    expectedBytes: completedBytes,
   );
 }
 

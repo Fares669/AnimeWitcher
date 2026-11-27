@@ -53,7 +53,6 @@ import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/features/search/data/mal_rankings.dart';
 import 'package:animewitcher/features/manga/presentation/manga_home_prefetch.dart';
-import 'package:animewitcher/core/network/poster_cache.dart';
 import 'package:animewitcher/core/utils/localized_text.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -423,12 +422,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       final page = ref.watch(homeMalRankingPageProvider(ranking)).value;
       if (page == null || (page.items.isEmpty && !page.hasMore)) continue;
       final items = page.items;
-      warmPosters(items.take(12).map((item) => item.posterUrl));
       rails.add(
         MediaHorizontalList(
           key: ValueKey<String>('home-mal-${ranking.name}'),
           title: appText(context, english: english, arabic: arabic),
           mediaList: items.take(malRankingPageSize).toList(growable: false),
+          // Keep ranking data ready, but leave encoded poster warming to the
+          // mounted rail's post-frame path, behind the visible cards.
+          warmProviderPosters: true,
           category: ViewAllCategory.providerContent,
           showViewAll: true,
           loadViewAllPage: (offset) => load(ranking, offset),

@@ -59,12 +59,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   ProviderSubscription<int>? _clearRequestSub;
   ProviderSubscription<int>? _focusRequestSub;
   bool _isLoadingProviderFilters = false;
+  String _lastControllerText = '';
 
   @override
   void initState() {
     super.initState();
     // Restore any previously committed query into the text field.
     _controller.text = ref.read(searchQueryProvider);
+    _lastControllerText = _controller.text;
     _clearRequestSub = ref.listenManual<int>(searchClearRequestProvider, (
       previous,
       next,
@@ -152,7 +154,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   }
 
   void _onTextChanged() {
-    if (mounted) setState(() {});
+    final text = _controller.text;
+    // The field already owns cursor, selection and IME composition updates.
+    // Search results and their overlay only depend on the text.
+    if (!mounted || text == _lastControllerText) return;
+    _lastControllerText = text;
+    setState(() {});
   }
 
   void _requestSearchFocus() {

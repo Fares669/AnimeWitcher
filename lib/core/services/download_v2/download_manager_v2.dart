@@ -53,6 +53,19 @@ Future<List<_CanonicalPathResult>> _canonicalPathBatch(
   return results;
 });
 
+Future<int?> _findCanonicalPathInBatch(List<String> paths, String expected) =>
+    runLocalFileIo(() {
+      for (var index = 0; index < paths.length; index++) {
+        final path = paths[index];
+        final canonical = _canonicalPathOnDisk((
+          original: path,
+          absolute: File(path).absolute.path,
+        ));
+        if (canonical == expected) return index;
+      }
+      return null;
+    });
+
 String _canonicalPathOnDisk(_CanonicalPathInput input) {
   var ancestor = p.normalize(input.absolute);
   final missing = <String>[];
@@ -3184,10 +3197,47 @@ final class DownloadManagerV2 {
     DownloadLogicalId? logicalId,
   ) async {
     final records = await _store.all();
+    const batchSize = 64;
+    final completed = <LogicalDownloadRecordV2>[];
+
+    Future<LogicalDownloadRecordV2?> checkCompleted() async {
+      if (completed.length == 1) {
+        final record = completed.removeLast();
+        return await _canonicalDestinationPath(record.destinationPath) ==
+                canonicalDestination
+            ? record
+            : null;
+      }
+      final index = await _findCanonicalPathInBatch([
+        for (final record in completed) record.destinationPath,
+      ], canonicalDestination);
+      final match = index == null ? null : completed[index];
+      completed.clear();
+      return match;
+    }
+
     for (final record in records) {
-      if (record.logicalId == logicalId ||
-          (record.intent == DownloadUserIntent.canceled &&
-              !_hasLiveOwnership(_snapshots[record.logicalId]))) {
+      if (record.logicalId == logicalId) continue;
+      // These rows do not need a platform lookup or a live ownership check.
+      // Read each path on disk in store order, stopping at the first conflict
+      // or error. Never reuse an earlier key to authorize a destructive action.
+      if (record.completedAtMillis != null &&
+          record.intent != DownloadUserIntent.canceled &&
+          p.isAbsolute(record.destinationPath)) {
+        completed.add(record);
+        if (completed.length < batchSize) continue;
+        final match = await checkCompleted();
+        if (match != null) return match;
+        continue;
+      }
+      // Evaluate any mutable canceled ownership only after the earlier
+      // completed paths have been checked, as in the sequential scan.
+      if (completed.isNotEmpty) {
+        final match = await checkCompleted();
+        if (match != null) return match;
+      }
+      if (record.intent == DownloadUserIntent.canceled &&
+          !_hasLiveOwnership(_snapshots[record.logicalId])) {
         continue;
       }
       if (await _canonicalDestinationPath(record.destinationPath) ==
@@ -3195,7 +3245,8 @@ final class DownloadManagerV2 {
         return record;
       }
     }
-    return null;
+    if (completed.isEmpty) return null;
+    return checkCompleted();
   }
 
   Future<File> _destinationFile(String destinationPath) async {

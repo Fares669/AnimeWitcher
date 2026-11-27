@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -103,7 +104,7 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
   int _previewRequest = 0;
 
   /// Where the divider sits, as a fraction of the width.
-  double _split = 0.5;
+  final _split = ValueNotifier<double>(0.5);
 
   @override
   void initState() {
@@ -124,6 +125,7 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
   @override
   void dispose() {
     _previewRequest++;
+    _split.dispose();
     final player = _player;
     _player = null;
     unawaited(player?.dispose());
@@ -481,11 +483,13 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
                   : LayoutBuilder(
                       builder: (context, constraints) {
                         final width = constraints.maxWidth;
-                        void setFromDx(double dx) => setState(
-                          () => _split = (dx / width)
+                        // A divider move only changes the clip and paint.
+                        // Keep the image and gesture subtrees mounted as-is.
+                        void setFromDx(double dx) {
+                          _split.value = (dx / width)
                               .clamp(0.02, 0.98)
-                              .toDouble(),
-                        );
+                              .toDouble();
+                        }
 
                         return GestureDetector(
                           behavior: HitTestBehavior.opaque,
@@ -595,24 +599,24 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
 }
 
 class _LeftOf extends CustomClipper<Rect> {
-  const _LeftOf(this.split);
-  final double split;
+  _LeftOf(this.split) : super(reclip: split);
+  final ValueListenable<double> split;
 
   @override
   Rect getClip(Size size) =>
-      Rect.fromLTWH(0, 0, size.width * split, size.height);
+      Rect.fromLTWH(0, 0, size.width * split.value, size.height);
 
   @override
   bool shouldReclip(_LeftOf oldClipper) => oldClipper.split != split;
 }
 
 class _DividerPainter extends CustomPainter {
-  const _DividerPainter(this.split);
-  final double split;
+  _DividerPainter(this.split) : super(repaint: split);
+  final ValueListenable<double> split;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final x = size.width * split;
+    final x = size.width * split.value;
     canvas.drawRect(
       Rect.fromLTWH(x - 1, 0, 2, size.height),
       Paint()..color = Colors.white.withValues(alpha: 0.9),
