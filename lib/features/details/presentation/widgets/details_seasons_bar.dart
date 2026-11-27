@@ -526,17 +526,18 @@ class _DetailsSeasonsBarState extends ConsumerState<DetailsSeasonsBar> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    _scheduleLoad();
   }
 
   @override
   void didUpdateWidget(covariant DetailsSeasonsBar oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.current.url != widget.current.url ||
+        oldWidget.current.provider != widget.current.provider ||
         oldWidget.current.artworkLookupMalId !=
             widget.current.artworkLookupMalId) {
       _walked = null;
-      WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+      _scheduleLoad();
     }
   }
 
@@ -547,36 +548,51 @@ class _DetailsSeasonsBarState extends ConsumerState<DetailsSeasonsBar> {
     super.dispose();
   }
 
-  Future<void> _load() async {
+  void _scheduleLoad() {
     final generation = ++_loadGeneration;
-    final malId = widget.current.artworkLookupMalId;
-    if (malId == null) {
-      if (mounted && generation == _loadGeneration) {
-        setState(() => _walked = const <SeasonsBarEntry>[]);
-      }
-      return;
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load(generation));
+  }
+
+  Future<void> _load(int generation) async {
+    bool isCurrent() => mounted && generation == _loadGeneration;
+    if (!isCurrent()) return;
+    final current = widget.current;
+    final malId = current.artworkLookupMalId;
+    if (malId == null) return;
 
     try {
+      // Only the native catalogue can resolve the resulting entries into
+      // playable pages. Do not walk or enrich a graph we cannot display.
+      final provider = ref.read(itemSourceProvider(current.provider));
+      if (provider is! AnimeWitcherNativeProvider) return;
       final aniList = ref.read(aniListFranchiseServiceProvider);
       final root = await aniList.fetchByMalId(malId);
-      if (root == null) {
-        if (mounted && generation == _loadGeneration) {
-          setState(() => _walked = const <SeasonsBarEntry>[]);
-        }
-        return;
-      }
+      if (!isCurrent() || root == null) return;
 
-      var graphEntries = await walkSeasonsBar(
+      final graphEntries = await walkSeasonsBar(
         current: root.item,
         related: root.related,
         fetchRelated: (url) async {
+          if (!isCurrent()) return const <MultimediaItem>[];
           final relatedMalId = _aniListMalIdFromUrl(url);
           if (relatedMalId == null) return const <MultimediaItem>[];
           return (await aniList.fetchByMalId(relatedMalId))?.related ??
               const <MultimediaItem>[];
         },
       );
+      if (!isCurrent() || graphEntries.isEmpty) return;
+
+      // The current card always uses the live details item; looking up that
+      // ID cannot add a route. Resolve the other routes before enriching the
+      // labels, which aren't needed if no other season can be opened.
+      final ids = <int>{
+        for (final entry in graphEntries)
+          if (!entry.isCurrent)
+            if (entry.item.artworkLookupMalId case final id?) id,
+      };
+      if (ids.isEmpty) return;
+      final resolved = await provider.resolveCatalogAnimeByMalIds(ids);
+      if (!isCurrent() || resolved.isEmpty) return;
 
       final aniZip = AniZipService();
       final seasonPairs = await Future.wait(
@@ -595,27 +611,17 @@ class _DetailsSeasonsBarState extends ConsumerState<DetailsSeasonsBar> {
               : (url: entry.item.url, season: mapping.seasonNumber);
         }),
       );
+      if (!isCurrent()) return;
+
       final seasonNumbers = <String, int>{
         for (final pair in seasonPairs)
           if (pair != null) pair.url: pair.season,
       };
-      graphEntries = applyAniZipSeasonNumbers(graphEntries, seasonNumbers);
-
-      final provider = ref.read(itemSourceProvider(widget.current.provider));
-      if (provider is! AnimeWitcherNativeProvider) {
-        if (mounted && generation == _loadGeneration) {
-          setState(() => _walked = const <SeasonsBarEntry>[]);
-        }
-        return;
-      }
-
-      final ids = graphEntries
-          .map((entry) => entry.item.artworkLookupMalId)
-          .whereType<int>()
-          .toSet();
-      final resolved = await provider.resolveCatalogAnimeByMalIds(ids);
       final matched = <SeasonsBarEntry>[];
-      for (final entry in graphEntries) {
+      for (final entry in applyAniZipSeasonNumbers(
+        graphEntries,
+        seasonNumbers,
+      )) {
         final id = entry.item.artworkLookupMalId;
         final item = entry.isCurrent
             ? widget.current
@@ -630,14 +636,9 @@ class _DetailsSeasonsBarState extends ConsumerState<DetailsSeasonsBar> {
         );
       }
 
-      if (!mounted || generation != _loadGeneration) return;
-      setState(
-        () =>
-            _walked = matched.length < 2 ? const <SeasonsBarEntry>[] : matched,
-      );
+      if (matched.length >= 2) setState(() => _walked = matched);
     } catch (_) {
-      if (!mounted || generation != _loadGeneration) return;
-      setState(() => _walked = const <SeasonsBarEntry>[]);
+      // The optional seasons bar can remain hidden if metadata is unavailable.
     }
   }
 

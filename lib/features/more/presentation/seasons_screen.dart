@@ -96,7 +96,8 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
     });
     ref.listen(activeProviderProvider, (previous, next) {
       if (previous?.packageName != next?.packageName &&
-          (previous?.supportsSeasons == true || next?.supportsSeasons == true)) {
+          (previous?.supportsSeasons == true ||
+              next?.supportsSeasons == true)) {
         _refreshSeasons().ignore();
       }
     });
@@ -170,24 +171,21 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
       case 0:
         return _SeasonGrid(
           key: ValueKey('past-${data.config.past}-$_reloadGeneration'),
-          provider: data.provider,
-          season: data.config.past,
+          catalog: data.catalog(index, data.config.past),
           showSeasonTitle: true,
           emptyLabel: 'لا توجد أعمال في الموسم السابق',
         );
       case 1:
         return _SeasonGrid(
           key: ValueKey('current-${data.config.current}-$_reloadGeneration'),
-          provider: data.provider,
-          season: data.config.current,
+          catalog: data.catalog(index, data.config.current),
           showSeasonTitle: true,
           emptyLabel: 'لا توجد أعمال في الموسم الحالي',
         );
       case 2:
         return _SeasonGrid(
           key: ValueKey('next-${data.config.next}-$_reloadGeneration'),
-          provider: data.provider,
-          season: data.config.next,
+          catalog: data.catalog(index, data.config.next),
           showSeasonTitle: true,
           emptyLabel: 'لا توجد أعمال في الموسم القادم',
         );
@@ -283,8 +281,15 @@ class _SeasonsBootstrap {
   final AnimeWitcherProvider provider;
   final ProviderSeasonConfig config;
   // One archive request per exact config/provider generation, on demand.
-  late final Future<List<String>> allSeasons =
-      Future<List<String>>.sync(() => provider.getAllSeasons());
+  late final Future<List<String>> allSeasons = Future<List<String>>.sync(
+    () => provider.getAllSeasons(),
+  );
+
+  // Retain cheap paging/scroll data, not entire trees of offscreen cards.
+  final _catalogs = <int, _SeasonCatalog>{};
+
+  _SeasonCatalog catalog(int tab, String season) =>
+      _catalogs.putIfAbsent(tab, () => _SeasonCatalog(provider, season));
 
   _SeasonsBootstrap({required this.provider, required this.config});
 }
@@ -322,10 +327,7 @@ class _OtherSeasonsList extends StatelessWidget {
   final AnimeWitcherProvider provider;
   final List<String> allSeasons;
 
-  const _OtherSeasonsList({
-    required this.provider,
-    required this.allSeasons,
-  });
+  const _OtherSeasonsList({required this.provider, required this.allSeasons});
 
   Map<int, Map<String, String>> _grouped() {
     final grouped = <int, Map<String, String>>{};
@@ -443,11 +445,21 @@ class _SeasonYearButton extends StatelessWidget {
   }
 }
 
-class _SeasonResultsScreen extends StatelessWidget {
+class _SeasonResultsScreen extends StatefulWidget {
   final AnimeWitcherProvider provider;
   final String season;
 
   const _SeasonResultsScreen({required this.provider, required this.season});
+
+  @override
+  State<_SeasonResultsScreen> createState() => _SeasonResultsScreenState();
+}
+
+class _SeasonResultsScreenState extends State<_SeasonResultsScreen> {
+  late final _SeasonCatalog _catalog = _SeasonCatalog(
+    widget.provider,
+    widget.season,
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -455,32 +467,59 @@ class _SeasonResultsScreen extends StatelessWidget {
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(
-        title: season,
+        title: widget.season,
         canPop: !MorePaneScope.of(context) && Navigator.of(context).canPop(),
         onBack: () => Navigator.of(context).pop(),
       ),
       body: _SeasonGrid(
-        provider: provider,
+        catalog: _catalog,
         topPadding: headerTop,
-        season: season,
         emptyLabel: 'لا توجد أعمال في هذا الموسم',
       ),
     );
   }
 }
 
-class _SeasonGrid extends StatefulWidget {
+class _SeasonCatalog {
+  _SeasonCatalog(this.provider, this.season);
+
   final AnimeWitcherProvider provider;
-  final double topPadding;
   final String season;
+  final pager = OffsetPager<MultimediaItem>(keyOf: multimediaItemPageKey);
+  double scrollOffset = 0;
+  bool requested = false;
+  Future<void>? pending;
+
+  Future<void> loadNext() {
+    requested = true;
+    return pending ??= pager
+        .loadNext(
+          (offset) => provider
+              .getSeasonPage(season, offset: offset, limit: 30)
+              .then(
+                (page) => (
+                  items: page.items,
+                  nextOffset: page.nextOffset,
+                  hasMore: page.hasMore,
+                ),
+              ),
+        )
+        .whenComplete(() {
+          pending = null;
+        });
+  }
+}
+
+class _SeasonGrid extends StatefulWidget {
+  final _SeasonCatalog catalog;
+  final double topPadding;
   final String emptyLabel;
   final bool showSeasonTitle;
 
   const _SeasonGrid({
     super.key,
-    required this.provider,
+    required this.catalog,
     this.topPadding = 0,
-    required this.season,
     required this.emptyLabel,
     this.showSeasonTitle = false,
   });
@@ -489,53 +528,42 @@ class _SeasonGrid extends StatefulWidget {
   State<_SeasonGrid> createState() => _SeasonGridState();
 }
 
-class _SeasonGridState extends State<_SeasonGrid>
-    with AutomaticKeepAliveClientMixin<_SeasonGrid> {
-  @override
-  bool get wantKeepAlive => true;
-
-  final ScrollController _controller = ScrollController();
-  final OffsetPager<MultimediaItem> _pager = OffsetPager<MultimediaItem>(
-    keyOf: multimediaItemPageKey,
+class _SeasonGridState extends State<_SeasonGrid> {
+  late final ScrollController _controller = ScrollController(
+    initialScrollOffset: widget.catalog.scrollOffset,
+    keepScrollOffset: false,
   );
+
+  OffsetPager<MultimediaItem> get _pager => widget.catalog.pager;
+  String get _season => widget.catalog.season;
 
   @override
   void initState() {
     super.initState();
     _controller.addListener(_onScroll);
-    _loadNext();
-  }
-
-  @override
-  void didUpdateWidget(covariant _SeasonGrid oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.season != widget.season ||
-        oldWidget.provider != widget.provider) {
-      _pager.reset();
+    if (widget.catalog.pending case final pending?) {
+      // The previous grid may have left the viewport during a page request.
+      _redrawWhenLoaded(pending);
+    } else if (!widget.catalog.requested) {
       _loadNext();
     }
   }
 
   void _onScroll() {
+    if (_controller.hasClients) {
+      widget.catalog.scrollOffset = _controller.position.pixels;
+    }
     if (_pager.shouldLoadMore(_controller)) _loadNext();
   }
 
   Future<void> _loadNext() async {
-    if (_pager.loading || !_pager.hasMore || widget.season.trim().isEmpty) {
-      return;
-    }
-    final future = _pager.loadNext(
-      (offset) => widget.provider
-          .getSeasonPage(widget.season, offset: offset, limit: 30)
-          .then(
-            (page) => (
-              items: page.items,
-              nextOffset: page.nextOffset,
-              hasMore: page.hasMore,
-            ),
-          ),
-    );
+    if (_pager.loading || !_pager.hasMore || _season.trim().isEmpty) return;
+    final future = widget.catalog.loadNext();
     setState(() {});
+    await _redrawWhenLoaded(future);
+  }
+
+  Future<void> _redrawWhenLoaded(Future<void> future) async {
     await future;
     if (mounted) setState(() {});
   }
@@ -550,7 +578,6 @@ class _SeasonGridState extends State<_SeasonGrid>
 
   @override
   Widget build(BuildContext context) {
-    super.build(context);
     final isDesktop = context.isDesktop;
     final initialLoading = _pager.items.isEmpty && _pager.loading;
     final extra = _pager.loading
@@ -561,8 +588,8 @@ class _SeasonGridState extends State<_SeasonGrid>
         controller: _controller,
         physics: const AlwaysScrollableScrollPhysics(),
         slivers: [
-          if (widget.showSeasonTitle && widget.season.trim().isNotEmpty)
-            SliverToBoxAdapter(child: SeasonListTitle(title: widget.season)),
+          if (widget.showSeasonTitle && _season.trim().isNotEmpty)
+            SliverToBoxAdapter(child: SeasonListTitle(title: _season)),
           if (_pager.items.isEmpty && !initialLoading)
             SliverFillRemaining(
               hasScrollBody: false,
@@ -599,7 +626,9 @@ class _SeasonGridState extends State<_SeasonGrid>
                 ),
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
-                    if (initialLoading) return const AnimePosterShimmer();
+                    if (initialLoading) {
+                      return const RepaintBoundary(child: AnimePosterShimmer());
+                    }
                     if (index >= _pager.items.length) {
                       if (_pager.error != null) {
                         return IconButton(
@@ -608,14 +637,14 @@ class _SeasonGridState extends State<_SeasonGrid>
                           icon: const Icon(Icons.refresh_rounded),
                         );
                       }
-                      return const AnimePosterShimmer();
+                      return const RepaintBoundary(child: AnimePosterShimmer());
                     }
                     final item = _pager.items[index];
                     return MultimediaCard.fromItem(
-                      key: ValueKey('season-${widget.season}-${item.url}'),
+                      key: ValueKey('season-$_season-${item.url}'),
                       item: item,
                       heroTag: heroTagWithId(
-                        'season-${widget.season}',
+                        'season-$_season',
                         item,
                         index,
                         dashed: true,
@@ -623,6 +652,8 @@ class _SeasonGridState extends State<_SeasonGrid>
                       onTap: () => item.openDetails(context),
                     );
                   },
+                  // MultimediaCard is already a repaint boundary.
+                  addRepaintBoundaries: false,
                   childCount: initialLoading
                       ? (isDesktop ? 18 : 12)
                       : _pager.items.length + extra,

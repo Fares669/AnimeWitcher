@@ -91,7 +91,8 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
     });
     ref.listen(activeProviderProvider, (previous, next) {
       if (previous?.packageName != next?.packageName &&
-          (previous?.supportsUpcoming == true || next?.supportsUpcoming == true)) {
+          (previous?.supportsUpcoming == true ||
+              next?.supportsUpcoming == true)) {
         unawaited(_refresh());
       }
     });
@@ -124,6 +125,7 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
               )
             : const AnimePosterShimmer(),
         itemCount: _pager.items.length,
+        itemsHaveRepaintBoundaries: true,
         itemBuilder: (context, index) {
           final item = _pager.items[index];
           return MultimediaCard.fromItem(

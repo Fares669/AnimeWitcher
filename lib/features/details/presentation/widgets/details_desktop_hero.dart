@@ -6,6 +6,7 @@ import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' show Bidi;
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:octo_image/octo_image.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/utils/artwork_quality.dart';
@@ -138,6 +139,7 @@ class DetailsDesktopHero extends ConsumerWidget {
 
     final providedBannerUrl = AppImageFallbacks.optional(displayItem.bannerUrl);
     final posterUrl = AppImageFallbacks.poster(displayItem.posterUrl);
+    final logoUrl = AppImageFallbacks.optional(displayItem.logoUrl);
     // Asked for at its stored size; the catalog's own URL requests a
     // thumbnail-sized copy of it.
     final backdropUrl =
@@ -378,46 +380,9 @@ class DetailsDesktopHero extends ConsumerWidget {
                               GestureDetector(
                                 behavior: HitTestBehavior.opaque,
                                 onLongPress: () => _copyAnimeTitle(context),
-                                child: displayItem.logoUrl != null
-                                    ? ArtworkDecode(
-                                        paintedWidth: compact ? 240 : 420,
-                                        builder:
-                                            (
-                                              BuildContext context,
-                                              int? decodeWidth,
-                                            ) => CachedNetworkImage(
-                                              imageUrl: displayItem.logoUrl!,
-                                              memCacheWidth: decodeWidth,
-                                              // Only the logo is held to its
-                                              // height. The name standing in
-                                              // for it, while it loads or when
-                                              // it fails, was held to it too,
-                                              // and a name of three lines lost
-                                              // its last one under the details.
-                                              imageBuilder: (context, image) =>
-                                                  Image(
-                                                    image: image,
-                                                    height: compact ? 56 : 96,
-                                                    // This widget takes a
-                                                    // resolved alignment, so
-                                                    // the start edge is worked
-                                                    // out here.
-                                                    alignment:
-                                                        Directionality.of(
-                                                              context,
-                                                            ) ==
-                                                            TextDirection.rtl
-                                                        ? Alignment.centerRight
-                                                        : Alignment.centerLeft,
-                                                    fit: BoxFit.contain,
-                                                  ),
-                                              placeholder: (_, _) =>
-                                                  _buildTitle(textColor),
-                                              errorWidget: (_, _, _) =>
-                                                  _buildTitle(textColor),
-                                            ),
-                                      )
-                                    : _buildTitle(textColor),
+                                child: logoUrl == null
+                                    ? _buildTitle(textColor)
+                                    : _buildLogo(context, logoUrl, textColor),
                               ),
                               SizedBox(height: compact ? 8 : 16),
                               // The scores ride with the metadata, in the same
@@ -581,6 +546,28 @@ class DetailsDesktopHero extends ConsumerWidget {
 
     notificationServiceOf(context).showSuccess(
       appText(context, english: 'Title copied', arabic: 'تم نسخ العنوان'),
+    );
+  }
+
+  Widget _buildLogo(BuildContext context, String url, Color textColor) {
+    final height = compact ? 56.0 : 96.0;
+    final decodeHeight =
+        (height * MediaQuery.devicePixelRatioOf(context) * 1.25).ceil();
+    return OctoImage(
+      image: CachedNetworkImageProvider(url),
+      // A contain-fit logo cannot paint taller than this. Keep 25% physical
+      // pixel headroom and its aspect ratio, including unusually wide logos.
+      height: height,
+      memCacheHeight: decodeHeight,
+      alignment: AlignmentDirectional.centerStart,
+      fit: BoxFit.contain,
+      fadeInDuration: const Duration(milliseconds: 500),
+      fadeOutDuration: const Duration(milliseconds: 1000),
+      // The fallback remains unconstrained by the logo's height so a long
+      // title never loses its last line. Do not use CachedNetworkImage's
+      // imageBuilder: it hands back the original, not the resized image.
+      placeholderBuilder: (_) => _buildTitle(textColor),
+      errorBuilder: (_, _, _) => _buildTitle(textColor),
     );
   }
 

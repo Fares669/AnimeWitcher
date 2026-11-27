@@ -39,10 +39,7 @@ class CatalogPage extends StatelessWidget {
       appBar: AppPageAppBar(title: title, canPop: canPop, onBack: onBack),
       body: background == null
           ? body
-          : Stack(
-              fit: StackFit.expand,
-              children: [background!, body],
-            ),
+          : Stack(fit: StackFit.expand, children: [background!, body]),
     );
   }
 }
@@ -83,6 +80,7 @@ class CatalogBody extends StatelessWidget {
     this.handsetPortraitColumns =
         MultimediaCardLayout.handsetPortraitGridColumns,
     this.bottomPadding = 110,
+    this.itemsHaveRepaintBoundaries = false,
   });
 
   /// Distance from the top of the screen to below the header.
@@ -137,6 +135,9 @@ class CatalogBody extends StatelessWidget {
   final int? handsetPortraitColumns;
   final double bottomPadding;
 
+  /// Avoid an extra grid boundary for cells that already isolate their paint.
+  final bool itemsHaveRepaintBoundaries;
+
   @override
   Widget build(BuildContext context) {
     if (isLoading && itemCount == 0) {
@@ -166,12 +167,12 @@ class CatalogBody extends StatelessWidget {
     final grid = CatalogDirection(
       child: GridView.builder(
         controller: scrollController,
+        addRepaintBoundaries: !itemsHaveRepaintBoundaries,
         physics: const AlwaysScrollableScrollPhysics(),
         padding: EdgeInsets.fromLTRB(hPad, topInset + 16, hPad, bottomPadding),
         gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
           context,
-          maxCrossAxisExtent:
-              maxCrossAxisExtent ?? (isDesktop ? 240 : 150),
+          maxCrossAxisExtent: maxCrossAxisExtent ?? (isDesktop ? 240 : 150),
           childAspectRatio:
               childAspectRatio ??
               (characterTiles
@@ -206,19 +207,23 @@ class CatalogBody extends StatelessWidget {
         itemBuilder: (context, index) {
           if (index < itemCount) return itemBuilder(context, index);
           final footerIndex = index - itemCount;
-          if (footerBuilder != null) return footerBuilder!(context, footerIndex);
-          return switch (footer) {
-            CatalogFooter.loading => AnimePosterShimmer(
-              isPortrait: isPortrait,
-              characterCaptionSpace: characterTiles,
-            ),
-            CatalogFooter.retry => IconButton(
-              tooltip: 'إعادة المحاولة',
-              onPressed: onRetry == null ? null : () => onRetry!(),
-              icon: const Icon(Icons.refresh_rounded),
-            ),
-            CatalogFooter.none => const SizedBox.shrink(),
-          };
+          final child =
+              footerBuilder?.call(context, footerIndex) ??
+              switch (footer) {
+                CatalogFooter.loading => AnimePosterShimmer(
+                  isPortrait: isPortrait,
+                  characterCaptionSpace: characterTiles,
+                ),
+                CatalogFooter.retry => IconButton(
+                  tooltip: 'إعادة المحاولة',
+                  onPressed: onRetry == null ? null : () => onRetry!(),
+                  icon: const Icon(Icons.refresh_rounded),
+                ),
+                CatalogFooter.none => const SizedBox.shrink(),
+              };
+          return itemsHaveRepaintBoundaries
+              ? RepaintBoundary(child: child)
+              : child;
         },
       ),
     );
@@ -227,10 +232,9 @@ class CatalogBody extends StatelessWidget {
   }
 
   Widget _empty(BuildContext context) {
-    final content = emptyWidget ??
-        (emptyMessage == null
-            ? const SizedBox.shrink()
-            : Text(emptyMessage!));
+    final content =
+        emptyWidget ??
+        (emptyMessage == null ? const SizedBox.shrink() : Text(emptyMessage!));
     if (onRefresh == null) {
       return Padding(
         padding: EdgeInsets.only(top: topInset),

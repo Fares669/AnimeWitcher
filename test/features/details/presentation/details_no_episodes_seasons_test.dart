@@ -1,9 +1,14 @@
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_account_service.dart';
+import 'package:animewitcher/core/extensions/item_provider_resolution.dart';
+import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
+import 'package:animewitcher/core/extensions/providers/witanime_provider.dart';
+import 'package:animewitcher/core/services/anilist_franchise_service.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
 import 'package:animewitcher/core/storage/secure_token_storage.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
+import 'package:animewitcher/core/storage/settings_repository.dart';
 import 'package:animewitcher/features/details/presentation/details_controller.dart';
 import 'package:animewitcher/features/details/presentation/details_screen.dart';
 import 'package:animewitcher/features/details/presentation/widgets/details_hero_actions.dart';
@@ -12,6 +17,7 @@ import 'package:animewitcher/features/library/presentation/library_media_kind.da
 import 'package:animewitcher/features/library/presentation/library_provider.dart';
 import 'package:animewitcher/features/library/presentation/library_state.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -102,7 +108,132 @@ final class _NoEpisodeDetailsController extends DetailsController {
   }) async {}
 }
 
+final class _FranchiseProbe extends AniListFranchiseService {
+  _FranchiseProbe(this.nodes) : super(Dio());
+
+  final Map<int, AniListFranchiseNode> nodes;
+  final requests = <int>[];
+
+  @override
+  Future<AniListFranchiseNode?> fetchByMalId(int malId) async {
+    requests.add(malId);
+    return nodes[malId];
+  }
+}
+
+final class _CatalogueProbe extends AnimeWitcherNativeProvider {
+  _CatalogueProbe(_Storage storage, this.results)
+    : super(Dio(), SettingsRepository(storage));
+
+  final Map<int, MultimediaItem> results;
+  final requests = <Set<int>>[];
+
+  @override
+  Future<Map<int, MultimediaItem>> resolveCatalogAnimeByMalIds(
+    Iterable<int> rawIds,
+  ) async {
+    final ids = rawIds.toSet();
+    requests.add(ids);
+    return {
+      for (final id in ids)
+        if (results.containsKey(id)) id: results[id]!,
+    };
+  }
+}
+
+MultimediaItem _franchiseFixture(
+  int id, {
+  String? relation,
+  String? provider,
+}) => MultimediaItem(
+  title: 'Probe Title $id',
+  url: provider == null
+      ? 'anilist-mal:$id'
+      : 'https://example.test/watch/probe-$id',
+  posterUrl: '',
+  relationType: relation,
+  provider: provider,
+  catalogType: 'مسلسل',
+  syncData: {'malId': '$id'},
+);
+
 void main() {
+  for (final scenario in ['external', 'standalone', 'sequel']) {
+    testWidgets(
+      'details season requests only for displayable work ($scenario)',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(590, 900));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final storage = _Storage();
+        storage.settings[SeasonsBarStyleNotifier.storageKey] =
+            SeasonsBarStyle.pills.name;
+        const rootId = 101;
+        const nextId = 102;
+        final sequel = _franchiseFixture(nextId, relation: 'SEQUEL');
+        final franchise = _FranchiseProbe({
+          rootId: AniListFranchiseNode(
+            item: _franchiseFixture(rootId),
+            related: scenario == 'standalone' ? [] : [sequel],
+          ),
+          nextId: AniListFranchiseNode(item: sequel, related: []),
+        });
+        final native = _CatalogueProbe(storage, {
+          nextId: _franchiseFixture(nextId, provider: 'probe'),
+        });
+        final available = scenario == 'external'
+            ? WitanimeProvider((_, {cancelToken}) async => '')
+            : native;
+        final item = _franchiseFixture(rootId, provider: 'probe');
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              storageServiceProvider.overrideWithValue(storage),
+              libraryProvider.overrideWith(_EmptyLibrary.new),
+              detailsControllerProvider(item.url)
+                  .overrideWith(() => _NoEpisodeDetailsController(item)),
+              itemSourceProvider(item.provider).overrideWithValue(available),
+              aniListFranchiseServiceProvider.overrideWithValue(franchise),
+            ],
+            child: MaterialApp(
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              theme: ThemeData.dark(),
+              home: DetailsScreen(item: item),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byType(DetailsSeasonsBar), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('details-episodes-toggle')),
+          findsOneWidget,
+        );
+        expect(
+          find.text('الموسم 2'),
+          scenario == 'sequel' ? findsOneWidget : findsNothing,
+        );
+        debugPrint(
+          'Details $scenario: franchise=${franchise.requests}, '
+          'catalogue=${native.requests}',
+        );
+        expect(franchise.requests, switch (scenario) {
+          'external' => <int>[],
+          'standalone' => [rootId],
+          _ => [rootId, nextId],
+        });
+        expect(
+          native.requests,
+          scenario == 'sequel'
+              ? [
+                  <int>{nextId},
+                ]
+              : isEmpty,
+        );
+      },
+    );
+  }
+
   testWidgets(
     'details reload server membership on reopen and update the heart immediately',
     (tester) async {

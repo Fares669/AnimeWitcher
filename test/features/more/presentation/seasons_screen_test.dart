@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -109,19 +110,55 @@ class _StubSeasonsProvider extends AnimeWitcherNativeProvider {
 }
 
 class _ScrollableSeasonsProvider extends _StubSeasonsProvider {
+  final requests = <String>[];
+
   @override
   Future<ProviderMediaPage> getSeasonPage(
     String season, {
     int offset = 0,
     int limit = 30,
-  }) async => ProviderMediaPage(
-    items: [
-      for (var i = 0; i < 30; i++)
-        MultimediaItem(title: 'Show $i', url: 'test://$season/$i', posterUrl: ''),
-    ],
-    nextOffset: 30,
-    hasMore: false,
-  );
+  }) async {
+    requests.add(season);
+    return ProviderMediaPage(
+      items: [
+        for (var i = 0; i < 30; i++)
+          MultimediaItem(
+            title: 'Show $i',
+            url: 'test://$season/$i',
+            posterUrl: '',
+          ),
+      ],
+      nextOffset: 30,
+      hasMore: false,
+    );
+  }
+}
+
+class _PendingAppendProvider extends _ScrollableSeasonsProvider {
+  final append = Completer<ProviderMediaPage>();
+  final appendOffsets = <int>[];
+
+  @override
+  Future<ProviderMediaPage> getSeasonPage(
+    String season, {
+    int offset = 0,
+    int limit = 30,
+  }) async {
+    if (season == _StubSeasonsProvider.current && offset > 0) {
+      appendOffsets.add(offset);
+      return append.future;
+    }
+    final first = await super.getSeasonPage(
+      season,
+      offset: offset,
+      limit: limit,
+    );
+    return ProviderMediaPage(
+      items: first.items,
+      nextOffset: first.nextOffset,
+      hasMore: season == _StubSeasonsProvider.current,
+    );
+  }
 }
 
 Future<void> _pumpSeasons(
@@ -202,9 +239,8 @@ Future<void> _writeShot(WidgetTester tester, Key key, String filename) async {
     );
     final image = await boundary.toImage(pixelRatio: 2);
     final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-    File(
-      '${artifacts.path}/$filename',
-    ).writeAsBytesSync(bytes!.buffer.asUint8List());
+    File('${artifacts.path}/$filename')
+        .writeAsBytesSync(bytes!.buffer.asUint8List());
   });
 }
 
@@ -249,6 +285,109 @@ void main() {
       await _writeShot(tester, shotKey, 'seasons_next_title_centered.png');
     },
   );
+
+  testWidgets(
+    'season tab switches release offscreen cards without refetching',
+    (tester) async {
+      final provider = _ScrollableSeasonsProvider();
+      await _pumpSeasons(tester, provider: provider);
+      final cards = find.byType(MultimediaCard, skipOffstage: false);
+      ScrollController visibleScroll() => tester
+          .widget<CustomScrollView>(
+            find.byType(CustomScrollView).hitTestable().first,
+          )
+          .controller!;
+
+      final currentScroll = visibleScroll();
+      currentScroll.jumpTo(630);
+      await tester.pump();
+      final currentCards = tester.widgetList<MultimediaCard>(cards).toList();
+      expect(currentCards, isNotEmpty);
+      expect(provider.requests, [_StubSeasonsProvider.current]);
+
+      await _selectTab(tester, 'السابق');
+      await tester.pumpAndSettle();
+      await _selectTab(tester, 'القادم');
+      await tester.pumpAndSettle();
+      final visitedCards = tester.widgetList<MultimediaCard>(cards).toList();
+      final currentPrefix = 'season-${_StubSeasonsProvider.current}-';
+      final nextPrefix = 'season-${_StubSeasonsProvider.next}-';
+      final retained = visitedCards
+          .where((card) => card.heroTag.startsWith(currentPrefix))
+          .length;
+      debugPrint(
+        'SEASON_PROFILE $retained previous-current cards after browsing '
+        '${visitedCards.length} mounted cards total',
+      );
+      expect(retained, 0);
+      expect(visitedCards, isNotEmpty);
+      expect(
+        visitedCards,
+        everyElement(
+          isA<MultimediaCard>().having(
+            (card) => card.heroTag.startsWith(nextPrefix),
+            'next season',
+            isTrue,
+          ),
+        ),
+      );
+
+      await _selectTab(tester, 'الحالي');
+      await tester.pumpAndSettle();
+      expect(visibleScroll().offset, closeTo(630, 0.01));
+      expect(provider.requests, [
+        _StubSeasonsProvider.current,
+        _StubSeasonsProvider.past,
+        _StubSeasonsProvider.next,
+      ]);
+    },
+  );
+
+  testWidgets('a seasonal append survives leaving and returning mid-request', (
+    tester,
+  ) async {
+    final provider = _PendingAppendProvider();
+    await _pumpSeasons(tester, provider: provider);
+    ScrollController visibleScroll() => tester
+        .widget<CustomScrollView>(
+          find.byType(CustomScrollView).hitTestable().first,
+        )
+        .controller!;
+
+    final initial = visibleScroll();
+    initial.jumpTo(initial.position.maxScrollExtent);
+    await tester.pump();
+    expect(provider.appendOffsets, [30]);
+
+    await _selectTab(tester, 'السابق');
+    await tester.pumpAndSettle();
+    await _selectTab(tester, 'الحالي');
+    // Do not settle until the intentionally held request has completed.
+    final resumed = visibleScroll();
+    expect(resumed, isNot(same(initial)));
+    expect(provider.appendOffsets, [30]);
+
+    const url = 'https://fixture.test/season-appended';
+    provider.append.complete(
+      ProviderMediaPage(
+        items: [
+          MultimediaItem(title: 'Appended show', url: url, posterUrl: ''),
+        ],
+        nextOffset: 31,
+        hasMore: false,
+      ),
+    );
+    await tester.pumpAndSettle();
+    resumed.jumpTo(resumed.position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    expect(
+      find
+          .byKey(ValueKey('season-${_StubSeasonsProvider.current}-$url'))
+          .hitTestable(),
+      findsOneWidget,
+    );
+    expect(provider.appendOffsets, [30]);
+  });
 
   testWidgets('season title scrolls away while the season tabs stay fixed', (
     tester,
@@ -319,5 +458,3 @@ void main() {
     await _writeShot(tester, shotKey, 'seasons_other_years_centered.png');
   });
 }
-
-
