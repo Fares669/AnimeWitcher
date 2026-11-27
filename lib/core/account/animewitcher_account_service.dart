@@ -874,7 +874,7 @@ class AnimeWitcherAccountService {
         'users/${profile.documentId}/notifications/_',
         profile,
       );
-      final document = await _firestore.getDocument(
+      final document = await _firestore.getNotificationCountDocument(
         'users/${profile.documentId}',
         token,
       );

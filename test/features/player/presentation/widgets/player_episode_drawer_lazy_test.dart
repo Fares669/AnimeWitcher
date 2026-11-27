@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/providers/device_info_provider.dart';
@@ -14,6 +17,7 @@ import 'package:animewitcher/features/player/presentation/widgets/next_episode_o
 import 'package:animewitcher/features/player/presentation/widgets/player_side_panel.dart';
 import 'package:animewitcher/features/settings/presentation/player_settings_provider.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+import 'package:animewitcher/shared/widgets/app_back_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -34,6 +38,15 @@ class _Player extends PlayerController {
   _Player(this.item, this.activeEpisode);
   final MultimediaItem item;
   final Episode activeEpisode;
+  final startedEpisodes = <(Episode, StreamResult?)>[];
+
+  @override
+  Future<void> loadEpisode(
+    Episode episode, {
+    StreamResult? selectedSource,
+  }) async {
+    startedEpisodes.add((episode, selectedSource));
+  }
 
   @override
   PlayerState build() => PlayerState(
@@ -59,18 +72,44 @@ class _Settings extends PlayerSettingsNotifier {
 }
 
 class _Details extends DetailsController {
+  int starts = 0;
+
   @override
-  DetailsState build(String itemUrl) => const DetailsState();
+  DetailsState build(String itemUrl) {
+    starts++;
+    return const DetailsState();
+  }
 }
 
 class _Downloads extends DownloadsNotifier {
+  int starts = 0;
+
   @override
-  Future<List<DownloadItem>> build() async => const [];
+  Future<List<DownloadItem>> build() async {
+    starts++;
+    return const [];
+  }
 }
 
 class _Files extends DownloadedFiles {
+  int checks = 0;
+  final selected = <Episode?>[];
+  final localSource = Completer<File?>();
+
   @override
-  Future<void> checkFile(MultimediaItem item, {Episode? episode}) async {}
+  Future<void> checkFile(MultimediaItem item, {Episode? episode}) async {
+    checks++;
+  }
+
+  @override
+  Future<File?> resolveFile(
+    MultimediaItem item, {
+    Episode? episode,
+    String? logicalId,
+  }) {
+    selected.add(episode);
+    return localSource.future;
+  }
 }
 
 class _History extends Fake implements HistoryRepository {
@@ -311,54 +350,93 @@ void main() {
         );
         final history = _History();
         final watched = _Watched();
+        final details = _Details();
+        final downloads = _Downloads();
+        final files = _Files();
+        final controller = _Player(
+          show,
+          anchorInViewport ? show.episodes!.first : show.episodes!.last,
+        );
         final player = mk.Player(platformPlayer: _FixtureBackend());
         final container = ProviderContainer(
           overrides: [
             deviceProfileProvider.overrideWithValue(
               const AsyncData(DeviceProfile(isTv: true)),
             ),
-            playerControllerProvider.overrideWith(
-              () => _Player(
-                show,
-                anchorInViewport ? show.episodes!.first : show.episodes!.last,
-              ),
-            ),
+            playerControllerProvider.overrideWith(() => controller),
             playerSettingsProvider.overrideWith(_Settings.new),
-            detailsControllerProvider(showUrl).overrideWith(_Details.new),
-            downloadsProvider.overrideWith(_Downloads.new),
-            downloadedFilesProvider.overrideWith(_Files.new),
+            detailsControllerProvider(detailsControllerKey(show))
+                .overrideWith(() => details),
+            downloadsProvider.overrideWith(() => downloads),
+            downloadedFilesProvider.overrideWith(() => files),
             historyRepositoryProvider.overrideWithValue(history),
             episodeWatchRepositoryProvider.overrideWithValue(watched),
           ],
         );
         addTearDown(container.dispose);
         final controlsKey = GlobalKey<AnimeWitcherPlayerControlsState>();
+        final navigator = GlobalKey<NavigatorState>();
         final chromeVisibility = <bool>[];
+        const open = Key('open-drawer-player-fixture');
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
             child: MaterialApp(
+              navigatorKey: navigator,
+              locale: const Locale('ar'),
               localizationsDelegates: AppLocalizations.localizationsDelegates,
               supportedLocales: AppLocalizations.supportedLocales,
               home: Scaffold(
-                body: AnimeWitcherPlayerControls(
-                  key: controlsKey,
-                  player: player,
-                  platformService: PlayerPlatformService(nativePip: false),
-                  onVisibilityChanged: chromeVisibility.add,
+                body: TextButton(
+                  key: open,
+                  onPressed: () => navigator.currentState!.push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => Scaffold(
+                        body: AnimeWitcherPlayerControls(
+                          key: controlsKey,
+                          player: player,
+                          platformService: PlayerPlatformService(
+                            nativePip: false,
+                          ),
+                          onVisibilityChanged: chromeVisibility.add,
+                          onBackPointer: () => navigator.currentState!.pop(),
+                        ),
+                      ),
+                    ),
+                  ),
+                  child: const Text('Open fixture'),
                 ),
               ),
             ),
           ),
         );
+        await tester.tap(find.byKey(open));
         await tester.pumpAndSettle();
+        final panel = find.byType(PlayerEpisodesPanel);
+        final shell = find.byType(PlayerSidePanel);
+        final slide = find.descendant(
+          of: shell,
+          matching: find.byType(OverflowBox),
+        );
+        double slideWidth() => tester.getSize(slide).width;
 
-        // The drawer remains mounted for a responsive opening animation and
-        // focus, but should not project the whole catalogue while closed.
-        expect(watched.reads, inInclusiveRange(1, 80));
-        expect(history.positions, watched.reads);
-        expect(history.durations, watched.reads);
-        expect(find.byType(PlayerEpisodesPanel), findsOneWidget);
+        // The shell exists at width zero to keep the opening slide. The
+        // never-opened drawer must not touch the catalog's panel providers or
+        // project any history/download row before it is revealed.
+        expect(shell, findsOneWidget);
+        expect(slideWidth(), 0);
+        expect(panel, findsNothing);
+        expect(
+          (
+            details.starts,
+            downloads.starts,
+            files.checks,
+            watched.reads,
+            history.positions,
+            history.durations,
+          ),
+          (0, 0, 0, 0, 0, 0),
+        );
 
         // A tap over the closed drawer still reaches the player chrome.
         await tester.tapAt(const Offset(1050, 360));
@@ -372,22 +450,35 @@ void main() {
         final beforeAccountRevision = watched.reads;
         container.read(accountDataRevisionProvider.notifier).bump();
         await tester.pump();
-        expect(watched.reads - beforeAccountRevision, inInclusiveRange(1, 40));
+        expect(watched.reads, beforeAccountRevision);
+        expect(details.starts, 0);
+        expect(downloads.starts, 0);
+        expect(files.checks, 0);
 
         final l10n = AppLocalizations.of(controlsKey.currentContext!)!;
         final beforeOpen = watched.reads;
         await tester.tap(find.byTooltip(l10n.episodes));
+        await tester.pump();
+        expect(panel, findsOneWidget);
+        final openingElement = tester.element(panel);
+        expect(slideWidth(), 0);
+        await tester.pump(const Duration(milliseconds: 80));
+        expect(slideWidth(), inExclusiveRange(0, 437.5));
         await tester.pumpAndSettle();
+        expect(slideWidth(), 437.5);
         expect(
           container.read(playerControllerProvider).showEpisodeList,
           isTrue,
         );
-        expect(find.byType(PlayerEpisodesPanel), findsOneWidget);
+        expect(details.starts, 1);
+        expect(downloads.starts, 1);
+        expect(files.checks, greaterThan(0));
+        expect(panel, findsOneWidget);
         expect(find.text(l10n.seasonWithNumber(1)), findsOneWidget);
         expect(find.text('Story 1-1'), findsOneWidget);
         expect(find.text('Story 1-2'), findsOneWidget);
         expect(find.text('Story 3-400'), findsNothing);
-        expect(watched.reads - beforeOpen, inInclusiveRange(1, 40));
+        expect(watched.reads - beforeOpen, inInclusiveRange(1, 80));
         expect(history.positions, watched.reads);
         expect(history.durations, watched.reads);
         expect(
@@ -463,6 +554,39 @@ void main() {
         );
         // Without a mounted anchor, retain the scroll position on reopening.
         if (!anchorInViewport) expect(scrollOffset(), previousOffset);
+        expect(tester.element(panel), same(openingElement));
+
+        if (anchorInViewport) {
+          final next = show.episodes![1];
+          await tester.tap(find.text(next.name));
+          await tester.pumpAndSettle();
+          expect(
+            container.read(playerControllerProvider).showEpisodeList,
+            isFalse,
+          );
+          expect(tester.element(panel), same(openingElement));
+          expect(files.selected, [next]);
+          expect(controller.startedEpisodes, isEmpty);
+          // The actual playback launcher finishes a local source only after
+          // the side panel has closed. It must still use this row's episode.
+          files.localSource.complete(File('/fixture/c15-local-episode.mp4'));
+          await tester.pumpAndSettle();
+          expect(controller.startedEpisodes.single.$1, same(next));
+          expect(controller.startedEpisodes.single.$2?.source, 'محلي');
+        } else {
+          controlsKey.currentState!.closeActivePanel();
+          await tester.pumpAndSettle();
+        }
+        expect(chromeVisibility.last, isTrue);
+        await tester.tap(find.byType(AppBackButton).hitTestable());
+        await tester.pumpAndSettle();
+        expect(find.byKey(open), findsOneWidget);
+        expect(shell, findsNothing);
+        expect(openingElement.mounted, isFalse);
+        expect(
+          FocusManager.instance.primaryFocus?.debugLabel,
+          isNot('episodes_panel_anchor'),
+        );
 
         await tester.pumpWidget(const SizedBox.shrink());
         await player.dispose();

@@ -140,11 +140,12 @@ void _showPendingEpisodeDownloadProgress(
 ///
 /// Visibility animates the drawer width (0 → [panel width]); the content is held
 /// at full width by an [OverflowBox] pinned to the right edge, so it slides
-/// cleanly from the right in both directions while staying mounted. Mounting
-/// persists so the content can drive focus on open. While closed it ignores
-/// pointers and is excluded from focus, so taps and D-pad fall through to the
-/// chrome below.
-class PlayerSidePanel extends StatelessWidget {
+/// cleanly from the right in both directions. The shell is present from the
+/// start, but the content only mounts on the first opening. Once mounted,
+/// keep it for subsequent focus, scrolling and in-flight choices. While
+/// closed it ignores pointers and is excluded from focus, so taps and D-pad
+/// fall through to the chrome below.
+class PlayerSidePanel extends StatefulWidget {
   final bool isVisible;
   final bool isTv;
   final VoidCallback onDismiss;
@@ -159,7 +160,21 @@ class PlayerSidePanel extends StatelessWidget {
   });
 
   @override
+  State<PlayerSidePanel> createState() => _PlayerSidePanelState();
+}
+
+class _PlayerSidePanelState extends State<PlayerSidePanel> {
+  late bool _hasOpened = widget.isVisible;
+
+  @override
+  void didUpdateWidget(covariant PlayerSidePanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isVisible) _hasOpened = true;
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final PlayerSidePanel(:isVisible, :onDismiss, :child) = widget;
     final size = MediaQuery.sizeOf(context);
     final isCompact = size.shortestSide < 600;
     final basePanelWidth = isCompact
@@ -199,12 +214,14 @@ class PlayerSidePanel extends StatelessWidget {
                   alignment: Alignment.centerRight,
                   minWidth: panelWidth,
                   maxWidth: panelWidth,
-                  child: _PanelSurface(
-                    child: FocusTraversalGroup(
-                      policy: WidgetOrderTraversalPolicy(),
-                      child: child,
-                    ),
-                  ),
+                  child: _hasOpened
+                      ? _PanelSurface(
+                          child: FocusTraversalGroup(
+                            policy: WidgetOrderTraversalPolicy(),
+                            child: child,
+                          ),
+                        )
+                      : null,
                 ),
               ),
             ),
@@ -368,11 +385,9 @@ class _PlayerEpisodesPanelState extends ConsumerState<PlayerEpisodesPanel> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && ref.read(playerControllerProvider).showEpisodeList) {
-        _focusAnchor();
-      }
-    });
+    if (ref.read(playerControllerProvider).showEpisodeList) {
+      _focusAnchor();
+    }
   }
 
   @override

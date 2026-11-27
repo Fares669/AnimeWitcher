@@ -563,10 +563,10 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       for (final row in visible) {
         final logicalId = row.logicalId;
         if (logicalId == null) continue;
-        final observed = manager.snapshotFor(DownloadLogicalId(logicalId));
-        final connections = observed?.taskId == row.id
-            ? observed?.activeConnections ?? 0
-            : 0;
+        final connections = manager.activeConnectionsFor(
+          DownloadLogicalId(logicalId),
+          expectedTaskId: row.id,
+        );
         if (connections != row.activeConnections) {
           _refreshPresentationState();
           break;

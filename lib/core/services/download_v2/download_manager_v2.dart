@@ -1711,12 +1711,25 @@ final class DownloadManagerV2 {
     });
   }
 
-  DownloadTransportSnapshot? snapshotFor(DownloadLogicalId logicalId) {
+  bool _canViewSnapshot(DownloadLogicalId logicalId) {
     final record = _recordsByLogicalId[logicalId];
-    if (record != null && !canAccessSourceDescriptor(record.sourceDescriptor)) {
-      return null;
-    }
-    return _snapshots[logicalId];
+    return record == null || canAccessSourceDescriptor(record.sourceDescriptor);
+  }
+
+  DownloadTransportSnapshot? snapshotFor(DownloadLogicalId logicalId) =>
+      _canViewSnapshot(logicalId) ? _snapshots[logicalId] : null;
+
+  /// The presentation safety poll only needs the exact task's current count.
+  /// Missing, superseded, and zero-count snapshots contribute zero even under
+  /// a provider visibility change. Recheck access for every live writer.
+  int activeConnectionsFor(
+    DownloadLogicalId logicalId, {
+    required String expectedTaskId,
+  }) {
+    final snapshot = _snapshots[logicalId];
+    final count = snapshot?.activeConnections ?? 0;
+    if (count == 0 || snapshot!.taskId != expectedTaskId) return 0;
+    return _canViewSnapshot(logicalId) ? count : 0;
   }
 
   /// Applies read-only native throughput telemetry to the current generation.

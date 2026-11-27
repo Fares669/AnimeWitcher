@@ -241,7 +241,46 @@ void main() {
     };
     expect(await service.loadNotificationCount(), 7);
     expect(requests.single.method, 'GET');
+    expect(requests.single.uri.queryParametersAll, {
+      'mask.fieldPaths': ['statistics.not_seen_notif'],
+    });
   });
+  test(
+    'masked count keeps zero and 404 semantics but does not swallow failures',
+    () async {
+      for (final statistics in <Object?>[
+        null,
+        'malformed',
+        {'not_seen_notif': -2},
+        {'not_seen_notif': '5'},
+        {'not_seen_notif': 5.0},
+        {},
+      ]) {
+        response = {
+          'name': 'projects/animewitcher-1c66d/databases/(default)/documents/users/profile',
+          'fields': FirestoreValueCodec.encodeFields({
+            'statistics': statistics,
+          }),
+        };
+        expect(await service.loadNotificationCount(), 0);
+      }
+      status = 404;
+      expect(await service.loadNotificationCount(), 0);
+      status = 503;
+      await expectLater(
+        service.loadNotificationCount(),
+        throwsA(isA<AnimeWitcherAccountException>()),
+      );
+      status = 200;
+      response = {
+        'name': 'projects/animewitcher-1c66d/databases/(default)/documents/users/profile',
+        'fields': FirestoreValueCodec.encodeFields({
+          'statistics': {'not_seen_notif': 11},
+        }),
+      };
+      expect(await service.loadNotificationCount(), 11);
+    },
+  );
   test('account switch discards an in-flight notification page', () async {
     final started = Completer<void>();
     final release = Completer<void>();
