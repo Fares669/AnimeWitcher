@@ -4,12 +4,14 @@ import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/core/providers/anime_data_source_settings_provider.dart';
 import 'package:animewitcher/features/settings/presentation/app_version_provider.dart';
 import 'package:animewitcher/features/settings/presentation/player_settings_provider.dart';
+import 'package:animewitcher/features/details/presentation/widgets/details_seasons_bar.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings_provider.dart';
 import 'package:animewitcher/features/more/presentation/more_screen.dart';
 import 'package:animewitcher/features/more/presentation/more_sidebar_shell.dart';
 import 'package:animewitcher/features/more/presentation/broadcast_schedule_screen.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+import 'package:animewitcher/shared/widgets/live_previews.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -187,5 +189,32 @@ void main() {
     expect(find.text('fixture version'), findsOneWidget);
     // ABOUT_START
     verify(1, 1, 1);
+  });
+  testWidgets('wide More keeps a live preview while editing General', (
+    tester,
+  ) async {
+    await _mountMore(tester, readVersion: (_) async => 'fixture version');
+    await tester.tap(find.text('عام').first);
+    await tester.pumpAndSettle();
+
+    final preview = find.byType(SeasonsBarPagePreview);
+    expect(
+      tester.widget<SeasonsBarPagePreview>(preview).style,
+      SeasonsBarStyle.cards,
+    );
+
+    final row = find.text('شريط المواسم');
+    await tester.ensureVisible(row);
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(SeasonsBarStyle.pills.label()));
+    await tester.tap(find.text('تطبيق'));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<SeasonsBarPagePreview>(preview).style,
+      SeasonsBarStyle.pills,
+    );
+    expect(find.text(SeasonsBarStyle.pills.label()), findsOneWidget);
   });
 }

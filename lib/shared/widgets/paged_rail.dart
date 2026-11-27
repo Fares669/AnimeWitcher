@@ -2,7 +2,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 // [ScrollDirection] is defined in the rendering layer and is not re-exported
 // by material.dart, so it must be imported explicitly.
-import 'package:flutter/rendering.dart' show ScrollDirection;
+import 'package:flutter/rendering.dart' show ScrollCacheExtent, ScrollDirection;
 
 /// A horizontal list whose cards snap into view whenever the user lifts
 /// their finger.
@@ -49,6 +49,9 @@ class PagedRail extends StatefulWidget {
   /// bleed outside the viewport bounds.
   final Clip clipBehavior;
 
+  /// Logical pixels of items to build ahead of each viewport edge.
+  final double cacheExtent;
+
   /// Duration of the snap-back animation after a drag release.
   final Duration snapDuration;
 
@@ -66,6 +69,7 @@ class PagedRail extends StatefulWidget {
     this.physics = const BouncingScrollPhysics(),
     this.reverse = false,
     this.clipBehavior = Clip.hardEdge,
+    this.cacheExtent = 1200,
     this.snapDuration = const Duration(milliseconds: 280),
     this.snapCurve = Curves.easeOutCubic,
   });
@@ -184,10 +188,6 @@ class _PagedRailState extends State<PagedRail> {
     });
   }
 
-  /// Cards this far past either edge are built, so their posters are on
-  /// their way before the rail is scrolled to them.
-  static const double _aheadExtent = 1200;
-
   @override
   Widget build(BuildContext context) {
     final Widget listView = widget.separatorBuilder != null
@@ -200,7 +200,7 @@ class _PagedRailState extends State<PagedRail> {
             physics: widget.physics,
             reverse: widget.reverse,
             clipBehavior: widget.clipBehavior,
-            cacheExtent: _aheadExtent,
+            scrollCacheExtent: ScrollCacheExtent.pixels(widget.cacheExtent),
             itemBuilder: widget.itemBuilder,
           )
         : ListView.builder(
@@ -212,7 +212,7 @@ class _PagedRailState extends State<PagedRail> {
             physics: widget.physics,
             reverse: widget.reverse,
             clipBehavior: widget.clipBehavior,
-            cacheExtent: _aheadExtent,
+            scrollCacheExtent: ScrollCacheExtent.pixels(widget.cacheExtent),
             itemBuilder: widget.itemBuilder,
           );
 

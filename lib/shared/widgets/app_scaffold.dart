@@ -209,11 +209,12 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
     Widget withSideMenu(Widget child) => AppSideMenuShell(
       showPageMenuButtons: layout != AppLayoutStyle.topBar,
       destinations: const <TaskbarDestination>[],
-      entries: phoneFixedSideMenuEntries(
+      entriesBuilder: (context, ref, menuVisible) => phoneFixedSideMenuEntries(
         context,
         ref,
         currentBranchIndex: currentIndex,
         onDestination: onDestination,
+        menuVisible: menuVisible,
       ),
       currentBranchIndex: currentIndex,
       onDestination: onDestination,

@@ -75,26 +75,59 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
   MangaReaderLoadBatchController? _deferredLoadBatchUpdate;
   bool _replayingSettledLoads = false;
 
-  List<List<int>> get _spreads => widget.doublePage
-      ? mangaReaderPageSpreads(
-          pageCount: widget.pages.length,
-          singleFirst: widget.settings.doublePageSingleFirstPage,
-          sectionStarts: widget.sectionDividers.keys,
-        )
-      : <List<int>>[
-          for (var index = 0; index < widget.pages.length; index++)
-            <int>[index],
-        ];
-
-  /// Spreads with the section dividers woven in, in stream order.
-  List<_WebtoonItem> get _items {
+  /// Double-page spreads must honor the first page and chapter boundaries.
+  List<_WebtoonItem> get _doublePageItems {
     final items = <_WebtoonItem>[];
-    for (final spread in _spreads) {
+    for (final spread in mangaReaderPageSpreads(
+      pageCount: widget.pages.length,
+      singleFirst: widget.settings.doublePageSingleFirstPage,
+      sectionStarts: widget.sectionDividers.keys,
+    )) {
       final divider = widget.sectionDividers[spread.first];
       if (divider != null) items.add(_WebtoonItem.dividerItem(divider));
       items.add(_WebtoonItem.spread(spread));
     }
     return items;
+  }
+
+  /// Only chapter dividers need entries in single-page mode. Each seam's
+  /// row is its page index plus the number of earlier dividers.
+  List<int> _singlePageDividerRows(Map<int, Widget> dividers) {
+    if (dividers.isEmpty) return const <int>[];
+    final rows =
+        dividers.keys
+            .where((page) => page >= 0 && page < widget.pages.length)
+            .toList()
+          ..sort();
+    for (var index = 0; index < rows.length; index++) {
+      rows[index] += index;
+    }
+    return rows;
+  }
+
+  int _singlePageStartRow(List<int> dividerRows) {
+    var row = _startPage;
+    for (final divider in dividerRows) {
+      if (divider > row) break;
+      row++;
+    }
+    return row;
+  }
+
+  // Find how many dividers precede the row, which is its displacement
+  // from the original page index.
+  int _dividersBeforeRow(List<int> dividerRows, int row) {
+    var lo = 0;
+    var hi = dividerRows.length;
+    while (lo < hi) {
+      final mid = (lo + hi) ~/ 2;
+      if (dividerRows[mid] < row) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo;
   }
 
   /// The item the session starts on: the spread holding the start page.
@@ -349,18 +382,28 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
   Widget build(BuildContext context) {
     if (widget.pages.isEmpty) return const SizedBox.shrink();
 
-    // With one page per row and no chapter dividers, the row is its
-    // page offset. Let the sliver request it instead of laying out the
-    // whole chapter's descriptors each time the reader rebuilds.
-    final items = !widget.doublePage && widget.sectionDividers.isEmpty
-        ? null
-        : _items;
-    final start = items == null ? _startPage : _startItemIndex(items);
-    final itemCount = items?.length ?? widget.pages.length;
+    // A single-page stream stays lazy after another chapter joins it:
+    // a seam adds one row, not a descriptor for every page in the stream.
+    final items = widget.doublePage ? _doublePageItems : null;
+    final dividers = widget.sectionDividers;
+    final dividerRows = items == null
+        ? _singlePageDividerRows(dividers)
+        : const <int>[];
+    final start = items == null
+        ? _singlePageStartRow(dividerRows)
+        : _startItemIndex(items);
+    final itemCount = items?.length ?? widget.pages.length + dividerRows.length;
 
-    Widget buildRow(BuildContext context, int index) => items == null
-        ? _spread(context, <int>[index])
-        : _item(context, items[index]);
+    Widget buildRow(BuildContext context, int index) {
+      if (items != null) return _item(context, items[index]);
+      final offset = _dividersBeforeRow(dividerRows, index);
+      final page = index - offset;
+      if (offset < dividerRows.length && dividerRows[offset] == index) {
+        return dividers[page]!;
+      }
+      return _spread(context, <int>[page]);
+    }
+
     final viewport = MediaQuery.sizeOf(context);
     final cacheExtent = mangaReaderPreloadCacheExtent(
       settings: widget.settings,

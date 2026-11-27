@@ -12,16 +12,21 @@ import 'package:animewitcher/core/utils/artwork_quality.dart';
 import 'package:animewitcher/features/characters/presentation/anime_characters_screen.dart';
 import 'package:animewitcher/features/characters/presentation/character_card.dart';
 import 'package:animewitcher/features/characters/presentation/character_details_screen.dart';
+import 'package:animewitcher/features/details/presentation/widgets/details_extra_tabs.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+import 'package:animewitcher/shared/widgets/cards_wrapper.dart';
 import 'package:animewitcher/shared/widgets/thumbnail_error_placeholder.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
+
+import '../../../support/test_fonts.dart';
 
 class _CachePaths extends PathProviderPlatform {
   _CachePaths(this.root);
@@ -268,6 +273,231 @@ void main() {
       variant: TargetPlatformVariant.only(viewport.platform),
     );
   }
+
+  testWidgets(
+    'Details Characters warms the nearby mixed cast and keeps portrait quality and navigation',
+    (tester) async {
+      final originalMode = highQualityArtwork.value;
+      highQualityArtwork.value = true;
+      tester.view.physicalSize = const Size(780, 1688);
+      tester.view.devicePixelRatio = 2;
+      final cache = PaintingBinding.instance.imageCache;
+      void clear() => cache
+        ..clear()
+        ..clearLiveImages();
+      clear();
+      addTearDown(() {
+        tester.view.reset();
+        highQualityArtwork.value = originalMode;
+        clear();
+      });
+
+      await tester.runAsync(TestFonts.loadWalkthroughFonts);
+      final cast = [
+        for (var i = 0; i < 11; i++)
+          for (final (role, name) in [
+            ('شخصية ثانوية', 'Supporting'),
+            ('شخصية رئيسية', 'Main'),
+          ])
+            Actor(
+              id: '$name-$i',
+              name: '$name $i',
+              role: role,
+              image: 'https://character.fixture.invalid/details-$name-$i.png',
+            ),
+      ];
+      await tester.runAsync(() async {
+        final data = await _png(1200, 1800);
+        for (final actor in cast) {
+          await manager.putFile(actor.image!, data, fileExtension: 'png');
+        }
+      });
+
+      final opened = <String>[];
+      final more = <String>[];
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            storageServiceProvider.overrideWithValue(StorageService()),
+            activeProviderProvider.overrideWithValue(_CastProvider(cast)),
+          ],
+          child: RepaintBoundary(
+            key: _boundary,
+            child: MaterialApp(
+              locale: const Locale('ar'),
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              theme: ThemeData.dark().copyWith(
+                textTheme: ThemeData.dark().textTheme.apply(
+                  fontFamily: 'NotoSansArabic',
+                ),
+              ),
+              home: Scaffold(
+                body: Builder(
+                  builder: (context) => ListView(
+                    children: [
+                      DetailsExtraTabs(
+                        similar: const AsyncData([]),
+                        related: const AsyncData([]),
+                        relatedHasMore: false,
+                        cast: AsyncData(cast),
+                        onTabBecameVisible: (_) {},
+                        onAnimeTap: (_) {},
+                        onCharacterTap: (actor) {
+                          opened.add(actor.id!);
+                          Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => CharacterDetailsScreen(
+                                characterId: actor.id!,
+                                initialName: actor.name,
+                                initialImageUrl: actor.image,
+                              ),
+                            ),
+                          );
+                        },
+                        onShowMoreCharacters: more.add,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(_photos, findsNothing);
+
+      final charactersTab = find.text(animeWitcherCharactersTabLabel);
+      await tester.tap(charactersTab);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      final cards = find.byType(CharacterPosterCard, skipOffstage: false);
+      final builtPhotos = find.byWidgetPredicate(
+        (widget) => widget is RawImage && widget.image != null,
+        skipOffstage: false,
+      );
+      await _waitFor(
+        tester,
+        () =>
+            cards.evaluate().isNotEmpty &&
+            cards.evaluate().length == builtPhotos.evaluate().length &&
+            cache.pendingImageCount == 0,
+      );
+      expect(cards, findsNWidgets(12));
+      expect(cache.currentSize, 12);
+      expect(cache.liveImageCount, 12);
+      expect(cache.currentSizeBytes, cache.currentSize * 448 * 672 * 4);
+      debugPrint(
+        'Details Characters initial: cards=${cards.evaluate().length} '
+        'entries=${cache.currentSize} bytes=${cache.currentSizeBytes} '
+        'live=${cache.liveImageCount}',
+      );
+
+      Finder card(String role, int index) =>
+          find.byKey(ValueKey('details-character-$role-$index'));
+      Finder photoFor(Finder card) =>
+          find.descendant(of: card, matching: _photos);
+      Finder rail(String role) =>
+          find.byKey(ValueKey('details-character-rail-$role'));
+      ScrollPosition railPosition(String role) => tester
+          .state<ScrollableState>(
+            find.descendant(of: rail(role), matching: find.byType(Scrollable)),
+          )
+          .position;
+
+      final main0 = card('Main', 0);
+      final main1 = card('Main', 1);
+      final support0 = card('Supporting', 0);
+      expect(tester.getRect(main0).right, tester.getRect(rail('Main')).right);
+      expect(
+        tester.getRect(main0).left,
+        greaterThan(tester.getRect(main1).left),
+      );
+      expect(tester.getRect(main0).top, lessThan(tester.getRect(support0).top));
+      expect(tester.getSize(main0), const Size(110, 198));
+      expect(railPosition('Main').pixels, 0);
+      expect(railPosition('Supporting').pixels, 0);
+
+      final firstPhoto = photoFor(main0);
+      expect(await _paintedColors(tester, firstPhoto), (_top, _bottom));
+      expect(await _paintedColors(tester, photoFor(support0)), (_top, _bottom));
+      final firstImage = tester.widget<RawImage>(firstPhoto).image!;
+      expect((firstImage.width, firstImage.height), (448, 672));
+
+      final focus = tester
+          .widget<Focus>(
+            find
+                .descendant(
+                  of: find.descendant(
+                    of: main0,
+                    matching: find.byType(CardsWrapper),
+                  ),
+                  matching: find.byType(Focus),
+                )
+                .first,
+          )
+          .focusNode!;
+      focus.requestFocus();
+      await tester.pumpAndSettle();
+      expect(focus.hasPrimaryFocus, isTrue);
+      final warmEntries = cache.currentSize;
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      final heroPhoto = find.descendant(
+        of: find.byType(CharacterDetailsScreen),
+        matching: _photos,
+      );
+      await _waitFor(tester, () => heroPhoto.evaluate().isNotEmpty);
+      expect(opened, ['Main-0']);
+      expect(tester.getSize(heroPhoto), const Size(168, 236));
+      expect(await _paintedColors(tester, heroPhoto), (_top, _bottom));
+      final hero = tester.widget<RawImage>(heroPhoto).image!;
+      expect((hero.width, hero.height), (448, 672));
+      expect(cache.currentSize, warmEntries);
+      final heroCopy = hero.clone();
+      addTearDown(heroCopy.dispose);
+
+      tester.state<NavigatorState>(find.byType(Navigator)).pop();
+      await tester.pumpAndSettle();
+      expect(focus.hasPrimaryFocus, isTrue);
+      expect(firstPhoto, findsOneWidget);
+      expect(
+        tester.widget<RawImage>(firstPhoto).image!.isCloneOf(heroCopy),
+        isTrue,
+      );
+      expect(railPosition('Main').pixels, 0);
+
+      final position = railPosition('Main');
+      position.jumpTo(position.maxScrollExtent);
+      await _waitFor(
+        tester,
+        () => photoFor(card('Main', 9)).evaluate().isNotEmpty,
+      );
+      expect(await _paintedColors(tester, photoFor(card('Main', 9))), (
+        _top,
+        _bottom,
+      ));
+      await tester.tap(
+        find.byKey(const ValueKey('details-character-Main-more')),
+      );
+      expect(more, ['Main']);
+
+      await tester.tap(find.text(animeWitcherRelatedTabLabel));
+      await tester.pumpAndSettle();
+      await tester.tap(charactersTab);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.pump(const Duration(milliseconds: 400));
+      await _waitFor(tester, () => firstPhoto.evaluate().isNotEmpty);
+      expect(railPosition('Main').pixels, 0);
+      expect(railPosition('Supporting').pixels, 0);
+      expect(await _paintedColors(tester, firstPhoto), (_top, _bottom));
+      expect(tester.takeException(), isNull);
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.android),
+  );
 
   testWidgets(
     'retains cover for a landscape source and original Standard key',

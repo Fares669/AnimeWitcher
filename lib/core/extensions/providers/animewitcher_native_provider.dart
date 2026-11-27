@@ -4280,9 +4280,12 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     final result = <String, dynamic>{...base};
     for (final entry in overlay.entries) {
       final value = entry.value;
+      // Only scalars need the blank check. Stringifying a collection here
+      // walks its nested metadata even though we keep the collection as-is.
       if (value == null ||
-          _text(value).isEmpty && value is! Map && value is! List)
+          (value is! Map && value is! List && _text(value).isEmpty)) {
         continue;
+      }
       if (entry.key == 'details' && value is Map) {
         result['details'] = <String, dynamic>{
           ..._map(result['details']),

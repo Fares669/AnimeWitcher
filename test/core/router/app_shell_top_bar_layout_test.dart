@@ -25,11 +25,14 @@ import 'package:animewitcher/features/library/presentation/library_screen.dart';
 import 'package:animewitcher/features/library/presentation/library_state.dart';
 import 'package:animewitcher/features/onboarding/first_run_setup_screen.dart';
 import 'package:animewitcher/features/search/data/mal_rankings.dart';
+import 'package:animewitcher/features/search/presentation/search_domain.dart';
 import 'package:animewitcher/features/search/presentation/search_screen.dart';
 import 'package:animewitcher/features/settings/presentation/general_settings_provider.dart';
 import 'package:animewitcher/features/settings/presentation/settings_screen.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/shared/widgets/app_navigation_bars.dart';
+import 'package:animewitcher/shared/widgets/app_search_field.dart';
+import 'package:animewitcher/shared/widgets/app_side_menu.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -166,6 +169,12 @@ Future<void> _pumpNavigation(WidgetTester tester) async {
   }
 }
 
+Future<void> _pumpDrawer(WidgetTester tester) async {
+  await _pumpNavigation(tester);
+  // The drawer transition lasts 280 ms and is separate from page navigation.
+  await tester.pump(const Duration(milliseconds: 64));
+}
+
 const _measurementSwitches = 12;
 
 void main() {
@@ -260,6 +269,7 @@ void main() {
       addTearDown(router.dispose);
 
       const notch = 28.0;
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
@@ -272,7 +282,7 @@ void main() {
             ),
             animeWitcherAccountControllerProvider.overrideWith(_Account.new),
             activeProviderProvider.overrideWithValue(catalogue),
-            extensionManagerProvider.overrideWithValue([catalogue]),
+            extensionManagerProvider.overrideWithBuild((_, _) => [catalogue]),
             homeDataProvider.overrideWith(_Home.new),
             continueWatchingProvider.overrideWith(_Resume.new),
             watchHistoryProvider.overrideWith(_History.new),
@@ -374,6 +384,131 @@ void main() {
           path == '/home',
         );
       }
+
+      router.go('/search');
+      await _pumpNavigation(tester);
+      final search = tester.state(find.byType(SearchScreen));
+      final field = find.byType(AppSearchField).hitTestable();
+      final focus = tester.widget<AppSearchField>(field).focusNode!;
+      focus.requestFocus();
+      await _pumpNavigation(tester);
+      expect(focus.hasFocus, isTrue);
+
+      final container = ProviderScope.containerOf(tester.element(field));
+      final domains = container.read(searchDomainProvider.notifier);
+      final shell = find.byType(AppSideMenuShell);
+      final panel = find.byType(AppSideMenuPanel, skipOffstage: false);
+      final menuControl = find
+          .byKey(const ValueKey<String>('app-side-menu-button'))
+          .hitTestable()
+          .first;
+      final menu = find.byKey(const ValueKey<String>('app-side-menu'));
+      expect(menu.hitTestable(), findsNothing);
+      var shellConfigs = 0;
+      var drawerConfigs = 0;
+      var entryConfigs = 0;
+      for (var i = 0; i < 16; i++) {
+        final beforeShell = tester.widget<AppSideMenuShell>(shell);
+        final beforePanel = tester.widget<AppSideMenuPanel>(panel);
+        domains.set(i.isEven ? SearchDomain.manga : SearchDomain.animation);
+        await _pumpNavigation(tester);
+        final afterPanel = tester.widget<AppSideMenuPanel>(panel);
+        if (!identical(beforeShell, tester.widget<AppSideMenuShell>(shell))) {
+          shellConfigs++;
+        }
+        if (!identical(beforePanel, afterPanel)) drawerConfigs++;
+        expect(afterPanel.entries.length, 14);
+        for (var row = 0; row < afterPanel.entries.length; row++) {
+          if (!identical(beforePanel.entries[row], afterPanel.entries[row])) {
+            entryConfigs++;
+          }
+        }
+        expect(tester.state(find.byType(SearchScreen)), same(search));
+        expect(tester.widget<AppSearchField>(field).focusNode, same(focus));
+        expect(focus.hasFocus, isTrue);
+      }
+      // Domain changes are frequent on Search. While the drawer is fully
+      // closed, none of its rows or the surrounding shell should rebuild.
+      expect((shellConfigs, drawerConfigs, entryConfigs), (0, 0, 0));
+
+      bool entrySelected(String id) => tester
+          .widget<AppSideMenuPanel>(panel)
+          .entries
+          .singleWhere((entry) => entry.id == id)
+          .selected;
+      final closeMenu = find.byKey(
+        const ValueKey<String>('app-side-menu-close'),
+      );
+      await tester.tap(menuControl);
+      await _pumpDrawer(tester);
+      expect(menu.hitTestable(), findsOneWidget);
+      expect(entrySelected('animation-search'), isTrue);
+      expect(focus.hasFocus, isFalse); // Menu still dismisses the keyboard.
+
+      final openShell = tester.widget<AppSideMenuShell>(shell);
+      domains.set(SearchDomain.characters);
+      await _pumpNavigation(tester);
+      expect(entrySelected('characters-search'), isTrue);
+      expect(tester.widget<AppSideMenuShell>(shell), same(openShell));
+
+      final drawerScroll = tester.state<ScrollableState>(
+        find.descendant(of: menu, matching: find.byType(Scrollable)).first,
+      );
+      expect(drawerScroll.position.maxScrollExtent, greaterThan(100));
+      drawerScroll.position.jumpTo(100);
+      await _pumpNavigation(tester);
+      await tester.tap(closeMenu);
+      await _pumpDrawer(tester);
+      expect(menu.hitTestable(), findsNothing);
+
+      // Exercise a background/resume and two genuine branch switches while
+      // closed: keep the drawer's scroll and pick the latest domain on open.
+      for (final state in [
+        AppLifecycleState.inactive,
+        AppLifecycleState.hidden,
+        AppLifecycleState.paused,
+      ]) {
+        tester.binding.handleAppLifecycleStateChanged(state);
+      }
+      domains.set(SearchDomain.manga);
+      for (final state in [
+        AppLifecycleState.hidden,
+        AppLifecycleState.inactive,
+        AppLifecycleState.resumed,
+      ]) {
+        tester.binding.handleAppLifecycleStateChanged(state);
+      }
+      router.go('/home');
+      await _pumpNavigation(tester);
+      expectPane('/home');
+      expect(tester.state(find.byType(HomeScreen)), same(home));
+      expect(homeScroll.offset, 250);
+      router.go('/search');
+      await _pumpNavigation(tester);
+      expectPane('/search');
+      expect(tester.state(find.byType(SearchScreen)), same(search));
+      await tester.tap(menuControl);
+      await _pumpDrawer(tester);
+      expect(entrySelected('manga-search'), isTrue);
+      expect(
+        tester.state<ScrollableState>(
+          find.descendant(of: menu, matching: find.byType(Scrollable)).first,
+        ),
+        same(drawerScroll),
+      );
+      expect(drawerScroll.position.pixels, 100);
+      final animeRow = find
+          .byKey(const ValueKey<String>('app-side-menu-page-anime-search'))
+          .hitTestable();
+      expect(animeRow, findsOneWidget);
+      await tester.tap(animeRow);
+      await _pumpDrawer(tester);
+      expect(menu.hitTestable(), findsNothing);
+      expect(container.read(searchDomainProvider), SearchDomain.anime);
+      expectPane('/search');
+
+      router.go('/home');
+      await _pumpNavigation(tester);
 
       // Non-shell details must cover the top bar; Back reveals the same
       // scroll position and state, not a remounted Home.

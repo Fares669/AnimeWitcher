@@ -208,6 +208,12 @@ class AppSideMenuButton extends StatelessWidget {
   }
 }
 
+typedef AppSideMenuEntriesBuilder = List<AppSideMenuEntry> Function(
+  BuildContext context,
+  WidgetRef ref,
+  bool menuVisible,
+);
+
 /// The phone layout without a bar: the pages fill the screen, and pulling
 /// one to the right — or its menu button — slides it aside to uncover a menu
 /// on the left, the account at its head and the pages under it, as ChatGPT
@@ -226,11 +232,16 @@ class AppSideMenuShell extends StatefulWidget {
     required this.onBackWhenClosed,
     required this.child,
     this.entries = const <AppSideMenuEntry>[],
+    this.entriesBuilder,
     this.showPageMenuButtons = true,
   });
 
   /// The pages under the tabs, after a divider.
   final List<AppSideMenuEntry> entries;
+
+  /// Supplies dynamic entries instead of [entries]. Their providers can be
+  /// observed without rebuilding the page or waking a fully closed drawer.
+  final AppSideMenuEntriesBuilder? entriesBuilder;
 
   final List<TaskbarDestination> destinations;
   final int currentBranchIndex;
@@ -370,16 +381,24 @@ class _AppSideMenuShellState extends State<AppSideMenuShell>
 
           // The menu's content changes with the shell or its own providers,
           // not with the animation. Keep it mounted while translating it.
+          Widget panel(List<AppSideMenuEntry> entries) => AppSideMenuPanel(
+            destinations: widget.destinations,
+            currentBranchIndex: widget.currentBranchIndex,
+            entries: entries,
+            onDestination: _pick,
+            onEntry: _entry,
+            onAccount: _account,
+            onClose: _close,
+          );
+
+          final buildEntries = widget.entriesBuilder;
           final menuPanel = draggable(
-            child: AppSideMenuPanel(
-              destinations: widget.destinations,
-              currentBranchIndex: widget.currentBranchIndex,
-              entries: widget.entries,
-              onDestination: _pick,
-              onEntry: _entry,
-              onAccount: _account,
-              onClose: _close,
-            ),
+            child: buildEntries == null
+                ? panel(widget.entries)
+                : Consumer(
+                    builder: (context, ref, _) =>
+                        panel(buildEntries(context, ref, !_closed)),
+                  ),
           );
 
           return ColoredBox(

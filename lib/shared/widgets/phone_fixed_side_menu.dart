@@ -20,8 +20,14 @@ List<AppSideMenuEntry> phoneFixedSideMenuEntries(
   WidgetRef ref, {
   required int currentBranchIndex,
   required ValueChanged<TaskbarDestination> onDestination,
+  bool menuVisible = true,
 }) {
-  final currentDomain = ref.watch(searchDomainProvider);
+  // Search selection is only rendered while the drawer is visible and on
+  // Search. A domain switch must not rebuild the Scaffold or its tab chrome.
+  final currentDomain =
+      menuVisible && currentBranchIndex == TaskbarDestination.search.branchIndex
+      ? ref.watch(searchDomainProvider)
+      : null;
 
   void open(Widget page) {
     Navigator.of(
