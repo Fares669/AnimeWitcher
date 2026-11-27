@@ -495,7 +495,8 @@ void main() {
       await waitFor('Initial download', () => webtoon.evaluate().isNotEmpty);
       expect(Directionality.of(tester.element(webtoon)), TextDirection.rtl);
       expect(reader().initialPage, _resumePage);
-      expect(reader().pages, hasLength(_pageCount));
+      final anchorPages = reader().pages;
+      expect(anchorPages, hasLength(_pageCount));
       final readerState = tester.state(webtoon);
       final center = tester.widget<CustomScrollView>(scrollView).center!;
       final controller = reader().controller!;
@@ -517,6 +518,9 @@ void main() {
         'Append second download',
         () => reader().pages.length == 2 * _pageCount,
       );
+      final appendedPages = reader().pages;
+      expect(appendedPages, isNot(same(anchorPages)));
+      expect(appendedPages.take(_pageCount), orderedEquals(anchorPages));
       expect(reader().sectionDividers.keys, [_pageCount]);
       final seam = find.byWidgetPredicate(
         (widget) =>
@@ -562,12 +566,28 @@ void main() {
       final scope = ProviderScope.containerOf(tester.element(webtoon));
       final settings = scope.read(mangaReaderSettingsProvider.notifier);
       final standardSettings = scope.read(mangaReaderSettingsProvider);
+      var changedPageLists = 0;
+      var copiedPageReferences = 0;
       for (var i = 0; i < 12; i++) {
+        final before = reader();
         await settings.setSettings(
           standardSettings.copyWith(showPageNumber: i.isOdd),
         );
         await tester.pump(const Duration(milliseconds: 32));
+        final after = reader();
+        expect(after, isNot(same(before)), reason: 'reader actually rebuilt');
+        if (!identical(after.pages, before.pages)) {
+          changedPageLists++;
+          copiedPageReferences += after.pages.length;
+        }
+        expect(after.pages, orderedEquals(appendedPages));
       }
+      expect(
+        changedPageLists,
+        0,
+        reason: 'unchanged stream keeps its page list',
+      );
+      expect(copiedPageReferences, 0);
       expect(controller.offset, settledOffset);
       expectLayout(_resumePage, _pageCount + 4, center: center);
       expect(tester.state(webtoon), same(readerState));
@@ -594,6 +614,13 @@ void main() {
         () => webtoon.evaluate().isNotEmpty,
       );
       expect(reader().initialPage, reopenPage);
+      expect(reader().pages, isNot(same(appendedPages)));
+      expect(
+        reader().pages.map((page) => page.imageUrl),
+        orderedEquals(
+          appendedPages.skip(_pageCount).map((page) => page.imageUrl),
+        ),
+      );
       expect(reader().sectionDividers, isEmpty);
       expectLayout(reopenPage, _pageCount - reopenPage);
       await expectPainted(reopenPage, _second, reopenPage);

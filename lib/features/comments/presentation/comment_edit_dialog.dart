@@ -19,68 +19,93 @@ Future<CommentEditDraft?> showCommentEditDialog(
   required String initialText,
   required bool initialSpoiler,
   required bool isReview,
-}) async {
-  final controller = TextEditingController(text: initialText);
-  var spoiler = isReview ? false : initialSpoiler;
-  try {
-    return await showDialog<CommentEditDraft>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: Text(title),
-          content: SizedBox(
-            width: 520,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: controller,
-                  autofocus: true,
-                  minLines: 3,
-                  maxLines: 7,
-                  maxLength: 500,
-                  textDirection: TextDirection.rtl,
-                  decoration: InputDecoration(
-                    hintText: hint,
-                    border: const OutlineInputBorder(),
-                  ),
-                ),
-                if (!isReview)
-                  CheckboxListTile(
-                    value: spoiler,
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('يحتوي على حرق'),
-                    onChanged: (value) {
-                      setDialogState(() => spoiler = value == true);
-                    },
-                  ),
-              ],
+}) => showDialog<CommentEditDraft>(
+  context: context,
+  builder: (_) => _CommentEditDialog(
+    title: title,
+    hint: hint,
+    initialText: initialText,
+    initialSpoiler: initialSpoiler,
+    isReview: isReview,
+  ),
+);
+
+class _CommentEditDialog extends StatefulWidget {
+  const _CommentEditDialog({
+    required this.title,
+    required this.hint,
+    required this.initialText,
+    required this.initialSpoiler,
+    required this.isReview,
+  });
+
+  final String title;
+  final String hint;
+  final String initialText;
+  final bool initialSpoiler;
+  final bool isReview;
+
+  @override
+  State<_CommentEditDialog> createState() => _CommentEditDialogState();
+}
+
+class _CommentEditDialogState extends State<_CommentEditDialog> {
+  late final _controller = TextEditingController(text: widget.initialText);
+  late bool _spoiler = !widget.isReview && widget.initialSpoiler;
+
+  @override
+  void dispose() {
+    // The route result can resolve before the reverse transition finishes.
+    // Keep the controller alive for as long as the dialog's field is mounted.
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+    Navigator.pop(
+      context,
+      CommentEditDraft(text: text, spoiler: !widget.isReview && _spoiler),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text(widget.title),
+    content: SizedBox(
+      width: 520,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            minLines: 3,
+            maxLines: 7,
+            maxLength: 500,
+            textDirection: TextDirection.rtl,
+            decoration: InputDecoration(
+              hintText: widget.hint,
+              border: const OutlineInputBorder(),
             ),
           ),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('إلغاء'),
+          if (!widget.isReview)
+            CheckboxListTile(
+              value: _spoiler,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('يحتوي على حرق'),
+              onChanged: (value) => setState(() => _spoiler = value == true),
             ),
-            FilledButton(
-              onPressed: () {
-                final text = controller.text.trim();
-                if (text.isEmpty) return;
-                Navigator.pop(
-                  dialogContext,
-                  CommentEditDraft(
-                    text: text,
-                    spoiler: isReview ? false : spoiler,
-                  ),
-                );
-              },
-              child: const Text('حفظ'),
-            ),
-          ],
-        ),
+        ],
       ),
-    );
-  } finally {
-    controller.dispose();
-  }
+    ),
+    actions: <Widget>[
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('إلغاء'),
+      ),
+      FilledButton(onPressed: _save, child: const Text('حفظ')),
+    ],
+  );
 }

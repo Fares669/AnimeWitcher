@@ -262,11 +262,13 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
   SearchDomain _domain = SearchDomain.anime;
   ProviderSearchFilters _filters = const ProviderSearchFilters();
   Future<void>? _scheduledReload;
+  CancelToken? _nativePage;
 
   @override
   SearchAggregateState build() {
     ref.onDispose(() {
       _generation++;
+      _cancelNativePage();
       _scheduledReload = null;
       _mediaIndex.reset();
       _characterIndex.reset();
@@ -318,8 +320,9 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
   Future<ProviderMediaPage> _loadPage(
     AnimeWitcherProvider provider,
     int offset,
-    SearchDomain domain,
-  ) {
+    SearchDomain domain, {
+    CancelToken? cancelToken,
+  }) {
     final pageSize = provider.searchPageSize;
     return switch (domain) {
       SearchDomain.anime => provider.searchPage(
@@ -327,12 +330,14 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
         _filters,
         offset: offset,
         limit: pageSize,
+        cancelToken: cancelToken,
       ),
       SearchDomain.animation => provider.searchAnimationPage(
         _query,
         _filters,
         offset: offset,
         limit: pageSize,
+        cancelToken: cancelToken,
       ),
       SearchDomain.manga => provider.searchMangaPage(
         _query,
@@ -351,6 +356,33 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
         ),
       ),
     };
+  }
+
+  Future<ProviderMediaPage> _loadCommittedPage(
+    AnimeWitcherProvider provider,
+    int offset,
+    SearchDomain domain,
+  ) async {
+    // The committed Manga filter path shares pending catalog requests only
+    // without a token. Leave it, aggregate results and other providers alone.
+    if (provider is! AnimeWitcherNativeProvider ||
+        (domain != SearchDomain.anime && domain != SearchDomain.animation)) {
+      return _loadPage(provider, offset, domain);
+    }
+
+    final token = CancelToken();
+    _nativePage = token;
+    try {
+      return await _loadPage(provider, offset, domain, cancelToken: token);
+    } finally {
+      if (identical(_nativePage, token)) _nativePage = null;
+    }
+  }
+
+  void _cancelNativePage() {
+    final token = _nativePage;
+    _nativePage = null;
+    token?.cancel('Committed search superseded');
   }
 
   Future<ProviderCharacterPage> _loadCharacterPage(
@@ -436,6 +468,7 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     // the selected ones in the same turn. Invalidate old results immediately
     // but start the first page only after those inputs have settled.
     final generation = ++_generation;
+    _cancelNativePage();
     _mediaIndex.reset();
     _characterIndex.reset();
     final reload = Future<void>.microtask(() async {
@@ -494,7 +527,7 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
         return;
       }
 
-      final page = await _loadPage(provider, 0, requestDomain);
+      final page = await _loadCommittedPage(provider, 0, requestDomain);
       if (!_isCurrent(generation, requestDomain)) return;
       state = SearchAggregateState(
         results: page.items.isEmpty
@@ -511,8 +544,8 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
         nextOffset: page.nextOffset,
       );
     } catch (e) {
-      debugPrint('[SEARCH PAGE] initial load failed: $e');
       if (_isCurrent(generation, requestDomain)) {
+        debugPrint('[SEARCH PAGE] initial load failed: $e');
         // Keep the last rendered cards on transient network failures. Show the
         // recoverable empty state only when there is nothing left to display.
         final hasCards =
@@ -557,7 +590,11 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
         return;
       }
 
-      final page = await _loadPage(provider, state.nextOffset, requestDomain);
+      final page = await _loadCommittedPage(
+        provider,
+        state.nextOffset,
+        requestDomain,
+      );
       if (!_isCurrent(generation, requestDomain)) return;
       final current = state.results.isEmpty
           ? const <MultimediaItem>[]
@@ -584,8 +621,8 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
         nextOffset: page.nextOffset,
       );
     } catch (e) {
-      debugPrint('[SEARCH PAGE] load more failed: $e');
       if (_isCurrent(generation, requestDomain)) {
+        debugPrint('[SEARCH PAGE] load more failed: $e');
         state = state.copyWith(isLoadingMore: false);
       }
     }

@@ -7,6 +7,7 @@ import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
 import 'package:animewitcher/core/providers/device_info_provider.dart';
+import 'package:animewitcher/core/router/app_router.dart';
 import 'package:animewitcher/core/services/artwork_fallback_service.dart';
 import 'package:animewitcher/core/storage/settings_repository.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
@@ -24,6 +25,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../support/memory_storage_service.dart';
 import '../../../support/widget_completion.dart';
@@ -138,6 +140,82 @@ class _OfflineCatalogApi implements HttpClientAdapter {
             : _hits('Current', index),
         'nbPages': 1,
       }),
+      200,
+      headers: _jsonHeaders,
+    );
+  }
+
+  @override
+  void close({bool force = false}) {
+    for (final body in held) {
+      body.release();
+    }
+  }
+}
+
+const _expectCommittedCancellation = true;
+const _oldCommittedQuery = 'عنوان سابق';
+const _newCommittedQuery = 'عنوان جديد';
+
+class _CommittedOfflineApi implements HttpClientAdapter {
+  _CommittedOfflineApi(this.index);
+
+  final String index;
+  final held = <_HeldBody>[];
+  final calls = <(String, int, CancelToken?)>[];
+  final unexpected = <Uri>[];
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    final uri = options.uri;
+    if (uri.path.endsWith('/Settings/constants')) {
+      return ResponseBody.fromString(
+        '{"fields":{"load_servers_type":{"stringValue":"fixture"}}}',
+        200,
+        headers: _jsonHeaders,
+      );
+    }
+    if (uri.path.endsWith('/services/search')) {
+      return ResponseBody.fromString('{}', 200, headers: _jsonHeaders);
+    }
+    final parts = uri.pathSegments;
+    if (!uri.host.endsWith('.algolia.net') ||
+        parts.length != 4 ||
+        parts[1] != 'indexes' ||
+        parts[2] != index) {
+      if (uri.path.contains('/documents/')) {
+        return ResponseBody.fromString('{}', 200, headers: _jsonHeaders);
+      }
+      unexpected.add(uri);
+      return ResponseBody.fromString('{}', 400, headers: _jsonHeaders);
+    }
+    final body = options.data as Map<String, dynamic>;
+    final params = Uri.splitQueryString(body['params'] as String);
+    final query = params['query'] ?? '';
+    final page = int.parse(params['page'] ?? '0');
+    if (query.isNotEmpty) {
+      calls.add((query, page, options.cancelToken));
+    }
+    if (query == _oldCommittedQuery && page == 1) {
+      final request = _HeldBody(index, options.cancelToken);
+      held.add(request);
+      return request.stream;
+    }
+    final hits = <Map<String, Object>>[
+      if (query.isNotEmpty && page == 0)
+        for (var i = 0; i < 30; i++)
+          {'objectID': '$query-$i', 'name': '$query $i'},
+      if (query == _newCommittedQuery && page == 1) ...[
+        {'objectID': '$query-0', 'name': 'نسخة مكررة لا تعرض'},
+        {'objectID': '$query-last', 'name': 'نتيجة مضافة'},
+      ],
+    ];
+    return ResponseBody.fromString(
+      jsonEncode({'hits': hits, 'nbPages': query.isEmpty ? 1 : 2}),
       200,
       headers: _jsonHeaders,
     );
@@ -293,6 +371,184 @@ MultimediaItem _item(String title) => MultimediaItem(
 );
 
 void main() {
+  for (final (domain, index) in const [
+    (SearchDomain.anime, 'series'),
+    (SearchDomain.animation, 'all_animation'),
+  ]) {
+    testWidgets('committed native ${domain.name} cancels an obsolete body', (
+      tester,
+    ) async {
+      final oldPlatform = debugDefaultTargetPlatformOverride;
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(412, 690);
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = oldPlatform;
+        tester.view.reset();
+      });
+      final storage = MemoryStorageService();
+      final adapter = _CommittedOfflineApi(index);
+      final dio = Dio()..httpClientAdapter = adapter;
+      final source = _ObservedNative(dio, storage);
+      addTearDown(() => dio.close(force: true));
+      final container = ProviderContainer(
+        overrides: [
+          storageServiceProvider.overrideWithValue(storage),
+          artworkFallbackServiceProvider.overrideWithValue(
+            _OfflineArtwork(dio, storage),
+          ),
+          extensionManagerProvider.overrideWith(() => _Manager(source)),
+          activeProviderProvider.overrideWithValue(source),
+          deviceProfileProvider.overrideWith(
+            (_) async => const DeviceProfile(),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.read(searchDomainProvider.notifier).set(domain);
+      final opened = <DetailsRouteExtra>[];
+      final router = GoRouter(
+        routes: [
+          GoRoute(path: '/', builder: (_, _) => const SearchScreen()),
+          GoRoute(
+            path: '/details',
+            builder: (_, state) {
+              opened.add(state.extra! as DetailsRouteExtra);
+              return const Scaffold(body: Text('تفاصيل النتيجة'));
+            },
+          ),
+        ],
+      );
+      addTearDown(router.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp.router(
+            routerConfig: router,
+            locale: const Locale('ar'),
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+          ),
+        ),
+      );
+      final field = find.byType(TextField);
+      final section = find.byType(SearchResultSection);
+      List<MultimediaItem> results() =>
+          tester.widget<SearchResultSection>(section).results;
+      final scroll = find
+          .descendant(
+            of: find.byType(CustomScrollView),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      ScrollPosition position() =>
+          tester.state<ScrollableState>(scroll).position;
+      SearchAggregateState state() =>
+          container.read(searchPagedResultsProvider);
+
+      Future<void> submit(String query) async {
+        await tester.enterText(field, query);
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await pumpUntil(
+          tester,
+          () =>
+              section.evaluate().length == 1 &&
+              results().length >= 30 &&
+              results().first.title == '$query 0',
+          'actual submitted page for $query',
+        );
+      }
+
+      expect(Directionality.of(tester.element(field)), TextDirection.rtl);
+      await submit(_oldCommittedQuery);
+      position().jumpTo(position().maxScrollExtent);
+      await pumpUntil(
+        tester,
+        () => adapter.held.length == 1 && adapter.held.single.started,
+        'actual scroll starts old next-page JSON streaming',
+      );
+      final obsolete = adapter.held.single;
+      expect(state().isLoadingMore, isTrue);
+      expect(obsolete.token != null, _expectCommittedCancellation);
+
+      await submit(_newCommittedQuery);
+      // The request count is the same. The difference is whether Dio
+      // cancelled this already-started response before the suffix arrived.
+      await tester.pump();
+      obsolete.release();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 20));
+      final expectedStaleRows = _expectCommittedCancellation
+          ? 0
+          : _rowsPerMedia;
+      final staleRows = source.expiredMappedRows[index] ?? 0;
+      expect(obsolete.aborted, _expectCommittedCancellation);
+      expect(obsolete.completed, !_expectCommittedCancellation);
+      expect(staleRows, expectedStaleRows);
+      expect(results().map((item) => item.title), [
+        for (var i = 0; i < 30; i++) '$_newCommittedQuery $i',
+      ]);
+      expect(state().hasMore, isTrue);
+
+      position().jumpTo(position().maxScrollExtent);
+      await pumpUntil(
+        tester,
+        () => !state().hasMore && results().length == 31,
+        'replacement query appends in order and retains first duplicate',
+      );
+      expect(results().map((item) => item.title), [
+        for (var i = 0; i < 30; i++) '$_newCommittedQuery $i',
+        'نتيجة مضافة',
+      ]);
+      expect(state().nextOffset, 60);
+      expect(find.byType(PhoneSuggestionBox), findsNothing);
+      expect(adapter.calls.map((call) => (call.$1, call.$2)), [
+        (_oldCommittedQuery, 0),
+        (_oldCommittedQuery, 1),
+        (_newCommittedQuery, 0),
+        (_newCommittedQuery, 1),
+      ]);
+      expect(adapter.unexpected, isEmpty);
+      final tokens = adapter.calls.map((call) => call.$3).toList();
+      if (_expectCommittedCancellation) {
+        expect(tokens.toSet(), hasLength(4));
+        expect(tokens.where((token) => token!.isCancelled), [obsolete.token]);
+      } else {
+        expect(tokens, everyElement(isNull));
+      }
+
+      final url = results().last.url;
+      position().jumpTo(position().maxScrollExtent);
+      await tester.pump();
+      final card = find.byKey(ValueKey(url));
+      await pumpUntil(
+        tester,
+        () => card.evaluate().isNotEmpty,
+        'replacement appended card is visible',
+      );
+      await tester.ensureVisible(card);
+      await tester.pump();
+      await tester.tap(card);
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump();
+      expect(find.text('تفاصيل النتيجة'), findsOneWidget);
+      expect(opened.map((extra) => extra.item.url), everyElement(url));
+      router.pop();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump();
+      expect(results().last.url, url);
+      expect(adapter.calls, hasLength(4));
+      expect(tester.takeException(), isNull);
+      debugPrint(
+        'C20_COMMITTED ${domain.name} oldBodiesCompleted='
+        '${obsolete.completed ? 1 : 0} oldMappedRows=$staleRows '
+        'starts=${adapter.calls.length} visible=${results().length}',
+      );
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    });
+  }
+
   for (final submit in [false, true]) {
     testWidgets(
       submit

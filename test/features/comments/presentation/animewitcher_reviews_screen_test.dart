@@ -49,6 +49,19 @@ class _FakeAccountService extends AnimeWitcherAccountService {
       );
 
   final List<AnimeWitcherComment> reviews;
+
+  final edits = <({String path, String text, bool spoiler})>[];
+
+  @override
+  Future<AnimeWitcherComment> updateOwnComment(
+    AnimeWitcherComment comment,
+    String rawText, {
+    required bool spoiler,
+  }) async {
+    edits.add((path: comment.path, text: rawText, spoiler: spoiler));
+    return comment.copyWith(text: rawText, spoiler: spoiler);
+  }
+
   final bool signedIn = true;
   final String myUserId = 'me';
   int? lastLimit;
@@ -701,6 +714,47 @@ void main() {
     expect(find.text('تعديل التعليق'), findsNothing);
     expect(find.text('يحتوي على حرق'), findsNothing);
     expect(find.byType(CheckboxListTile), findsNothing);
+  });
+
+  testWidgets('saving my review survives route pop without a spoiler', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    debugWindowControlsInsetOverride = 0;
+    addTearDown(() => debugWindowControlsInsetOverride = null);
+    final review = _review(
+      id: 'mine',
+      text: 'مراجعة قديمة',
+      userId: 'me',
+    ).copyWith(spoiler: true);
+    final service = _FakeAccountService(reviews: [review]);
+    await tester.pumpWidget(
+      _app(
+        service: service,
+        home: const AnimeWitcherMyCommentsScreen(isReviews: true),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _openOwnReviewEditor(tester);
+    final dialog = find.byType(AlertDialog);
+    final field = find.descendant(of: dialog, matching: find.byType(TextField));
+    expect(tester.widget<TextField>(field).controller!.text, review.text);
+    expect(find.byType(CheckboxListTile), findsNothing);
+
+    await tester.enterText(field, '  مراجعة جديدة  ');
+    await tester.tap(find.text('حفظ'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 60));
+    expect(dialog, findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(dialog, findsNothing);
+    expect(service.edits, [
+      (path: review.path, text: 'مراجعة جديدة', spoiler: false),
+    ]);
+    expect(find.text('مراجعة جديدة').hitTestable(), findsOneWidget);
+    await tester.pump(const Duration(seconds: 2));
   });
 
   testWidgets('reviews screenshots', (tester) async {

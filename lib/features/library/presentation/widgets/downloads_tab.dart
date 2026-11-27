@@ -103,7 +103,9 @@ Future<void> _removeMissingDownload(
 }
 
 bool _canPauseDownload(TaskStatus status) => switch (status) {
-  TaskStatus.running || TaskStatus.enqueued || TaskStatus.waitingToRetry => true,
+  TaskStatus.running ||
+  TaskStatus.enqueued ||
+  TaskStatus.waitingToRetry => true,
   _ => false,
 };
 
@@ -438,9 +440,13 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
         : selected.map((item) => item.id).toSet();
     final canPause = selected.any((item) => _canPauseDownload(item.status));
     final canResume = selected.any((item) => item.status == TaskStatus.paused);
-    final controllableActive = active.where(
-      (item) => _canPauseDownload(item.status) || item.status == TaskStatus.paused,
-    ).toList();
+    final controllableActive = active
+        .where(
+          (item) =>
+              _canPauseDownload(item.status) ||
+              item.status == TaskStatus.paused,
+        )
+        .toList();
     final allPaused =
         controllableActive.isNotEmpty &&
         controllableActive.every((item) => item.status == TaskStatus.paused);
@@ -1076,10 +1082,13 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
           ),
         ),
         children: [
-          Consumer(
-            builder: (context, ref, _) => _buildDownloadRows(
+          _CompletedDownloadRows(
+            items: items,
+            isManga: isManga,
+            builder: (context, ref, orderedItems) => _buildDownloadRows(
               context,
               ref,
+              orderedItems,
               isManga: isManga,
               selecting: selecting,
             ),
@@ -1089,39 +1098,15 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
     );
   }
 
-  // ExpansionTile does not mount this consumer while the group is closed.
-  // Avoid sorting and building every completed row just to show its header.
   Widget _buildDownloadRows(
     BuildContext context,
-    WidgetRef ref, {
+    WidgetRef ref,
+    List<DownloadItem> orderedItems, {
     required bool isManga,
     required bool selecting,
   }) {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context)!;
-    final episodeSortAscending = ref.watch(episodeSortAscendingProvider);
-
-    final orderedItems = isManga
-        ? (List<DownloadItem>.from(items)..sort((a, b) {
-            final an = a.chapter?.number;
-            final bn = b.chapter?.number;
-            if (an != null && bn != null) {
-              final compare = an.compareTo(bn);
-              if (compare != 0) {
-                return episodeSortAscending ? compare : -compare;
-              }
-            }
-            final compare = (a.chapter?.name ?? '').compareTo(
-              b.chapter?.name ?? '',
-            );
-            return episodeSortAscending ? compare : -compare;
-          }))
-        : episodeItemsInDisplayOrder(
-            items,
-            episodeOf: (item) => item.episode,
-            ascending: episodeSortAscending,
-          );
-
     return Column(
       children: orderedItems.asMap().entries.map((entry) {
         final download = entry.value;
@@ -1267,6 +1252,76 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
     } finally {
       if (mounted) setState(() => _deleteInFlight = false);
     }
+  }
+}
+
+// ExpansionTile only mounts this projection while the group is open.
+// Selection and active-transfer updates do not change the completed rows
+// or their order. Keep the same projection until either one changes.
+class _CompletedDownloadRows extends ConsumerStatefulWidget {
+  const _CompletedDownloadRows({
+    required this.items,
+    required this.isManga,
+    required this.builder,
+  });
+
+  final List<DownloadItem> items;
+  final bool isManga;
+  final Widget Function(BuildContext, WidgetRef, List<DownloadItem>) builder;
+
+  @override
+  ConsumerState<_CompletedDownloadRows> createState() =>
+      _CompletedDownloadRowsState();
+}
+
+class _CompletedDownloadRowsState
+    extends ConsumerState<_CompletedDownloadRows> {
+  List<DownloadItem>? _input;
+  late List<DownloadItem> _ordered;
+  late bool _ascending;
+  late bool _isManga;
+
+  @override
+  Widget build(BuildContext context) {
+    final ascending = ref.watch(episodeSortAscendingProvider);
+    final items = widget.items;
+    final isManga = widget.isManga;
+    if (!identical(_input, items) ||
+        _ascending != ascending ||
+        _isManga != isManga) {
+      _ordered = _orderRows(items, isManga: isManga, ascending: ascending);
+      _input = items;
+      _ascending = ascending;
+      _isManga = isManga;
+    }
+    return widget.builder(context, ref, _ordered);
+  }
+
+  List<DownloadItem> _orderRows(
+    List<DownloadItem> items, {
+    required bool isManga,
+    required bool ascending,
+  }) {
+    return isManga
+        ? (List<DownloadItem>.from(items)..sort((a, b) {
+            final an = a.chapter?.number;
+            final bn = b.chapter?.number;
+            if (an != null && bn != null) {
+              final compare = an.compareTo(bn);
+              if (compare != 0) {
+                return ascending ? compare : -compare;
+              }
+            }
+            final compare = (a.chapter?.name ?? '').compareTo(
+              b.chapter?.name ?? '',
+            );
+            return ascending ? compare : -compare;
+          }))
+        : episodeItemsInDisplayOrder(
+            items,
+            episodeOf: (item) => item.episode,
+            ascending: ascending,
+          );
   }
 }
 

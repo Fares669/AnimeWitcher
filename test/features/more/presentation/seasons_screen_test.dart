@@ -12,10 +12,14 @@ import 'package:animewitcher/core/storage/settings_repository.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/more/presentation/seasons_screen.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+import 'package:animewitcher/shared/widgets/app_back_button.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:animewitcher/shared/widgets/multimedia_card.dart';
+import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -165,8 +169,11 @@ Future<void> _pumpSeasons(
   WidgetTester tester, {
   required AnimeWitcherNativeProvider provider,
   Key? shotKey,
+  Size viewport = const Size(390, 844),
+  String font = 'NotoSansArabic',
+  bool openRoute = false,
 }) async {
-  await tester.binding.setSurfaceSize(const Size(390, 844));
+  await tester.binding.setSurfaceSize(viewport);
   addTearDown(() => tester.binding.setSurfaceSize(null));
 
   await tester.pumpWidget(
@@ -186,7 +193,7 @@ Future<void> _pumpSeasons(
         supportedLocales: AppLocalizations.supportedLocales,
         theme: ThemeData(
           brightness: Brightness.dark,
-          fontFamily: 'NotoSansArabic',
+          fontFamily: font,
           scaffoldBackgroundColor: Colors.black,
           colorScheme: const ColorScheme.dark(
             primary: Color(0xFFEEC60A),
@@ -194,7 +201,25 @@ Future<void> _pumpSeasons(
             onSurface: Color(0xFFE5E7EB),
           ),
         ),
-        home: shotKey == null
+        builder: openRoute && shotKey != null
+            ? (context, child) => RepaintBoundary(key: shotKey, child: child)
+            : null,
+        home: openRoute
+            ? Builder(
+                builder: (context) => Scaffold(
+                  body: Center(
+                    child: FilledButton(
+                      onPressed: () => Navigator.of(context).push<void>(
+                        MaterialPageRoute(
+                          builder: (_) => const SeasonsScreen(),
+                        ),
+                      ),
+                      child: const Text('افتح المواسم'),
+                    ),
+                  ),
+                ),
+              )
+            : shotKey == null
             ? const SeasonsScreen()
             : RepaintBoundary(key: shotKey, child: const SeasonsScreen()),
       ),
@@ -244,8 +269,151 @@ Future<void> _writeShot(WidgetTester tester, Key key, String filename) async {
   });
 }
 
+Future<String?> _rgbaHash(WidgetTester tester, Key key) =>
+    tester.runAsync(() async {
+      final boundary = tester.renderObject<RenderRepaintBoundary>(
+        find.byKey(key),
+      );
+      final image = await boundary.toImage();
+      try {
+        final rgba = (await image.toByteData())!;
+        return sha256
+            .convert(
+              rgba.buffer.asUint8List(rgba.offsetInBytes, rgba.lengthInBytes),
+            )
+            .toString();
+      } finally {
+        image.dispose();
+      }
+    });
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets('loaded RTL Seasons keeps route configuration on tab changes', (
+    tester,
+  ) async {
+    const font = 'C20SeasonsReadex';
+    await tester.runAsync(() async {
+      final loader = FontLoader(font)
+        ..addFont(
+          rootBundle.load('assets/fonts/readex_pro/ReadexPro-Regular.ttf'),
+        );
+      await loader.load();
+    });
+    for (final size in [const Size(390, 844), const Size(1280, 800)]) {
+      const shotKey = ValueKey('season-route-frame');
+      final provider = _ScrollableSeasonsProvider();
+      await _pumpSeasons(
+        tester,
+        provider: provider,
+        shotKey: shotKey,
+        viewport: size,
+        openRoute: true,
+        font: font,
+      );
+      await tester.tap(find.text('افتح المواسم'));
+      await tester.pumpAndSettle();
+
+      final page = find.byType(SeasonsScreen);
+      expect(Directionality.of(tester.element(page)), TextDirection.rtl);
+      final appBar = find.byType(AppPageAppBar).hitTestable();
+      final tabs = find.byType(TabBar).hitTestable();
+      final body = find.byType(TabBarView).hitTestable();
+      ScrollController scroll() => tester
+          .widget<CustomScrollView>(
+            find.byType(CustomScrollView).hitTestable().first,
+          )
+          .controller!;
+      var appBarUpdates = 0;
+      var bodyUpdates = 0;
+      var childUpdates = 0;
+      final hashes = <String?>[];
+
+      if (size.width < 500)
+        scroll().jumpTo(630);
+      else
+        scroll().jumpTo(320);
+      await tester.pumpAndSettle();
+      final originalOffset = scroll().offset;
+      expect(originalOffset, greaterThan(0));
+      hashes.add(await _rgbaHash(tester, shotKey));
+
+      Future<void> switchTo(String label) async {
+        final beforeBar = tester.widget<AppPageAppBar>(appBar);
+        final beforeBody = tester.widget<TabBarView>(body);
+        await _selectTab(tester, label);
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<TabBar>(tabs).controller!.index,
+          _seasonTabIndex[label],
+        );
+        final afterBar = tester.widget<AppPageAppBar>(appBar);
+        final afterBody = tester.widget<TabBarView>(body);
+        if (!identical(beforeBar, afterBar)) appBarUpdates++;
+        if (!identical(beforeBody, afterBody)) bodyUpdates++;
+        for (var i = 0; i < beforeBody.children.length; i++) {
+          if (!identical(beforeBody.children[i], afterBody.children[i])) {
+            childUpdates++;
+          }
+        }
+      }
+
+      await switchTo('السابق');
+      _expectTitleCentered(tester, _StubSeasonsProvider.past);
+      hashes.add(await _rgbaHash(tester, shotKey));
+      await switchTo('القادم');
+      _expectTitleCentered(tester, _StubSeasonsProvider.next);
+      hashes.add(await _rgbaHash(tester, shotKey));
+      await switchTo('المواسم الأخرى');
+      final year = find.byKey(const ValueKey('other-season-year-2026'));
+      expect(year.hitTestable(), findsOneWidget);
+      hashes.add(await _rgbaHash(tester, shotKey));
+      await tester.tap(find.text('شتاء').hitTestable().first);
+      await tester.pumpAndSettle();
+      expect(find.text('شتاء عام 2026'), findsOneWidget);
+      expect(find.byType(MultimediaCard).hitTestable(), findsWidgets);
+      await tester.tap(find.byType(AppBackButton).hitTestable().last);
+      await tester.pumpAndSettle();
+      expect(year.hitTestable(), findsOneWidget);
+      expect(tester.widget<TabBar>(tabs).controller!.index, 3);
+      hashes.add(await _rgbaHash(tester, shotKey));
+
+      await switchTo('الحالي');
+      expect(scroll().offset, closeTo(originalOffset, 0.01));
+      final prefix = 'season-${_StubSeasonsProvider.current}-';
+      expect(
+        tester
+            .widgetList<MultimediaCard>(
+              find.byType(MultimediaCard, skipOffstage: false),
+            )
+            .every((card) => card.heroTag.startsWith(prefix)),
+        isTrue,
+      );
+      hashes.add(await _rgbaHash(tester, shotKey));
+      await switchTo('القادم');
+      await switchTo('الحالي');
+      expect(scroll().offset, closeTo(originalOffset, 0.01));
+      expect(provider.requests, [
+        _StubSeasonsProvider.current,
+        _StubSeasonsProvider.past,
+        _StubSeasonsProvider.next,
+        'شتاء عام 2026',
+      ]);
+      expect(hashes, everyElement(isNotNull));
+      debugPrint(
+        'C20_SEASONS_RTL width=${size.width.toInt()} '
+        'appbar=$appBarUpdates body=$bodyUpdates tabs=$childUpdates '
+        'rgba=${hashes.join(',')}',
+      );
+      expect((appBarUpdates, bodyUpdates, childUpdates), (0, 0, 0));
+      await tester.tap(find.byType(AppBackButton).hitTestable().last);
+      await tester.pumpAndSettle();
+      expect(find.text('افتح المواسم'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
 
   testWidgets(
     'past/current/next tabs show the centered settings season string',

@@ -330,6 +330,25 @@ class _MeasuredSeries extends MultimediaItem {
   }
 }
 
+class _OrderProbeEpisode extends Episode {
+  _OrderProbeEpisode(int ordinal, this.onOrderRead)
+    : super(
+        name: 'الحلقة $ordinal',
+        url: 'https://animewitcher.test/complete-sort/$ordinal',
+        season: 1,
+        episode: ordinal,
+        serverName: 'الحلقة $ordinal',
+      );
+
+  final void Function() onOrderRead;
+
+  @override
+  int get season {
+    onOrderRead();
+    return super.season;
+  }
+}
+
 class _StubEpisodeSortAscendingNotifier extends EpisodeSortAscendingNotifier {
   _StubEpisodeSortAscendingNotifier(this._value, this._onRead);
 
@@ -341,6 +360,9 @@ class _StubEpisodeSortAscendingNotifier extends EpisodeSortAscendingNotifier {
     _onRead?.call();
     return _value;
   }
+
+  @override
+  void setAscending(bool value) => state = value;
 }
 
 Widget _downloadsApp(
@@ -1226,20 +1248,28 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('connection badge follows active count instead of selected ceiling', (tester) async {
-    DownloadItem row(int count) => _item(taskId: 'live-count', timestamp: 1,
-      status: TaskStatus.running, activeConnections: count, parallelChunks: 16);
-    final notifier = _StubDownloadsNotifier([row(8)]);
-    await tester.pumpWidget(_downloadsApp([], notifier: notifier));
-    await tester.pumpAndSettle();
-    expect(find.text('8×  40%'), findsOneWidget);
-    expect(find.text('16×  40%'), findsNothing);
-    for (final count in [4, 1, 0]) {
-      notifier.publish([row(count)]);
-      await tester.pump(const Duration(seconds: 2));
-      expect(find.text('$count×  40%'), findsOneWidget);
-    }
-  });
+  testWidgets(
+    'connection badge follows active count instead of selected ceiling',
+    (tester) async {
+      DownloadItem row(int count) => _item(
+        taskId: 'live-count',
+        timestamp: 1,
+        status: TaskStatus.running,
+        activeConnections: count,
+        parallelChunks: 16,
+      );
+      final notifier = _StubDownloadsNotifier([row(8)]);
+      await tester.pumpWidget(_downloadsApp([], notifier: notifier));
+      await tester.pumpAndSettle();
+      expect(find.text('8×  40%'), findsOneWidget);
+      expect(find.text('16×  40%'), findsNothing);
+      for (final count in [4, 1, 0]) {
+        notifier.publish([row(count)]);
+        await tester.pump(const Duration(seconds: 2));
+        expect(find.text('$count×  40%'), findsOneWidget);
+      }
+    },
+  );
 
   testWidgets('global pause controls all active rows in queue order', (
     tester,
@@ -1829,8 +1859,13 @@ void main() {
     await tester.pumpWidget(_downloadsApp([], notifier: notifier));
     await tester.pumpAndSettle();
     for (final key in ['downloads-delete-all', 'downloads-pause-resume-all']) {
-      expect(find.ancestor(of: find.byKey(ValueKey(key)),
-          matching: find.byType(TabBarView)), findsOneWidget);
+      expect(
+        find.ancestor(
+          of: find.byKey(ValueKey(key)),
+          matching: find.byType(TabBarView),
+        ),
+        findsOneWidget,
+      );
     }
     await tester.tap(find.byKey(const ValueKey('downloads-delete-all')));
     await tester.pumpAndSettle();
@@ -2582,61 +2617,240 @@ void main() {
     }
   });
 
-  testWidgets('completed groups only sort once opened and keep the details-page direction', (
-    tester,
-  ) async {
-    await _prepareArtworkStorage(tester);
-    final show = MultimediaItem(
-      title: 'Scrambled',
-      url: 'https://animewitcher.test/scrambled',
-      posterUrl: '',
-      contentType: MultimediaContentType.anime,
-      tmdbId: 99,
-    );
+  testWidgets(
+    'completed groups only sort once opened and keep the details-page direction',
+    (tester) async {
+      await _prepareArtworkStorage(tester);
+      final show = MultimediaItem(
+        title: 'Scrambled',
+        url: 'https://animewitcher.test/scrambled',
+        posterUrl: '',
+        contentType: MultimediaContentType.anime,
+        tmdbId: 99,
+      );
 
-    DownloadItem episode(int number, int timestamp) => DownloadItem(
-      task: _task(
-        taskId: 'scrambled-$number',
-        filename: 'الحلقة $number.mp4',
-        metaData: 'https://animewitcher.test/scrambled/$number',
-      ),
-      status: TaskStatus.complete,
-      progress: 1,
-      item: show,
-      episode: Episode(
-        name: 'الحلقة $number',
-        url: 'https://animewitcher.test/scrambled/$number',
-        season: 1,
-        episode: number,
-        serverName: 'الحلقة $number',
-      ),
-      timestamp: timestamp,
-    );
+      DownloadItem episode(int number, int timestamp) => DownloadItem(
+        task: _task(
+          taskId: 'scrambled-$number',
+          filename: 'الحلقة $number.mp4',
+          metaData: 'https://animewitcher.test/scrambled/$number',
+        ),
+        status: TaskStatus.complete,
+        progress: 1,
+        item: show,
+        episode: Episode(
+          name: 'الحلقة $number',
+          url: 'https://animewitcher.test/scrambled/$number',
+          season: 1,
+          episode: number,
+          serverName: 'الحلقة $number',
+        ),
+        timestamp: timestamp,
+      );
 
-    var sortReads = 0;
-    await tester.pumpWidget(
-      _downloadsApp([
-        episode(10, 300),
-        episode(12, 200),
-        episode(11, 100),
-      ], episodeSortAscending: false, onReadEpisodeSort: () => sortReads++),
-    );
-    await tester.pump();
-    await tester.tap(find.text('المكتملة'));
-    await tester.pumpAndSettle();
-    expect(find.text('Scrambled'), findsOneWidget);
-    expect(sortReads, 0, reason: 'the completed group has not been expanded');
-    await tester.tap(find.text('Scrambled'));
-    await tester.pumpAndSettle();
-    await _awaitArtworkLookups(tester);
-    expect(sortReads, 1);
+      var sortReads = 0;
+      await tester.pumpWidget(
+        _downloadsApp(
+          [episode(10, 300), episode(12, 200), episode(11, 100)],
+          episodeSortAscending: false,
+          onReadEpisodeSort: () => sortReads++,
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text('المكتملة'));
+      await tester.pumpAndSettle();
+      expect(find.text('Scrambled'), findsOneWidget);
+      expect(sortReads, 0, reason: 'the completed group has not been expanded');
+      await tester.tap(find.text('Scrambled'));
+      await tester.pumpAndSettle();
+      await _awaitArtworkLookups(tester);
+      expect(sortReads, 1);
 
-    final episode12Y = tester.getTopLeft(find.text('الحلقة 12')).dy;
-    final episode11Y = tester.getTopLeft(find.text('الحلقة 11')).dy;
-    final episode10Y = tester.getTopLeft(find.text('الحلقة 10')).dy;
-    expect(episode12Y, lessThan(episode11Y));
-    expect(episode11Y, lessThan(episode10Y));
-  });
+      final episode12Y = tester.getTopLeft(find.text('الحلقة 12')).dy;
+      final episode11Y = tester.getTopLeft(find.text('الحلقة 11')).dy;
+      final episode10Y = tester.getTopLeft(find.text('الحلقة 10')).dy;
+      expect(episode12Y, lessThan(episode11Y));
+      expect(episode11Y, lessThan(episode10Y));
+    },
+  );
+
+  testWidgets(
+    'expanded completed rows keep their order across unrelated updates',
+    (tester) async {
+      await tester.runAsync(TestFonts.loadWalkthroughFonts);
+      await tester.binding.setSurfaceSize(const Size(425, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await _prepareArtworkStorage(tester);
+      const seriesTitle = 'أرشيف محلي';
+      final show = MultimediaItem(
+        title: seriesTitle,
+        url: 'https://animewitcher.test/complete-sort',
+        posterUrl: '',
+        contentType: MultimediaContentType.anime,
+        tmdbId: 765,
+      );
+      var orderReads = 0;
+      DownloadItem row(
+        int number, {
+        int? displayNumber,
+        TaskStatus status = TaskStatus.complete,
+        double progress = 1,
+      }) => DownloadItem(
+        task: _task(
+          taskId: 'order-$number',
+          filename: 'unit-$number.mp4',
+          metaData: 'https://animewitcher.test/complete-sort/$number',
+        ),
+        status: status,
+        progress: progress,
+        item: show,
+        episode: _OrderProbeEpisode(
+          displayNumber ?? number,
+          () => orderReads++,
+        ),
+        timestamp: number,
+        logicalId: 'video-order-$number',
+      );
+      final archive = List<DownloadItem>.generate(
+        48,
+        (i) => row(1 + ((i * 17) % 48)),
+      );
+      final notifier = _StubDownloadsNotifier([
+        row(49, status: TaskStatus.running, progress: .3),
+        ...archive,
+      ]);
+      final ascending = find.byKey(const ValueKey('order-1'));
+      final second = find.byKey(const ValueKey('order-2'));
+      final penultimate = find.byKey(const ValueKey('order-48'));
+      final completed = find.byWidgetPredicate(
+        (widget) =>
+            widget is CompletedDownloadEpisodeCard &&
+            widget.key == const ValueKey('order-49'),
+      );
+      await tester.pumpWidget(
+        _downloadsApp(
+          [],
+          notifier: notifier,
+          openDownloadsScreen: true,
+          progressData: const {},
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(DownloadsScreen), findsOneWidget);
+      await tester.tap(find.text('المكتملة'));
+      await tester.pumpAndSettle();
+      await _awaitArtworkLookups(tester);
+      final series = find.text(seriesTitle);
+      expect(orderReads, 0, reason: 'closed groups still have no sorting work');
+      await tester.tap(series);
+      await tester.pumpAndSettle();
+      expect(orderReads, greaterThan(0));
+      expect(find.byType(CompletedDownloadEpisodeCard), findsNWidgets(48));
+      expect(
+        tester.getTopLeft(ascending).dy,
+        lessThan(tester.getTopLeft(second).dy),
+      );
+      expect(completed, findsNothing);
+      final firstRect = tester.getRect(ascending);
+      orderReads = 0;
+      for (var i = 0; i < 3; i++) {
+        await tester.longPress(find.text('الحلقة 1'));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('downloads-selection-bar')),
+          findsOneWidget,
+        );
+        final selectedRect = tester.getRect(ascending);
+        expect(selectedRect.topLeft, firstRect.topLeft);
+        expect(selectedRect.width, firstRect.width);
+        expect(
+          find.descendant(
+            of: ascending,
+            matching: find.byIcon(Icons.check_circle_rounded),
+          ),
+          findsOneWidget,
+        );
+        await tester.tap(
+          find.byKey(const ValueKey('downloads-clear-selection')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('downloads-selection-bar')),
+          findsNothing,
+        );
+      }
+      final selectionReads = orderReads;
+      orderReads = 0;
+      for (var i = 0; i < 6; i++) {
+        notifier.publish([
+          row(49, status: TaskStatus.running, progress: .35 + i * .05),
+          ...archive,
+        ]);
+        await tester.pumpAndSettle();
+        expect(tester.getRect(ascending), firstRect);
+        expect(completed, findsNothing);
+      }
+      final progressReads = orderReads;
+      debugPrint(
+        'C20_DOWNLOADS_ORDER selection=$selectionReads progress=$progressReads',
+      );
+      expect(selectionReads, 0);
+      expect(progressReads, 0);
+
+      orderReads = 0;
+      final scope = ProviderScope.containerOf(
+        tester.element(find.byType(DownloadsTab)),
+      );
+      scope.read(episodeSortAscendingProvider.notifier).setAscending(false);
+      await tester.pumpAndSettle();
+      expect(orderReads, greaterThan(0));
+      expect(
+        tester.getTopLeft(penultimate).dy,
+        lessThan(tester.getTopLeft(second).dy),
+      );
+      expect(tester.getTopLeft(penultimate), firstRect.topLeft);
+
+      orderReads = 0;
+      // A fresh completion and metadata replacement under the same old task ID
+      // must invalidate the expansion's cached order with the new rows.
+      notifier.publish([
+        row(49),
+        for (final item in archive)
+          if (item.id == 'order-1') row(1, displayNumber: 50) else item,
+      ]);
+      await tester.pumpAndSettle();
+      expect(orderReads, greaterThan(0));
+      expect(find.text('الحلقة 50'), findsOneWidget);
+      expect(find.byType(CompletedDownloadEpisodeCard), findsNWidgets(49));
+      expect(
+        tester.getTopLeft(ascending).dy,
+        lessThan(tester.getTopLeft(completed).dy),
+      );
+      expect(
+        tester.getTopLeft(completed).dy,
+        lessThan(tester.getTopLeft(penultimate).dy),
+      );
+
+      await tester.tap(series);
+      await tester.pumpAndSettle();
+      expect(find.byType(CompletedDownloadEpisodeCard), findsNothing);
+      orderReads = 0;
+      await tester.tap(series);
+      await tester.pumpAndSettle();
+      expect(
+        orderReads,
+        greaterThan(0),
+        reason: 'collapse releases row ordering',
+      );
+      expect(
+        tester.getTopLeft(ascending).dy,
+        lessThan(tester.getTopLeft(completed).dy),
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    },
+  );
 
   testWidgets('tab swipe follows RTL and lands on the completed anime group', (
     tester,

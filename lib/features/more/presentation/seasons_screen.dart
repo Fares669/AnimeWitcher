@@ -31,34 +31,20 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
     with SingleTickerProviderStateMixin {
   late Future<_SeasonsBootstrap> _bootstrapFuture;
   late final TabController _tabController;
-  int _selectedTab = 1;
   int _reloadGeneration = 0;
   bool _hidesEcchiAtLoad = false;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(
-      length: 4,
-      vsync: this,
-      initialIndex: _selectedTab,
-    )..addListener(_handleTabTick);
+    _tabController = TabController(length: 4, vsync: this, initialIndex: 1);
     _bootstrapFuture = _loadBootstrap();
   }
 
   @override
   void dispose() {
-    _tabController
-      ..removeListener(_handleTabTick)
-      ..dispose();
+    _tabController.dispose();
     super.dispose();
-  }
-
-  void _handleTabTick() {
-    final value = _tabController.index;
-    if (value != _selectedTab) {
-      setState(() => _selectedTab = value);
-    }
   }
 
   AnimeWitcherProvider? _readCatalogProvider() {
@@ -135,8 +121,13 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
                 children: [
                   _SeasonTabs(controller: _tabController),
                   Expanded(
-                    child: _SeasonsLoadingBody(
-                      showSeasonTitle: _selectedTab != 3,
+                    // Once loaded, TabBar and TabBarView already follow the
+                    // controller; changing tabs must not rebuild the route.
+                    child: ListenableBuilder(
+                      listenable: _tabController,
+                      builder: (context, _) => _tabController.index == 3
+                          ? const _SeasonsLoadingBody(showSeasonTitle: false)
+                          : const _SeasonsLoadingBody(showSeasonTitle: true),
                     ),
                   ),
                 ],

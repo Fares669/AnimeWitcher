@@ -32,6 +32,18 @@ class _FakeAccountService extends AnimeWitcherAccountService {
 
   final List<AnimeWitcherComment> comments;
 
+  final edits = <({String path, String text, bool spoiler})>[];
+
+  @override
+  Future<AnimeWitcherComment> updateOwnComment(
+    AnimeWitcherComment comment,
+    String rawText, {
+    required bool spoiler,
+  }) async {
+    edits.add((path: comment.path, text: rawText, spoiler: spoiler));
+    return comment.copyWith(text: rawText, spoiler: spoiler);
+  }
+
   @override
   bool get isSignedIn => true;
 
@@ -232,5 +244,96 @@ void main() {
     expect(find.text('تعديل التعليق'), findsOneWidget);
     expect(find.text('يحتوي على حرق'), findsOneWidget);
     expect(find.byType(CheckboxListTile), findsOneWidget);
+  });
+
+  testWidgets('saving comment edit keeps the field alive through route pop', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final comment = _comment(id: 'c1', text: 'نص قبل التحرير', spoiler: true);
+    final service = _FakeAccountService(comments: [comment]);
+    await tester.pumpWidget(
+      _app(
+        service: service,
+        home: const AnimeWitcherCommentsScreen(target: _target),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _openOwnEditor(tester);
+    final dialog = find.byType(AlertDialog);
+    final field = find.descendant(of: dialog, matching: find.byType(TextField));
+    final editor = tester.widget<EditableText>(
+      find.descendant(of: dialog, matching: find.byType(EditableText)),
+    );
+    expect(editor.controller.text, comment.text);
+    expect(editor.focusNode.hasFocus, isTrue);
+    expect(
+      tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
+      isTrue,
+    );
+
+    await tester.tap(find.byType(CheckboxListTile));
+    await tester.enterText(field, '  تعديل محلي  ');
+    await tester.tap(find.text('حفظ'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 60));
+    expect(dialog, findsOneWidget, reason: 'reverse animation is still active');
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(dialog, findsNothing);
+    expect(service.edits, [
+      (path: comment.path, text: 'تعديل محلي', spoiler: false),
+    ]);
+    expect(find.text('تعديل محلي').hitTestable(), findsOneWidget);
+    expect(find.text('نص قبل التحرير'), findsNothing);
+    await tester.pump(const Duration(seconds: 2));
+  });
+
+  testWidgets('empty comment stays open; cancel and Back do not save', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final comment = _comment(id: 'c1', text: 'نص محفوظ');
+    final service = _FakeAccountService(comments: [comment]);
+    await tester.pumpWidget(
+      _app(
+        service: service,
+        home: const AnimeWitcherCommentsScreen(target: _target),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final dialog = find.byType(AlertDialog);
+    final field = find.descendant(of: dialog, matching: find.byType(TextField));
+
+    await _openOwnEditor(tester);
+    await tester.enterText(field, '   ');
+    await tester.tap(find.text('حفظ'));
+    await tester.pumpAndSettle();
+    expect(dialog, findsOneWidget);
+    expect(service.edits, isEmpty);
+
+    await tester.enterText(field, 'ملغى');
+    await tester.tap(find.text('إلغاء'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 60));
+    expect(dialog, findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(dialog, findsNothing);
+
+    await _openOwnEditor(tester);
+    expect(tester.widget<TextField>(field).controller!.text, comment.text);
+    await tester.enterText(field, 'غير محفوظ');
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 60));
+    expect(dialog, findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(dialog, findsNothing);
+    expect(service.edits, isEmpty);
+    expect(find.text(comment.text).hitTestable(), findsOneWidget);
   });
 }
