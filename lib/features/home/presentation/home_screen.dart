@@ -265,7 +265,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final homeDataAsync = showNewsOnHome
         ? ref.watch(homeDataProvider)
         : _watchHomeWithoutNews();
-    final continueWatching = ref.watch(continueWatchingProvider);
+    // Keep history subscribed from startup, but only rearrange Home when
+    // the shelf appears or disappears. Progress updates belong to its cards.
+    final hasContinueWatching = ref.watch(
+      continueWatchingProvider.select((items) => items.isNotEmpty),
+    );
     final profile = ref.watch(deviceProfileProvider).asData?.value;
     final isWidescreen =
         profile?.isTv == true ||
@@ -284,7 +288,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               child: _buildBody(
                 context,
                 homeDataAsync,
-                continueWatching,
+                hasContinueWatching: hasContinueWatching,
                 showNewsOnHome: showNewsOnHome,
                 isWidescreen: isWidescreen,
               ),
@@ -444,8 +448,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   Widget _buildBody(
     BuildContext context,
-    HomeState state,
-    List<HistoryItem> continueWatching, {
+    HomeState state, {
+    required bool hasContinueWatching,
     required bool showNewsOnHome,
     bool isWidescreen = false,
   }) {
@@ -531,12 +535,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                     ),
                   ),
 
-                if (continueWatching.isNotEmpty)
+                if (hasContinueWatching)
                   SliverToBoxAdapter(
-                    child: ContinueWatchingSection(
-                      title: l10n.continueWatching,
-                      items: continueWatching,
-                      topPadding: isWidescreen ? 0 : null,
+                    child: Consumer(
+                      builder: (context, ref, _) => ContinueWatchingSection(
+                        title: l10n.continueWatching,
+                        items: ref.watch(continueWatchingProvider),
+                        topPadding: isWidescreen ? 0 : null,
+                      ),
                     ),
                   ),
 

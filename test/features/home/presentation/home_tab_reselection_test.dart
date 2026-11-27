@@ -14,6 +14,8 @@ import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/home/presentation/home_provider.dart';
 import 'package:animewitcher/features/home/presentation/home_screen.dart';
 import 'package:animewitcher/features/home/presentation/home_state.dart';
+import 'package:animewitcher/features/home/presentation/widgets/home_hero_carousel.dart';
+import 'package:animewitcher/features/home/presentation/widgets/media_horizontal_list.dart';
 import 'package:animewitcher/features/library/presentation/history_provider.dart';
 import 'package:animewitcher/features/onboarding/first_run_setup_screen.dart';
 import 'package:animewitcher/features/search/data/mal_rankings.dart';
@@ -42,11 +44,13 @@ class _HomeData extends HomeData {
   final keepCurrentValues = <bool>[];
   Completer<void>? pending;
 
+  String showTitle = 'Show';
+
   @override
   HomeState build() => HomeSuccess({
     for (var i = 0; i < 10; i++)
       'Section $i': [
-        MultimediaItem(title: 'Show $i', url: 'show-$i', posterUrl: ''),
+        MultimediaItem(title: '$showTitle $i', url: 'show-$i', posterUrl: ''),
       ],
   });
 
@@ -63,11 +67,27 @@ class _HomeData extends HomeData {
 }
 
 class _ContinueWatching extends ContinueWatchingNotifier {
+  _ContinueWatching({this.resumeFixture = false});
+
+  final bool resumeFixture;
   int calls = 0;
   Completer<void>? pending;
 
   @override
-  List<HistoryItem> build() => [];
+  List<HistoryItem> build() => resumeFixture ? [_entry(10)] : [];
+
+  void publishPosition(int position) {
+    state = [_entry(position)];
+  }
+
+  void removeResumeEntry() => state = const [];
+
+  HistoryItem _entry(int position) => HistoryItem(
+    item: MultimediaItem(title: 'Resume show', url: 'resume', posterUrl: ''),
+    position: position,
+    duration: 100,
+    timestamp: position,
+  );
 
   @override
   Future<void> refreshFromServer() async {
@@ -90,6 +110,96 @@ class _Account extends AnimeWitcherAccountController {
 void main() {
   setUp(() {
     VisibilityDetectorController.instance.updateInterval = Duration.zero;
+  });
+
+  testWidgets('resume-only changes stay inside the real Home shelf', (
+    tester,
+  ) async {
+    final (:data, :history, :scroll) = await _pumpHome(
+      tester,
+      layout: AppLayoutStyle.sideRail,
+      resumeFixture: true,
+    );
+    scroll.jumpTo(220);
+    await tester.pumpAndSettle();
+
+    final progressFinder = find.byType(LinearProgressIndicator);
+    double? progress() =>
+        tester.widget<LinearProgressIndicator>(progressFinder).value;
+    final heroFinder = find.byType(HomeHeroCarousel);
+    final rails = find.byType(MediaHorizontalList);
+    final hero = tester.widget(heroFinder);
+    final firstRail = tester.widget(rails.first);
+    for (final position in [11, 16, 22]) {
+      history.publishPosition(position);
+      await tester.pump();
+      expect(progress(), closeTo(position / 100, 0.0001));
+      expect(tester.widget(heroFinder), same(hero));
+      expect(tester.widget(rails.first), same(firstRail));
+    }
+    expect(scroll.offset, 220);
+    expect(data.calls, 0);
+    expect(history.calls, 0);
+
+    await tester.tap(find.byIcon(TaskbarDestination.search.icon).hitTestable());
+    await tester.pumpAndSettle();
+    expect(find.text('Search page'), findsOneWidget);
+    history.publishPosition(34);
+    await tester.pump();
+    await tester.tap(find.byIcon(TaskbarDestination.home.icon).hitTestable());
+    await tester.pumpAndSettle();
+    expect(progress(), closeTo(0.34, 0.0001));
+    expect(scroll.offset, 220);
+    expect(data.calls, 0);
+    expect(history.calls, 0);
+
+    // Player and details routes can also cover Home instead of switching tabs.
+    final navigator = Navigator.of(tester.element(heroFinder));
+    unawaited(
+      navigator.push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Text('Over Home')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Over Home'), findsOneWidget);
+    history.publishPosition(50);
+    await tester.pump();
+    navigator.pop();
+    await tester.pumpAndSettle();
+    expect(progress(), closeTo(0.50, 0.0001));
+    expect(scroll.offset, 220);
+
+    final refresh = tester.widget<RefreshIndicator>(
+      find.byType(RefreshIndicator),
+    );
+    await refresh.onRefresh();
+    await tester.pumpAndSettle();
+    expect(data.calls, 1);
+    expect(history.calls, 1);
+    expect(data.keepCurrentValues, [true]);
+
+    // Real catalogue changes remain independent and rebuild the carousel/rails.
+    final heroBeforeCatalogueChange = tester.widget(heroFinder);
+    data.showTitle = 'Updated show';
+    data.showSuccess();
+    await tester.pumpAndSettle();
+    expect(tester.widget(heroFinder), isNot(same(heroBeforeCatalogueChange)));
+    expect(
+      tester.widget<MediaHorizontalList>(rails.first).mediaList.first.title,
+      'Updated show 0',
+    );
+    expect(progress(), closeTo(0.50, 0.0001));
+
+    // Preserve the empty shelf behavior and reinsert it with current progress.
+    history.removeResumeEntry();
+    await tester.pumpAndSettle();
+    expect(progressFinder, findsNothing);
+    history.publishPosition(75);
+    await tester.pumpAndSettle();
+    expect(progress(), closeTo(0.75, 0.0001));
+    await _disposeHome(tester);
   });
 
   for (final layout in <AppLayoutStyle?>[...AppLayoutStyle.values, null]) {
@@ -512,6 +622,7 @@ _pumpHome(
   WidgetTester tester, {
   AppLayoutStyle? layout,
   bool disableAnimations = false,
+  bool resumeFixture = false,
 }) async {
   final phone = layout == null;
   debugDefaultTargetPlatformOverride = phone ? TargetPlatform.android : null;
@@ -523,7 +634,7 @@ _pumpHome(
   addTearDown(tester.view.reset);
   final storage = _Storage();
   final data = _HomeData();
-  final history = _ContinueWatching();
+  final history = _ContinueWatching(resumeFixture: resumeFixture);
   final container = ProviderContainer(
     overrides: [
       storageServiceProvider.overrideWithValue(storage),

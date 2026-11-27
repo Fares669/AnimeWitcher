@@ -249,6 +249,7 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
   int _generation = 0;
   DateTime? _lastProgressEmitAt;
   Timer? _progressEmitTimer;
+  bool _progressNeedsChildScan = false;
 
   int get _pageConnectionLimit =>
       _boundedPageConnections(spec.maxConcurrentPages);
@@ -408,6 +409,11 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
   ) {
     if (_disposed || _canceled || generation != _generation) return;
     _recordPageBytes(index, snapshot);
+    if (snapshot.status != DownloadTransportStatus.running) {
+      // A completing page may remain attached while its file is verified and
+      // checkpointed. Allow another page's progress to report that slot loss.
+      _progressNeedsChildScan = true;
+    }
     if (snapshot.status != DownloadTransportStatus.complete) {
       unawaited(_onPageSnapshot(index, generation, snapshot));
       return;
@@ -582,6 +588,7 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
     DownloadTransportStatus status, {
     double? progress,
   }) {
+    _progressNeedsChildScan = false;
     final pageCount = spec.pages.length;
     var activeConnections = _startingIndexes.length;
     Duration? timeRemaining;
@@ -630,44 +637,49 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
   /// that cadence instead of crawling with every page callback.
   static const Duration _progressCoalesceWindow = Duration(seconds: 1);
 
-  /// Page progress callbacks arrive in bursts — with every page in flight
-  /// at once they can land dozens of times a second, and republishing the
-  /// chapter aggregate for each one flooded the presentation with a new
-  /// snapshot every few milliseconds, each carrying a slightly different
-  /// summed speed that crawled on screen. Aggregates that change something
-  /// material (status, pages done, connections, or a speed swing of a
-  /// quarter or more) still go out immediately; speed-only ripples are
-  /// coalesced to the episode cadence above, with a trailing emission so
-  /// the latest rate still lands.
+  /// Publish material transitions immediately and keep one trailing sample
+  /// for byte/ETA changes. When all attached children were already running,
+  /// another running sample cannot change the parent’s connection count.
+  /// Avoid reading every child (the package adapter allocates a snapshot on
+  /// each current read) only in that settled, unpaused steady state.
   void _emitProgressAggregate() {
-    final status = _paused && _allPagesPaused()
-        ? DownloadTransportStatus.paused
-        : DownloadTransportStatus.running;
-    final next = _aggregate(status);
     final now = DateTime.now();
     final last = _lastProgressEmitAt;
-    final windowElapsed =
-        last == null || now.difference(last) >= _progressCoalesceWindow;
-    if (windowElapsed || _isMaterialProgressChange(next)) {
-      _progressEmitTimer?.cancel();
-      _progressEmitTimer = null;
-      _lastProgressEmitAt = now;
-      _emit(next);
-      return;
+    final elapsed = last == null ? null : now.difference(last);
+    final windowElapsed = elapsed == null || elapsed >= _progressCoalesceWindow;
+    final stableRunningSample =
+        !_progressNeedsChildScan &&
+        !_paused &&
+        _startingIndexes.isEmpty &&
+        _current.status == DownloadTransportStatus.running &&
+        _current.activeConnections == _pageHandles.length &&
+        _current.completedPages == _manifest.completedIndexes.length;
+
+    if (windowElapsed || !stableRunningSample) {
+      final next = _aggregate(_progressAggregateStatus());
+      if (windowElapsed || _isMaterialProgressChange(next)) {
+        _progressEmitTimer?.cancel();
+        _progressEmitTimer = null;
+        _lastProgressEmitAt = now;
+        _emit(next);
+        return;
+      }
     }
+
     _progressEmitTimer ??= Timer(
-      _progressCoalesceWindow - now.difference(last),
+      _progressCoalesceWindow - elapsed,
       () {
         _progressEmitTimer = null;
         if (_disposed || _current.isFinal) return;
-        _emitAggregate(
-          _paused && _allPagesPaused()
-              ? DownloadTransportStatus.paused
-              : DownloadTransportStatus.running,
-        );
+        _emitAggregate(_progressAggregateStatus());
       },
     );
   }
+
+  DownloadTransportStatus _progressAggregateStatus() =>
+      _paused && _allPagesPaused()
+          ? DownloadTransportStatus.paused
+          : DownloadTransportStatus.running;
 
   bool _isMaterialProgressChange(DownloadTransportSnapshot next) {
     final current = _current;

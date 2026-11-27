@@ -16,6 +16,115 @@ final class _MeasuredArtworkEpisode extends Episode {
 }
 
 void main() {
+  group('Details route item merge', () {
+    final title = MultimediaItem(
+      title: 'Catalog',
+      url: 'anime://catalog',
+      posterUrl: 'https://images.example/title.jpg',
+    );
+
+    test('reuses the merge until an input really changes', () {
+      final merge = DetailsRouteItemMerge();
+      final headers = {'Referer': 'original'};
+      final catalog = [
+        for (var i = 1; i <= 4; i++)
+          Episode(
+            name: 'Episode $i',
+            url: 'episode://$i',
+            episode: i,
+            headers: headers,
+          ),
+      ];
+      MultimediaItem render([MultimediaItem? incoming]) => merge.resolve(
+        fallback: title,
+        incoming: incoming ?? title,
+        episodes: catalog,
+      );
+
+      final first = render();
+      expect(render(), same(first));
+      // Nested records already shared by the existing merge stay live.
+      headers['Referer'] = 'renewed';
+      expect(render(), same(first));
+      expect(first.episodes!.first.headers!['Referer'], 'renewed');
+
+      final oldEpisode = catalog[1];
+      catalog[1] = oldEpisode.copyWith(description: 'new episode metadata');
+      expect(catalog[1], oldEpisode); // Episode equality ignores description.
+      final edited = render();
+      expect(edited, isNot(same(first)));
+      expect(edited.episodes![1], same(catalog[1]));
+      expect(render(), same(edited));
+
+      edited.episodes!.removeLast();
+      final repaired = render();
+      expect(repaired, isNot(same(edited)));
+      expect(repaired.episodes, orderedEquals(catalog));
+
+      // MultimediaItem equality also ignores cast; a replacement can share
+      // the catalog and identity fields while changing UI data.
+      final actors = [Actor(name: 'New character')];
+      final withCast = title.copyWith(cast: actors);
+      expect(withCast, title);
+      final castResult = render(withCast);
+      expect(castResult, isNot(same(repaired)));
+      expect(castResult.cast, same(actors));
+      expect(render(withCast), same(castResult));
+
+      final newCard = title.copyWith(description: 'An updated opening card');
+      expect(newCard, title);
+      expect(
+        merge.resolve(fallback: newCard, incoming: withCast, episodes: catalog)
+            .description,
+        newCard.description,
+      );
+    });
+
+    test('remerges duplicate and noncanonical episode order', () {
+      final merge = DetailsRouteItemMerge();
+      final catalog = [
+        Episode(name: 'Regular', url: 'episode://1', season: 1, episode: 1),
+        Episode(name: 'Dubbed', url: 'episode://1-dub', season: 1, episode: 1),
+        Episode(name: 'Later', url: 'episode://2', season: 1, episode: 2),
+      ];
+      MultimediaItem render() =>
+          merge.resolve(fallback: title, incoming: title, episodes: catalog);
+      final first = render();
+      expect(render(), isNot(same(first)));
+      catalog[0] = catalog[2];
+      catalog[2] = first.episodes!.first;
+      final updated = render();
+      expect(
+        updated.episodes!.map((e) => e.url),
+        orderedEquals(
+          mergeDetailsItem(
+            fallback: title,
+            incoming: title,
+            episodes: catalog,
+          ).episodes!.map((e) => e.url),
+        ),
+      );
+      expect(render(), isNot(same(updated)));
+    });
+
+    test('resolves renewed episode artwork if title artwork is absent', () {
+      final merge = DetailsRouteItemMerge();
+      final sparse = title.copyWith(
+        posterUrl: 'none',
+        bannerUrl: 'https://images.example/banner.jpg',
+      );
+      final catalog = [
+        Episode(name: 'One', url: 'episode://1', episode: 1),
+        Episode(name: 'Two', url: 'episode://2', episode: 2),
+      ];
+      MultimediaItem render() =>
+          merge.resolve(fallback: sparse, incoming: sparse, episodes: catalog);
+      expect(render().posterUrl, sparse.bannerUrl);
+      catalog[0] = catalog[0].copyWith(posterUrl: title.posterUrl);
+      expect(render().posterUrl, title.posterUrl);
+    });
+  });
+
   group('mergeDetailsItem', () {
     test('keeps card artwork when a sparse details response has none', () {
       final card = MultimediaItem(

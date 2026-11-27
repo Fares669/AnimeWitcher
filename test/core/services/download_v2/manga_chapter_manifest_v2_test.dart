@@ -44,6 +44,12 @@ void main() {
     'non-WebP RIFF': ascii.encode('RIFFxxxxAVI '),
     'non-AVIF ftyp': <int>[0, 0, 0, 20, ...ascii.encode('ftypheic'), 0, 0, 0, 0, ...ascii.encode('mif1')],
     'AVIF brand outside ftyp box': <int>[0, 0, 0, 16, ...ascii.encode('ftypmif1'), 0, 0, 0, 0, ...ascii.encode('avif')],
+    'AVIF compatible brand beyond the 64-byte header cap': <int>[
+      0, 0, 0, 68,
+      ...ascii.encode('ftypmif1'),
+      ...List<int>.filled(52, 0),
+      ...ascii.encode('avif'),
+    ],
     'truncated PNG signature': tinyMangaPng.take(7).toList(),
     'empty': <int>[],
   }.entries) {
@@ -62,7 +68,7 @@ void main() {
     });
   }
 
-  test('digest-bearing validation reads at most 64 header bytes and hashes once', () async {
+  test('digest-bearing validation checks the header and hashes on one open', () async {
     final directory = await Directory.systemTemp.createTemp('aw-bounded-header-');
     addTearDown(() => directory.delete(recursive: true));
     final page = File(p.join(directory.path, 'page'));
@@ -72,23 +78,96 @@ void main() {
     );
     final counted = _CountedPageFile(page);
     expect(await manifest.isPageValid(0, counted), isTrue);
-    expect(counted.headerReads, <int>[64]);
-    expect(counted.digestReads, 1);
+    expect(counted.opens, 1);
+    expect(counted.closes, 1);
+    expect(counted.stats, 2);
+    expect(counted.reads.first, 64);
+    expect(
+      counted.readRequests.skip(1),
+      everyElement(lessThanOrEqualTo(64 * 1024)),
+    );
+    expect(counted.reads.reduce((a, b) => a + b), tinyMangaJpeg.length);
+    expect(counted.digestStreams, 0);
   });
 
-  test('unsupported image header is rejected before hashing the body', () async {
+  test('unsupported image header is rejected without reading the body', () async {
     final directory = await Directory.systemTemp.createTemp('aw-no-html-hash-');
     addTearDown(() => directory.delete(recursive: true));
     final page = File(p.join(directory.path, 'page'));
-    await page.writeAsString('<html>expired</html>', flush: true);
+    await page.writeAsString('<html>${'a' * 100000}</html>', flush: true);
     final manifest = _singlePageManifest(
       digest: await MangaChapterManifestV2.pageDigest(page),
     );
     final counted = _CountedPageFile(page);
     expect(await manifest.isPageValid(0, counted), isFalse);
-    expect(counted.headerReads, <int>[64]);
-    expect(counted.digestReads, 0);
+    expect(counted.opens, 1);
+    expect(counted.closes, 1);
+    expect(counted.stats, 1);
+    expect(counted.readRequests, <int>[64]);
+    expect(counted.reads, <int>[64]);
+    expect(counted.digestStreams, 0);
   });
+
+  test('verifies the whole page again after a same-length body edit', () async {
+    final directory = await Directory.systemTemp.createTemp('aw-page-hash-body-');
+    addTearDown(() => directory.delete(recursive: true));
+    final page = File(p.join(directory.path, 'page'));
+    final bytes = Uint8List(3 * 64 * 1024 + 17)
+      ..setRange(0, tinyMangaJpeg.length, tinyMangaJpeg);
+    await page.writeAsBytes(bytes, flush: true);
+    final manifest = _singlePageManifest(
+      digest: await MangaChapterManifestV2.pageDigest(page),
+    );
+    expect(await manifest.isPageValid(0, page), isTrue);
+    bytes[bytes.length - 1] = 1;
+    await page.writeAsBytes(bytes, flush: true);
+    expect(await manifest.isPageValid(0, page), isFalse);
+    await page.delete();
+    expect(await manifest.isPageValid(0, page), isFalse);
+  });
+
+  test('body read failure rejects the page and closes the handle', () async {
+    final directory = await Directory.systemTemp.createTemp('aw-page-read-fail-');
+    addTearDown(() => directory.delete(recursive: true));
+    final page = File(p.join(directory.path, 'page'));
+    await page.writeAsBytes(tinyMangaJpeg, flush: true);
+    final manifest = _singlePageManifest(
+      digest: await MangaChapterManifestV2.pageDigest(page),
+    );
+    final failing = _CountedPageFile(page, failBodyRead: true);
+    expect(await manifest.isPageValid(0, failing), isFalse);
+    expect(failing.opens, 1);
+    expect(failing.reads, <int>[64]);
+    expect(failing.closes, 1);
+  });
+
+  for (final delete in [false, true]) {
+    test('in-flight ${delete ? 'deletion' : 'replacement'} after reading the header is rejected', () async {
+      final directory = await Directory.systemTemp.createTemp('aw-page-race-');
+      addTearDown(() => directory.delete(recursive: true));
+      final page = File(p.join(directory.path, 'page'));
+      await page.writeAsBytes(tinyMangaJpeg, flush: true);
+      final manifest = _singlePageManifest(
+        digest: await MangaChapterManifestV2.pageDigest(page),
+      );
+      final counted = _CountedPageFile(page, afterHeaderRead: () async {
+        if (delete) {
+          await page.delete();
+        } else {
+          final replacement = File(p.join(directory.path, 'replacement'));
+          final edited = Uint8List.fromList(tinyMangaJpeg);
+          edited[edited.length - 1] ^= 1;
+          await replacement.writeAsBytes(edited, flush: true);
+          await replacement.setLastModified(DateTime.utc(2000));
+          await replacement.rename(page.path);
+        }
+      });
+      expect(await manifest.isPageValid(0, counted), isFalse);
+      expect(counted.opens, 1);
+      expect(counted.closes, 1);
+      expect(counted.stats, 2);
+    }, skip: Platform.isWindows);
+  }
 
   test('incomplete checkpoint retains expected digests for rejected pages', () async {
     final directory = await Directory.systemTemp.createTemp('aw-invalid-provenance-');
@@ -265,10 +344,20 @@ MangaChapterManifestV2 _singlePageManifest({String? digest}) => MangaChapterMani
 );
 
 final class _CountedPageFile implements File {
-  _CountedPageFile(this.file);
+  _CountedPageFile(
+    this.file, {
+    this.failBodyRead = false,
+    this.afterHeaderRead,
+  });
   final File file;
-  final List<int> headerReads = <int>[];
-  int digestReads = 0;
+  final bool failBodyRead;
+  final Future<void> Function()? afterHeaderRead;
+  final List<int> readRequests = <int>[];
+  final List<int> reads = <int>[];
+  int stats = 0;
+  int opens = 0;
+  int closes = 0;
+  int digestStreams = 0;
 
   @override
   Future<bool> exists() => file.exists();
@@ -277,12 +366,20 @@ final class _CountedPageFile implements File {
   Future<int> length() => file.length();
 
   @override
-  Future<RandomAccessFile> open({FileMode mode = FileMode.read}) async =>
-      _CountedHeaderFile(await file.open(mode: mode), headerReads);
+  Future<FileStat> stat() {
+    stats++;
+    return file.stat();
+  }
+
+  @override
+  Future<RandomAccessFile> open({FileMode mode = FileMode.read}) async {
+    opens++;
+    return _CountedOpenFile(await file.open(mode: mode), this);
+  }
 
   @override
   Stream<List<int>> openRead([int? start, int? end]) {
-    digestReads++;
+    digestStreams++;
     return file.openRead(start, end);
   }
 
@@ -290,19 +387,30 @@ final class _CountedPageFile implements File {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-final class _CountedHeaderFile implements RandomAccessFile {
-  _CountedHeaderFile(this.file, this.reads);
+final class _CountedOpenFile implements RandomAccessFile {
+  _CountedOpenFile(this.file, this.owner);
   final RandomAccessFile file;
-  final List<int> reads;
+  final _CountedPageFile owner;
 
   @override
-  Future<Uint8List> read(int count) {
-    reads.add(count);
-    return file.read(count);
+  Future<Uint8List> read(int count) async {
+    owner.readRequests.add(count);
+    if (owner.failBodyRead && owner.reads.isNotEmpty) {
+      throw FileSystemException('Simulated body read failure', owner.file.path);
+    }
+    final result = await file.read(count);
+    owner.reads.add(result.length);
+    if (owner.reads.length == 1) {
+      await owner.afterHeaderRead?.call();
+    }
+    return result;
   }
 
   @override
-  Future<void> close() => file.close();
+  Future<void> close() async {
+    owner.closes++;
+    await file.close();
+  }
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);

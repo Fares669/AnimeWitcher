@@ -144,6 +144,81 @@ void main() {
     await _waitForStatus(handle, DownloadTransportStatus.complete);
   });
 
+  test(
+    'steady manga page callbacks skip child scans but keep the latest progress',
+    () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'aw-manga-steady-progress-',
+      );
+      addTearDown(() => temp.delete(recursive: true));
+      final starter = _FakePageStarter();
+      const width = 16;
+      final handle = await MangaChapterTransportV2(startPage: starter.start).start(
+        MangaChapterTransportSpecV2(
+          taskId: 'steady-progress',
+          mangaId: 'm1',
+          chapterId: 'c1',
+          destinationDirectory: temp.path,
+          retries: 1,
+          maxConcurrentPages: width,
+          pages: List<MangaPage>.generate(
+            width,
+            (index) =>
+                MangaPage(index: index, imageUrl: 'https://cdn.test/$index.png'),
+          ),
+        ),
+      );
+      addTearDown(handle.dispose);
+      await starter.waitUntilStarted(width - 1);
+      await Future<void>.delayed(Duration.zero);
+      expect(handle.current.activeConnections, width);
+
+      int currentReads() => starter.handles.values.fold(
+        0,
+        (sum, page) => sum + page.currentReads,
+      );
+
+      final before = currentReads();
+      final trailing = handle.snapshots.firstWhere(
+        (snapshot) => snapshot.transferredBytes == width * 640,
+      );
+      for (var tick = 1; tick <= 64; tick++) {
+        for (var index = 0; index < width; index++) {
+          starter.handles[index]!.setProgress(
+            tick / 100,
+            timeRemaining: Duration(seconds: index + tick),
+          );
+        }
+      }
+      await Future<void>.delayed(Duration.zero);
+      expect(currentReads() - before, 0);
+      expect(handle.current.transferredBytes, 0);
+      final sample = await trailing.timeout(const Duration(seconds: 3));
+      expect(sample.activeConnections, width);
+      expect(sample.completedPages, 0);
+      expect(sample.timeRemaining, const Duration(seconds: 79));
+
+      // A real change of connection state is never delayed by the byte timer.
+      starter.handles[width - 1]!.setHeldSpeed(1);
+      await Future<void>.delayed(Duration.zero);
+      expect(handle.current.activeConnections, width - 1);
+      starter.handles[width - 1]!.setProgress(0.7);
+      await Future<void>.delayed(Duration.zero);
+      expect(handle.current.activeConnections, width);
+      expect(handle.current.transferredBytes, (width - 1) * 640 + 700);
+
+      expect(await handle.pause(), isTrue);
+      expect(handle.current.status, DownloadTransportStatus.paused);
+      expect(handle.current.activeConnections, 0);
+      expect(await handle.resume(), isTrue);
+      await _waitForStatus(handle, DownloadTransportStatus.running);
+      expect(handle.current.activeConnections, width);
+      expect(await handle.cancel(), isTrue);
+      await _waitForStatus(handle, DownloadTransportStatus.canceled);
+      expect(handle.current.activeConnections, 0);
+    },
+  );
+
   test('held manga pages show zero speed when every network connection has stopped', () async {
     final temp = await Directory.systemTemp.createTemp('aw-manga-no-stale-speed-');
     addTearDown(() => temp.delete(recursive: true));
@@ -345,6 +420,58 @@ void main() {
       expect(await File(p.join(temp.path, '0001.png')).readAsBytes(), tinyMangaPng);
     }, io);
   });
+
+  test(
+    'completion updates connection count before checkpoint publication',
+    () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'aw-manga-progress-slot-',
+      );
+      addTearDown(() => temp.delete(recursive: true));
+      final io = _DelayedManifestPublicationIO(
+        p.join(temp.path, '${MangaChapterManifestV2.fileName}.tmp'),
+      );
+      await IOOverrides.runWithIOOverrides(() async {
+        final starter = _FakePageStarter();
+        final handle = await MangaChapterTransportV2(
+          startPage: starter.start,
+        ).start(
+          MangaChapterTransportSpecV2(
+            taskId: 'progress-slot',
+            mangaId: 'm1',
+            chapterId: 'c1',
+            destinationDirectory: temp.path,
+            retries: 1,
+            maxConcurrentPages: 2,
+            pages: const [
+              MangaPage(index: 0, imageUrl: 'https://cdn.test/0.png'),
+              MangaPage(index: 1, imageUrl: 'https://cdn.test/1.png'),
+            ],
+          ),
+        );
+        try {
+          await starter.waitUntilStarted(1);
+          await Future<void>.delayed(Duration.zero);
+          expect(handle.current.activeConnections, 2);
+          io.delayNextPublication = true;
+          await starter.complete(0);
+          await io.entered.future.timeout(const Duration(seconds: 2));
+
+          starter.handles[1]!.setProgress(0.5);
+          await Future<void>.delayed(Duration.zero);
+          expect(handle.current.activeConnections, 1);
+          expect(handle.current.completedPages, 0);
+          io.release.complete();
+          await io.published.future;
+          await starter.complete(1);
+          await _waitForStatus(handle, DownloadTransportStatus.complete);
+        } finally {
+          if (!io.release.isCompleted) io.release.complete();
+          await handle.dispose();
+        }
+      }, io);
+    },
+  );
 
   test('fresh extensionless real image completes and records its digest', () async {
     final temp = await Directory.systemTemp.createTemp('aw-extensionless-page-');
@@ -1095,6 +1222,7 @@ final class _FakePageHandle implements DownloadTransportHandle {
   bool cancelAccepted = true;
   bool cancelAcknowledgesWithoutSettling = false;
   int resumeCalls = 0;
+  int currentReads = 0;
 
   DownloadTransportSnapshot _current = const DownloadTransportSnapshot(
     taskId: 'placeholder',
@@ -1105,23 +1233,26 @@ final class _FakePageHandle implements DownloadTransportHandle {
       StreamController<DownloadTransportSnapshot>.broadcast();
 
   @override
-  DownloadTransportSnapshot get current =>
-      _current.taskId == 'placeholder'
-          ? DownloadTransportSnapshot(
-              taskId: taskId,
-              status: DownloadTransportStatus.running,
-              progress: 0,
-            )
-          : _current;
+  DownloadTransportSnapshot get current {
+    currentReads++;
+    return _current.taskId == 'placeholder'
+        ? DownloadTransportSnapshot(
+            taskId: taskId,
+            status: DownloadTransportStatus.running,
+            progress: 0,
+          )
+        : _current;
+  }
 
   @override
   Stream<DownloadTransportSnapshot> get snapshots => _controller.stream;
 
 
-  void setProgress(double value) {
+  void setProgress(double value, {Duration timeRemaining = Duration.zero}) {
     _current = DownloadTransportSnapshot(
       taskId: taskId, status: DownloadTransportStatus.running, progress: value,
       transferredBytes: (value * 1000).round(), totalBytes: 1000,
+      timeRemaining: timeRemaining,
     );
     _controller.add(_current);
   }

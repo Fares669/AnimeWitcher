@@ -75,3 +75,102 @@ String? _distinctFullPoster(String? fullPoster, String? displayPoster) {
   if (displayPoster != null && fullPoster == displayPoster) return null;
   return fullPoster;
 }
+
+/// Reuses one rendered item across rebuilds of the same Details route.
+///
+/// Keep the controller's merge and the general model constructor unchanged:
+/// their callers can supply mutable or unsorted episode catalogs.
+final class DetailsRouteItemMerge {
+  static final _growableEpisodeListType = <Episode>[].runtimeType;
+  static final _fixedEpisodeListType = List<Episode>.empty().runtimeType;
+
+  ({
+    MultimediaItem fallback,
+    MultimediaItem incoming,
+    List<Episode> episodes,
+    MultimediaItem? rendered,
+  })?
+  _previous;
+
+  MultimediaItem resolve({
+    required MultimediaItem fallback,
+    required MultimediaItem incoming,
+    required List<Episode>? episodes,
+  }) {
+    // Subclasses can override the fields that the merge reads. Never memoize
+    // those; check only the plain model fields on the optimized path.
+    final catalog =
+        fallback.runtimeType == MultimediaItem &&
+            incoming.runtimeType == MultimediaItem
+        ? episodes ?? incoming.episodes ?? fallback.episodes
+        : null;
+    final previous = _previous;
+    final sameInput =
+        previous != null &&
+        identical(fallback, previous.fallback) &&
+        identical(incoming, previous.incoming) &&
+        identical(catalog, previous.episodes);
+    final cached = sameInput ? previous.rendered : null;
+    if (cached != null && _sameStrictEpisodeOrder(catalog!, cached.episodes!)) {
+      return cached;
+    }
+
+    final rendered = mergeDetailsItem(
+      fallback: fallback,
+      incoming: incoming,
+      episodes: episodes,
+    );
+    // Leave repeated noncanonical inputs on the existing merge path without
+    // rescanning them. A fresh input can still qualify.
+    if (sameInput && cached == null) return rendered;
+    // Never reuse an episode-artwork fallback. Matching a nonempty rendered
+    // URL to a raw title poster proves that poster already supplied artwork.
+    // Also leave custom List implementations alone.
+    _previous =
+        catalog != null &&
+            catalog.length > 1 &&
+            (catalog.runtimeType == _growableEpisodeListType ||
+                catalog.runtimeType == _fixedEpisodeListType) &&
+            rendered.posterUrl.isNotEmpty &&
+            (rendered.posterUrl == incoming.posterUrl ||
+                rendered.posterUrl == fallback.posterUrl)
+        ? (
+            fallback: fallback,
+            incoming: incoming,
+            episodes: catalog,
+            rendered: _sameStrictEpisodeOrder(catalog, rendered.episodes!)
+                ? rendered
+                : null,
+          )
+        : null;
+    return rendered;
+  }
+
+  static bool _sameStrictEpisodeOrder(
+    List<Episode> catalog,
+    List<Episode> rendered,
+  ) {
+    if (catalog.length != rendered.length) return false;
+    var previousSeason = 0;
+    var previousNumber = 0;
+    for (var i = 0, length = catalog.length; i < length; i++) {
+      final episode = catalog[i];
+      // Identity detects in-place list edits even when Episode.== would
+      // accept a replacement. Take the original sort path for ties, because
+      // List.sort does not guarantee a stable order for equal keys.
+      if (!identical(episode, rendered[i]) || episode.runtimeType != Episode) {
+        return false;
+      }
+      final season = episode.season;
+      final number = episode.episode;
+      if (i > 0 &&
+          (season < previousSeason ||
+              (season == previousSeason && number <= previousNumber))) {
+        return false;
+      }
+      previousSeason = season;
+      previousNumber = number;
+    }
+    return true;
+  }
+}

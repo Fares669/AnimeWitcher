@@ -104,7 +104,7 @@ class AnimeWitcherAccountService {
   AnimeWitcherProfile? _profile;
   DateTime? _lastSyncAt;
   int _sessionGeneration = 0;
-  Future<AnimeWitcherSession>? _refreshInFlight;
+  ({int generation, Future<AnimeWitcherSession> operation})? _refreshInFlight;
   Future<void>? _syncInFlight;
   final Map<String, Future<void>> _displayLibraryInFlight = {};
   DateTime? _lastVerificationEmailSentAt;
@@ -2681,55 +2681,65 @@ class AnimeWitcherAccountService {
     return _refreshSession(current, generation);
   }
 
+  AnimeWitcherSession _requireCurrentSession(
+    AnimeWitcherSession expected,
+    int generation,
+  ) {
+    if (!_isCurrentSession(expected, generation)) {
+      throw const AnimeWitcherAccountException(
+        'session-changed',
+        'The active account changed while synchronizing.',
+      );
+    }
+    return _session!;
+  }
+
   Future<AnimeWitcherSession> _refreshSession(
-    AnimeWitcherSession current,
+    AnimeWitcherSession expected,
     int generation, {
     bool force = false,
   }) async {
-    if (!force && !current.needsRefresh) return current;
+    final current = _requireCurrentSession(expected, generation);
     final active = _refreshInFlight;
-    if (active != null) return active;
+    if (active != null && active.generation == generation) {
+      final refreshed = await active.operation;
+      _requireCurrentSession(expected, generation);
+      return refreshed;
+    }
+    // Multi-stage sync can deliver several 401s for the same old ID token
+    // after an earlier stage has already rotated it. Retry with the active
+    // token instead of sending another request with the old refresh token.
+    if (!current.needsRefresh &&
+        (!force || current.idToken != expected.idToken)) {
+      return current;
+    }
     final operation = _auth.refresh(current);
-    _refreshInFlight = operation;
+    _refreshInFlight = (generation: generation, operation: operation);
     try {
       final refreshed = await operation;
-      if (!_isCurrentSession(current, generation)) {
-        throw const AnimeWitcherAccountException(
-          'session-changed',
-          'The active account changed while synchronizing.',
-        );
-      }
+      _requireCurrentSession(current, generation);
       _session = refreshed;
       await _persistSession();
       return refreshed;
     } finally {
-      if (identical(_refreshInFlight, operation)) _refreshInFlight = null;
+      if (identical(_refreshInFlight?.operation, operation)) {
+        _refreshInFlight = null;
+      }
     }
   }
 
   Future<T> _authenticated<T>(
     Future<T> Function(String idToken) operation,
   ) async {
-    var session = await _authorizedSession();
     final generation = _sessionGeneration;
-    if (!_isCurrentSession(session, generation)) {
-      throw const AnimeWitcherAccountException(
-        'session-changed',
-        'The active account changed while synchronizing.',
-      );
-    }
+    final session = await _authorizedSession();
+    _requireCurrentSession(session, generation);
     try {
       return await operation(session.idToken);
     } on AnimeWitcherAccountException catch (error) {
       if (error.code != 'invalid-session') rethrow;
       final refreshed = await _refreshSession(session, generation, force: true);
-      if (!_isCurrentSession(session, generation)) {
-        throw const AnimeWitcherAccountException(
-          'session-changed',
-          'The active account changed while synchronizing.',
-        );
-      }
-      session = refreshed;
+      _requireCurrentSession(session, generation);
       return operation(refreshed.idToken);
     }
   }

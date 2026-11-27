@@ -192,6 +192,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   late final AnimationController _episodesRevealController;
   late final Animation<double> _episodesReveal;
   final GlobalKey _extraTabsKey = GlobalKey();
+  final _routeItemMerge = DetailsRouteItemMerge();
   int? _userRating;
   bool _loadingUserRating = false;
   bool _loadedUserRatingSignedIn = false;
@@ -1012,7 +1013,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
                 .select((s) => s.isMovie),
           )
         : false;
-    final item = mergeDetailsItem(
+    final item = _routeItemMerge.resolve(
       fallback: widget.item,
       incoming: currentItem ?? details ?? widget.item,
       episodes: episodesAsync.asData?.value,
