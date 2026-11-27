@@ -909,6 +909,7 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
                 borderRadius: BorderRadius.circular(LayoutConstants.radiusMd),
                 child: ArtworkDecode(
                   paintedWidth: 80,
+                  sizeHighQualityToDisplay: true,
                   builder: (BuildContext context, int? decodeWidth) =>
                       FutureBuilder<File?>(
                         future: _poster,
@@ -1250,6 +1251,7 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
       borderRadius: BorderRadius.circular(LayoutConstants.radiusMd),
       child: ArtworkDecode(
         paintedWidth: 80,
+        sizeHighQualityToDisplay: true,
         builder: (BuildContext context, int? decodeWidth) => CachedNetworkImage(
           imageUrl: url,
           width: 80,

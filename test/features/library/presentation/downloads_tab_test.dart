@@ -7,6 +7,7 @@ import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 import 'package:animewitcher/core/services/download_concurrency.dart';
 import 'package:animewitcher/core/services/download_v2/download_continued_processing_v2.dart';
 import 'package:animewitcher/core/utils/download_progress_data.dart';
+import 'package:animewitcher/core/utils/artwork_quality.dart';
 import 'package:animewitcher/features/library/presentation/download_progress_v2_provider.dart';
 import 'package:animewitcher/core/services/notification_service.dart';
 import 'package:animewitcher/core/utils/download_cleanup.dart';
@@ -121,6 +122,7 @@ DownloadItem _item({
   TaskStatus status = TaskStatus.complete,
   String metaData = 'https://animewitcher.test/black-torch/9',
   Episode? episode,
+  MultimediaItem? media,
   String? logicalId,
   int activeConnections = 0,
   int parallelChunks = 16,
@@ -129,7 +131,7 @@ DownloadItem _item({
     task: _task(taskId: taskId, filename: filename, metaData: metaData),
     status: status,
     progress: status == TaskStatus.complete ? 1.0 : 0.4,
-    item: _blackTorch(),
+    item: media ?? _blackTorch(),
     episode: episode ?? _episode9(),
     timestamp: timestamp,
     logicalId: logicalId,
@@ -372,6 +374,96 @@ void main() {
       ]);
       expect(ranked.visible, orderedEquals([paused, legacy, running]));
       expect(ranked.extraCompleteRecords, orderedEquals([complete]));
+    },
+  );
+
+  testWidgets(
+    'high-quality active and grouped artwork share a display-sized poster',
+    (tester) async {
+      final previousQuality = highQualityArtwork.value;
+      highQualityArtwork.value = true;
+      tester.view.physicalSize = const Size(1600, 1800);
+      tester.view.devicePixelRatio = 2;
+      final cache = PaintingBinding.instance.imageCache;
+      addTearDown(() {
+        cache
+          ..clear()
+          ..clearLiveImages();
+        highQualityArtwork.value = previousQuality;
+        tester.view.reset();
+      });
+      await _prepareArtworkStorage(tester);
+      const url = 'https://animewitcher.test/large-cached-poster.png';
+      await tester.runAsync(() async {
+        final recorder = ui.PictureRecorder();
+        ui.Canvas(recorder)
+            .drawColor(const Color(0xff2468ac), ui.BlendMode.src);
+        final picture = recorder.endRecording();
+        final image = await picture.toImage(1920, 2880);
+        picture.dispose();
+        final png = (await image.toByteData(format: ui.ImageByteFormat.png))!;
+        image.dispose();
+        await DefaultCacheManager().putFile(
+          url,
+          png.buffer.asUint8List(png.offsetInBytes, png.lengthInBytes),
+          fileExtension: 'png',
+        );
+      });
+      cache.clear();
+      final media = _blackTorch().copyWith(posterUrl: url);
+      await tester.pumpWidget(
+        _downloadsApp([
+          _item(
+            taskId: 'active-poster',
+            timestamp: 3,
+            status: TaskStatus.running,
+            media: media,
+          ),
+          _item(taskId: 'done-poster-1', timestamp: 2, media: media),
+          _item(
+            taskId: 'done-poster-2',
+            timestamp: 1,
+            media: media,
+            metaData: 'https://animewitcher.test/black-torch/10',
+            episode: Episode(
+              name: 'الحلقة 10',
+              url: 'https://animewitcher.test/black-torch/10',
+              episode: 10,
+            ),
+          ),
+        ]),
+      );
+
+      Future<(int, int, int)> readPoster() async {
+        final raw = find.byWidgetPredicate(
+          (w) =>
+              w is RawImage &&
+              w.height == 120 &&
+              w.width == 80 &&
+              w.image != null,
+        );
+        for (var i = 0; i < 80 && raw.evaluate().isEmpty; i++) {
+          await tester.pump(const Duration(milliseconds: 16));
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 10)),
+          );
+        }
+        final picture = tester.widget<RawImage>(raw.first).image!;
+        expect(tester.getSize(raw.first), const Size(80, 120));
+        final pixels = (await tester.runAsync(picture.toByteData))!;
+        expect(pixels.getUint32(0), 0x2468acff);
+        return (picture.width, picture.height, cache.currentSizeBytes);
+      }
+
+      final active = await readPoster();
+      await tester.tap(find.text('المكتملة'));
+      await tester.pump(const Duration(milliseconds: 400));
+      await _awaitArtworkLookups(tester);
+      final grouped = await readPoster();
+      debugPrint('Downloads posters: active=$active grouped=$grouped');
+      await tester.pumpWidget(const SizedBox.shrink());
+      expect(active, (256, 384, 393216));
+      expect(grouped, active);
     },
   );
 
