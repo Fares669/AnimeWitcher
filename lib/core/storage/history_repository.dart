@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:flutter/foundation.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -125,6 +126,12 @@ HistoryRepository historyRepository(Ref ref) {
     ref.watch(storageServiceProvider),
     ref.watch(animeWitcherAccountServiceProvider),
   );
+}
+
+/// A published, detached watch-history list. Its contents cannot change while
+/// presentation code holds this snapshot.
+final class WatchHistorySnapshot extends UnmodifiableListView<HistoryItem> {
+  WatchHistorySnapshot._(List<HistoryItem> rows) : super(rows);
 }
 
 class HistoryRepository {
@@ -333,8 +340,8 @@ class HistoryRepository {
   List<HistoryItem> getWatchHistory() {
     final rows = _storageService.getWatchHistory();
     if (!identical(rows, _historySnapshot)) {
-      _projectedHistory = List<HistoryItem>.unmodifiable(
-        rows.map(HistoryItem.fromMap),
+      _projectedHistory = WatchHistorySnapshot._(
+        rows.map(HistoryItem.fromMap).toList(growable: false),
       );
       _historySnapshot = rows;
       _historyByItem = null;

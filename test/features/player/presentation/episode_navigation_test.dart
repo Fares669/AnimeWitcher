@@ -130,4 +130,107 @@ void main() {
       same(dubbedFirst),
     );
   });
+
+  test('chrome projection keeps duplicate URL and variant ordering', () {
+    Episode row(String url, DubStatus variant, {bool filler = false}) =>
+        Episode(name: url, url: url, dubStatus: variant, isFiller: filler);
+    final prior = row('previous', DubStatus.subbed);
+    final otherAnchor = row('anchor', DubStatus.dubbed);
+    final anchor = row('anchor', DubStatus.subbed);
+    final otherNext = row('wrong-next', DubStatus.dubbed);
+    final filler = row('filler', DubStatus.subbed, filler: true);
+    final sameAnchorAgain = row('anchor', DubStatus.subbed, filler: true);
+    final otherStory = row('wrong-story', DubStatus.dubbed);
+    final story = row('story', DubStatus.subbed);
+    final list = [
+      prior,
+      otherAnchor,
+      anchor,
+      otherNext,
+      filler,
+      sameAnchorAgain,
+      otherStory,
+      story,
+    ];
+
+    for (final current in [anchor, sameAnchorAgain, filler, story, null]) {
+      for (final includeStory in [false, true]) {
+        final result = episodeChromeNavigation(
+          episodes: list,
+          currentEpisode: current,
+          currentEpisodeUrl: 'anchor',
+          includeFillerStory: includeStory,
+        );
+        final next = adjacentEpisode(
+          episodes: list,
+          currentEpisode: current,
+          currentEpisodeUrl: 'anchor',
+          offset: 1,
+        );
+        expect(result.next, same(next));
+        expect(
+          result.previous,
+          same(
+            adjacentEpisode(
+              episodes: list,
+              currentEpisode: current,
+              currentEpisodeUrl: 'anchor',
+              offset: -1,
+            ),
+          ),
+        );
+        expect(
+          result.story,
+          includeStory && (next?.isFiller ?? false)
+              ? same(
+                  nextStoryEpisode(
+                    episodes: list,
+                    currentEpisode: current,
+                    currentEpisodeUrl: 'anchor',
+                  ),
+                )
+              : isNull,
+        );
+      }
+    }
+
+    expect(
+      episodeChromeNavigation(
+        episodes: list,
+        currentEpisode: anchor,
+        currentEpisodeUrl: '',
+        includeFillerStory: true,
+      ),
+      (previous: prior, next: filler, story: story),
+    );
+    expect(
+      episodeChromeNavigation(
+        episodes: list.take(6).toList(),
+        currentEpisode: anchor,
+        currentEpisodeUrl: '',
+        includeFillerStory: true,
+      ),
+      (previous: prior, next: filler, story: null),
+    );
+  });
+
+  test('chrome projection is empty without a valid anchor', () {
+    for (final episodes in [
+      null,
+      <Episode>[],
+      [_episode(1)],
+    ]) {
+      for (final url in ['', 'missing']) {
+        expect(
+          episodeChromeNavigation(
+            episodes: episodes,
+            currentEpisode: null,
+            currentEpisodeUrl: url,
+            includeFillerStory: true,
+          ),
+          (previous: null, next: null, story: null),
+        );
+      }
+    }
+  });
 }

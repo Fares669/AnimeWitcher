@@ -55,8 +55,10 @@ class _BroadcastScheduleScreenState
 
   late final TabController _tabController;
   late int _selectedDay;
-  final Map<String, _BroadcastScheduleDayState> _dayStates =
-      <String, _BroadcastScheduleDayState>{};
+  final _dayStates = {
+    for (final day in animeWitcherBroadcastDays)
+      day: ValueNotifier(const _BroadcastScheduleDayState()),
+  };
   final Map<String, CancelToken> _requestTokens = <String, CancelToken>{};
 
   @override
@@ -77,6 +79,9 @@ class _BroadcastScheduleScreenState
       token.cancel('Broadcast schedule screen disposed');
     }
     _requestTokens.clear();
+    for (final state in _dayStates.values) {
+      state.dispose();
+    }
     _tabController
       ..removeListener(_handleTabTick)
       ..dispose();
@@ -87,9 +92,9 @@ class _BroadcastScheduleScreenState
     if (_tabController.indexIsChanging) return;
     final value = _tabController.index;
     if (value == _selectedDay) return;
-    setState(() => _selectedDay = value);
+    _selectedDay = value;
     final day = animeWitcherBroadcastDays[value];
-    final state = _dayStates[day] ?? const _BroadcastScheduleDayState();
+    final state = _dayStates[day]!.value;
     if (!state.loaded && !state.loading && state.error == null) {
       unawaited(_loadDay(day, refresh: true));
     }
@@ -109,7 +114,8 @@ class _BroadcastScheduleScreenState
   }
 
   Future<void> _loadDay(String day, {required bool refresh}) async {
-    final previous = _dayStates[day] ?? const _BroadcastScheduleDayState();
+    final state = _dayStates[day]!;
+    final previous = state.value;
     if (!refresh && (previous.loading || !previous.hasMore)) return;
     final active = ref.read(activeProviderProvider);
     final provider = active?.supportsBroadcastSchedule == true
@@ -117,14 +123,12 @@ class _BroadcastScheduleScreenState
         : ref.nativeProvider;
     if (provider == null) {
       if (!mounted) return;
-      setState(() {
-        _dayStates[day] = _BroadcastScheduleDayState(
-          items: previous.items,
-          nextOffset: previous.nextOffset,
-          hasMore: previous.hasMore,
-          error: StateError('Broadcast schedule provider is unavailable'),
-        );
-      });
+      state.value = _BroadcastScheduleDayState(
+        items: previous.items,
+        nextOffset: previous.nextOffset,
+        hasMore: previous.hasMore,
+        error: StateError('Broadcast schedule provider is unavailable'),
+      );
       return;
     }
 
@@ -133,15 +137,13 @@ class _BroadcastScheduleScreenState
     _requestTokens[day] = token;
     final offset = refresh ? 0 : previous.nextOffset;
     if (mounted) {
-      setState(() {
-        _dayStates[day] = _BroadcastScheduleDayState(
-          items: previous.items,
-          nextOffset: offset,
-          hasMore: refresh ? true : previous.hasMore,
-          loading: true,
-          loaded: previous.loaded,
-        );
-      });
+      state.value = _BroadcastScheduleDayState(
+        items: previous.items,
+        nextOffset: offset,
+        hasMore: refresh ? true : previous.hasMore,
+        loading: true,
+        loaded: previous.loaded,
+      );
     }
 
     try {
@@ -159,40 +161,34 @@ class _BroadcastScheduleScreenState
       final deduped = <String, MultimediaItem>{
         for (final item in merged) item.url: item,
       }.values.toList(growable: false);
-      setState(() {
-        _dayStates[day] = _BroadcastScheduleDayState(
-          items: deduped,
-          nextOffset: page.nextOffset,
-          hasMore: page.hasMore,
-          loaded: true,
-        );
-      });
+      state.value = _BroadcastScheduleDayState(
+        items: deduped,
+        nextOffset: page.nextOffset,
+        hasMore: page.hasMore,
+        loaded: true,
+      );
     } on DioException catch (error) {
       if (CancelToken.isCancel(error) ||
           !mounted ||
           !identical(_requestTokens[day], token)) {
         return;
       }
-      setState(() {
-        _dayStates[day] = _BroadcastScheduleDayState(
-          items: previous.items,
-          nextOffset: previous.nextOffset,
-          hasMore: previous.hasMore,
-          loaded: previous.loaded,
-          error: error,
-        );
-      });
+      state.value = _BroadcastScheduleDayState(
+        items: previous.items,
+        nextOffset: previous.nextOffset,
+        hasMore: previous.hasMore,
+        loaded: previous.loaded,
+        error: error,
+      );
     } catch (error) {
       if (!mounted || !identical(_requestTokens[day], token)) return;
-      setState(() {
-        _dayStates[day] = _BroadcastScheduleDayState(
-          items: previous.items,
-          nextOffset: previous.nextOffset,
-          hasMore: previous.hasMore,
-          loaded: previous.loaded,
-          error: error,
-        );
-      });
+      state.value = _BroadcastScheduleDayState(
+        items: previous.items,
+        nextOffset: previous.nextOffset,
+        hasMore: previous.hasMore,
+        loaded: previous.loaded,
+        error: error,
+      );
     } finally {
       if (identical(_requestTokens[day], token)) {
         _requestTokens.remove(day);
@@ -205,7 +201,9 @@ class _BroadcastScheduleScreenState
       token.cancel('Broadcast schedule source or preferences changed');
     }
     _requestTokens.clear();
-    setState(() => _dayStates.clear());
+    for (final state in _dayStates.values) {
+      state.value = const _BroadcastScheduleDayState();
+    }
     unawaited(_loadDay(animeWitcherBroadcastDays[_selectedDay], refresh: true));
   }
 
@@ -241,12 +239,16 @@ class _BroadcastScheduleScreenState
                 controller: _tabController,
                 children: [
                   for (final day in animeWitcherBroadcastDays)
-                    _ScheduleDayBody(
-                      day: day,
-                      state:
-                          _dayStates[day] ?? const _BroadcastScheduleDayState(),
-                      onRefresh: () => _loadDay(day, refresh: true),
-                      onLoadMore: () => _loadDay(day, refresh: false),
+                    // A hidden request may finish while another day is in
+                    // view. Update only its pane, not the visible grid/cards.
+                    ValueListenableBuilder<_BroadcastScheduleDayState>(
+                      valueListenable: _dayStates[day]!,
+                      builder: (context, state, _) => _ScheduleDayBody(
+                        day: day,
+                        state: state,
+                        onRefresh: () => _loadDay(day, refresh: true),
+                        onLoadMore: () => _loadDay(day, refresh: false),
+                      ),
                     ),
                 ],
               ),

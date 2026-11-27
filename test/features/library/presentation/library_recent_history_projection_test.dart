@@ -16,6 +16,7 @@ import 'package:animewitcher/features/library/presentation/library_screen.dart';
 import 'package:animewitcher/features/more/presentation/recent_watched_screen.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/shared/widgets/catalog_page.dart';
+import 'package:animewitcher/shared/widgets/multimedia_card.dart';
 // Match the app's existing Material compatibility API.
 // ignore: deprecated_member_use
 import 'package:flutter/material.dart';
@@ -162,7 +163,8 @@ void main() {
               _url(i): <String, dynamic>{
                 'url': _url(i),
                 'title': 'Offline history ${i.toString().padLeft(4, '0')}',
-                'type': 'anime',
+                'type': i == _historySize - 2 ? 'manga' : 'anime',
+                'year': i % 3 == 0 ? null : 1998 + i % 30,
                 'provider': 'AnimeWitcher',
                 'position': i,
                 'duration': 10000,
@@ -281,7 +283,83 @@ void main() {
           of: find.byType(RecentWatchedBody),
           matching: find.byType(CatalogBody),
         );
-        final onRefresh = tester.widget<CatalogBody>(recentBody).onRefresh!;
+        CatalogBody grid() => tester.widget<CatalogBody>(recentBody);
+        List<Key?> displayedKeys(int count) {
+          final context = tester.element(recentBody);
+          final body = grid();
+          expect(body.itemCount, _historySize);
+          return [
+            for (var i = 0; i < count; i++)
+              (body.itemBuilder(context, i) as MultimediaCard).key,
+          ];
+        }
+
+        Future<void> save(int row, int timestamp) async {
+          await tester.runAsync(
+            () => storage.updateHistoryItemTimestampAndPosition(
+              _url(row),
+              null,
+              timestamp,
+              222,
+            ),
+          );
+          revision.bump();
+          await tester.pump();
+        }
+
+        expect(grid().itemCount, _historySize);
+        expect(displayedKeys(3), [
+          ValueKey<String>('recent-${_url(1)}'),
+          ValueKey<String>('recent-${_url(_historySize - 1)}'),
+          ValueKey<String>('recent-${_url(_historySize - 2)}'),
+        ]);
+        for (var i = 2; i <= 7; i++) {
+          await save(i, 2200 + i);
+          expect(displayedKeys(1), [ValueKey<String>('recent-${_url(i)}')]);
+        }
+        expect(account.recentRequests, beforeReturn + 1);
+
+        // Equal timestamps remain on the existing (not necessarily stable)
+        // Dart sort. The mixed media and both alternate filters stay intact.
+        await save(1, 2207);
+
+        void expectOrder(int Function(HistoryItem, HistoryItem) compare) {
+          final expected = [...container.read(watchHistoryProvider)]
+            ..sort(compare);
+          expect(displayedKeys(12), [
+            for (final entry in expected.take(12))
+              ValueKey<String>('recent-${entry.item.url}'),
+          ]);
+        }
+
+        expectOrder((a, b) => b.timestamp.compareTo(a.timestamp));
+        final filter = find.byKey(
+          ValueKey(phone ? 'library-filter' : 'library-side-filter'),
+        );
+        await tester.tap(filter);
+        await _paint(tester);
+        final sheet = find.byKey(const ValueKey('library-filter-sheet'));
+        Future<void> pickOrder(String value) async {
+          final option = find.descendant(of: sheet, matching: find.text(value));
+          await tester.ensureVisible(option);
+          await tester.tap(option);
+          await _paint(tester);
+        }
+
+        await pickOrder('الاسم');
+        expectOrder(
+          (a, b) =>
+              a.item.title.toLowerCase().compareTo(b.item.title.toLowerCase()),
+        );
+        await pickOrder('السنة');
+        expectOrder((a, b) => (b.item.year ?? 0).compareTo(a.item.year ?? 0));
+        await pickOrder('آخر إضافة');
+        expectOrder((a, b) => b.timestamp.compareTo(a.timestamp));
+        Navigator.of(tester.element(sheet)).pop();
+        await _paint(tester);
+        expectOrder((a, b) => b.timestamp.compareTo(a.timestamp));
+
+        final onRefresh = grid().onRefresh!;
         final beforeManual = account.recentRequests;
         account.rejectNext = true;
         await onRefresh();

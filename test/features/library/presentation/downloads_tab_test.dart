@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
@@ -13,11 +14,13 @@ import 'package:animewitcher/core/services/download_v2/download_v2_provider.dart
 import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
 import 'package:animewitcher/core/utils/download_progress_data.dart';
 import 'package:animewitcher/core/utils/artwork_quality.dart';
+import 'package:animewitcher/features/library/presentation/download_episode_artwork.dart';
 import 'package:animewitcher/features/library/presentation/download_progress_v2_provider.dart';
 import 'package:animewitcher/core/services/notification_service.dart';
 import 'package:animewitcher/core/utils/download_cleanup.dart';
 import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
 import 'package:animewitcher/features/library/presentation/downloads_screen.dart';
+import 'package:animewitcher/features/library/presentation/widgets/completed_download_episode_card.dart';
 import 'package:animewitcher/features/library/presentation/widgets/downloads_tab.dart';
 import 'package:animewitcher/shared/widgets/underline_segment_tabs.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
@@ -47,6 +50,43 @@ class _ArtworkPaths extends PathProviderPlatform {
   Future<String?> getTemporaryPath() async => root;
   @override
   Future<String?> getApplicationDocumentsPath() async => root;
+}
+
+class _GatedEpisodeArtworkPaths extends _ArtworkPaths {
+  _GatedEpisodeArtworkPaths(super.root);
+
+  Completer<void>? hold;
+
+  @override
+  Future<String?> getApplicationSupportPath() async {
+    await hold?.future;
+    return root;
+  }
+}
+
+Future<Uint8List> _episodeArtworkPng(Color color) async {
+  final recorder = ui.PictureRecorder();
+  ui.Canvas(recorder).drawColor(color, ui.BlendMode.src);
+  final picture = recorder.endRecording();
+  final image = await picture.toImage(320, 180);
+  picture.dispose();
+  final png = (await image.toByteData(format: ui.ImageByteFormat.png))!;
+  image.dispose();
+  return png.buffer.asUint8List(png.offsetInBytes, png.lengthInBytes);
+}
+
+Future<void> _pumpEpisodeArtRealTime(
+  WidgetTester tester,
+  bool Function() settled,
+) async {
+  for (var i = 0; i < 400; i++) {
+    await tester.pump();
+    if (settled()) return;
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 5)),
+    );
+  }
+  fail('completed episode artwork did not settle');
 }
 
 late Directory _artworkFixtureRoot;
@@ -515,6 +555,182 @@ void main() {
         (tester.widget<Image>(image).image as ResizeImage).imageProvider
             as FileImage;
     expect(file.file.path, poster.path);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('completed route gives retained episode art priority', (
+    tester,
+  ) async {
+    const retained = 6;
+    final paths = _GatedEpisodeArtworkPaths(_artworkFixtureRoot.path);
+    final original = PathProviderPlatform.instance;
+    PathProviderPlatform.instance = paths;
+    tester.view.physicalSize = const Size(430, 1000);
+    tester.view.devicePixelRatio = 1;
+    final previousQuality = highQualityArtwork.value;
+    highQualityArtwork.value = true;
+    final cache = PaintingBinding.instance.imageCache;
+    void clearCache() {
+      cache.clear();
+      cache.clearLiveImages();
+    }
+
+    clearCache();
+    addTearDown(() {
+      PathProviderPlatform.instance = original;
+      tester.view.reset();
+      highQualityArtwork.value = previousQuality;
+      clearCache();
+    });
+
+    String id(int index) => 'c11-artwork-$index';
+    String url(int index) => 'https://cached.invalid/c11-artwork/$index.png';
+    const localColor = Color(0xffae233d);
+    const fallbackColor = Color(0xff285ad5);
+    final rows = [
+      for (var i = 0; i < retained + 2; i++)
+        _item(
+          taskId: id(i),
+          timestamp: i,
+          filename: 'artwork-$i.mp4',
+          metaData: 'artwork-tracking-$i',
+          episode: Episode(
+            name: 'Artwork row $i',
+            url: 'artwork-episode-$i',
+            episode: i + 1,
+            posterUrl: url(i),
+          ),
+        ),
+    ];
+    await tester.runAsync(() async {
+      final local = await _episodeArtworkPng(localColor);
+      final fallback = await _episodeArtworkPng(fallbackColor);
+      for (var i = 0; i < rows.length; i++) {
+        await DefaultCacheManager().putFile(
+          url(i),
+          fallback,
+          fileExtension: 'png',
+        );
+        if (i == retained) continue; // Missing owned thumbnail.
+        final saved = (await downloadedEpisodeArtworkFile(id(i)))!;
+        await saved.parent.create(recursive: true);
+        // An accepted signature but invalid frame exercises the Image.file
+        // decode-error fallback, not the ownership check's miss branch.
+        await saved.writeAsBytes(i < retained ? local : local.take(8).toList());
+      }
+    });
+
+    await tester.pumpWidget(_downloadsApp(rows, openDownloadsScreen: true));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('المكتملة'));
+    await tester.pumpAndSettle();
+    await _awaitArtworkLookups(tester);
+
+    final hold = paths.hold = Completer<void>();
+    addTearDown(() {
+      if (!hold.isCompleted) hold.complete();
+    });
+    await tester.tap(find.text('Black Torch'));
+    await tester.pump();
+    await tester.pump();
+    final rowCards = find.byType(CompletedDownloadEpisodeCard);
+    expect(rowCards, findsNWidgets(rows.length));
+    final fallbacks = find.descendant(
+      of: rowCards,
+      matching: find.byType(CachedNetworkImage),
+    );
+    expect(fallbacks, findsNothing);
+    hold.complete();
+
+    Finder rendered(int index) => find.descendant(
+      of: find.byKey(ValueKey(id(index))),
+      matching: find.byType(RawImage),
+    );
+    ui.Image? decoded(int index) => rendered(index).evaluate().length == 1
+        ? tester.widget<RawImage>(rendered(index)).image
+        : null;
+    // Wait on real file-backed image decodes without advancing the fake
+    // grace deadline. The known miss and corrupt local file still fall back.
+    await _pumpEpisodeArtRealTime(
+      tester,
+      () =>
+          fallbacks.evaluate().length == 2 &&
+          List.generate(rows.length, decoded).every((image) => image != null),
+    );
+    final actualUrls = tester
+        .widgetList<CachedNetworkImage>(fallbacks)
+        .map((widget) => widget.imageUrl);
+    expect(actualUrls, unorderedEquals([url(retained), url(retained + 1)]));
+    for (var i = 0; i < rows.length; i++) {
+      final image = decoded(i)!;
+      expect((image.width, image.height), (192, 108));
+      final bytes = (await tester.runAsync(image.toByteData))!;
+      expect(bytes.getUint32(0), i < retained ? 0xae233dff : 0x285ad5ff);
+    }
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('slow retained art does not stall completed route fallback', (
+    tester,
+  ) async {
+    final paths = _GatedEpisodeArtworkPaths(_artworkFixtureRoot.path);
+    final original = PathProviderPlatform.instance;
+    PathProviderPlatform.instance = paths;
+    final hold = Completer<void>();
+    addTearDown(() {
+      if (!hold.isCompleted) hold.complete();
+      PathProviderPlatform.instance = original;
+    });
+    const url = 'https://cached.invalid/c11-artwork/slow.png';
+    await tester.runAsync(() async {
+      await DefaultCacheManager().putFile(
+        url,
+        await _episodeArtworkPng(const Color(0xff3567a8)),
+        fileExtension: 'png',
+      );
+    });
+    await tester.pumpWidget(
+      _downloadsApp([
+        _item(
+          taskId: 'c11-artwork-slow',
+          timestamp: 1,
+          episode: Episode(
+            name: 'Slow artwork',
+            url: 'artwork-episode-slow',
+            episode: 1,
+            posterUrl: url,
+          ),
+        ),
+      ], openDownloadsScreen: true),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('المكتملة'));
+    await tester.pumpAndSettle();
+    await _awaitArtworkLookups(tester);
+
+    paths.hold = hold;
+    await tester.tap(find.text('Black Torch'));
+    await tester.pump();
+    await tester.pump();
+    final fallback = find.byWidgetPredicate(
+      (widget) => widget is CachedNetworkImage && widget.imageUrl == url,
+    );
+    await tester.pump(const Duration(milliseconds: 59));
+    expect(fallback, findsNothing);
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(fallback, findsOneWidget);
+    expect(hold.isCompleted, isFalse);
+    await _pumpEpisodeArtRealTime(
+      tester,
+      () => tester
+          .widgetList<RawImage>(find.byType(RawImage))
+          .any((widget) => widget.image != null),
+    );
+    hold.complete();
+    await _awaitArtworkLookups(tester);
+    expect(fallback, findsOneWidget);
+    expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

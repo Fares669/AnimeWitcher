@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/services/notification_service.dart';
+import '../../../core/storage/history_repository.dart'
+    show WatchHistorySnapshot;
 import '../../../shared/widgets/catalog_page.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../../core/router/app_router.dart';
@@ -91,11 +93,26 @@ class _RecentWatchedBodyState extends ConsumerState<RecentWatchedBody> {
     }
   }
 
+  // Storage normally publishes newest first. Keep the normal sort for
+  // equal timestamps because List.sort does not promise stable tie order.
+  // Restrict reuse to owned immutable snapshots; providers can be overridden.
+  bool _canUsePublishedOrder(List<HistoryItem> source) {
+    if (widget.sort != LibrarySort.added || source is! WatchHistorySnapshot) {
+      return false;
+    }
+    for (var i = 1; i < source.length; i++) {
+      if (source[i - 1].timestamp <= source[i].timestamp) return false;
+    }
+    return true;
+  }
+
   @override
   Widget build(BuildContext context) {
     final source = ref.watch(watchHistoryProvider);
     if (!identical(_sortedSource, source) || _sortedOrder != widget.sort) {
-      _sortedHistory = sortLibraryHistory(source, widget.sort);
+      _sortedHistory = _canUsePublishedOrder(source)
+          ? source
+          : sortLibraryHistory(source, widget.sort);
       _sortedSource = source;
       _sortedOrder = widget.sort;
     }

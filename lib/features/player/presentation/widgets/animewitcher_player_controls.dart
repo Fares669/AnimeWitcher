@@ -13,6 +13,7 @@ import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 import 'package:video_view/video_view.dart' as vv;
 
 import '../../../../l10n/generated/app_localizations.dart';
+import '../episode_navigation.dart';
 import '../player_controller.dart';
 import '../player_shortcuts.dart';
 import '../../../details/presentation/playback_launcher.dart';
@@ -1431,27 +1432,34 @@ class AnimeWitcherPlayerControlsState
       playerControllerProvider.select((s) => s.maxPlaybackSpeed),
     );
     final isSeries = playerNotifier.isSeries;
-    final previousEpisode = playerNotifier.previousEpisode;
-    final nextEpisode = playerNotifier.nextEpisode;
+    final episode = playerNotifier.currentEpisode;
     // The note is the viewer's to act on; the setting decides whether they
     // are told at all, and "skip" has already stepped past it by the time
     // the card is built.
     final fillerBehaviour =
         ref.watch(playerSettingsProvider).asData?.value.fillerBehaviour ??
         FillerBehaviour.note;
+    final showFillerNote =
+        showNextEpOverlay &&
+        nextEpTitle != null &&
+        fillerBehaviour == FillerBehaviour.note;
+    final navigation = isSeries
+        ? episodeChromeNavigation(
+            episodes: playerNotifier.multimediaItem?.episodes,
+            currentEpisode: episode,
+            currentEpisodeUrl: playerNotifier.currentEpisodeUrl ?? '',
+            includeFillerStory: showFillerNote,
+          )
+        : (previous: null, next: null, story: null);
     final showsFillerNote =
-        fillerBehaviour == FillerBehaviour.note &&
-        (nextEpisode?.isFiller ?? false);
-    final storyEpisode = showsFillerNote
-        ? playerNotifier.nextStoryEpisodeOrNull
-        : null;
+        showFillerNote && (navigation.next?.isFiller ?? false);
+    final storyEpisode = navigation.story;
     final storyEpisodeLabel = storyEpisode == null
         ? null
         : storyEpisode.serverName.trim().isNotEmpty
         ? storyEpisode.serverName
         : 'الحلقة ${storyEpisode.episode}';
     final hasEpisodePicker = playerNotifier.hasEpisodePicker;
-    final episode = playerNotifier.currentEpisode;
     final episodeLabel = episode == null
         ? null
         : formatPlayerEpisodeLabel(
@@ -1574,8 +1582,8 @@ class AnimeWitcherPlayerControlsState
                     externalSubtitles: externalSubtitles,
                     showEpisodeList: showEpisodeList,
                     isSeries: isSeries,
-                    hasPreviousEpisode: previousEpisode != null,
-                    hasNextEpisode: nextEpisode != null,
+                    hasPreviousEpisode: navigation.previous != null,
+                    hasNextEpisode: navigation.next != null,
                     hasEpisodePicker: hasEpisodePicker,
                     supportsPlaybackSpeed: supportsPlaybackSpeed,
                     playbackSpeed: playbackSpeed,

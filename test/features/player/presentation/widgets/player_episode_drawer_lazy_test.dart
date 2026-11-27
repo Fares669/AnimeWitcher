@@ -6,9 +6,11 @@ import 'package:animewitcher/core/storage/history_repository.dart';
 import 'package:animewitcher/features/details/presentation/details_controller.dart';
 import 'package:animewitcher/features/details/presentation/downloaded_file_provider.dart';
 import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
+import 'package:animewitcher/features/player/presentation/episode_navigation.dart';
 import 'package:animewitcher/features/player/presentation/player_controller.dart';
 import 'package:animewitcher/features/player/presentation/player_platform_service.dart';
 import 'package:animewitcher/features/player/presentation/widgets/animewitcher_player_controls.dart';
+import 'package:animewitcher/features/player/presentation/widgets/next_episode_overlay.dart';
 import 'package:animewitcher/features/player/presentation/widgets/player_side_panel.dart';
 import 'package:animewitcher/features/settings/presentation/player_settings_provider.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
@@ -109,7 +111,170 @@ class _Watched extends Fake implements EpisodeWatchRepository {
   }
 }
 
+class _NavigationPlayer extends _Player {
+  _NavigationPlayer(super.item, super.activeEpisode);
+
+  Episode? _selected;
+  Episode get _anchor => _selected ?? activeEpisode;
+
+  @override
+  Episode get currentEpisode => _anchor;
+
+  @override
+  String get currentEpisodeUrl => _anchor.url;
+
+  @override
+  bool get isSeries => true;
+
+  // Preserve the normal controller contract while supplying a local route
+  // fixture instead of needing to load a provider or decoder.
+  @override
+  Episode? get previousEpisode => adjacentEpisode(
+    episodes: item.episodes,
+    currentEpisode: currentEpisode,
+    currentEpisodeUrl: currentEpisodeUrl,
+    offset: -1,
+  );
+
+  @override
+  Episode? get nextEpisode => adjacentEpisode(
+    episodes: item.episodes,
+    currentEpisode: currentEpisode,
+    currentEpisodeUrl: currentEpisodeUrl,
+    offset: 1,
+  );
+
+  @override
+  Episode? get nextStoryEpisodeOrNull => nextStoryEpisode(
+    episodes: item.episodes,
+    currentEpisode: currentEpisode,
+    currentEpisodeUrl: currentEpisodeUrl,
+  );
+
+  void showFillerPrompt() {
+    state = state.copyWith(
+      showNextEpisodeOverlay: true,
+      nextEpisodeTitle: 'Next filler',
+    );
+  }
+
+  void select(Episode episode) {
+    _selected = episode;
+    state = state.copyWith(activeEpisodeUrl: episode.url);
+  }
+}
+
 void main() {
+  testWidgets('player chrome refreshes neighbors and its filler prompt', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final messenger = tester.binding.defaultBinaryMessenger;
+    for (final channel in const [
+      MethodChannel('com.yosemiteyss.flutter_volume_controller/method'),
+      MethodChannel('com.yosemiteyss.flutter_volume_controller/event'),
+    ]) {
+      messenger.setMockMethodCallHandler(channel, (_) async => null);
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    }
+
+    final source = [
+      for (var i = 0; i < 1200; i++)
+        Episode(
+          name: 'Story $i',
+          url: 'local-nav:$i',
+          episode: i,
+          dubStatus: i.isEven ? DubStatus.subbed : DubStatus.dubbed,
+          isFiller: i > 1000 && i < 1120,
+        ),
+    ];
+    final show = MultimediaItem(
+      title: 'Navigation fixture',
+      url: 'local-navigation-fixture',
+      posterUrl: '',
+      contentType: MultimediaContentType.series,
+      episodes: source,
+    );
+    final controller = _NavigationPlayer(show, source[1000]);
+    final player = mk.Player(platformPlayer: _FixtureBackend());
+    final history = _History();
+    final watched = _Watched();
+    final chromeVisibility = <bool>[];
+    final controlsKey = GlobalKey<AnimeWitcherPlayerControlsState>();
+    try {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            deviceProfileProvider.overrideWithValue(
+              const AsyncData(DeviceProfile(isTv: true)),
+            ),
+            playerControllerProvider.overrideWith(() => controller),
+            playerSettingsProvider.overrideWith(_Settings.new),
+            detailsControllerProvider(show.url).overrideWith(_Details.new),
+            downloadsProvider.overrideWith(_Downloads.new),
+            downloadedFilesProvider.overrideWith(_Files.new),
+            historyRepositoryProvider.overrideWithValue(history),
+            episodeWatchRepositoryProvider.overrideWithValue(watched),
+          ],
+          child: MaterialApp(
+            locale: const Locale('ar'),
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: Scaffold(
+              body: AnimeWitcherPlayerControls(
+                key: controlsKey,
+                player: player,
+                platformService: PlayerPlatformService(nativePip: false),
+                onVisibilityChanged: chromeVisibility.add,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final l10n = AppLocalizations.of(controlsKey.currentContext!)!;
+      expect(find.byTooltip('السابق'), findsOneWidget);
+      expect(find.byTooltip(l10n.next), findsOneWidget);
+      final initialDuration = player.state.duration;
+
+      final priorChromeChanges = chromeVisibility.length;
+      for (var i = 0; i < 12; i++) {
+        await tester.tapAt(Offset(i.isEven ? 390 : 850, 330));
+        await tester.pumpAndSettle();
+      }
+      expect(chromeVisibility.length - priorChromeChanges, 12);
+      expect(chromeVisibility.last, isTrue);
+      expect(player.state.duration, initialDuration);
+
+      final prompt = find.byType(NextEpisodeOverlay);
+      expect(prompt, findsNothing);
+      controller.showFillerPrompt();
+      await tester.pumpAndSettle();
+      expect(prompt, findsOneWidget);
+      final overlay = tester.widget<NextEpisodeOverlay>(prompt);
+      expect(overlay.nextEpisodeIsFiller, isTrue);
+      expect(overlay.skipFillerLabel, 'الحلقة 1120');
+      controller.dismissNextEpisodeOverlay();
+      await tester.pumpAndSettle();
+      expect(prompt, findsNothing);
+      controller.select(source[1198]);
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('السابق'), findsOneWidget);
+      expect(find.byTooltip(l10n.next), findsNothing);
+      controller.select(source.first);
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('السابق'), findsNothing);
+      expect(find.byTooltip(l10n.next), findsOneWidget);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await player.dispose();
+    }
+    expect(tester.takeException(), isNull);
+  });
+
   for (final anchorInViewport in [true, false]) {
     testWidgets(
       'player projects only laid-out drawer rows, anchor visible: $anchorInViewport',

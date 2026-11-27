@@ -204,7 +204,7 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
           emptyLabel: 'لا توجد أعمال في الموسم القادم',
         );
       default:
-        return FutureBuilder<List<String>>(
+        return FutureBuilder<List<_SeasonArchiveYear>>(
           key: ValueKey('other-seasons-$_reloadGeneration'),
           future: data.allSeasons,
           builder: (context, snapshot) {
@@ -219,7 +219,7 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
             }
             return _OtherSeasonsList(
               provider: data.provider,
-              allSeasons: snapshot.requireData,
+              years: snapshot.requireData,
             );
           },
         );
@@ -294,10 +294,12 @@ class _SeasonsLoadingBody extends StatelessWidget {
 class _SeasonsBootstrap {
   final AnimeWitcherProvider provider;
   final ProviderSeasonConfig config;
-  // One archive request per exact config/provider generation, on demand.
-  late final Future<List<String>> allSeasons = Future<List<String>>.sync(
-    () => provider.getAllSeasons(),
-  );
+  // Parse and sort the archive once per config/provider generation, only
+  // when Archive is opened. Tab visits can rebuild without scanning it again.
+  late final Future<List<_SeasonArchiveYear>> allSeasons = _loadArchive();
+
+  Future<List<_SeasonArchiveYear>> _loadArchive() async =>
+      _groupArchiveYears(await provider.getAllSeasons());
 
   // Retain cheap paging/scroll data, not entire trees of offscreen cards.
   final _catalogs = <int, _SeasonCatalog>{};
@@ -337,36 +339,59 @@ class _SeasonTabs extends StatelessWidget {
   }
 }
 
+const _archiveSeasonNames = <String>['شتاء', 'ربيع', 'صيف', 'خريف'];
+
+final _archiveSeasonPattern = RegExp(r'^(شتاء|ربيع|صيف|خريف)\s+عام\s+(\d{4})$');
+
+class _SeasonArchiveYear {
+  _SeasonArchiveYear(this.year, List<String?> seasons)
+    : _winter = seasons[0],
+      _spring = seasons[1],
+      _summer = seasons[2],
+      _autumn = seasons[3];
+
+  final int year;
+  final String? _winter, _spring, _summer, _autumn;
+
+  String? seasonAt(int index) => switch (index) {
+    0 => _winter,
+    1 => _spring,
+    2 => _summer,
+    _ => _autumn,
+  };
+}
+
+List<_SeasonArchiveYear> _groupArchiveYears(List<String> allSeasons) {
+  final grouped = <int, List<String?>>{};
+  for (final raw in allSeasons) {
+    final value = raw.trim();
+    final match = _archiveSeasonPattern.firstMatch(value);
+    if (match == null) continue;
+    final year = int.tryParse(match.group(2)!);
+    if (year == null) continue;
+    final season = _archiveSeasonNames.indexOf(match.group(1)!);
+    // Preserve the exact supplied label and last occurrence for this slot.
+    grouped.putIfAbsent(year, () => List<String?>.filled(4, null))[season] =
+        value;
+  }
+  final years = [
+    for (final entry in grouped.entries)
+      _SeasonArchiveYear(entry.key, entry.value),
+  ]..sort((a, b) => b.year.compareTo(a.year));
+  return List<_SeasonArchiveYear>.unmodifiable(years);
+}
+
 class _OtherSeasonsList extends StatelessWidget {
   final AnimeWitcherProvider provider;
-  final List<String> allSeasons;
+  final List<_SeasonArchiveYear> years;
 
-  const _OtherSeasonsList({required this.provider, required this.allSeasons});
-
-  Map<int, Map<String, String>> _grouped() {
-    final grouped = <int, Map<String, String>>{};
-    final pattern = RegExp(r'^(شتاء|ربيع|صيف|خريف)\s+عام\s+(\d{4})$');
-    for (final raw in allSeasons) {
-      final value = raw.trim();
-      final match = pattern.firstMatch(value);
-      if (match == null) continue;
-      final year = int.tryParse(match.group(2)!);
-      final season = match.group(1)!;
-      if (year == null) continue;
-      grouped.putIfAbsent(year, () => <String, String>{})[season] = value;
-    }
-    return grouped;
-  }
+  const _OtherSeasonsList({required this.provider, required this.years});
 
   @override
   Widget build(BuildContext context) {
-    final grouped = _grouped();
-    final years = grouped.keys.toList()..sort((a, b) => b.compareTo(a));
     if (years.isEmpty) {
       return Center(child: Text('لا توجد مواسم أخرى'));
     }
-
-    const seasons = <String>['شتاء', 'ربيع', 'صيف', 'خريف'];
 
     return ListView.separated(
       key: const PageStorageKey<String>('other-seasons'),
@@ -378,8 +403,8 @@ class _OtherSeasonsList extends StatelessWidget {
         color: Theme.of(context).dividerColor.withValues(alpha: 0.55),
       ),
       itemBuilder: (context, index) {
-        final year = years[index];
-        final values = grouped[year]!;
+        final group = years[index];
+        final year = group.year;
         return Padding(
           padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
           child: Column(
@@ -398,13 +423,13 @@ class _OtherSeasonsList extends StatelessWidget {
               const SizedBox(height: 14),
               Row(
                 children: [
-                  for (var i = 0; i < seasons.length; i++) ...[
+                  for (var i = 0; i < _archiveSeasonNames.length; i++) ...[
                     Expanded(
                       child: _SeasonYearButton(
-                        label: seasons[i],
-                        enabled: values.containsKey(seasons[i]),
+                        label: _archiveSeasonNames[i],
+                        enabled: group.seasonAt(i) != null,
                         onTap: () {
-                          final fullSeason = values[seasons[i]];
+                          final fullSeason = group.seasonAt(i);
                           if (fullSeason == null) return;
                           Navigator.of(context).push(
                             MaterialPageRoute<void>(
@@ -417,7 +442,8 @@ class _OtherSeasonsList extends StatelessWidget {
                         },
                       ),
                     ),
-                    if (i != seasons.length - 1) const SizedBox(width: 8),
+                    if (i != _archiveSeasonNames.length - 1)
+                      const SizedBox(width: 8),
                   ],
                 ],
               ),

@@ -68,3 +68,49 @@ Episode? episodeAtOffsetInVariant(
   }
   return null;
 }
+
+/// Projects the player chrome's neighbors from one fresh catalogue scan.
+///
+/// Playback actions still resolve their target when invoked. Here the previous
+/// row can be tracked while finding the first matching anchor, and the next
+/// story row is only needed when the visible prompt has a filler to skip.
+({Episode? previous, Episode? next, Episode? story}) episodeChromeNavigation({
+  required List<Episode>? episodes,
+  required Episode? currentEpisode,
+  required String currentEpisodeUrl,
+  required bool includeFillerStory,
+}) {
+  const empty = (previous: null, next: null, story: null);
+  final url = currentEpisode?.url ?? currentEpisodeUrl;
+  if (episodes == null || url.isEmpty) return empty;
+
+  final variant = currentEpisode?.dubStatus ?? DubStatus.none;
+  bool inVariant(Episode episode) =>
+      variant == DubStatus.none || episode.dubStatus == variant;
+
+  Episode? previous;
+  var index = 0;
+  for (; index < episodes.length; index++) {
+    final row = episodes[index];
+    final isAnchor = row.url == url;
+    if (!inVariant(row)) continue;
+    if (isAnchor) break;
+    previous = row;
+  }
+  if (index == episodes.length) return empty;
+
+  Episode? next;
+  Episode? story;
+  for (index++; index < episodes.length; index++) {
+    final row = episodes[index];
+    if (!inVariant(row)) continue;
+    if (next == null) {
+      next = row;
+      if (!includeFillerStory || !row.isFiller) break;
+    } else if (!row.isFiller) {
+      story = row;
+      break;
+    }
+  }
+  return (previous: previous, next: next, story: story);
+}

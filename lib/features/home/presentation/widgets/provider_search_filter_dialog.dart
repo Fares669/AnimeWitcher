@@ -882,57 +882,65 @@ class _ChipWrap extends StatelessWidget {
 
   static const double _gap = 6;
 
-  Widget _chip(BuildContext context, String value) {
-    final colors = Theme.of(context).colorScheme;
-    final on = selected.contains(value);
-    final label = Text(
-      value,
-      maxLines: 1,
-      textAlign: TextAlign.center,
-      overflow: TextOverflow.ellipsis,
-      style: TextStyle(
-        fontSize: 12.5,
-        color: on ? colors.primary : colors.onSurface,
-        fontWeight: on ? FontWeight.w700 : FontWeight.w500,
-      ),
-    );
-    final compact = columns != null && columns! >= 10;
-    return Material(
-      key: ValueKey<String>('filterChip-$value'),
-      color: on
-          ? colors.primary.withValues(alpha: 0.18)
-          : colors.surfaceContainerHighest,
-      shape: StadiumBorder(
-        side: BorderSide(
-          color: on
-              ? colors.primary.withValues(alpha: 0.6)
-              : Colors.transparent,
-        ),
-      ),
-      child: InkWell(
-        customBorder: const StadiumBorder(),
-        onTap: () => onToggle(value),
-        child: Padding(
-          padding: EdgeInsets.symmetric(
-            horizontal: compact ? 4 : 11,
-            vertical: 6,
-          ),
-          child: compact
-              ? FittedBox(fit: BoxFit.scaleDown, child: label)
-              : label,
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final perRow = columns;
+    final compact = (perRow ?? 0) >= 10;
+    final insets = compact
+        ? const EdgeInsets.symmetric(horizontal: 4, vertical: 6)
+        : const EdgeInsets.symmetric(horizontal: 11, vertical: 6);
+    final colors = Theme.of(context).colorScheme;
+    // The expanded studio list can contain hundreds of pills with an
+    // identical appearance. Allocate styles and outlines once per state.
+    late final inactiveLabel = TextStyle(
+      fontSize: 12.5,
+      color: colors.onSurface,
+      fontWeight: FontWeight.w500,
+    );
+    late final activeLabel = TextStyle(
+      fontSize: 12.5,
+      color: colors.primary,
+      fontWeight: FontWeight.w700,
+    );
+    late final activeFill = colors.primary.withValues(alpha: 0.18);
+    late final activeShape = StadiumBorder(
+      side: BorderSide(color: colors.primary.withValues(alpha: 0.6)),
+    );
+
+    Widget chip(String value) {
+      final on = selected.contains(value);
+      final label = Text(
+        value,
+        maxLines: 1,
+        textAlign: TextAlign.center,
+        overflow: TextOverflow.ellipsis,
+        style: on ? activeLabel : inactiveLabel,
+      );
+
+      return Material(
+        key: ValueKey<String>('filterChip-$value'),
+        color: on ? activeFill : colors.surfaceContainerHighest,
+        shape: on
+            ? activeShape
+            : const StadiumBorder(side: BorderSide(color: Colors.transparent)),
+        child: InkWell(
+          customBorder: const StadiumBorder(),
+          onTap: () => onToggle(value),
+          child: Padding(
+            padding: insets,
+            child: compact
+                ? FittedBox(fit: BoxFit.scaleDown, child: label)
+                : label,
+          ),
+        ),
+      );
+    }
+
     if (perRow == null) {
       return Wrap(
         spacing: _gap,
         runSpacing: _gap,
-        children: [for (final value in values) _chip(context, value)],
+        children: [for (final value in values) chip(value)],
       );
     }
     return Column(
@@ -946,7 +954,7 @@ class _ChipWrap extends StatelessWidget {
                   if (j > i) const SizedBox(width: _gap),
                   Expanded(
                     child: j < values.length
-                        ? _chip(context, values[j])
+                        ? chip(values[j])
                         : const SizedBox.shrink(),
                   ),
                 ],

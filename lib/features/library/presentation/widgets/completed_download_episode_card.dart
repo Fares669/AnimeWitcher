@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -50,13 +51,18 @@ class CompletedDownloadEpisodeCard extends ConsumerStatefulWidget {
 class _CompletedDownloadEpisodeCardState
     extends ConsumerState<CompletedDownloadEpisodeCard> {
   static const _thumbnailWidth = 140.0;
+  static const _localArtworkGrace = Duration(milliseconds: 60);
 
   late Future<File?> _artwork;
+  Timer? _artworkGraceTimer;
+  String? _episodePosterUrl;
+  String? _thumbnailFallbackUrl;
+  bool _mayShowPendingFallback = false;
 
   @override
   void initState() {
     super.initState();
-    _artwork = _loadArtwork();
+    _loadArtwork();
   }
 
   @override
@@ -69,17 +75,61 @@ class _CompletedDownloadEpisodeCardState
         oldWidget.item.episode?.posterUrl != widget.item.episode?.posterUrl ||
         oldWidget.item.item.bannerUrl != widget.item.item.bannerUrl ||
         oldWidget.item.item.posterUrl != widget.item.item.posterUrl) {
-      _artwork = _loadArtwork();
+      _loadArtwork();
     }
   }
 
-  Future<File?> _loadArtwork() => ensureDownloadedEpisodeArtwork(
-    taskId: widget.item.id,
-    logicalId: widget.item.logicalId,
-    episode: widget.item.episode,
-    item: widget.item.item,
-    allowMetadataBackfill: widget.item.artworkMetadataVerified,
-  );
+  @override
+  void dispose() {
+    _artworkGraceTimer?.cancel();
+    super.dispose();
+  }
+
+  void _loadArtwork() {
+    _artworkGraceTimer?.cancel();
+    _artworkGraceTimer = null;
+    _mayShowPendingFallback = false;
+    final item = widget.item;
+    final episodePosterUrl = _episodePosterUrl = AppImageFallbacks.optional(
+      item.episode?.posterUrl,
+    );
+    _thumbnailFallbackUrl =
+        episodePosterUrl ??
+        AppImageFallbacks.episode(
+          bannerUrl: item.item.bannerUrl,
+          posterUrl: item.item.posterUrl,
+        );
+    final artwork = _artwork = ensureDownloadedEpisodeArtwork(
+      taskId: item.id,
+      logicalId: item.logicalId,
+      episode: item.episode,
+      item: item.item,
+      allowMetadataBackfill: item.artworkMetadataVerified,
+    );
+
+    if (_thumbnailFallbackUrl == null) return;
+    // Prefer the owned offline thumbnail without opening another image
+    // stream. A miss releases the fallback immediately; slow storage only
+    // holds it for the same grace period as the completed-group poster.
+    _artworkGraceTimer = Timer(_localArtworkGrace, () {
+      _artworkGraceTimer = null;
+      if (mounted) setState(() => _mayShowPendingFallback = true);
+    });
+    void cancelGrace() {
+      if (!identical(_artwork, artwork)) return;
+      _artworkGraceTimer?.cancel();
+      _artworkGraceTimer = null;
+    }
+
+    unawaited(
+      artwork.then<void>(
+        (_) => cancelGrace(),
+        onError: (Object _, StackTrace _) {
+          cancelGrace();
+        },
+      ),
+    );
+  }
 
   _EpisodeWatchPresentation _watchPresentation(
     BuildContext context,
@@ -352,14 +402,8 @@ class _CompletedDownloadEpisodeCardState
     String? statusBadge, {
     required bool isWatched,
   }) {
-    final episode = widget.item.episode;
-    final episodePosterUrl = AppImageFallbacks.optional(episode?.posterUrl);
-    final fallbackUrl =
-        episodePosterUrl ??
-        AppImageFallbacks.episode(
-          bannerUrl: widget.item.item.bannerUrl,
-          posterUrl: widget.item.item.posterUrl,
-        );
+    final episodePosterUrl = _episodePosterUrl;
+    final fallbackUrl = _thumbnailFallbackUrl;
     final placeholderColor = Theme.of(context)
         .colorScheme
         .surfaceContainerHighest;
@@ -396,6 +440,11 @@ class _CompletedDownloadEpisodeCardState
                         ),
                       ),
                     );
+                  }
+                  if (fallbackUrl != null &&
+                      !_mayShowPendingFallback &&
+                      snapshot.connectionState != ConnectionState.done) {
+                    return ColoredBox(color: placeholderColor);
                   }
                   return _networkThumbnail(
                     fallbackUrl,
