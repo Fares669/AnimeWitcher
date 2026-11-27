@@ -166,15 +166,24 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
         ));
       }
     }
-    for (final category in LibraryCategory.valuesForCatalog(
+    final categories = LibraryCategory.valuesForCatalog(
       witanimeAnime: witanimeAnime,
-    )) {
-      if (!_prefs.shows(category)) continue;
+    ).where(_prefs.shows);
+    final missing = categories.where(
+      (category) => !_tabCounts.containsKey((kind, category)),
+    );
+    if (missing.isNotEmpty) {
+      final counts = ref
+          .read(libraryProvider.notifier)
+          .categoryCountsFor(kind, missing);
+      for (final entry in counts.entries) {
+        _tabCounts[(kind, entry.key)] = entry.value;
+      }
+    }
+
+    for (final category in categories) {
       // The server total can exceed the number of loaded poster cards.
-      final count = _tabCounts.putIfAbsent(
-        (kind, category),
-        () => ref.read(libraryProvider.notifier).categoryCount(kind, category),
-      );
+      final count = _tabCounts[(kind, category)];
       if (_prefs.hideEmpty && count == 0) continue;
       tabs.add((
         key: category.storageKey,

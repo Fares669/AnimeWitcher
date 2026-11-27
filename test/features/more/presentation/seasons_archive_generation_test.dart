@@ -55,8 +55,12 @@ final class _SignedOut extends AnimeWitcherAccountController {
 }
 
 final class _Catalogue extends AnimeWitcherNativeProvider {
-  _Catalogue(Dio dio, SettingsRepository settings, this._identity)
-    : super(dio, settings);
+  _Catalogue(
+    Dio dio,
+    SettingsRepository settings,
+    this._identity, {
+    bool Function()? isEcchiHidden,
+  }) : super(dio, settings, isEcchiHidden: isEcchiHidden);
 
   final String _identity;
 
@@ -218,7 +222,13 @@ void main() {
     final dio = Dio()..httpClientAdapter = _NoSockets();
     addTearDown(() => dio.close(force: true));
     final old = _Catalogue(dio, SettingsRepository(storage), 'fixture-archive-old');
-    final current = _Catalogue(dio, SettingsRepository(storage), 'fixture-archive-current');
+    var hidesEcchi = false;
+    final current = _Catalogue(
+      dio,
+      SettingsRepository(storage),
+      'fixture-archive-current',
+      isEcchiHidden: () => hidesEcchi,
+    );
     final selection = _Selection(old);
     await tester.pumpWidget(
       ProviderScope(
@@ -341,11 +351,12 @@ void main() {
     await _frames(tester);
     expect(_year2025.hitTestable(), findsOneWidget);
 
-    // A genuine account revision supersedes the held old refresh config:
+    // A changed account discovery filter supersedes the held refresh config:
     // settling it may not start a new Archive stage in the wrong generation.
     await _pullRefresh(tester);
     expect(current.configs, hasLength(5));
     final scope = ProviderScope.containerOf(tester.element(_screen), listen: false);
+    hidesEcchi = true;
     scope.read(accountDataRevisionProvider.notifier).bump();
     await _frames(tester);
     expect(current.configs, hasLength(6));

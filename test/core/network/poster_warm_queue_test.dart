@@ -75,6 +75,42 @@ void main() {
       _url(4),
     ]);
   });
+
+  test(
+    'a long session keeps recent history but never evicts active work',
+    () async {
+      final held = Completer<void>();
+      final started = <int, int>{};
+      final queue = PosterWarmQueue(
+        fetch: (url) async {
+          final id = int.parse(Uri.parse(url).path.substring(1));
+          started.update(id, (count) => count + 1, ifAbsent: () => 1);
+          if (id == 0) await held.future;
+        },
+        isBlocked: (_) => false,
+      );
+      for (var start = 0; start < 2048; start += 16) {
+        queue.enqueue([
+          _url(0),
+          for (var i = start; i < start + 16; i++) _url(i),
+        ]);
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(started, hasLength(2048));
+      expect(started[0], 1, reason: 'a held request cannot expire from dedup');
+
+      queue.enqueue([_url(1), _url(2047)]);
+      await Future<void>.delayed(Duration.zero);
+      expect(started[1], 2, reason: 'the oldest completed URL was released');
+      expect(started[2047], 1, reason: 'recent rows stay deduplicated');
+
+      held.complete();
+      await Future<void>.delayed(Duration.zero);
+      queue.enqueue([_url(0)]);
+      await Future<void>.delayed(Duration.zero);
+      expect(started[0], 1, reason: 'finishing a held request makes it recent');
+    },
+  );
 }
 
 final class _Fetches {

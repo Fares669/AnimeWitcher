@@ -10,6 +10,7 @@ import 'package:animewitcher/core/providers/anime_data_source_settings_provider.
 import 'package:animewitcher/core/storage/history_repository.dart';
 import 'package:animewitcher/core/storage/settings_repository.dart';
 import 'package:animewitcher/features/details/presentation/downloaded_file_provider.dart';
+import 'package:animewitcher/features/details/presentation/stream_source_prefetch.dart';
 import 'package:animewitcher/features/library/presentation/history_provider.dart';
 import 'package:animewitcher/features/player/presentation/player_controller_base.dart';
 import 'package:animewitcher/features/settings/presentation/player_settings_provider.dart';
@@ -187,6 +188,7 @@ class _Catalog extends AnimeWitcherProvider {
   int detailCalls = 0;
   int scheduleCalls = 0;
   int streamCalls = 0;
+  final streamUrls = <String>[];
   Completer<List<StreamResult>>? pendingStreams;
   @override
   String get packageName => 'test.catalog';
@@ -222,6 +224,7 @@ class _Catalog extends AnimeWitcherProvider {
   @override
   Future<List<StreamResult>> loadStreams(String url) {
     streamCalls++;
+    streamUrls.add(url);
     return pendingStreams?.future ??
         Future.error(StateError('Local playback must not resolve sources'));
   }
@@ -241,6 +244,20 @@ class _Catalog extends AnimeWitcherProvider {
   }
 }
 
+// Count actual probes of the first row in the shared playback lookup.
+class _CountedEpisode extends Episode {
+  _CountedEpisode()
+    : super(name: 'Episode 1', url: 'episode-1', season: 1, episode: 1);
+
+  int urlReads = 0;
+
+  @override
+  String get url {
+    urlReads++;
+    return super.url;
+  }
+}
+
 class _Extensions extends ExtensionManager {
   _Extensions(this.catalog);
   final _Catalog catalog;
@@ -251,6 +268,16 @@ class _Extensions extends ExtensionManager {
 class _Settings extends PlayerSettingsNotifier {
   @override
   Future<PlayerSettings> build() async => const PlayerSettings();
+
+  @override
+  Future<void> setPrefetchNextEpisode(bool val) async {
+    state = AsyncData(state.requireValue.copyWith(prefetchNextEpisode: val));
+  }
+
+  @override
+  Future<void> setFillerBehaviour(FillerBehaviour val) async {
+    state = AsyncData(state.requireValue.copyWith(fillerBehaviour: val));
+  }
 }
 
 class _ArtworkSettings extends AnimeDataSourceSettingsNotifier {
@@ -451,14 +478,18 @@ void main() {
     }
   }
 
-  Future<void> startSource({bool local = false, bool live = false}) async {
-    final episode = _episode(1);
+  Future<void> startSource({
+    bool local = false,
+    bool live = false,
+    List<Episode>? episodes,
+  }) async {
+    final episode = episodes?.first ?? _episode(1);
     final url = local
         ? '/saved/episode.mp4'
         : 'https://video.test/original.mp4';
     await controller.init(
       player: player,
-      item: _item([episode, _episode(2)]),
+      item: _item(episodes ?? [episode, _episode(2)]),
       videoUrl: url,
       episode: episode,
       selectedSource: local
@@ -472,6 +503,140 @@ void main() {
     player.advance(const Duration(seconds: 5));
     await flush();
   }
+
+  test('end-of-episode ticks reuse lookup and do not retry a failed warm', () async {
+    final first = _CountedEpisode();
+    final current = _episode(199);
+    final next = _episode(200);
+    final directUrl = 'https://video.test/original.mp4';
+    await controller.init(
+      player: player,
+      item: _item([
+        first,
+        for (var i = 2; i < 199; i++) _episode(i),
+        current,
+        next,
+      ]),
+      videoUrl: directUrl,
+      episode: current,
+      selectedSource: StreamResult(url: directUrl, source: 'Selected'),
+    );
+    await flush();
+
+    player.value = player.value.copyWith(duration: const Duration(minutes: 24));
+    const startMs = 1425000;
+    player.advance(const Duration(milliseconds: startMs - 100));
+    await flush();
+    expect(catalog.streamCalls, 0);
+    expect(controller.currentState.showNextEpisodeOverlay, isFalse);
+    first.urlReads = 0;
+
+    for (var i = 0; i < 150; i++) {
+      player.advance(Duration(milliseconds: startMs + i * 100));
+      // Let the fake provider's failed Future settle and the cache forget it
+      // so each tick can expose a real speculative retry, not just a warm call.
+      await flush();
+      if (i == 0) {
+        expect(controller.currentState.showNextEpisodeOverlay, isTrue);
+        expect(controller.currentState.nextEpisodeTitle, next.name);
+        controller.dismissNextEpisodeOverlay();
+      }
+    }
+    // ignore: avoid_print
+    print(
+      'PLAYBACK_END_PROFILE lookups=${first.urlReads} failed_warms=${catalog.streamCalls}',
+    );
+    expect(first.urlReads, 1);
+    expect(catalog.streamUrls, [next.url]);
+    expect(controller.currentState.showNextEpisodeOverlay, isFalse);
+
+    // A viewer's explicit request is not gated by speculative attempts.
+    final source = StreamResult(
+      url: 'https://video.test/next.mp4',
+      source: 'Other',
+    );
+    catalog.pendingStreams = Completer<List<StreamResult>>()
+      ..complete([source]);
+    final fetched = await container
+        .read(streamSourcePrefetchProvider)
+        .sources(catalog, next.url);
+    expect(fetched, [source]);
+    expect(catalog.streamUrls, [next.url, next.url]);
+  });
+
+  test('a rewind re-arms warming without retrying on clock jitter', () async {
+    await startSource();
+    player.value = player.value.copyWith(duration: const Duration(minutes: 24));
+
+    player.advance(const Duration(seconds: 1425));
+    await flush();
+    controller.dismissNextEpisodeOverlay();
+    expect(catalog.streamCalls, 1);
+
+    player.advance(const Duration(milliseconds: 1424500));
+    await flush();
+    player.advance(const Duration(seconds: 1425));
+    await flush();
+    expect(catalog.streamCalls, 1);
+
+    player.advance(const Duration(seconds: 1420));
+    await flush();
+    player.advance(const Duration(seconds: 1425));
+    await flush();
+    expect(catalog.streamCalls, 2);
+    expect(controller.currentState.showNextEpisodeOverlay, isFalse);
+  });
+
+  test('an end-window warm follows enabled and skip-filler settings', () async {
+    final settings = container.read(playerSettingsProvider.notifier);
+    await settings.setPrefetchNextEpisode(false);
+    await settings.setFillerBehaviour(FillerBehaviour.skip);
+    final first = _episode(1);
+    final filler = _episode(2).copyWith(isFiller: true);
+    final story = _episode(3);
+    await startSource(episodes: [first, filler, story]);
+    player.value = player.value.copyWith(duration: const Duration(minutes: 24));
+
+    player.advance(const Duration(seconds: 1425));
+    await flush();
+    expect(controller.currentState.nextEpisodeTitle, filler.name);
+    expect(catalog.streamCalls, 0);
+
+    await settings.setPrefetchNextEpisode(true);
+    player.advance(const Duration(seconds: 1426));
+    await flush();
+    expect(catalog.streamUrls, [story.url]);
+
+    await settings.setFillerBehaviour(FillerBehaviour.note);
+    player.advance(const Duration(seconds: 1427));
+    await flush();
+    player.advance(const Duration(seconds: 1428));
+    await flush();
+    expect(catalog.streamUrls, [story.url, filler.url]);
+  });
+
+  test(
+    'a late episode list can populate an initially empty end overlay',
+    () async {
+      final first = _episode(1);
+      final next = _episode(2);
+      await startSource(episodes: [first]);
+      player.value = player.value.copyWith(
+        duration: const Duration(minutes: 24),
+      );
+      player.advance(const Duration(seconds: 1425));
+      await flush();
+      expect(controller.currentState.showNextEpisodeOverlay, isFalse);
+
+      catalog.episodes.single.complete([first, next]);
+      await flush();
+      player.advance(const Duration(seconds: 1426));
+      await flush();
+      expect(controller.currentState.showNextEpisodeOverlay, isTrue);
+      expect(controller.currentState.nextEpisodeTitle, next.name);
+      expect(catalog.streamUrls, [next.url]);
+    },
+  );
 
   for (final background in [false, true]) {
     test(

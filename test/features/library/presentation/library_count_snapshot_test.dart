@@ -17,7 +17,10 @@ import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/core/storage/witanime_library_service.dart';
 import 'package:animewitcher/features/library/presentation/library_media_kind.dart';
 import 'package:animewitcher/features/library/presentation/library_provider.dart';
+import 'package:animewitcher/features/library/presentation/library_screen.dart';
+import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -36,11 +39,34 @@ class _Storage extends StorageService {
 
   int scans = 0;
   int diskMaps = 0;
+  int shelfReads = 0;
+  int hydratedCards = 0;
+  int projectionMicros = 0;
+
+  void resetWork() {
+    scans = 0;
+    shelfReads = 0;
+    hydratedCards = 0;
+    projectionMicros = 0;
+  }
+
+  @override
+  List<MultimediaItem> getLibraryItems({String? category}) {
+    shelfReads++;
+    final timer = Stopwatch()..start();
+    final items = super.getLibraryItems(category: category);
+    projectionMicros += timer.elapsedMicroseconds;
+    hydratedCards += items.length;
+    return items;
+  }
 
   @override
   Map<String, ({int anime, int manga})> getLocalLibraryCounts() {
     scans++;
-    return super.getLocalLibraryCounts();
+    final timer = Stopwatch()..start();
+    final counts = super.getLocalLibraryCounts();
+    projectionMicros += timer.elapsedMicroseconds;
+    return counts;
   }
 
   @override
@@ -222,6 +248,69 @@ void main() {
   const completed = LibraryCategory.completed;
   const later = LibraryCategory.continueLater;
   const uninterested = LibraryCategory.notInterested;
+
+  testWidgets('phone badge counts use one metadata scan for a large library', (
+    tester,
+  ) async {
+    await tester.runAsync(() async {
+      await storage.setSelectedLibraryCategory(watching.storageKey);
+      await box.putAll({
+        for (final category in LibraryCategory.primaryValues)
+          for (var i = 0; i < 1200; i++)
+            '${category.storageKey}-$i': {
+              ..._row(
+                'https://example.test/${category.storageKey}/$i',
+                type: i.isEven ? 'anime' : 'manga',
+                category: category.storageKey,
+                favorite: i % 3 == 0,
+                updatedAt: i,
+              ),
+              'posterUrl': '',
+            },
+      });
+    });
+    tester.view.physicalSize = const Size(400, 860);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          locale: Locale('ar'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: LibraryScreen(),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('أشاهده حاليًا 600'), findsOneWidget);
+    expect(find.text('المفضلة 1000'), findsOneWidget);
+    final library = container.read(libraryProvider.notifier);
+    final profiles = <({int scans, int reads, int cards, int micros})>[];
+    for (var iteration = 0; iteration < 5; iteration++) {
+      storage.resetWork();
+      library.refresh();
+      await tester.pump();
+      profiles.add((
+        scans: storage.scans,
+        reads: storage.shelfReads,
+        cards: storage.hydratedCards,
+        micros: storage.projectionMicros,
+      ));
+    }
+    debugPrint('library-phone-badge-profile $profiles');
+    expect(profiles.map((profile) => profile.scans), everyElement(1));
+    expect(profiles.map((profile) => profile.reads), everyElement(2));
+    expect(profiles.map((profile) => profile.cards), everyElement(2400));
+
+    await tester.runAsync(() => box.delete('watching-0'));
+    library.refresh();
+    await tester.pump();
+    expect(find.text('أشاهده حاليًا 599'), findsOneWidget);
+    expect(find.text('المفضلة 999'), findsOneWidget);
+  });
 
   test('same per-shelf winner before kind filtering, all legacy branches, no stale local data', () async {
     // Insert less-preferred key first and newest. Box getAt orders by key,

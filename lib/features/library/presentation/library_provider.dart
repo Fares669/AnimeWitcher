@@ -325,38 +325,54 @@ class Library extends _$Library {
         () => _cachedCategoryCount(kind, category),
       );
 
-  /// A synchronous desktop sidebar projection. Do not retain the local
-  /// snapshot or disk-cache reads across builds, writes, or account switches.
+  /// Batch badge counts for the requested phone tabs without opening shelves.
+  Map<LibraryCategory, int?> categoryCountsFor(
+    LibraryMediaKind kind,
+    Iterable<LibraryCategory> categories,
+  ) {
+    final count = _countProjection();
+    return {for (final category in categories) category: count(kind, category)};
+  }
+
+  /// A synchronous desktop sidebar projection.
   Map<LibraryMediaKind, Map<LibraryCategory, int?>> categoryCounts({
     required bool witanimeAnime,
   }) {
-    Map<String, ({int anime, int manga})>? local;
-    final cached = <LibraryMediaKind, Map<String, int>>{};
+    final count = _countProjection();
     return {
       for (final kind in LibraryMediaKind.values)
         kind: {
           for (final category in LibraryCategory.valuesForCatalog(
             witanimeAnime: witanimeAnime && kind == LibraryMediaKind.anime,
           ))
-            category: _categoryCount(
-              kind,
-              category,
-              () {
-                final counts = (local ??= ref
-                    .read(storageServiceProvider)
-                    .getLocalLibraryCounts())[category.storageKey];
-                return (kind == LibraryMediaKind.manga
-                        ? counts?.manga
-                        : counts?.anime) ??
-                    0;
-              },
-              () => cached.putIfAbsent(
-                kind,
-                () => _cachedCategoryCounts(kind),
-              )[category.storageKey],
-            ),
+            category: count(kind, category),
         },
     };
+  }
+
+  // One local scan and at most one disk cache lookup per kind in a projection.
+  // Neither snapshot survives its caller, so writes and account switches stay
+  // visible the next time badges are requested.
+  int? Function(LibraryMediaKind, LibraryCategory) _countProjection() {
+    Map<String, ({int anime, int manga})>? local;
+    final cached = <LibraryMediaKind, Map<String, int>>{};
+    return (kind, category) => _categoryCount(
+      kind,
+      category,
+      () {
+        final counts = (local ??= ref
+            .read(storageServiceProvider)
+            .getLocalLibraryCounts())[category.storageKey];
+        return (kind == LibraryMediaKind.manga
+                ? counts?.manga
+                : counts?.anime) ??
+            0;
+      },
+      () => cached.putIfAbsent(
+        kind,
+        () => _cachedCategoryCounts(kind),
+      )[category.storageKey],
+    );
   }
 
   int? _categoryCount(

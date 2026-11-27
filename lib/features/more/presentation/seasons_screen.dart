@@ -10,6 +10,7 @@ import '../../../core/account/account_providers.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/utils/offset_pager.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
@@ -32,6 +33,7 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
   late final TabController _tabController;
   int _selectedTab = 1;
   int _reloadGeneration = 0;
+  bool _hidesEcchiAtLoad = false;
 
   @override
   void initState() {
@@ -59,11 +61,16 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
     }
   }
 
-  Future<_SeasonsBootstrap> _loadBootstrap() async {
+  AnimeWitcherProvider? _readCatalogProvider() {
     final active = ref.read(activeProviderProvider);
-    final provider = active?.supportsSeasons == true
-        ? active
-        : ref.nativeProvider;
+    return active?.supportsSeasons == true ? active : ref.nativeProvider;
+  }
+
+  Future<_SeasonsBootstrap> _loadBootstrap() async {
+    final provider = _readCatalogProvider();
+    _hidesEcchiAtLoad =
+        provider is AnimeWitcherNativeProvider &&
+        provider.hidesEcchiInDiscovery;
     if (provider == null) {
       throw StateError('Season catalog provider is unavailable');
     }
@@ -92,6 +99,13 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
   Widget build(BuildContext context) {
     ref.listen<int>(accountDataRevisionProvider, (previous, next) {
       if (previous == next) return;
+      final provider = _readCatalogProvider();
+      // Account validation and sync also bump this revision. Of the account
+      // state, only the native discovery filter affects these results.
+      final hidesEcchi =
+          provider is AnimeWitcherNativeProvider &&
+          provider.hidesEcchiInDiscovery;
+      if (hidesEcchi == _hidesEcchiAtLoad) return;
       _refreshSeasons().ignore();
     });
     ref.listen(activeProviderProvider, (previous, next) {

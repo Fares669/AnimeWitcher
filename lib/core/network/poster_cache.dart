@@ -26,6 +26,6 @@ final _posterWarmQueue = PosterWarmQueue(
 );
 
 /// Warms posters across rows without filling the shared download queue.
-/// Each accepted URL is attempted at most once; cards handle retries.
+/// Recent URLs are not attempted again; cards handle retries.
 void warmPosters(Iterable<String> urls, {int limit = 24}) =>
     _posterWarmQueue.enqueue(urls, limit: limit);

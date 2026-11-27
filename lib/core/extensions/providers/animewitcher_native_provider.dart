@@ -122,6 +122,9 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   final bool Function() _isEcchiHidden;
   final HtmlUnescape _unescape = HtmlUnescape();
 
+  /// The account preference that can change native discovery pages.
+  bool get hidesEcchiInDiscovery => _isEcchiHidden();
+
   static const String _baseUrl = 'https://animewitcher.com';
   static const String _firestoreProjectId = 'animewitcher-1c66d';
   static const String _defaultAlgoliaAppId = '5UIU27G8CZ';
@@ -2002,7 +2005,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   /// hide unrelated anime and `isAdult` is broader than AnimeWitcher's ecchi
   /// category.
   List<MultimediaItem> _filterEcchiItems(Iterable<MultimediaItem> items) {
-    if (!_isEcchiHidden()) return items.toList(growable: false);
+    if (!hidesEcchiInDiscovery) return items.toList(growable: false);
     return items
         .where((item) => !_containsEcchiTag(item.tags ?? const <String>[]))
         .toList(growable: false);

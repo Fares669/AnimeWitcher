@@ -80,6 +80,53 @@ class FfiImageDecoder {
   // 3 parallel jobs keeps tile throughput high without overloading memory.
   static const int _maxConcurrent = 3;
   int _activeJobs = 0;
+  int _renderers = 0;
+  bool _trimWhenIdle = false;
+  bool _nativeCacheMayBeDirty = false;
+
+  /// Retain decoded native contexts while an image view is mounted.
+  /// Contexts can contain a full RGBA image even though Flutter draws tiles.
+  VoidCallback retainRenderer() {
+    _renderers++;
+    _trimWhenIdle = false;
+    var released = false;
+    return () {
+      if (released) return;
+      released = true;
+      _renderers--;
+      if (_renderers != 0) return;
+      _trimWhenIdle = true;
+      // Let widgets replacing each other in the same frame retain the cache.
+      scheduleMicrotask(_trimIdleNativeCache);
+    };
+  }
+
+  void _trimIdleNativeCache() {
+    final port = _sendPort;
+    if (port == null ||
+        !_trimWhenIdle ||
+        !_nativeCacheMayBeDirty ||
+        _renderers != 0 ||
+        _activeJobs != 0 ||
+        _queue.isNotEmpty) {
+      return;
+    }
+    _nativeCacheMayBeDirty = false;
+    port.send('clearCache');
+  }
+
+  @visibleForTesting
+  Future<int> debugNativeCacheEntryCount() async {
+    final port = _sendPort;
+    if (port == null) return 0;
+    final response = ReceivePort();
+    try {
+      port.send(response.sendPort);
+      return await response.first as int;
+    } finally {
+      response.close();
+    }
+  }
 
   void cancel(Object token) {
     _queue.removeWhere((job) {
@@ -255,6 +302,17 @@ class FfiImageDecoder {
     final Map<String, bool> lruOrder = {};
     const int maxCacheSize = 5;
 
+    void clearCache() {
+      for (final ctx in cachedContexts.values) {
+        if (ctx.address != 0) {
+          _freeDecoder(ctx);
+        }
+      }
+      cachedContexts.clear();
+      lruOrder.clear();
+      cachedDimensions.clear();
+    }
+
     receivePort.listen((message) async {
       if (message is Map<String, dynamic>) {
         final responsePort = message['responsePort'] as SendPort;
@@ -375,16 +433,11 @@ class FfiImageDecoder {
           calloc.free(rgbaBuffer);
           responsePort.send({'success': false, 'error': "FFI error: $e"});
         }
-      } else if (message == 'dispose') {
-        for (final ctx in cachedContexts.values) {
-          if (ctx.address != 0) {
-            _freeDecoder(ctx);
-          }
-        }
-        cachedContexts.clear();
-        lruOrder.clear();
-        cachedDimensions.clear();
-        receivePort.close();
+      } else if (message == 'clearCache' || message == 'dispose') {
+        clearCache();
+        if (message == 'dispose') receivePort.close();
+      } else if (message is SendPort) {
+        message.send(cachedContexts.length);
       }
     });
   }
@@ -469,6 +522,7 @@ class FfiImageDecoder {
     while (_activeJobs < _maxConcurrent && _queue.isNotEmpty) {
       final job = _queue.removeLast();
       _activeJobs++;
+      _nativeCacheMayBeDirty = true;
 
       final responsePort = ReceivePort();
       responsePort.listen((response) {
@@ -519,6 +573,7 @@ class FfiImageDecoder {
         'responsePort': responsePort.sendPort,
       });
     }
+    _trimIdleNativeCache();
   }
 
   bool getImageDimensions(
@@ -568,6 +623,7 @@ class FfiImageDecoder {
     _receivePort = null;
     _isRunning = false;
     _activeJobs = 0;
+    _nativeCacheMayBeDirty = false;
 
     for (final job in _queue) {
       if (!job.completer.isCompleted) {

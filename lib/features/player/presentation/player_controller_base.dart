@@ -480,6 +480,18 @@ class PlayerController extends Notifier<PlayerState> {
   bool _suppressNextEpisodeDetection = false;
   bool _isNextEpisodeOverlayForced = false;
   bool _userDismissedOverlay = false;
+  ({
+    List<Episode>? episodes,
+    Episode? episode,
+    String videoUrl,
+    Episode? next,
+  })? _nextEpisodeOverlayLookup;
+  ({
+    int sourceSessionId,
+    String nextUrl,
+    bool skipsFiller,
+    List<Episode>? fillerEpisodes,
+  })? _nextEpisodeWarmAttempt;
   bool _manualSelectionPending = false;
   // Audio tracks that have already failed with decode errors for the current
   // stream. When one track fails, we try the next one before source-switching.
@@ -766,6 +778,8 @@ class PlayerController extends Notifier<PlayerState> {
     _midPlaybackErrorTimer?.cancel();
     _midPlaybackErrorTimer = null;
     _resetBufferWatchdog();
+    _nextEpisodeOverlayLookup = null;
+    _nextEpisodeWarmAttempt = null;
     _player = player;
     _videoViewController = videoViewController;
     _videoUrl = videoUrl;
@@ -1576,6 +1590,9 @@ class PlayerController extends Notifier<PlayerState> {
       return;
     }
     if (remainingMs > 15000) {
+      // A rewind can bring the viewer back to the end after the warm cache
+      // expires. Re-arm outside the window, but ignore small clock jitter.
+      if (remainingMs > 16000) _nextEpisodeWarmAttempt = null;
       if (state.showNextEpisodeOverlay && !_isNextEpisodeOverlayForced) {
         state = state.copyWith(showNextEpisodeOverlay: false);
       }
@@ -1592,12 +1609,30 @@ class PlayerController extends Notifier<PlayerState> {
   }
 
   Episode? _episodeAfterCurrentForOverlay() {
+    final episodes = _item.episodes;
+    final previous = _nextEpisodeOverlayLookup;
+    if (previous != null &&
+        identical(previous.episodes, episodes) &&
+        identical(previous.episode, _episode) &&
+        previous.videoUrl == _videoUrl) {
+      return previous.next;
+    }
+
+    // Episode catalog updates replace the list. A normal clock tick does
+    // not change the lookup, including when the current episode is last.
     final active = currentEpisode;
-    return episodeAtOffsetInVariant(
-      _item.episodes,
+    final next = episodeAtOffsetInVariant(
+      episodes,
       currentUrl: active?.url ?? _videoUrl,
       variant: isSeries ? active?.dubStatus ?? DubStatus.none : DubStatus.none,
     );
+    _nextEpisodeOverlayLookup = (
+      episodes: episodes,
+      episode: _episode,
+      videoUrl: _videoUrl,
+      next: next,
+    );
+    return next;
   }
 
   void _showNextEpisodeOverlay(Episode next, {String? description}) {
@@ -3818,14 +3853,32 @@ class PlayerController extends Notifier<PlayerState> {
       final settings = ref.read(playerSettingsProvider).asData?.value;
       if (settings != null && !settings.prefetchNextEpisode) return;
 
-      final behaviour = settings?.fillerBehaviour ?? FillerBehaviour.note;
-      final target = behaviour == FillerBehaviour.skip && next.isFiller
-          ? (nextStoryEpisodeOrNull ?? next)
-          : next;
+      final skipsFiller =
+          settings?.fillerBehaviour == FillerBehaviour.skip && next.isFiller;
+      final fillerEpisodes = skipsFiller ? _item.episodes : null;
+      final previous = _nextEpisodeWarmAttempt;
+      if (previous != null &&
+          previous.sourceSessionId == state.sourceSessionId &&
+          previous.nextUrl == next.url &&
+          previous.skipsFiller == skipsFiller &&
+          identical(previous.fillerEpisodes, fillerEpisodes)) {
+        return;
+      }
+
+      final target = skipsFiller ? (nextStoryEpisodeOrNull ?? next) : next;
       if (target.url.trim().isEmpty) return;
 
       final provider = _resolveProvider();
       if (provider == null) return;
+      // The source cache deliberately forgets failures so an explicit fetch
+      // can retry. A clock tick is not an explicit request: don't start that
+      // work again on every tick when the viewer is offline or a server fails.
+      _nextEpisodeWarmAttempt = (
+        sourceSessionId: state.sourceSessionId,
+        nextUrl: next.url,
+        skipsFiller: skipsFiller,
+        fillerEpisodes: fillerEpisodes,
+      );
       ref.read(streamSourcePrefetchProvider).warm(provider, target.url);
     } catch (e) {
       if (kDebugMode) _debugPrint('Next-episode prefetch skipped: $e');
@@ -4148,6 +4201,8 @@ class PlayerController extends Notifier<PlayerState> {
     _cancelAutoSubtitleSelection();
     _disableAnime4kMetal();
     final closingSession = ++_sourceSessionSerial;
+    _nextEpisodeOverlayLookup = null;
+    _nextEpisodeWarmAttempt = null;
     _pendingResumeSeekPosition = null;
     _stallTimer?.cancel();
     _stallTimer = null;

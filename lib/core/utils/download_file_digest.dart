@@ -1,6 +1,7 @@
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:ffi/ffi.dart';
@@ -25,12 +26,45 @@ Future<String> downloadFileDigest(File file) async {
   }
 }
 
-Future<String> _digestOnWorker(File file, bool useRust) async {
+String _digestOnWorker(File file, bool useRust) {
   if (useRust && !file.path.contains('\u0000')) {
     final result = _tryRustFileDigest(file.path);
     if (result != null) return result;
   }
-  return _streamDigest(file);
+  return _bufferedDigest(file);
+}
+
+// This runs only in the worker. Async file reads allocate a fresh external
+// buffer for each chunk and use the VM I/O pool even though nothing on this
+// isolate can usefully run while the file is being hashed.
+String _bufferedDigest(File file) {
+  final buffer = Uint8List(256 * 1024);
+  final digest = _DigestSink();
+  final hash = sha256.startChunkedConversion(digest);
+  final input = file.openSync();
+  try {
+    while (true) {
+      final read = input.readIntoSync(buffer);
+      if (read == 0) break;
+      hash.add(
+        read == buffer.length ? buffer : Uint8List.sublistView(buffer, 0, read),
+      );
+    }
+  } finally {
+    input.closeSync();
+  }
+  hash.close();
+  return digest.value.toString();
+}
+
+final class _DigestSink implements Sink<Digest> {
+  late Digest value;
+
+  @override
+  void add(Digest digest) => value = digest;
+
+  @override
+  void close() {}
 }
 
 Future<String> _streamDigest(File file) async =>

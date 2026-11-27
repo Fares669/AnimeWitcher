@@ -22,10 +22,36 @@ class _ObservedFile implements File {
   final SendPort observations;
 
   @override
-  Stream<List<int>> openRead([int? start, int? end]) {
-    observations.send(Isolate.current.controlPort);
-    return File(path).openRead(start, end);
+  RandomAccessFile openSync({FileMode mode = FileMode.read}) {
+    return _ObservedAccessFile(File(path).openSync(mode: mode), observations);
   }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _ObservedAccessFile implements RandomAccessFile {
+  _ObservedAccessFile(this.delegate, this.observations);
+
+  final RandomAccessFile delegate;
+  final SendPort observations;
+  List<int>? _firstBuffer;
+
+  @override
+  int readIntoSync(List<int> buffer, [int start = 0, int? end]) {
+    _firstBuffer ??= buffer;
+    final read = delegate.readIntoSync(buffer, start, end);
+    observations.send((
+      Isolate.current.controlPort,
+      identical(buffer, _firstBuffer),
+      buffer.length,
+      read,
+    ));
+    return read;
+  }
+
+  @override
+  void closeSync() => delegate.closeSync();
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -81,20 +107,28 @@ void main() {
 
   if (!const bool.fromEnvironment('ANIMEWITCHER_RUST_DOWNLOAD_SHA256')) {
     test(
-      'streams the Dart digest on an isolate distinct from the UI',
+      'reuses one bounded read buffer on an isolate distinct from the UI',
       () async {
-        final file = await File('${root.path}/worker.bin').writeAsString('abc');
+        final bytes = Uint8List(512 * 1024 + 13);
+        bytes[bytes.length - 1] = 251;
+        final file = await File('${root.path}/worker.bin').writeAsBytes(bytes);
         final observations = ReceivePort();
         try {
-          final openedOn = observations.first;
+          final reads = observations
+              .cast<(SendPort, bool, int, int)>()
+              .take(4)
+              .toList();
           final digest = await downloadFileDigest(
             _ObservedFile(file.path, observations.sendPort),
           );
-          expect(digest, sha256.convert('abc'.codeUnits).toString());
-          expect(
-            await openedOn.timeout(const Duration(seconds: 2)),
-            isNot(Isolate.current.controlPort),
-          );
+          expect(digest, sha256.convert(bytes).toString());
+          final seen = await reads.timeout(const Duration(seconds: 2));
+          expect(seen.map((read) => read.$4), [256 * 1024, 256 * 1024, 13, 0]);
+          for (final (worker, reused, capacity, _) in seen) {
+            expect(worker, isNot(Isolate.current.controlPort));
+            expect(reused, isTrue);
+            expect(capacity, 256 * 1024);
+          }
         } finally {
           observations.close();
         }

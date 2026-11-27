@@ -477,9 +477,12 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
   ui.Offset _lastNotifiedCenter = ui.Offset.zero;
   Timer? _resizeTimer;
 
+  late final VoidCallback _releaseDecoderCache;
+
   @override
   void initState() {
     super.initState();
+    _releaseDecoderCache = ffiImageDecoder.retainRenderer();
     _tilingEngine = TilingEngine();
     _animationController = AnimationController(
       vsync: this,
@@ -515,6 +518,7 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
     widget.controller?._detach();
     _animationController.dispose();
     _tilingEngine.dispose();
+    _releaseDecoderCache();
     super.dispose();
   }
 

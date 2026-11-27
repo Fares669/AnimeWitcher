@@ -96,6 +96,7 @@ class PosterRetryPolicy {
   static const int limit = 5;
   static const Duration base = Duration(milliseconds: 1200);
   static const Duration cooldown = Duration(minutes: 10);
+  static const int _maxCooling = 1024;
 
   final Map<String, DateTime> _cooling = <String, DateTime>{};
 
@@ -108,7 +109,19 @@ class PosterRetryPolicy {
   }
 
   void cool(String url, [DateTime? now]) {
-    _cooling[url] = (now ?? DateTime.now()).add(cooldown);
+    final stamp = now ?? DateTime.now();
+    // Cooldown entries are ordered by when they were last cooled. Expired
+    // URLs need not be seen again to be released, and a prolonged outage
+    // cannot grow this history for the lifetime of the app.
+    _cooling.remove(url);
+    _cooling[url] = stamp.add(cooldown);
+    while (_cooling.isNotEmpty) {
+      final oldest = _cooling.keys.first;
+      if (_cooling.length <= _maxCooling && _cooling[oldest]!.isAfter(stamp)) {
+        break;
+      }
+      _cooling.remove(oldest);
+    }
   }
 
   void clear(String url) => _cooling.remove(url);
