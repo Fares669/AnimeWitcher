@@ -4318,11 +4318,6 @@ class PlayerController extends Notifier<PlayerState> {
     _midPlaybackErrorTimer?.cancel();
     _midPlaybackErrorTimer = null;
 
-    // Best-effort cleanup of subtitle temp files we wrote into the OS temp
-    // dir. Don't await — the player has to close fast, and the next launch
-    // will catch any leftovers. Fixes audit finding H5.
-    unawaited(_cleanupSubtitleTempFiles());
-
     if (_isInitialized) saveProgress();
     Future.microtask(() {
       if (ref.mounted &&
@@ -4331,30 +4326,6 @@ class PlayerController extends Notifier<PlayerState> {
         state = const PlayerState();
       }
     });
-  }
-
-  // Walks the OS temp dir and deletes any subtitle file the app's subtitle
-  // download pipeline wrote (naming convention: `sub_*` or `temp_sub_*`).
-  // Pattern-based rather than tracked-set-based because the search flow runs
-  // in a separate provider and tracking handoff is fragile.
-  Future<void> _cleanupSubtitleTempFiles() async {
-    try {
-      final tempDir = await getTemporaryDirectory();
-      if (!await tempDir.exists()) return;
-      await for (final entity in tempDir.list(followLinks: false)) {
-        if (entity is! File) continue;
-        final name = p.basename(entity.path);
-        if (name.startsWith('sub_') || name.startsWith('temp_sub_')) {
-          try {
-            await entity.delete();
-          } catch (_) {
-            // Another player session may already have deleted it. Ignore.
-          }
-        }
-      }
-    } catch (e) {
-      if (kDebugMode) _debugPrint('[PlayerController] subtitle cleanup: $e');
-    }
   }
 
   Future<int> _findFirstWorkingStream(

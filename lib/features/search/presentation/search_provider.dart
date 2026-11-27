@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -655,6 +656,7 @@ class SearchSuggestionState {
 @riverpod
 class SearchSuggestionController extends _$SearchSuggestionController {
   Timer? _debounce;
+  CancelToken? _inFlight;
   int _generation = 0;
 
   @override
@@ -675,10 +677,16 @@ class SearchSuggestionController extends _$SearchSuggestionController {
       _restartForCatalogChange();
     });
     ref.listen(searchDomainProvider, (_, _) => _restartForCatalogChange());
-    ref.onDispose(() {
-      _debounce?.cancel();
-    });
+    ref.onDispose(_cancelPendingWork);
     return const SearchSuggestionState();
+  }
+
+  void _cancelPendingWork() {
+    _debounce?.cancel();
+    _debounce = null;
+    final inFlight = _inFlight;
+    _inFlight = null;
+    inFlight?.cancel();
   }
 
   void _restartForCatalogChange() {
@@ -691,9 +699,9 @@ class SearchSuggestionController extends _$SearchSuggestionController {
     if (query == state.query) return;
 
     final generation = ++_generation;
+    _cancelPendingWork();
     final trimmed = query.trim();
     if (trimmed.length < 2) {
-      _debounce?.cancel();
       state = state.copyWith(
         query: query,
         suggestions: const [],
@@ -708,8 +716,13 @@ class SearchSuggestionController extends _$SearchSuggestionController {
 
     state = SearchSuggestionState(query: query, isLoading: true);
 
-    _debounce?.cancel();
+    if (!ref.mounted || generation != _generation) return;
     _debounce = Timer(const Duration(milliseconds: 350), () async {
+      _debounce = null;
+      // Only instant suggestions share this token; a submitted result is
+      // owned separately by PagedSearchNotifier.
+      final token = CancelToken();
+      _inFlight = token;
       try {
         final manager = ref.read(extensionManagerProvider.notifier);
         final providers = manager.getAllProviders();
@@ -746,6 +759,7 @@ class SearchSuggestionController extends _$SearchSuggestionController {
                   none,
                   offset: 0,
                   limit: 20,
+                  cancelToken: token,
                 ),
               )
             : Future.value(const <MultimediaItem>[]);
@@ -758,6 +772,7 @@ class SearchSuggestionController extends _$SearchSuggestionController {
                   none,
                   offset: 0,
                   limit: 20,
+                  cancelToken: token,
                 ),
               )
             : Future.value(const <MultimediaItem>[]);
@@ -773,7 +788,7 @@ class SearchSuggestionController extends _$SearchSuggestionController {
             animeProvider != null &&
                 (everything || domain == SearchDomain.anime)
             ? animeProvider
-                  .search(query)
+                  .search(query, cancelToken: token)
                   .catchError((Object _) => const <MultimediaItem>[])
             : Future.value(const <MultimediaItem>[]);
         final anime = await animeFuture;
@@ -822,13 +837,15 @@ class SearchSuggestionController extends _$SearchSuggestionController {
             isLoading: false,
           );
         }
+      } finally {
+        if (identical(_inFlight, token)) _inFlight = null;
       }
     });
   }
 
   void clear() {
     _generation++;
-    _debounce?.cancel();
+    _cancelPendingWork();
     state = const SearchSuggestionState();
   }
 }

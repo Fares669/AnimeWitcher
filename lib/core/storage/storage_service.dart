@@ -491,10 +491,53 @@ class StorageService {
     required String category,
     required bool manga,
     required int limit,
+  }) => _hydrateLocalShelf(
+    _orderedLibraryRows(category),
+    manga: manga,
+    limit: limit,
+  );
+
+  /// Search can read several unmounted local shelves together. Bucket raw
+  /// row references in Hive order, then use the same per-shelf winners and
+  /// ordering as a single shelf. Nothing survives this read.
+  Map<String, ({List<MultimediaItem> items, int total})>
+  getLocalLibraryShelves({
+    required Map<String, int> limits,
+    required bool manga,
+  }) {
+    final rowsByShelf = <String, List<Map<dynamic, dynamic>>>{
+      for (final category in limits.keys)
+        _normalizeLibraryCategory(category): <Map<dynamic, dynamic>>[],
+    };
+    if (rowsByShelf.isEmpty) return {};
+    final favorites = rowsByShelf['favorite'];
+    final hasPrimary = rowsByShelf.length > (favorites == null ? 0 : 1);
+    for (final raw in _libraryBox.values) {
+      if (raw is! Map) continue;
+      if (hasPrimary) rowsByShelf[_storedLibraryCategory(raw)]?.add(raw);
+      if (favorites != null && _storedLibraryFavorite(raw)) favorites.add(raw);
+    }
+    return {
+      for (final entry in limits.entries)
+        entry.key: _hydrateLocalShelf(
+          _orderedLibraryRows(
+            null,
+            rows: rowsByShelf[_normalizeLibraryCategory(entry.key)]!,
+          ),
+          manga: manga,
+          limit: entry.value,
+        ),
+    };
+  }
+
+  ({List<MultimediaItem> items, int total}) _hydrateLocalShelf(
+    Iterable<_StoredLibraryCard> cards, {
+    required bool manga,
+    required int limit,
   }) {
     final items = <MultimediaItem>[];
     var total = 0;
-    for (final card in _orderedLibraryRows(category)) {
+    for (final card in cards) {
       final type = _storedLibraryContentType(card.row);
       if ((type == MultimediaContentType.manga) != manga) continue;
       total++;
@@ -503,13 +546,16 @@ class StorageService {
     return (items: items, total: total);
   }
 
-  List<_StoredLibraryCard> _orderedLibraryRows(String? category) {
+  List<_StoredLibraryCard> _orderedLibraryRows(
+    String? category, {
+    Iterable<dynamic>? rows,
+  }) {
     final entries = <_StoredLibraryCard>[];
     final seen = <String>{};
     final normalizedFilter = category == null
         ? null
         : _normalizeLibraryCategory(category);
-    for (final raw in _libraryBox.values) {
+    for (final raw in rows ?? _libraryBox.values) {
       if (raw is! Map) continue;
       if (normalizedFilter == 'favorite') {
         if (!_storedLibraryFavorite(raw)) continue;

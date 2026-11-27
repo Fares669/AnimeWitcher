@@ -76,6 +76,7 @@ class MangaChapterList extends ConsumerStatefulWidget {
     this.revealKey,
   });
 
+  /// A published chapter snapshot. Supply a new list when it changes.
   final List<MangaChapter> chapters;
   final ValueChanged<MangaChapter>? onOpen;
   final ValueChanged<MangaChapter>? onDownload;
@@ -101,6 +102,37 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
   final Set<String> _selectedChapterIds = <String>{};
   List<DownloadItem>? _indexedDownloads;
   late MangaChapterDownloadIndex _downloadIndex;
+  List<List<MangaChapter>>? _ranges;
+  ({int? range, String query, List<MangaChapter> chapters})? _narrowed;
+
+  List<List<MangaChapter>> get _chapterRanges =>
+      _ranges ??= mangaChapterRanges(widget.chapters);
+
+  List<MangaChapter> _chaptersForRangeAndQuery(int? range) {
+    final query = _query.trim();
+    if (range == null && query.isEmpty) {
+      _narrowed = null;
+      return widget.chapters;
+    }
+    final previous = _narrowed;
+    if (previous != null &&
+        previous.range == range &&
+        previous.query == query) {
+      return previous.chapters;
+    }
+    final allowedIds = range == null
+        ? null
+        : _chapterRanges[range].map((chapter) => chapter.id).toSet();
+    final matchesQuery = mangaChapterMatcher(query);
+    final chapters = <MangaChapter>[
+      for (final chapter in widget.chapters)
+        if ((allowedIds == null || allowedIds.contains(chapter.id)) &&
+            matchesQuery(chapter))
+          chapter,
+    ];
+    _narrowed = (range: range, query: query, chapters: chapters);
+    return chapters;
+  }
 
   MangaChapterDownloadIndex get _chapterDownloads {
     final downloads = widget.downloads;
@@ -137,6 +169,15 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
   AnimationStatusListener? _routeStatusListener;
 
   bool get _selecting => _selectedChapterIds.isNotEmpty;
+
+  @override
+  void didUpdateWidget(covariant MangaChapterList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.chapters, widget.chapters)) {
+      _ranges = null;
+      _narrowed = null;
+    }
+  }
 
   @override
   void didChangeDependencies() {
@@ -204,52 +245,55 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
   /// of it are read.
   Widget _rangeMenu(
     BuildContext context,
-    List<List<MangaChapter>> ranges,
+    int? range,
     MangaReadingRepository repository,
   ) {
     final colors = Theme.of(context).colorScheme;
-    final all = 'كل الفصول';
-    String rangeTitle(int i) =>
-        '${'الفصول'} '
-        '${mangaChapterRangeLabel(ranges[i], i)}';
-    final range = _rangeIndex;
+    const all = 'كل الفصول';
+    String rangeTitle(List<MangaChapter> chapters, int index) =>
+        'الفصول ${mangaChapterRangeLabel(chapters, index)}';
     return PopupMenuButton<int>(
       key: const ValueKey<String>('manga-chapter-range-menu'),
       tooltip: 'نطاق الفصول',
       initialValue: range ?? -1,
       onSelected: (value) =>
           setState(() => _rangeIndex = value < 0 ? null : value),
-      itemBuilder: (_) => <PopupMenuEntry<int>>[
-        PopupMenuItem<int>(value: -1, child: Text(all)),
-        for (var i = 0; i < ranges.length; i++)
-          PopupMenuItem<int>(
-            value: i,
-            child: Row(
-              children: <Widget>[
-                Expanded(child: Text(rangeTitle(i))),
-                const SizedBox(width: 16),
-                Text(
-                  () {
-                    final read = ranges[i]
-                        .where(
-                          (c) =>
-                              repository.get(c.mangaId, c.id)?.isRead == true,
-                        )
-                        .length;
-                    if (read == ranges[i].length) {
-                      return 'مكتمل';
-                    }
-                    return '$read/${ranges[i].length}';
-                  }(),
-                  style: TextStyle(
-                    color: colors.onSurfaceVariant,
-                    fontSize: 12,
+      itemBuilder: (_) {
+        // Hundreds of off-screen rows may arrive at once. Build the
+        // reading-order groups only when this menu or a selection needs them.
+        final ranges = _chapterRanges;
+        return <PopupMenuEntry<int>>[
+          const PopupMenuItem<int>(value: -1, child: Text(all)),
+          for (var i = 0; i < ranges.length; i++)
+            PopupMenuItem<int>(
+              value: i,
+              child: Row(
+                children: <Widget>[
+                  Expanded(child: Text(rangeTitle(ranges[i], i))),
+                  const SizedBox(width: 16),
+                  Text(
+                    () {
+                      final read = ranges[i]
+                          .where(
+                            (c) =>
+                                repository.get(c.mangaId, c.id)?.isRead == true,
+                          )
+                          .length;
+                      if (read == ranges[i].length) {
+                        return 'مكتمل';
+                      }
+                      return '$read/${ranges[i].length}';
+                    }(),
+                    style: TextStyle(
+                      color: colors.onSurfaceVariant,
+                      fontSize: 12,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-      ],
+        ];
+      },
       child: Container(
         height: 40,
         padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -264,7 +308,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
             Text(
-              range == null ? all : rangeTitle(range),
+              range == null ? all : rangeTitle(_chapterRanges[range], range),
               style: TextStyle(color: colors.onSurface, fontSize: 13),
             ),
             const SizedBox(width: 6),
@@ -375,7 +419,8 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
   /// Range and search tools, with reading-state filters below them.
   Widget _toolbar(
     BuildContext context, {
-    required List<List<MangaChapter>> ranges,
+    required int rangeCount,
+    required int? range,
     required MangaReadingRepository repository,
   }) {
     return Column(
@@ -386,7 +431,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
           runSpacing: 8,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: <Widget>[
-            if (ranges.length > 1) _rangeMenu(context, ranges, repository),
+            if (rangeCount > 1) _rangeMenu(context, range, repository),
             _goToField(context),
           ],
         ),
@@ -741,32 +786,33 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
       return widget.embedded ? SliverToBoxAdapter(child: note) : note;
     }
 
-    final ordered = ascending
-        ? widget.chapters
-        : widget.chapters.reversed.toList(growable: false);
-    final ranges = mangaChapterRanges(widget.chapters);
-    final rangeIndex = _rangeIndex != null && _rangeIndex! < ranges.length
+    final rangeCount =
+        (widget.chapters.length + mangaChapterRangeSize - 1) ~/
+        mangaChapterRangeSize;
+    final range = _rangeIndex != null && _rangeIndex! < rangeCount
         ? _rangeIndex
         : null;
-    final inRange = rangeIndex == null
-        ? null
-        : ranges[rangeIndex].map((c) => c.id).toSet();
-    final matchesQuery = mangaChapterMatcher(_query);
-    final chapters = ordered
-        .where((chapter) {
-          if (inRange != null && !inRange.contains(chapter.id)) return false;
-          if (!matchesQuery(chapter)) return false;
-          return switch (_filter) {
-            MangaChapterFilter.all => true,
-            MangaChapterFilter.unread =>
-              repository.get(chapter.mangaId, chapter.id)?.isRead != true,
-            MangaChapterFilter.downloaded => _isDownloaded(
-              chapter,
-              progressById,
-            ),
-          };
-        })
-        .toList(growable: false);
+    final narrowed = _chaptersForRangeAndQuery(range);
+    // Reading and download eligibility can change in-place. Only the
+    // chapter snapshot's range/query projection is safe to reuse.
+    final chapters = switch (_filter) {
+      MangaChapterFilter.all => narrowed,
+      MangaChapterFilter.unread =>
+        narrowed
+            .where(
+              (chapter) =>
+                  repository.get(chapter.mangaId, chapter.id)?.isRead != true,
+            )
+            .toList(growable: false),
+      MangaChapterFilter.downloaded =>
+        narrowed
+            .where((chapter) => _isDownloaded(chapter, progressById))
+            .toList(growable: false),
+    };
+    // Slivers need random access to individual displayed rows, not a
+    // second list holding all the same references just to reverse them.
+    MangaChapter chapterAt(int index) =>
+        chapters[ascending ? index : chapters.length - 1 - index];
     Widget emptyNote() => Padding(
       padding: const EdgeInsets.symmetric(vertical: 32),
       child: Center(
@@ -806,7 +852,12 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
       );
     }
 
-    final toolbar = _toolbar(context, ranges: ranges, repository: repository);
+    final toolbar = _toolbar(
+      context,
+      rangeCount: rangeCount,
+      range: range,
+      repository: repository,
+    );
 
     if (widget.embedded) {
       // The page above already names this section, so the tools sit at its
@@ -829,7 +880,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
             itemCount: chapters.length,
             separatorBuilder: (_, __) => const Divider(height: 1),
             itemBuilder: (context, index) =>
-                _withTransition(row(chapters[index])),
+                _withTransition(row(chapterAt(index))),
           ),
         ],
       );
@@ -875,7 +926,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
               sliver: SliverList.separated(
                 itemCount: chapters.length,
                 separatorBuilder: (_, __) => const Divider(height: 1),
-                itemBuilder: (context, index) => row(chapters[index]),
+                itemBuilder: (context, index) => row(chapterAt(index)),
               ),
             ),
             SliverToBoxAdapter(child: SizedBox(height: _selecting ? 148 : 96)),

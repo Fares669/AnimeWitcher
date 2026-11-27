@@ -129,11 +129,22 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
     List<HistoryItem> history, {
     required bool witanimeAnime,
   }) sync* {
-    final seen = <String>{};
-    for (final category in LibraryCategory.valuesForCatalog(
+    final categories = LibraryCategory.valuesForCatalog(
       witanimeAnime: witanimeAnime,
-    )) {
-      if (!_prefs.shows(category)) continue;
+    ).where(_prefs.shows);
+    final missing = categories
+        .where((category) => !_lists.containsKey((kind, category)))
+        .toList(growable: false);
+    if (missing.isNotEmpty) {
+      final shelves = ref
+          .read(libraryProvider.notifier)
+          .itemsForSearchShelves(kind, missing);
+      for (final entry in shelves.entries) {
+        _lists[(kind, entry.key)] = sortLibraryItems(entry.value, _prefs.sort);
+      }
+    }
+    final seen = <String>{};
+    for (final category in categories) {
       for (final item in _list(kind, category)) {
         if (seen.add(item.url)) yield item;
       }

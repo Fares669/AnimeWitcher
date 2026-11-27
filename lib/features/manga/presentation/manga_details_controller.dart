@@ -286,7 +286,13 @@ class MangaDetailsController extends _$MangaDetailsController {
       final chapters = await provider.getMangaChapters(item.url);
       if (!ref.mounted) return;
       _chaptersFetched = true;
-      state = state.copyWith(chapters: AsyncData<List<MangaChapter>>(chapters));
+      // View projections are tied to this published snapshot. A provider
+      // retaining its working list cannot mutate a visible chapter table.
+      state = state.copyWith(
+        chapters: AsyncData<List<MangaChapter>>(
+          List<MangaChapter>.unmodifiable(chapters),
+        ),
+      );
     } catch (error, stackTrace) {
       if (!ref.mounted) return;
       state = state.copyWith(

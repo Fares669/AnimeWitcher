@@ -15,6 +15,7 @@ import 'package:animewitcher/features/details/presentation/downloaded_file_provi
 import 'package:animewitcher/features/details/presentation/stream_source_prefetch.dart';
 import 'package:animewitcher/features/library/presentation/history_provider.dart';
 import 'package:animewitcher/features/player/presentation/player_controller_base.dart';
+import 'package:animewitcher/features/player/presentation/player_teardown.dart';
 import 'package:animewitcher/features/settings/presentation/player_settings_provider.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
@@ -405,6 +406,18 @@ class _CheckpointPaths extends PathProviderPlatform {
   Future<String?> getApplicationSupportPath() async => support.path;
   @override
   Future<String?> getTemporaryPath() async => '${support.path}/subtitle-temp';
+}
+
+class _SubtitlePaths extends _CheckpointPaths {
+  _SubtitlePaths(super.support, this.temporary);
+  final Directory temporary;
+  int temporaryLookups = 0;
+
+  @override
+  Future<String?> getTemporaryPath() async {
+    temporaryLookups++;
+    return temporary.path;
+  }
 }
 
 class _CheckpointStorage extends StorageService {
@@ -812,6 +825,119 @@ void main() {
     },
     skip: !Platform.isLinux || nativeClip == null || nativeLibrary == null,
     timeout: const Timeout(Duration(seconds: 24)),
+  );
+
+  test(
+    'player teardown never opens the shared subtitle temp directory',
+    () async {
+      final temporary = await testDirectory.createTemp('subtitle-boundary-');
+      final paths = _SubtitlePaths(testDirectory, temporary);
+      final before = PathProviderPlatform.instance;
+      PathProviderPlatform.instance = paths;
+      addTearDown(() => PathProviderPlatform.instance = before);
+      final sibling = await File(
+        '${temporary.path}/temp_sub_for_another_player.srt',
+      ).writeAsString('external subtitle');
+      final sidecar = await File('${temporary.path}/sub_user_selected.srt')
+          .writeAsString('user-selected subtitle');
+
+      // This is also the teardown used when leaving before startup succeeds.
+      controller.disposeController();
+      await flush();
+
+      expect(paths.temporaryLookups, 0);
+      expect(await sidecar.readAsString(), 'user-selected subtitle');
+      expect(await sibling.readAsString(), 'external subtitle');
+    },
+  );
+
+  final subtitleClip = Platform.environment['ANIMEWITCHER_TEST_LOCAL_CLIP'];
+  test(
+    'native local playback can reopen the same external subtitle after Back',
+    () async {
+      final priorNativeMode = media.NativePlayer.test;
+      media.NativePlayer.test = true;
+      addTearDown(() => media.NativePlayer.test = priorNativeMode);
+      media.MediaKit.ensureInitialized(libmpv: nativeLibrary);
+
+      final temporary = await testDirectory.createTemp('subtitle-reopen-');
+      final paths = _SubtitlePaths(testDirectory, temporary);
+      final before = PathProviderPlatform.instance;
+      PathProviderPlatform.instance = paths;
+      addTearDown(() => PathProviderPlatform.instance = before);
+      const cue = 'Sidecar kept after Back';
+      final subtitle = await File('${temporary.path}/sub_user_selected.srt')
+          .writeAsString('1\n00:00:00,000 --> 00:00:15,000\n$cue\n');
+      final neighbor = await File(
+        '${temporary.path}/temp_sub_for_another_player.srt',
+      ).writeAsString('external subtitle');
+      final item = _item(
+        const [],
+        type: MultimediaContentType.movie,
+      ).copyWith(provider: 'Local');
+      final selected = StreamResult(
+        url: subtitleClip!,
+        source: 'Local',
+        subtitles: [
+          SubtitleFile(
+            url: subtitle.uri.toString(),
+            label: 'Fixture',
+            lang: 'en',
+          ),
+        ],
+      );
+      const deadline = Duration(seconds: 6);
+
+      for (var visit = 0; visit < 2; visit++) {
+        final native = media.Player(
+          configuration: const media.PlayerConfiguration(muted: true),
+        );
+        try {
+          final cueReady = native.stream.subtitle
+              .firstWhere((lines) => lines.any((line) => line.contains(cue)))
+              .timeout(deadline);
+          final selectedTrackReady = native.stream.track
+              .firstWhere(
+                (track) => track.subtitle.id == subtitle.uri.toString(),
+              )
+              .timeout(deadline);
+          await Future.wait([
+            controller
+                .init(
+                  player: native,
+                  item: item,
+                  videoUrl: selected.url,
+                  selectedSource: selected,
+                )
+                .timeout(deadline),
+            cueReady,
+            selectedTrackReady,
+          ]);
+          expect(
+            native.state.duration,
+            greaterThan(const Duration(seconds: 10)),
+          );
+          expect(native.state.playing, isTrue);
+          expect(
+            controller.currentState.externalSubtitles.single.url,
+            subtitle.uri.toString(),
+          );
+          final beforeBack = paths.temporaryLookups;
+
+          // PlayerScreen.Back calls these in this order.
+          controller.disposeController(player: native);
+          await stopPlayerBeforeExit(native).timeout(deadline);
+          await flush();
+          expect(paths.temporaryLookups, beforeBack);
+          expect(await subtitle.exists(), isTrue);
+          expect(await neighbor.readAsString(), 'external subtitle');
+        } finally {
+          await native.dispose().timeout(deadline);
+        }
+      }
+    },
+    skip: !Platform.isLinux || subtitleClip == null || nativeLibrary == null,
+    timeout: const Timeout(Duration(seconds: 30)),
   );
 
   test('end-of-episode ticks reuse lookup and do not retry a failed warm', () async {

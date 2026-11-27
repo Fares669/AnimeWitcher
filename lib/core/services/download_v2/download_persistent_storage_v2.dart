@@ -128,6 +128,21 @@ final class DownloadPersistentStorageV2 implements PersistentStorage {
   Future<List<TaskRecord>> retrieveAllTaskRecords() =>
       _retrieveAll(taskRecordsPath, TaskRecord.fromJson);
 
+  /// Scoped read over the worker's locally owned package task files.
+  Future<List<TaskRecord>> retrieveDurableChildRecords(
+    String parentTaskId,
+  ) async {
+    final rows = await _run('local.durableChildren', [
+      taskRecordsPath,
+      parentTaskId,
+    ]) as List;
+    return rows
+        .map(
+          (row) => TaskRecord.fromJson(Map<String, dynamic>.from(row as Map)),
+        )
+        .toList();
+  }
+
   @override
   Future<void> removeTaskRecord(String? taskId) =>
       _remove(taskRecordsPath, taskId);

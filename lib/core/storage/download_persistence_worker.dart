@@ -3,11 +3,13 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 
+import 'package:background_downloader/background_downloader.dart';
 import 'package:collection/collection.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../services/download_parallel.dart';
 import 'download_persistence_io.dart';
 
 /// Exclusive owner of the download boxes and downloader JSON files.
@@ -151,6 +153,7 @@ void _downloadPersistenceMain(List<Object?> configuration) {
   final directory = configuration[1] as String;
   final documents = configuration[2] as String?;
   final requests = ReceivePort();
+  final durableRecords = _DurableRecordFiles();
   runDownloadPersistenceIo(() async {
     Hive.init(directory);
     responses.send(requests.sendPort);
@@ -165,6 +168,7 @@ void _downloadPersistenceMain(List<Object?> configuration) {
           directory,
           documents,
           operation,
+          durableRecords,
           (request[2] as List).cast<Object?>(),
         );
         responses.send(<Object?>[id, result, null, null]);
@@ -183,6 +187,7 @@ Future<dynamic> _dispatch(
   String directory,
   String? documents,
   String operation,
+  _DurableRecordFiles durableRecords,
   List<Object?> args,
 ) async {
   if (operation == 'close') return Hive.close();
@@ -230,6 +235,7 @@ Future<dynamic> _dispatch(
   }
   if (operation == 'local.version') return _localVersion(directory);
   if (operation == 'local.initialize') {
+    durableRecords.invalidate();
     final version = _localVersion(directory);
     if (version == 1) return null;
     if (version != 0) {
@@ -283,25 +289,131 @@ Future<dynamic> _dispatch(
             if (!p.basename(file.path).startsWith('.aw-persistence-'))
               if (_readJson(file) case final Map<String, dynamic> value) value,
         ];
+      case 'local.durableChildren':
+        if (collection != LocalStorePersistentStorage.taskRecordsPath) {
+          throw StateError('Durable lookup requires task records');
+        }
+        return durableRecords.read(directory, args[1] as String);
       case 'local.put':
+        final id = args[1] as String;
         _atomicWrite(
-          _localFile(directory, collection, args[1] as String),
+          _localFile(directory, collection, id),
           utf8.encode(jsonEncode(args[2])),
         );
+        if (collection == LocalStorePersistentStorage.taskRecordsPath) {
+          durableRecords.stored(id, args[2]);
+        }
         return null;
       case 'local.remove':
         final id = args[1] as String?;
+        final isTaskRecord =
+            collection == LocalStorePersistentStorage.taskRecordsPath;
         if (id == null) {
+          // A recursive deletion may succeed only in part on failure.
+          if (isTaskRecord) durableRecords.invalidate();
           final folder = _localDirectory(directory, collection);
           if (folder.existsSync()) folder.deleteSync(recursive: true);
         } else {
           final file = _localFile(directory, collection, id);
           if (file.existsSync()) file.deleteSync();
+          if (isTaskRecord) durableRecords.removed(id);
         }
         return null;
     }
   }
   throw StateError('Unsupported download persistence operation: $operation');
+}
+
+/// Indexes only durable child file names; the worker is the exclusive task
+/// record writer. Initialize after migration, then observe each successful
+/// atomic put/remove in the same dispatch sequence. The current rows still
+/// come from disk, and no native writer status is cached.
+final class _DurableRecordFiles {
+  Map<String, Set<String>>? _filesByParent;
+  final _parentByFile = <String, String>{};
+  bool _hasMixedCase = false;
+
+  void invalidate() {
+    _filesByParent = null;
+    _parentByFile.clear();
+    _hasMixedCase = false;
+  }
+
+  void _add(String filename, Map<String, dynamic> json) {
+    if (filename.startsWith('.aw-persistence-')) return;
+    // Keep the same compatibility rules as Database.allRecords, including
+    // validation of task types/status and metadata-based durable ownership.
+    final record = TaskRecord.fromJson(json);
+    if (record.group != kPersistentDownloadChunkGroup) return;
+    final parent = downloadInternalParentTaskId(record.task);
+    if (parent == null) return;
+    _hasMixedCase |= filename.toLowerCase() != filename;
+    _parentByFile[filename] = parent;
+    (_filesByParent![parent] ??= <String>{}).add(filename);
+  }
+
+  void stored(String filename, Object? value) {
+    if (_filesByParent == null) return;
+    removed(filename);
+    if (_filesByParent == null) return;
+    try {
+      _add(filename, Map<String, dynamic>.from(value as Map));
+    } catch (_) {
+      // Do not change storage write semantics; the next lookup will rescan and
+      // surface any malformed task record as the previous full scan did.
+      invalidate();
+    }
+  }
+
+  void removed(String filename) {
+    // Legacy mixed-case aliases can resolve to the same file on Windows/iOS.
+    // Admit such a mutation only through a new authoritative directory scan.
+    if (_hasMixedCase || filename != filename.toLowerCase()) {
+      invalidate();
+      return;
+    }
+    final parent = _parentByFile.remove(filename);
+    if (parent == null) return;
+    final files = _filesByParent![parent]!;
+    files.remove(filename);
+    if (files.isEmpty) _filesByParent!.remove(parent);
+  }
+
+  List<Map<String, dynamic>> read(String directory, String parent) {
+    final folder = _localDirectory(
+      directory,
+      LocalStorePersistentStorage.taskRecordsPath,
+    );
+    if (_filesByParent == null) {
+      _filesByParent = <String, Set<String>>{};
+      try {
+        if (folder.existsSync()) {
+          for (final file
+              in folder.listSync(followLinks: false).whereType<File>()) {
+            final filename = p.basename(file.path);
+            if (filename.startsWith('.aw-persistence-')) continue;
+            if (_readJson(file) case final Map<String, dynamic> json) {
+              _add(filename, json);
+            }
+          }
+        }
+      } catch (_) {
+        invalidate();
+        rethrow;
+      }
+    }
+    return [
+      for (final filename in _filesByParent![parent] ?? const <String>{})
+        if (FileSystemEntity.typeSync(
+              p.join(folder.path, filename),
+              followLinks: false,
+            ) ==
+            FileSystemEntityType.file)
+          if (_readJson(File(p.join(folder.path, filename)))
+              case final Map<String, dynamic> json)
+            json,
+    ];
+  }
 }
 
 Future<Box<dynamic>> _openHiveBox(String name) async {

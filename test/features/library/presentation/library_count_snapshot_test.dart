@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 
 import 'package:animewitcher/core/account/account_providers.dart';
@@ -10,6 +11,7 @@ import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/extensions/providers/anime3rb_provider.dart';
 import 'package:animewitcher/core/extensions/providers/witanime_provider.dart';
+import 'package:animewitcher/core/router/app_router.dart';
 import 'package:animewitcher/core/storage/anime3rb_library_service.dart';
 import 'package:animewitcher/core/storage/download_persistence_worker.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
@@ -24,6 +26,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
@@ -44,6 +47,9 @@ class _Storage extends StorageService {
   int boundedReads = 0;
   int hydratedCards = 0;
   int projectionMicros = 0;
+  int shelfCategoryReads = 0;
+  int batchedReads = 0;
+  bool measuringShelf = false;
 
   void resetWork() {
     scans = 0;
@@ -51,6 +57,8 @@ class _Storage extends StorageService {
     boundedReads = 0;
     hydratedCards = 0;
     projectionMicros = 0;
+    shelfCategoryReads = 0;
+    batchedReads = 0;
   }
 
   @override
@@ -71,14 +79,44 @@ class _Storage extends StorageService {
   }) {
     boundedReads++;
     final timer = Stopwatch()..start();
-    final shelf = super.getLocalLibraryShelf(
-      category: category,
-      manga: manga,
-      limit: limit,
-    );
-    projectionMicros += timer.elapsedMicroseconds;
-    hydratedCards += shelf.items.length;
-    return shelf;
+    measuringShelf = true;
+    try {
+      final shelf = super.getLocalLibraryShelf(
+        category: category,
+        manga: manga,
+        limit: limit,
+      );
+      hydratedCards += shelf.items.length;
+      return shelf;
+    } finally {
+      measuringShelf = false;
+      projectionMicros += timer.elapsedMicroseconds;
+    }
+  }
+
+  @override
+  Map<String, ({List<MultimediaItem> items, int total})>
+  getLocalLibraryShelves({
+    required Map<String, int> limits,
+    required bool manga,
+  }) {
+    batchedReads++;
+    final timer = Stopwatch()..start();
+    measuringShelf = true;
+    try {
+      final shelves = super.getLocalLibraryShelves(
+        limits: limits,
+        manga: manga,
+      );
+      hydratedCards += shelves.values.fold(
+        0,
+        (sum, shelf) => sum + shelf.items.length,
+      );
+      return shelves;
+    } finally {
+      measuringShelf = false;
+      projectionMicros += timer.elapsedMicroseconds;
+    }
   }
 
   @override
@@ -103,6 +141,33 @@ class _Storage extends StorageService {
       mediaKindKey: mediaKindKey,
     );
   }
+}
+
+class _CountedLibraryRow extends MapBase<String, dynamic> {
+  _CountedLibraryRow(this.valuesByKey, this.storage);
+
+  final Map<String, dynamic> valuesByKey;
+  final _Storage storage;
+
+  @override
+  dynamic operator [](Object? key) {
+    if (key == 'libraryCategory' && storage.measuringShelf) {
+      storage.shelfCategoryReads++;
+    }
+    return valuesByKey[key];
+  }
+
+  @override
+  void operator []=(String key, dynamic value) => valuesByKey[key] = value;
+
+  @override
+  void clear() => valuesByKey.clear();
+
+  @override
+  Iterable<String> get keys => valuesByKey.keys;
+
+  @override
+  dynamic remove(Object? key) => valuesByKey.remove(key);
 }
 
 class _NativeAccount extends Fake implements AnimeWitcherAccountService {
@@ -360,6 +425,128 @@ void main() {
     expect(find.text('المفضلة 999'), findsOneWidget);
   });
 
+  testWidgets(
+    'phone library search shares one cold local scan across shelves',
+    (tester) async {
+      const rowsPerCategory = 480;
+      const rowCount = rowsPerCategory * 5;
+      await tester.runAsync(() async {
+        await storage.setSelectedLibraryCategory(watching.storageKey);
+        await box.putAll({
+          for (final category in LibraryCategory.primaryValues)
+            for (var i = 0; i < rowsPerCategory; i++)
+              '${category.storageKey}-$i': _CountedLibraryRow({
+                ..._row(
+                  'https://example.test/${category.storageKey}/$i',
+                  type: i.isEven ? 'anime' : 'manga',
+                  category: category.storageKey,
+                  favorite: i % 3 == 0,
+                  updatedAt: i,
+                ),
+                'title': i >= rowsPerCategory - 8
+                    ? 'Target ${category.storageKey} $i'
+                    : 'Other ${category.storageKey} $i',
+                'posterUrl': '',
+              }, storage),
+        });
+      });
+      tester.view.physicalSize = const Size(400, 860);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      MultimediaItem? opened;
+      final router = GoRouter(
+        routes: [
+          GoRoute(path: '/', builder: (_, _) => const LibraryScreen()),
+          GoRoute(
+            path: '/details',
+            builder: (_, state) {
+              opened = (state.extra! as DetailsRouteExtra).item;
+              return const Scaffold(body: Text('Library selection'));
+            },
+          ),
+        ],
+      );
+      addTearDown(router.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp.router(
+            routerConfig: router,
+            locale: const Locale('ar'),
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final search = find.byKey(const ValueKey<String>('library-search'));
+      final library = container.read(libraryProvider.notifier);
+      expect(find.text('أشاهده حاليًا 240'), findsOneWidget);
+      final reference = <String, MultimediaItem>{};
+      for (final category in LibraryCategory.values) {
+        for (final item
+            in storage
+                .getLocalLibraryShelf(
+                  category: category.storageKey,
+                  manga: false,
+                  limit: 30,
+                )
+                .items) {
+          reference.putIfAbsent(item.url, () => item);
+        }
+      }
+      final expected = reference.values
+          .where((item) => item.title.startsWith('Target'))
+          .map((item) => item.url)
+          .toList(growable: false);
+      storage.resetWork();
+
+      List<String> shown() => tester
+          .widget<LibraryItemsGrid>(find.byType(LibraryItemsGrid))
+          .items
+          .map((item) => item.url)
+          .toList(growable: false);
+      await tester.enterText(search, 'tArGeT');
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pumpAndSettle();
+      expect(shown(), expected);
+      // Watching was already mounted. The search must not hydrate it again or
+      // traverse the box for each of the four remaining primary shelves.
+      expect(storage.shelfCategoryReads, rowCount);
+      expect(storage.boundedReads, 0);
+      expect(storage.batchedReads, 1);
+      expect(storage.hydratedCards, 150);
+
+      storage.resetWork();
+      await tester.enterText(search, 'target completed');
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pumpAndSettle();
+      expect(shown(), expected.where((url) => url.contains('/completed/')));
+      expect(storage.shelfCategoryReads, 0);
+      final selected = shown().first;
+      await tester.tap(find.byKey(ValueKey(selected)).hitTestable());
+      await tester.pumpAndSettle();
+      expect(find.text('Library selection'), findsOneWidget);
+      expect(opened?.url, selected);
+      router.pop();
+      await tester.pumpAndSettle();
+
+      // The search cache invalidates on actual Library refresh. A direct Hive
+      // deletion affects both search results and the authoritative badge.
+      await tester.runAsync(
+        () => box.delete('completed-${selected.split('/').last}'),
+      );
+      library.refresh();
+      await tester.pumpAndSettle();
+      expect(shown(), isNot(contains(selected)));
+      expect(find.text('تمت مشاهدته 239'), findsOneWidget);
+      await tester.enterText(search, '');
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pumpAndSettle();
+      expect(shown().first, 'https://example.test/watching/478');
+    },
+  );
+
   test('same per-shelf winner before kind filtering, all legacy branches, no stale local data', () async {
     // Insert less-preferred key first and newest. Box getAt orders by key,
     // not insertion or by recency, and the first eligible row wins each shelf.
@@ -490,6 +677,29 @@ void main() {
               expected.take(limit).map((item) => item.toJson()),
             );
           }
+        }
+      }
+      final limits = <String, int>{
+        'watching': 17,
+        'favorite': 30,
+        'completed': 100,
+      };
+      for (final kind in LibraryMediaKind.values) {
+        final batch = storage.getLocalLibraryShelves(
+          limits: limits,
+          manga: kind == manga,
+        );
+        for (final entry in limits.entries) {
+          final single = storage.getLocalLibraryShelf(
+            category: entry.key,
+            manga: kind == manga,
+            limit: entry.value,
+          );
+          expect(batch[entry.key]!.total, single.total);
+          expect(
+            batch[entry.key]!.items.map((item) => item.toJson()),
+            single.items.map((item) => item.toJson()),
+          );
         }
       }
       final library = container.read(libraryProvider.notifier);
@@ -625,6 +835,13 @@ void main() {
         (_, {cancelToken}) async => throw StateError('network forbidden'),
       ),
     );
+    storage.resetWork();
+    expect(library.itemsForSearchShelves(anime, [watching, completed]), {
+      watching: <MultimediaItem>[],
+      completed: <MultimediaItem>[],
+    }); // Both shelves belong to signed-in Witanime, not the Hive box.
+    expect(storage.batchedReads, 0);
+    expect(storage.boundedReads, 0);
     var view = library.categoryCounts(witanimeAnime: true);
     expect(view, _individualCounts(library, witanimeAnime: true));
     expect(view[anime]!.length, 4);
@@ -644,7 +861,22 @@ void main() {
     expect(view[anime]!.length, 6);
     expect(view[anime]![watching], 51);
     expect(view[manga]![watching], 1);
+    storage.resetWork();
+    expect(library.itemsForSearchShelves(anime, [watching, completed]), {
+      watching: <MultimediaItem>[],
+      completed: <MultimediaItem>[],
+    }); // Signed-in Anime3rb is authoritative as well.
+    expect(storage.batchedReads, 0);
+    expect(storage.boundedReads, 0);
     arAccount.signedIn = false;
     expect(library.categoryCounts(witanimeAnime: false)[anime]![watching], 1);
+    nativeAccount.owner = 'native';
+    storage.resetWork();
+    expect(library.itemsForSearchShelves(anime, [watching, completed]), {
+      watching: <MultimediaItem>[],
+      completed: <MultimediaItem>[],
+    }); // No using Hive rows as a signed-in authoritative initial page.
+    expect(storage.batchedReads, 0);
+    expect(storage.boundedReads, 0);
   });
 }

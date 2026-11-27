@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_account_service.dart';
+import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
@@ -557,6 +558,233 @@ void main() {
       },
     );
   }
+
+  for (final phone in [true, false]) {
+    testWidgets(
+      'Manga Details changes chapter ranges, direction and live filters '
+      '(phone=$phone)',
+      (tester) async {
+        if (phone) {
+          _usePhoneWindow(tester);
+        } else {
+          tester.view.physicalSize = const Size(1280, 900);
+          tester.view.devicePixelRatio = 1;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+        }
+        MangaChapter chapter(int n) => MangaChapter(
+          id: '$n',
+          mangaId: 'm1',
+          url: 'chapter://$n',
+          name: 'الفصل $n',
+          number: n.toDouble(),
+        );
+        final source = _MangaProvider()
+          .._replacementChapters = [
+            chapter(1600),
+            const MangaChapter(
+              id: 'bonus-duplicate',
+              mangaId: 'm1',
+              url: 'chapter://bonus-duplicate',
+              name: 'Duplicate 1600',
+              number: 1600,
+            ),
+            if (!phone)
+              const MangaChapter(
+                id: 'bonus-unnumbered',
+                mangaId: 'm1',
+                url: 'chapter://bonus-unnumbered',
+                name: 'Bonus ١٦٠٠',
+              ),
+            for (var n = 1599; n > 0; n--) chapter(n),
+          ];
+        final storage = _MangaDetailsReadingStorage();
+        final feed = _MangaDetailsDownloadFeed();
+        final opened = <String>[];
+        await tester.pumpWidget(
+          _app(
+            source,
+            readingStorage: storage,
+            downloadFeed: feed,
+            onOpenChapter: (chapter) => opened.add(chapter.id),
+          ),
+        );
+        await _pumpUntil(tester, () => source.detailsFinished);
+        final toggle = find.byKey(const ValueKey('manga-chapters-toggle'));
+        await Scrollable.ensureVisible(tester.element(toggle), alignment: .2);
+        await tester.pump();
+        await tester.tap(toggle.hitTestable());
+        final range = find.byKey(const ValueKey('manga-chapter-range-menu'));
+        await _pumpUntil(tester, () => range.evaluate().isNotEmpty);
+        await Scrollable.ensureVisible(tester.element(range), alignment: .1);
+        await tester.pump(const Duration(milliseconds: 300));
+
+        final container = ProviderScope.containerOf(tester.element(range));
+        final scroll = Scrollable.of(tester.element(range)).position;
+        final search = find.byKey(const ValueKey('manga-chapter-go-to'));
+        final descendingPeak = <String>[
+          '1600',
+          'bonus-duplicate',
+          if (!phone) 'bonus-unnumbered',
+        ];
+        Finder row(String id) =>
+            find.byKey(ValueKey<String>('manga-chapter-row-$id'));
+        void expectOrdered(List<String> ids) {
+          for (final id in ids) {
+            expect(row(id), findsOneWidget);
+          }
+          for (var i = 1; i < ids.length; i++) {
+            expect(
+              tester.getTopLeft(row(ids[i])).dy,
+              greaterThan(tester.getTopLeft(row(ids[i - 1])).dy),
+            );
+          }
+        }
+
+        expectOrdered(descendingPeak);
+        expect(find.text('كل الفصول'), findsOneWidget);
+        final originalOffset = scroll.pixels;
+        for (var tick = 1; tick <= 8; tick++) {
+          feed.publishProgress(tick / 10);
+          await tester.pump(const Duration(milliseconds: 90));
+        }
+        expect(scroll.pixels, originalOffset);
+        expectOrdered(descendingPeak);
+
+        await tester.enterText(search, '١٦٠٠');
+        await tester.pump(const Duration(milliseconds: 200));
+        expectOrdered(descendingPeak);
+        expect(row('1599'), findsNothing);
+        final filteredOffset = scroll.pixels;
+        for (var tick = 1; tick <= 8; tick++) {
+          feed.publishProgress(tick / 10);
+          await tester.pump(const Duration(milliseconds: 90));
+        }
+        expect(scroll.pixels, filteredOffset);
+        expectOrdered(descendingPeak);
+
+        final sort = find.byKey(const ValueKey('manga-chapter-sort-toggle'));
+        await tester.tap(sort.hitTestable());
+        await tester.pump(const Duration(milliseconds: 200));
+        expect(container.read(episodeSortAscendingProvider), isFalse);
+        expectOrdered(descendingPeak.reversed.toList());
+
+        final unread = find.byKey(
+          const ValueKey('manga-chapter-filter-unread'),
+        );
+        await tester.tap(unread.hitTestable());
+        await tester.pump(const Duration(milliseconds: 200));
+        await container.read(mangaReadingRepositoryProvider).setReadStates(
+          'm1',
+          const ['1600'],
+          read: true,
+        );
+        await tester.pump(const Duration(milliseconds: 200));
+        expect(row('1600'), findsNothing);
+        expect(row('bonus-duplicate'), findsOneWidget);
+
+        await tester.tap(
+          find
+              .byKey(const ValueKey('manga-chapter-filter-downloaded'))
+              .hitTestable(),
+        );
+        await tester.pump(const Duration(milliseconds: 200));
+        expect(row('bonus-duplicate'), findsNothing);
+        feed.publishRows([
+          _TrackedChapterDownload(
+            counter: _ChapterDownloadReadCounter(),
+            taskId: 'fixture-completed',
+            url: 'chapter://bonus-duplicate',
+          ),
+        ]);
+        await tester.pump(const Duration(milliseconds: 200));
+        expect(row('bonus-duplicate'), findsOneWidget);
+        expect(row('1600'), findsNothing);
+        await tester.tap(
+          find.byKey(const ValueKey('manga-chapter-filter-all')).hitTestable(),
+        );
+        await tester.pump(const Duration(milliseconds: 200));
+
+        await tester.enterText(search, '');
+        await tester.testTextInput.receiveAction(TextInputAction.go);
+        // Opening the range menu should report the live reading counts.
+        await tester.pump(const Duration(milliseconds: 200));
+        await Scrollable.ensureVisible(tester.element(range), alignment: .1);
+        await tester.pump();
+        await tester.tap(range.hitTestable());
+        await tester.pumpAndSettle();
+        final firstGroup = find.text('الفصول 1–50').hitTestable();
+        expect(firstGroup, findsOneWidget);
+        await tester.tap(firstGroup);
+        await tester.pumpAndSettle();
+        expect(find.text('الفصول 1–50'), findsOneWidget);
+        expectOrdered(['1', '2', '3']);
+        expect(row('1600'), findsNothing);
+
+        await tester.tap(sort.hitTestable());
+        await tester.pump(const Duration(milliseconds: 240));
+        expect(container.read(episodeSortAscendingProvider), isTrue);
+        expectOrdered(['50', '49', '48']);
+        final target = row('49');
+        await Scrollable.ensureVisible(tester.element(target), alignment: .5);
+        await tester.pump(const Duration(milliseconds: 200));
+        await tester.tap(target.hitTestable());
+        await tester.pump();
+        expect(opened, ['49']);
+        expect(source.chaptersCalls, 1);
+      },
+    );
+  }
+
+  testWidgets('Manga Details publishes a detached chapter snapshot', (
+    tester,
+  ) async {
+    _usePhoneWindow(tester);
+    const first = MangaChapter(
+      id: 'first',
+      mangaId: 'm1',
+      url: 'chapter://first',
+      name: 'First',
+      number: 1,
+    );
+    const replacement = MangaChapter(
+      id: 'replacement',
+      mangaId: 'm1',
+      url: 'chapter://replacement',
+      name: 'Replacement',
+      number: 2,
+    );
+    final providerList = [first];
+    final source = _MangaProvider().._replacementChapters = providerList;
+    await tester.pumpWidget(_app(source));
+    await _pumpUntil(tester, () => source.detailsFinished);
+    final toggle = find.byKey(const ValueKey('manga-chapters-toggle'));
+    await Scrollable.ensureVisible(tester.element(toggle), alignment: .2);
+    await tester.pump();
+    await tester.tap(toggle.hitTestable());
+
+    final details = mangaDetailsControllerProvider(
+      'https://animewitcher.com/manga/m1',
+    );
+    final scope = ProviderScope.containerOf(tester.element(toggle));
+    await _pumpUntil(tester, () => scope.read(details).chapters.hasValue);
+    final initial = scope.read(details).chapters.requireValue;
+    expect(initial, [first]);
+    expect(() => initial.add(replacement), throwsUnsupportedError);
+
+    providerList[0] = replacement;
+    await tester.pump();
+    expect(scope.read(details).chapters.requireValue, [first]);
+    final newLoad = scope.read(details.notifier).retry();
+    await _pumpUntil(tester, () {
+      final chapters = scope.read(details).chapters.asData?.value;
+      return chapters?.first.id == replacement.id;
+    });
+    await newLoad;
+    expect(initial, [first]);
+    expect(scope.read(details).chapters.requireValue, [replacement]);
+    expect(source.chaptersCalls, 2);
+  });
 
   testWidgets('Manga Details keeps reading work scoped to reading changes', (
     tester,

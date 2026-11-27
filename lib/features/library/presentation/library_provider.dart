@@ -456,6 +456,51 @@ class Library extends _$Library {
     LibraryCategory category,
   ) => _visibleItems(kind, category);
 
+  /// Load only the missing search shelves. Signed-in shelves retain their
+  /// existing provider/page authority; only shelves sourced from the local
+  /// library participate in the shared read.
+  Map<LibraryCategory, List<MultimediaItem>> itemsForSearchShelves(
+    LibraryMediaKind kind,
+    Iterable<LibraryCategory> categories,
+  ) {
+    final shelves = <LibraryCategory, List<MultimediaItem>>{};
+    final local = <LibraryCategory, _LibraryShelfCursorState>{};
+    final guest = _accountUid == null;
+    final witanime = _useWitanimeShelf(kind);
+    final anime3rb = _useAnime3rbShelf(kind);
+    for (final category in categories) {
+      final page = _page(kind, category);
+      if (guest &&
+          !anime3rb &&
+          !(witanime && isWitanimeSyncedCategory(category)) &&
+          !page.receivedRemotePage) {
+        local[category] = page;
+      } else {
+        shelves[category] = _visibleItems(kind, category);
+      }
+    }
+    if (local.length == 1) {
+      final category = local.keys.single;
+      shelves[category] = _visibleItems(kind, category);
+    } else if (local.isNotEmpty) {
+      final batch = ref
+          .read(libraryRepositoryProvider)
+          .getLocalShelves(
+            limits: {
+              for (final entry in local.entries)
+                entry.key.storageKey: entry.value.visibleLimit,
+            },
+            manga: kind == LibraryMediaKind.manga,
+          );
+      for (final entry in local.entries) {
+        final shelf = batch[entry.key.storageKey]!;
+        entry.value.cachedLocalCount = shelf.total;
+        shelves[entry.key] = shelf.items;
+      }
+    }
+    return shelves;
+  }
+
   LibraryCategory get selectedCategory => state.category;
   LibraryMediaKind get selectedMediaKind => state.mediaKind;
 

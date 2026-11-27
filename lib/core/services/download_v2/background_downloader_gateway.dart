@@ -288,13 +288,22 @@ List<String> durableChildTaskIdsForParentV2(
   return ids;
 }
 
+({DownloadLogicalId logicalId, int generation, int? pageIndex})?
+_mangaParentIdentity(String taskId) {
+  final parent = parseDownloadTaskIdentityV2(taskId);
+  return parent != null &&
+          parent.pageIndex == null &&
+          parent.logicalId.value.startsWith('manga_')
+      ? parent
+      : null;
+}
+
 /// Exact generated Manga pages, including the older notification group.
 List<String> mangaChildTaskIdsForParentV2(
   Iterable<TaskRecord> records, String parentTaskId,
 ) {
-  final parent = parseDownloadTaskIdentityV2(parentTaskId);
-  if (parent == null || parent.pageIndex != null ||
-      !parent.logicalId.value.startsWith('manga_')) return [];
+  final parent = _mangaParentIdentity(parentTaskId);
+  if (parent == null) return [];
   final ids = <String>[
     for (final record in records)
       if ((record.task.group == kDownloadV2SilentPackageGroup ||
@@ -882,13 +891,24 @@ final class PackageBackgroundDownloaderGateway
     await _downloader.database.deleteRecordWithId(taskId);
   }
 
+  Future<List<TaskRecord>> _durableTrackingRecords(String parentTaskId) {
+    // Database.allRecords(group:) reads every task file before filtering.
+    // Keep unrelated task files out of the cleanup hot path when we own the
+    // serialized store; injected/legacy stores keep the default full read.
+    // ignore: invalid_use_of_visible_for_testing_member
+    final storage = _downloader.database.storage;
+    return storage is DownloadPersistentStorageV2
+        ? storage.retrieveDurableChildRecords(parentTaskId)
+        : _downloader.database.allRecords(group: kPersistentDownloadChunkGroup);
+  }
+
   Future<void> _ensureDurableTrackingSettled(String parentTaskId) async {
     final parent = await _downloader.database.recordForId(parentTaskId);
     var durable = _durableHandles.containsKey(parentTaskId) ||
         parent?.task.group == kDownloadV2DurableParallelGroup ||
         _pendingDurableStarts.keys.any((id) => id.startsWith('$parentTaskId.part.'));
     if (!durable) {
-      final records = await _downloader.database.allRecords(group: kPersistentDownloadChunkGroup);
+      final records = await _durableTrackingRecords(parentTaskId);
       durable = durableChildTaskIdsForParentV2(records, parentTaskId).isNotEmpty;
     }
     // Already-cleaned ordinary tracking must stay locally idempotent; its
@@ -902,6 +922,9 @@ final class PackageBackgroundDownloaderGateway
   }
 
   Future<void> _cleanupMangaChildTracking(String parentTaskId) async {
+    // The selector accepts only exact generated Manga parents, never video
+    // parents or page task IDs; there cannot be work for any other identity.
+    if (_mangaParentIdentity(parentTaskId) == null) return;
     final records = await _downloader.database.allRecords();
     final ids = mangaChildTaskIdsForParentV2(records, parentTaskId);
     if (ids.isEmpty) return;
@@ -946,9 +969,7 @@ final class PackageBackgroundDownloaderGateway
         // Exact generation fences make retained metadata harmless.
       }
     }
-    final records = await _downloader.database.allRecords(
-      group: kPersistentDownloadChunkGroup,
-    );
+    final records = await _durableTrackingRecords(parentTaskId);
     final childIds = durableChildTaskIdsForParentV2(records, parentTaskId);
     if (childIds.isEmpty) return;
 

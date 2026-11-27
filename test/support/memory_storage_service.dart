@@ -41,6 +41,20 @@ class MemoryStorageService extends StorageService {
   }
 
   @override
+  Map<String, ({List<MultimediaItem> items, int total})>
+  getLocalLibraryShelves({
+    required Map<String, int> limits,
+    required bool manga,
+  }) => {
+    for (final entry in limits.entries)
+      entry.key: getLocalLibraryShelf(
+        category: entry.key,
+        manga: manga,
+        limit: entry.value,
+      ),
+  };
+
+  @override
   Map<String, ({int anime, int manga})> getLocalLibraryCounts() => {
     for (final category in LibraryCategory.values)
       category.storageKey: _countLibraryItems(category.storageKey),

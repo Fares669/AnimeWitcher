@@ -183,6 +183,11 @@ class LibraryRepository {
     limit: limit,
   );
 
+  Map<String, ({List<MultimediaItem> items, int total})> getLocalShelves({
+    required Map<String, int> limits,
+    required bool manga,
+  }) => _storageService.getLocalLibraryShelves(limits: limits, manga: manga);
+
   int getLibraryItemUpdatedAt(String url) {
     return _storageService.getLibraryItemUpdatedAt(url);
   }
