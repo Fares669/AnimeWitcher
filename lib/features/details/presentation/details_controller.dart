@@ -11,6 +11,7 @@ import '../../../../core/utils/episode_label.dart';
 import '../../../core/account/account_providers.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/item_provider_resolution.dart';
+import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
 
@@ -172,6 +173,8 @@ class DetailsController extends _$DetailsController {
   bool _relatedLoadStarted = false;
   bool _recommendationsLoadStarted = false;
   int _loadGeneration = 0;
+  int _catalogFilterGeneration = 0;
+  bool? _hidesEcchiAtLoad;
 
   @override
   DetailsState build(String itemUrl) {
@@ -411,6 +414,7 @@ class DetailsController extends _$DetailsController {
 
       _lastEpisodesProvider = provider;
       _lastEpisodesUrl = item.url;
+      _hidesEcchiAtLoad = _nativeCatalogFilter(provider);
       if (!provider.supportsIndependentDetailSections) {
         state = state.copyWith(nextAiringResolved: true);
       }
@@ -466,8 +470,9 @@ class DetailsController extends _$DetailsController {
     _episodesFetched = false;
 
     final reloadCast = state.cast.hasValue;
-    final reloadRelated = state.related.hasValue;
-    final reloadRecommendations = state.recommendations.hasValue;
+    final reloadRelated = _relatedLoadStarted || state.related.hasValue;
+    final reloadRecommendations =
+        _recommendationsLoadStarted || state.recommendations.hasValue;
     _castLoadStarted = reloadCast;
     _relatedLoadStarted = reloadRelated;
     _recommendationsLoadStarted = reloadRecommendations;
@@ -476,6 +481,7 @@ class DetailsController extends _$DetailsController {
     _loadStarted = true;
     _lastEpisodesProvider = provider;
     _lastEpisodesUrl = item.url;
+    _hidesEcchiAtLoad = _nativeCatalogFilter(provider);
 
     final tasks = <Future<void>>[
       _loadBasicDetails(provider, item, generation),
@@ -739,6 +745,16 @@ class DetailsController extends _$DetailsController {
     );
   }
 
+  bool? _nativeCatalogFilter(AnimeWitcherProvider provider) =>
+      provider is AnimeWitcherNativeProvider
+      ? provider.hidesEcchiInDiscovery
+      : null;
+
+  bool _isCurrentCatalogLoad(int generation, int filterGeneration) =>
+      ref.mounted &&
+      generation == _loadGeneration &&
+      filterGeneration == _catalogFilterGeneration;
+
   Future<void> _reloadFilteredCatalogLists() async {
     final provider = _lastEpisodesProvider;
     final url = _lastEpisodesUrl;
@@ -749,24 +765,39 @@ class DetailsController extends _$DetailsController {
         !provider.supportsIndependentDetailSections) {
       return;
     }
-    final generation = _loadGeneration;
-    final tasks = <Future<void>>[];
-    if (_relatedLoadStarted || state.related.hasValue) {
-      tasks.add(
-        _loadRelatedInBackground(provider, url, currentItem, generation),
-      );
+    final filter = _nativeCatalogFilter(provider);
+    final reloadRelated = _relatedLoadStarted || state.related.hasValue;
+    final reloadRecommendations =
+        _recommendationsLoadStarted || state.recommendations.hasValue;
+    if (filter != null) {
+      // These native lists resolve from the public catalogue. Routine account
+      // sync (watch history, library, profile restoration) does not change them.
+      if (filter == _hidesEcchiAtLoad) return;
+      _hidesEcchiAtLoad = filter;
+      ++_catalogFilterGeneration;
+      // Do not leave the less restrictive results on screen during the fetch.
+      if (filter && (reloadRelated || reloadRecommendations)) {
+        state = state.copyWith(
+          related: reloadRelated ? const AsyncLoading() : null,
+          relatedHasMore: reloadRelated ? false : null,
+          recommendations: reloadRecommendations ? const AsyncLoading() : null,
+          similarHasMore: reloadRecommendations ? false : null,
+        );
+      }
     }
-    if (_recommendationsLoadStarted || state.recommendations.hasValue) {
-      tasks.add(
+
+    final generation = _loadGeneration;
+    await Future.wait(<Future<void>>[
+      if (reloadRelated)
+        _loadRelatedInBackground(provider, url, currentItem, generation),
+      if (reloadRecommendations)
         _loadRecommendationsInBackground(
           provider,
           url,
           currentItem,
           generation,
         ),
-      );
-    }
-    if (tasks.isNotEmpty) await Future.wait(tasks);
+    ]);
   }
 
   Future<void> _loadCastInBackground(
@@ -820,9 +851,10 @@ class DetailsController extends _$DetailsController {
     MultimediaItem contextItem,
     int generation,
   ) async {
+    final filterGeneration = _catalogFilterGeneration;
     try {
       final page = await provider.getRelatedPage(url);
-      if (!ref.mounted || generation != _loadGeneration) return;
+      if (!_isCurrentCatalogLoad(generation, filterGeneration)) return;
       final value = page.items;
       final updated = (state.item ?? contextItem).copyWith(related: value);
       state = state.copyWith(
@@ -832,7 +864,7 @@ class DetailsController extends _$DetailsController {
         item: updated,
       );
     } catch (error, stackTrace) {
-      if (!ref.mounted || generation != _loadGeneration) return;
+      if (!_isCurrentCatalogLoad(generation, filterGeneration)) return;
       _relatedLoadStarted = false;
       state = state.copyWith(
         related: AsyncError<List<MultimediaItem>>(error, stackTrace),
@@ -880,9 +912,10 @@ class DetailsController extends _$DetailsController {
     MultimediaItem contextItem,
     int generation,
   ) async {
+    final filterGeneration = _catalogFilterGeneration;
     try {
       final page = await provider.getRecommendationsPage(url);
-      if (!ref.mounted || generation != _loadGeneration) return;
+      if (!_isCurrentCatalogLoad(generation, filterGeneration)) return;
       final value = page.items;
       final updated = (state.item ?? contextItem).copyWith(
         recommendations: value,
@@ -894,7 +927,7 @@ class DetailsController extends _$DetailsController {
         item: updated,
       );
     } catch (error, stackTrace) {
-      if (!ref.mounted || generation != _loadGeneration) return;
+      if (!_isCurrentCatalogLoad(generation, filterGeneration)) return;
       _recommendationsLoadStarted = false;
       state = state.copyWith(
         recommendations: AsyncError<List<MultimediaItem>>(error, stackTrace),

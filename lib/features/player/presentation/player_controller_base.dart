@@ -13,6 +13,7 @@ import 'package:path/path.dart' as p;
 import 'package:video_view/video_view.dart'
     show VideoController, SubtitleTrackConfig, VideoControllerPlaybackState;
 
+import '../../../../core/account/account_providers.dart';
 import '../../../../core/logger/app_logger.dart';
 
 import '../../../../core/providers/anime_data_source_settings_provider.dart';
@@ -268,6 +269,23 @@ class PlayerState {
   }
 }
 
+typedef _ContinueCheckpoint = ({
+  int position,
+  int duration,
+  String? streamUrl,
+  String? episodeUrl,
+  int accountRevision,
+});
+
+class _PendingContinueCheckpoint {
+  _PendingContinueCheckpoint(this.item, this.episode, this.values);
+
+  final MultimediaItem item;
+  final Episode? episode;
+  final _ContinueCheckpoint values;
+  bool retryOnFailure = false;
+}
+
 class PlayerController extends Notifier<PlayerState> {
   PlaybackLogRedactor _logRedactor = PlaybackLogRedactor();
 
@@ -288,6 +306,7 @@ class PlayerController extends Notifier<PlayerState> {
   Future<void>? _localPlaybackReady;
 
   bool _hasMarkedWatched = false;
+  _PendingContinueCheckpoint? _pendingContinueCheckpoint;
   int _catalogGeneration = 0;
 
   Player get player => _player;
@@ -672,6 +691,7 @@ class PlayerController extends Notifier<PlayerState> {
     // disposeController() being called, clean up subscriptions.
     ref.onDispose(() {
       _isDisposed = true;
+      _pendingContinueCheckpoint = null;
       _cancelAutoSubtitleSelection();
       _disableAnime4kMetal();
       ++_sourceSessionSerial;
@@ -797,6 +817,7 @@ class PlayerController extends Notifier<PlayerState> {
     _isApplyingPendingResumeSeek = false;
     _pendingResumeSeekFuture = null;
     _hasMarkedWatched = false;
+    _pendingContinueCheckpoint = null;
     ++_catalogGeneration;
     ++_skipFetchGeneration;
     _skipNeedsDurationRefresh = false;
@@ -3804,6 +3825,7 @@ class PlayerController extends Notifier<PlayerState> {
     _waitingForNetworkRecovery = false;
     _wasNetworkOffline = false;
     _hasMarkedWatched = false;
+    _pendingContinueCheckpoint = null;
     _lastKnownPlaybackPositionMs = 0;
     _lastKnownPlaybackDurationMs = 0;
     _recoveryPositionMs = null;
@@ -4103,6 +4125,7 @@ class PlayerController extends Notifier<PlayerState> {
       final currentEpisode = _resolveCurrentEpisode();
       // Mark watched locally once playback reaches 90%.
       if (progressPercent >= 90) {
+        _pendingContinueCheckpoint = null;
         if (!_hasMarkedWatched) {
           if (isSeries && currentEpisode != null) {
             unawaited(
@@ -4165,32 +4188,95 @@ class PlayerController extends Notifier<PlayerState> {
 
       // 3. Normal local progress saving.
       if (progressPercent > 5 || isSeries) {
-        ref
-            .read(continueWatchingProvider.notifier)
-            .saveProgress(
-              _item,
-              pos,
-              dur,
-              lastStreamUrl: state.currentStream?.url,
-              lastEpisodeUrl: currentEpisode?.url ?? _currentProgressUrl,
-              season: currentEpisode?.season,
-              episode: currentEpisode?.episode,
-              episodeTitle: currentEpisode == null
-                  ? null
-                  : episodeTitleForStorage(
-                      episode: currentEpisode.episode,
-                      title: currentEpisode.name,
-                      isFinal: currentEpisode.isFinal,
-                      serverName: currentEpisode.serverName,
-                    ),
-              episodeServerName: currentEpisode?.serverName,
-              episodeServerNumber: currentEpisode?.serverNumber,
-              episodePosterUrl: _episodeArtwork(currentEpisode),
-            );
+        _writeContinueCheckpoint(
+          position: pos,
+          duration: dur,
+          streamUrl: state.currentStream?.url,
+          episodeUrl: currentEpisode?.url ?? _currentProgressUrl,
+          episode: currentEpisode,
+        );
       }
     } catch (e) {
       if (kDebugMode) _debugPrint("History save failed: $e");
     }
+  }
+
+  void _writeContinueCheckpoint({
+    required int position,
+    required int duration,
+    String? streamUrl,
+    String? episodeUrl,
+    Episode? episode,
+  }) {
+    final item = _item;
+    final values = (
+      position: position,
+      duration: duration,
+      streamUrl: streamUrl,
+      episodeUrl: episodeUrl,
+      accountRevision: ref.read(accountDataRevisionProvider),
+    );
+    final pending = _pendingContinueCheckpoint;
+    // Pause, progress thresholds and Back can meet while Hive is still
+    // writing the same bookmark. Don't queue another local write and sync
+    // for that same intent. A newer/different checkpoint always goes through.
+    if (pending != null &&
+        identical(pending.item, item) &&
+        identical(pending.episode, episode) &&
+        pending.values == values) {
+      pending.retryOnFailure = true;
+      return;
+    }
+
+    final notifier = ref.read(continueWatchingProvider.notifier);
+    final checkpoint = _PendingContinueCheckpoint(item, episode, values);
+    final artwork = _episodeArtwork(episode);
+    final title = episode == null
+        ? null
+        : episodeTitleForStorage(
+            episode: episode.episode,
+            title: episode.name,
+            isFinal: episode.isFinal,
+            serverName: episode.serverName,
+          );
+
+    Future<void> write() => notifier.saveProgress(
+      item,
+      position,
+      duration,
+      lastStreamUrl: streamUrl,
+      lastEpisodeUrl: episodeUrl,
+      season: episode?.season,
+      episode: episode?.episode,
+      episodeTitle: title,
+      episodeServerName: episode?.serverName,
+      episodeServerNumber: episode?.serverNumber,
+      episodePosterUrl: artwork,
+    );
+    _pendingContinueCheckpoint = checkpoint;
+    unawaited(() async {
+      try {
+        try {
+          await write();
+        } catch (_) {
+          // Preserve one retry if an overlapping save was suppressed, but
+          // never replay an old checkpoint over a newer intent or account.
+          if (!checkpoint.retryOnFailure ||
+              !identical(_pendingContinueCheckpoint, checkpoint) ||
+              !ref.mounted ||
+              ref.read(accountDataRevisionProvider) != values.accountRevision) {
+            rethrow;
+          }
+          await write();
+        }
+      } catch (error) {
+        if (kDebugMode) _debugPrint('History save failed: $error');
+      } finally {
+        if (identical(_pendingContinueCheckpoint, checkpoint)) {
+          _pendingContinueCheckpoint = null;
+        }
+      }
+    }());
   }
 
   void disposeController({Player? player}) {

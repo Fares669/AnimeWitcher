@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_account_service.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
+import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:animewitcher/core/storage/secure_token_storage.dart';
@@ -258,6 +259,8 @@ final class _MangaDetailsDownloadFeed extends DownloadsNotifier {
   @override
   Future<List<DownloadItem>> build() async => const [];
 
+  void publishRows(List<DownloadItem> rows) => state = AsyncData(rows);
+
   void publishProgress(double progress) {
     state = AsyncData([
       DownloadItem(
@@ -277,6 +280,46 @@ final class _MangaDetailsDownloadFeed extends DownloadsNotifier {
         progress: progress,
       ),
     ]);
+  }
+}
+
+final class _ChapterDownloadReadCounter {
+  int statuses = 0;
+}
+
+final class _TrackedChapterDownload extends DownloadItem {
+  _TrackedChapterDownload({
+    required this.counter,
+    required String taskId,
+    String? url,
+    super.chapter,
+    DownloadMediaKind kind = DownloadMediaKind.mangaChapter,
+    super.status = TaskStatus.complete,
+  }) : super(
+         task: DownloadTask(
+           taskId: taskId,
+           url: 'https://example.test/fixture',
+           filename: 'fixture',
+         ),
+         progress: 1,
+         item: _manga,
+         timestamp: 1,
+         mediaKind: kind,
+         trackingUrl: url,
+       );
+
+  final _ChapterDownloadReadCounter counter;
+  static final _manga = MultimediaItem(
+    title: 'A download fixture',
+    url: 'https://example.test/manga/fixture',
+    posterUrl: '',
+    contentType: MultimediaContentType.manga,
+  );
+
+  @override
+  TaskStatus get status {
+    counter.statuses++;
+    return super.status;
   }
 }
 
@@ -354,6 +397,167 @@ void _usePhoneWindow(WidgetTester tester) {
 }
 
 void main() {
+  for (final phone in [true, false]) {
+    testWidgets(
+      'Manga Details does not rescan download history for each chapter '
+      '(phone=$phone)',
+      (tester) async {
+        if (phone) {
+          _usePhoneWindow(tester);
+        } else {
+          tester.view.physicalSize = const Size(1280, 900);
+          tester.view.devicePixelRatio = 1;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+        }
+        const chapterCount = 1600;
+        const ticks = 8;
+        final source = _MangaProvider(chapterCount: chapterCount)
+          .._replacementChapters = List<MangaChapter>.generate(
+            chapterCount,
+            (i) => MangaChapter(
+              id: '${i + 1}',
+              mangaId: 'm1',
+              url: 'chapter://${i + 1}',
+              name: 'الفصل ${i + 1}',
+              number: (i == 1 ? 1 : i + 1).toDouble(),
+            ),
+            growable: false,
+          );
+        final feed = _MangaDetailsDownloadFeed();
+        final counter = _ChapterDownloadReadCounter();
+        final opened = <String>[];
+        await tester.pumpWidget(
+          _app(
+            source,
+            downloadFeed: feed,
+            onOpenChapter: (chapter) => opened.add(chapter.id),
+          ),
+        );
+        await _pumpUntil(tester, () => source.detailsFinished);
+        final toggle = find.byKey(const ValueKey('manga-chapters-toggle'));
+        await Scrollable.ensureVisible(tester.element(toggle), alignment: .25);
+        await tester.pump();
+        await tester.tap(toggle.hitTestable());
+        final downloaded = find.byKey(
+          const ValueKey('manga-chapter-filter-downloaded'),
+        );
+        await _pumpUntil(tester, () => downloaded.evaluate().isNotEmpty);
+        await Scrollable.ensureVisible(
+          tester.element(downloaded),
+          alignment: .15,
+        );
+        await tester.pump(const Duration(milliseconds: 260));
+        final standingRows =
+            List<DownloadItem>.generate(
+              192,
+              (i) => _TrackedChapterDownload(
+                counter: counter,
+                taskId: 'unrelated-$i',
+                url: 'chapter://other/$i',
+              ),
+            )..addAll([
+              _TrackedChapterDownload(
+                counter: counter,
+                taskId: 'first',
+                url: ' chapter://1 ',
+              ),
+              _TrackedChapterDownload(
+                counter: counter,
+                taskId: 'second',
+                chapter: const MangaChapter(
+                  id: ' 2 ',
+                  mangaId: ' m1 ',
+                  url: 'chapter://rotated',
+                  name: 'Alternate URL',
+                ),
+              ),
+              _TrackedChapterDownload(
+                counter: counter,
+                taskId: 'video-collision',
+                kind: DownloadMediaKind.videoEpisode,
+                url: 'chapter://3',
+              ),
+              _TrackedChapterDownload(
+                counter: counter,
+                taskId: 'failed',
+                status: TaskStatus.failed,
+                url: 'chapter://4',
+              ),
+            ]);
+        feed.publishRows(standingRows);
+        await tester.pump();
+        await tester.tap(downloaded.hitTestable());
+        await tester.pump(const Duration(milliseconds: 300));
+
+        Finder row(int n) =>
+            find.byKey(ValueKey<String>('manga-chapter-row-$n'));
+        expect(row(1), findsOneWidget);
+        expect(row(2), findsOneWidget);
+        expect(row(3), findsNothing);
+        expect(row(4), findsNothing);
+        final firstOffset = Scrollable.of(tester.element(downloaded))
+            .position
+            .pixels;
+
+        counter.statuses = 0;
+        for (var tick = 0; tick < ticks; tick++) {
+          feed.publishRows([
+            ...standingRows,
+            _TrackedChapterDownload(
+              counter: counter,
+              taskId: 'tick-$tick',
+              kind: DownloadMediaKind.videoEpisode,
+              status: TaskStatus.running,
+              url: 'episode://unrelated',
+            ),
+          ]);
+          await tester.pump(const Duration(milliseconds: 90));
+        }
+        // Each of the eight new snapshots should visit the manga rows
+        // once, not once per chapter in the filter or visible action.
+        expect(counter.statuses, lessThan(1900));
+        expect(
+          Scrollable.of(tester.element(downloaded)).position.pixels,
+          firstOffset,
+        );
+        expect(row(1), findsOneWidget);
+        expect(row(2), findsOneWidget);
+        expect(row(3), findsNothing);
+        expect(source.chaptersCalls, 1);
+
+        final search = find.byKey(const ValueKey('manga-chapter-go-to'));
+        await tester.enterText(search, '١');
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(row(1), findsOneWidget);
+        expect(row(2), findsOneWidget);
+        await tester.enterText(search, '٢');
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(row(1), findsNothing);
+        expect(row(2), findsNothing);
+        expect(
+          find.byKey(const ValueKey('manga-chapter-filter-empty')),
+          findsOneWidget,
+        );
+        await tester.enterText(search, '');
+        await tester.testTextInput.receiveAction(TextInputAction.go);
+        await tester.pump(const Duration(milliseconds: 300));
+        await Scrollable.ensureVisible(tester.element(row(1)), alignment: .4);
+        await tester.pump(const Duration(milliseconds: 200));
+        await tester.tap(row(1).hitTestable());
+        await tester.pump();
+        expect(opened, ['1']);
+
+        feed.publishRows(
+          standingRows.where((entry) => entry.id != 'first').toList(),
+        );
+        await tester.pump(const Duration(milliseconds: 200));
+        expect(row(1), findsNothing);
+        expect(row(2), findsOneWidget);
+      },
+    );
+  }
+
   testWidgets('Manga Details keeps reading work scoped to reading changes', (
     tester,
   ) async {

@@ -37,6 +37,14 @@ typedef _StoredLibraryCard = ({
   int updatedAt,
 });
 
+/// A last-watched date for an already known local history row.
+typedef RecentHistoryUpdate = ({
+  String url,
+  String? episodeUrl,
+  int timestamp,
+  int position,
+});
+
 class StorageService {
   StorageService({DownloadPersistenceWorker? downloadPersistenceWorker})
     : _downloadPersistenceWorker = downloadPersistenceWorker == null
@@ -1330,26 +1338,126 @@ class StorageService {
     String? lastEpisodeUrl,
     int timestamp,
     int position,
-  ) async {
-    final canonicalUrl = _canonicalMediaUrl(url);
+  ) => _updateHistoryItem(
+    _canonicalMediaUrl(url),
+    lastEpisodeUrl,
+    timestamp,
+    position,
+  );
+
+  /// Applies a contiguous group of known Recently Watched rows in cloud
+  /// order. Only legacy keys are indexed, and the lookup lives for this
+  /// group, not for the lifetime of the history box.
+  Future<void> syncKnownRecentHistoryRows(
+    List<RecentHistoryUpdate> updates, {
+    required String accountUid,
+    required bool Function() isCurrent,
+  }) async {
+    if (updates.isEmpty || !isCurrent()) return;
+    Map<String, List<dynamic>>? aliases;
+    // Normal writes only add canonical/episode keys. If a raw box writer
+    // adds an alias while this group is committing, rebuild before the next
+    // row. Existing indexed entries are also revalidated at the point of use.
+    final changes = updates.length < 2
+        ? null
+        : _historyBox.watch().listen((event) {
+            final value = event.value;
+            if (!event.deleted &&
+                value is Map &&
+                _legacyHistoryUrl(event.key, value) != null) {
+              aliases = null;
+            }
+          });
+    try {
+      for (final update in updates) {
+        if (!isCurrent()) return;
+        final url = _canonicalMediaUrl(update.url);
+        if (changes != null) aliases ??= _indexLegacyHistoryKeys();
+        await _updateHistoryItem(
+          url,
+          update.episodeUrl,
+          update.timestamp,
+          update.position,
+          aliasKeys: aliases == null ? null : aliases![url] ?? const [],
+        );
+        if (!isCurrent()) return;
+        await markHistoryItemSynced(
+          url,
+          accountUid: accountUid,
+          syncedAt: update.timestamp,
+        );
+      }
+    } finally {
+      await changes?.cancel();
+    }
+  }
+
+  String? _legacyHistoryUrl(dynamic key, Map<dynamic, dynamic> entry) {
+    if (key is String && key.startsWith('EP_')) return null;
+    final rawUrl = (entry['url'] ?? '').toString();
+    if (rawUrl.isEmpty) return null;
+    final canonicalUrl = _canonicalMediaUrl(rawUrl);
+    return key == _getKey(canonicalUrl) ? null : canonicalUrl;
+  }
+
+  Map<String, List<dynamic>> _indexLegacyHistoryKeys() {
+    final aliases = <String, List<dynamic>>{};
+    for (var i = 0; i < _historyBox.length; i++) {
+      final key = _historyBox.keyAt(i);
+      final row = _historyBox.getAt(i);
+      if (row is! Map) continue;
+      final url = _legacyHistoryUrl(key, row);
+      if (url != null) (aliases[url] ??= []).add(key);
+    }
+    return aliases;
+  }
+
+  Future<void> _updateHistoryItem(
+    String canonicalUrl,
+    String? lastEpisodeUrl,
+    int timestamp,
+    int position, {
+    List<dynamic>? aliasKeys,
+  }) async {
     final mainKey = _getKey(canonicalUrl);
+    Map<dynamic, dynamic>? latestAlias;
+    var latestTimestamp = -1;
+    final staleMainKeys = <dynamic>[];
+    if (aliasKeys != null) {
+      for (final key in aliasKeys) {
+        final raw = _historyBox.get(key);
+        if (raw is! Map || !_historyEntryMatchesUrl(raw, canonicalUrl)) {
+          continue;
+        }
+        staleMainKeys.add(key);
+        final timestamp = _historyTimestamp(raw);
+        if (latestAlias == null || timestamp > latestTimestamp) {
+          latestAlias = raw;
+          latestTimestamp = timestamp;
+        }
+      }
+    }
     final entry =
-        _historyBox.get(mainKey) ?? _latestHistoryMainEntry(canonicalUrl);
+        _historyBox.get(mainKey) ??
+        (aliasKeys == null
+            ? _latestHistoryMainEntry(canonicalUrl)
+            : latestAlias);
     if (entry is Map) {
       final updatedEntry = Map<String, dynamic>.from(entry);
       updatedEntry['url'] = canonicalUrl;
       updatedEntry['timestamp'] = timestamp;
       updatedEntry['position'] = position;
 
-      final staleMainKeys = <dynamic>[];
-      for (var i = 0; i < _historyBox.length; i++) {
-        final key = _historyBox.keyAt(i);
-        if (key == mainKey || (key is String && key.startsWith('EP_'))) {
-          continue;
-        }
-        final raw = _historyBox.getAt(i);
-        if (raw is Map && _historyEntryMatchesUrl(raw, canonicalUrl)) {
-          staleMainKeys.add(key);
+      if (aliasKeys == null) {
+        for (var i = 0; i < _historyBox.length; i++) {
+          final key = _historyBox.keyAt(i);
+          if (key == mainKey || (key is String && key.startsWith('EP_'))) {
+            continue;
+          }
+          final raw = _historyBox.getAt(i);
+          if (raw is Map && _historyEntryMatchesUrl(raw, canonicalUrl)) {
+            staleMainKeys.add(key);
+          }
         }
       }
       if (staleMainKeys.isNotEmpty) {

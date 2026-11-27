@@ -1790,9 +1790,13 @@ class AnimeWitcherAccountService {
   Future<void> syncRecentWatched() async {
     if (!isSignedIn) return;
     final profile = _profile!;
+    final generation = _sessionGeneration;
+    bool isCurrent() =>
+        generation == _sessionGeneration && _isCurrentProfile(profile);
     await _pendingStorageWrite;
+    if (!isCurrent()) return;
     await _flushPendingLastWatchedDeletes(profile);
-    if (!_isCurrentProfile(profile)) return;
+    if (!isCurrent()) return;
 
     // AnimeWitcher keeps last_watched as its own collection. It is the only
     // server source for Recently Watched; removing a continue_watching document
@@ -1803,7 +1807,7 @@ class AnimeWitcherAccountService {
         token,
       ),
     );
-    if (!_isCurrentProfile(profile)) return;
+    if (!isCurrent()) return;
     recentDocs.sort((a, b) {
       final aDate = _dateValue(a.fields['date'])?.millisecondsSinceEpoch ?? 0;
       final bDate = _dateValue(b.fields['date'])?.millisecondsSinceEpoch ?? 0;
@@ -1818,8 +1822,19 @@ class AnimeWitcherAccountService {
       if (animeId != null) localByAnime[animeId] = raw;
     }
 
+    final known = <RecentHistoryUpdate>[];
+    Future<void> applyKnown() async {
+      if (known.isEmpty) return;
+      await _storage.syncKnownRecentHistoryRows(
+        known,
+        accountUid: profile.uid,
+        isCurrent: isCurrent,
+      );
+      known.clear();
+    }
+
     for (final recent in recentDocs) {
-      if (!_isCurrentProfile(profile)) return;
+      if (!isCurrent()) return;
       final animeId = _optionalString(recent.fields['anime_id']) ?? recent.id;
       if (animeId.isEmpty) continue;
       final watchedAt =
@@ -1830,23 +1845,21 @@ class AnimeWitcherAccountService {
       if (local != null) {
         final url = _optionalString(local['url']);
         if (url != null && timestamp > 0) {
-          await _storage.updateHistoryItemTimestampAndPosition(
-            url,
-            _optionalString(local['lastEpisodeUrl']),
-            timestamp,
-            _intValue(local['position']),
-          );
-          await _storage.markHistoryItemSynced(
-            url,
-            accountUid: profile.uid,
-            syncedAt: timestamp,
-          );
+          known.add((
+            url: url,
+            episodeUrl: _optionalString(local['lastEpisodeUrl']),
+            timestamp: timestamp,
+            position: _intValue(local['position']),
+          ));
         }
         continue;
       }
 
+      // Don't move local writes across a missing item's awaited catalog fetch.
+      await applyKnown();
+      if (!isCurrent()) return;
       final item = await _itemForAnimeId(animeId);
-      if (item == null || !_isCurrentProfile(profile)) continue;
+      if (item == null || !isCurrent()) continue;
       await _storage.saveProgress(
         item,
         0,
@@ -1860,6 +1873,7 @@ class AnimeWitcherAccountService {
             : DateTime.now().millisecondsSinceEpoch,
       );
     }
+    await applyKnown();
   }
 
   Future<void> recordLastWatched({required MultimediaItem item}) async {

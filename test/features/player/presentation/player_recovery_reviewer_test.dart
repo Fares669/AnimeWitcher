@@ -7,8 +7,10 @@ import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/providers/anime_data_source_settings_provider.dart';
+import 'package:animewitcher/core/storage/download_persistence_worker.dart';
 import 'package:animewitcher/core/storage/history_repository.dart';
 import 'package:animewitcher/core/storage/settings_repository.dart';
+import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/details/presentation/downloaded_file_provider.dart';
 import 'package:animewitcher/features/details/presentation/stream_source_prefetch.dart';
 import 'package:animewitcher/features/library/presentation/history_provider.dart';
@@ -18,7 +20,11 @@ import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import 'package:media_kit/media_kit.dart' as media;
+// Set the platform facade directly so integration files stay in the fixture.
+// ignore: depend_on_referenced_packages
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 class _Player extends Fake implements media.Player {
   final positions = StreamController<Duration>.broadcast(sync: true);
@@ -337,7 +343,38 @@ class _History extends WatchHistory {
   }) async {}
 }
 
+typedef _ProgressRow = ({
+  int position,
+  int duration,
+  String? episodeUrl,
+  String? streamUrl,
+});
+
+class _CheckpointProbe {
+  bool hold = false;
+  final requests = <_ProgressRow>[];
+  final finished = <_ProgressRow>[];
+  final waits = <Completer<void>>[];
+
+  Future<void> checkpoint(_ProgressRow row) async {
+    if (!hold) return;
+    requests.add(row);
+    final wait = Completer<void>();
+    waits.add(wait);
+    await wait.future;
+    finished.add(row);
+  }
+
+  void finish() {
+    for (final wait in waits) {
+      if (!wait.isCompleted) wait.complete();
+    }
+  }
+}
+
 class _ContinueWatching extends ContinueWatchingNotifier {
+  _ContinueWatching(this.probe);
+  final _CheckpointProbe probe;
   @override
   List<HistoryItem> build() => const [];
   @override
@@ -353,7 +390,91 @@ class _ContinueWatching extends ContinueWatchingNotifier {
     String? episodeServerName,
     String? episodeServerNumber,
     String? episodePosterUrl,
-  }) async {}
+  }) => probe.checkpoint((
+    position: position,
+    duration: duration,
+    episodeUrl: lastEpisodeUrl,
+    streamUrl: lastStreamUrl,
+  ));
+}
+
+class _CheckpointPaths extends PathProviderPlatform {
+  _CheckpointPaths(this.support);
+  final Directory support;
+  @override
+  Future<String?> getApplicationSupportPath() async => support.path;
+  @override
+  Future<String?> getTemporaryPath() async => '${support.path}/subtitle-temp';
+}
+
+class _CheckpointStorage extends StorageService {
+  _CheckpointStorage(this.probe, {required super.downloadPersistenceWorker});
+  final _CheckpointProbe probe;
+  final entries = Completer<void>();
+
+  @override
+  Future<void> saveContinueWatchingProgress(
+    MultimediaItem item,
+    int positionMillis,
+    int durationMillis, {
+    String? lastStreamUrl,
+    String? lastEpisodeUrl,
+    int? season,
+    int? episode,
+    String? episodeTitle,
+    String? episodeServerName,
+    String? episodeServerNumber,
+    String? episodePosterUrl,
+    int? progressPercent,
+    int? timestamp,
+    String? syncedAccountUid,
+    int? syncedAt,
+  }) async {
+    final wait = probe.checkpoint((
+      position: positionMillis,
+      duration: durationMillis,
+      episodeUrl: lastEpisodeUrl,
+      streamUrl: lastStreamUrl,
+    ));
+    if (probe.hold && !entries.isCompleted) entries.complete();
+    await wait;
+    await super.saveContinueWatchingProgress(
+      item,
+      positionMillis,
+      durationMillis,
+      lastStreamUrl: lastStreamUrl,
+      lastEpisodeUrl: lastEpisodeUrl,
+      season: season,
+      episode: episode,
+      episodeTitle: episodeTitle,
+      episodeServerName: episodeServerName,
+      episodeServerNumber: episodeServerNumber,
+      episodePosterUrl: episodePosterUrl,
+      progressPercent: progressPercent,
+      timestamp: timestamp,
+      syncedAccountUid: syncedAccountUid,
+      syncedAt: syncedAt,
+    );
+  }
+}
+
+class _OfflineProgressAccount extends _Account {
+  final progressCalls = <({int position, String? episodeUrl})>[];
+
+  @override
+  Future<void> saveContinueWatchingProgress({
+    required MultimediaItem item,
+    required int position,
+    required int duration,
+    String? episodeUrl,
+    int? episodeNumber,
+    String? episodeTitle,
+    String? episodeServerName,
+    String? episodeServerNumber,
+    String? episodePosterUrl,
+  }) async {
+    progressCalls.add((position: position, episodeUrl: episodeUrl));
+  }
 }
 
 class _Files extends DownloadedFiles {
@@ -421,6 +542,7 @@ void main() {
   late _Player player;
   late _Account account;
   late _HistoryRepository history;
+  late _CheckpointProbe checkpointProbe;
   final additionalPlayers = <_Player>[];
   int connectivityChecks = 0;
   Completer<List<String>>? pendingConnectivity;
@@ -441,6 +563,7 @@ void main() {
     player = _Player();
     account = _Account();
     history = _HistoryRepository();
+    checkpointProbe = _CheckpointProbe();
     container = ProviderContainer(
       overrides: [
         extensionManagerProvider.overrideWith(() => _Extensions(catalog)),
@@ -451,7 +574,9 @@ void main() {
         historyRepositoryProvider.overrideWithValue(history),
         animeWitcherAccountServiceProvider.overrideWithValue(account),
         watchHistoryProvider.overrideWith(_History.new),
-        continueWatchingProvider.overrideWith(_ContinueWatching.new),
+        continueWatchingProvider.overrideWith(
+          () => _ContinueWatching(checkpointProbe),
+        ),
         downloadedFilesProvider.overrideWith(_Files.new),
       ],
     );
@@ -459,6 +584,7 @@ void main() {
     controller = container.read(playerControllerProvider.notifier);
   });
   tearDown(() async {
+    checkpointProbe.finish();
     container.dispose();
     if (!account.pending.isCompleted) account.pending.complete();
     for (final request in [...catalog.episodes, ...catalog.artwork]) {
@@ -503,6 +629,190 @@ void main() {
     player.advance(const Duration(seconds: 5));
     await flush();
   }
+
+  test('close coalesces only the matching in-flight checkpoint', () async {
+    await startSource();
+    player.value = player.value.copyWith(
+      position: const Duration(seconds: 8),
+      duration: const Duration(minutes: 24),
+    );
+    checkpointProbe.hold = true;
+    controller.saveProgress();
+    controller.disposeController(player: player);
+    expect(checkpointProbe.requests.map((r) => r.position), [8000]);
+
+    checkpointProbe.finish();
+    await flush();
+    expect(checkpointProbe.finished, checkpointProbe.requests);
+  });
+
+  test('new position, rewind and account revision each persist', () async {
+    await startSource();
+    checkpointProbe.hold = true;
+    void saveAt(int seconds) {
+      player.value = player.value.copyWith(
+        position: Duration(seconds: seconds),
+        duration: const Duration(minutes: 24),
+      );
+      controller.saveProgress();
+    }
+
+    saveAt(8);
+    saveAt(8);
+    saveAt(13);
+    saveAt(8);
+    container.read(accountDataRevisionProvider.notifier).bump();
+    saveAt(8);
+    expect(checkpointProbe.requests.map((r) => r.position), [
+      8000,
+      13000,
+      8000,
+      8000,
+    ]);
+
+    checkpointProbe.finish();
+    await flush();
+    saveAt(8);
+    expect(checkpointProbe.requests.length, 5, reason: 'not a permanent skip');
+  });
+
+  test(
+    'overlap retries a failed local checkpoint without rewinding a newer save',
+    () async {
+      await startSource();
+      checkpointProbe.hold = true;
+      void saveAt(int seconds) {
+        player.value = player.value.copyWith(
+          position: Duration(seconds: seconds),
+          duration: const Duration(minutes: 24),
+        );
+        controller.saveProgress();
+      }
+
+      saveAt(8);
+      saveAt(8);
+      checkpointProbe.waits.first.completeError(
+        StateError('local write failed'),
+      );
+      await flush();
+      expect(checkpointProbe.requests.map((r) => r.position), [8000, 8000]);
+
+      saveAt(8);
+      saveAt(13);
+      checkpointProbe.waits[1].completeError(StateError('older write failed'));
+      await flush();
+      expect(checkpointProbe.requests.map((r) => r.position), [
+        8000,
+        8000,
+        13000,
+      ]);
+      checkpointProbe.finish();
+      await flush();
+      expect(checkpointProbe.finished.last.position, 13000);
+    },
+  );
+
+  final nativeClip = Platform.environment['ANIMEWITCHER_TEST_PROGRESS_CLIP'];
+  final nativeLibrary = Platform.environment['ANIMEWITCHER_TEST_LIBMPV'];
+
+  test(
+    'native pause and immediate exit share a durable progress checkpoint',
+    () async {
+      final priorNativeMode = media.NativePlayer.test;
+      media.NativePlayer.test = true;
+      addTearDown(() => media.NativePlayer.test = priorNativeMode);
+      media.MediaKit.ensureInitialized(libmpv: nativeLibrary);
+      final native = media.Player(
+        configuration: const media.PlayerConfiguration(muted: true),
+      );
+      addTearDown(native.dispose);
+
+      final previousPaths = PathProviderPlatform.instance;
+      PathProviderPlatform.instance = _CheckpointPaths(testDirectory);
+      addTearDown(() => PathProviderPlatform.instance = previousPaths);
+      final gate = _CheckpointProbe();
+      final worker = DownloadPersistenceWorker.forDirectory(testDirectory.path);
+      addTearDown(worker.close);
+      final storage = _CheckpointStorage(
+        gate,
+        downloadPersistenceWorker: worker,
+      );
+      await storage.init();
+      addTearDown(Hive.close);
+      final offline = _OfflineProgressAccount();
+      final actual = ProviderContainer(
+        overrides: [
+          extensionManagerProvider.overrideWith(() => _Extensions(catalog)),
+          activeProviderProvider.overrideWithValue(catalog),
+          playerSettingsProvider.overrideWith(_Settings.new),
+          animeDataSourceSettingsProvider.overrideWith(_ArtworkSettings.new),
+          settingsRepositoryProvider.overrideWithValue(_SettingsRepository()),
+          historyRepositoryProvider.overrideWithValue(
+            HistoryRepository(storage, offline),
+          ),
+          animeWitcherAccountServiceProvider.overrideWithValue(offline),
+          watchHistoryProvider.overrideWith(_History.new),
+          downloadedFilesProvider.overrideWith(_Files.new),
+        ],
+      );
+      addTearDown(actual.dispose);
+      addTearDown(gate.finish);
+      await actual.read(playerSettingsProvider.future);
+      final ctrl = actual.read(playerControllerProvider.notifier);
+      final episode = _episode(1);
+      final series = _item([episode, _episode(2)]);
+      const nativeTimeout = Duration(seconds: 6);
+
+      final playingPosition = native.stream.position
+          .firstWhere((p) => p >= const Duration(milliseconds: 250))
+          .timeout(nativeTimeout);
+      await ctrl
+          .init(
+            player: native,
+            item: series,
+            episode: episode,
+            videoUrl: nativeClip!,
+          )
+          .timeout(nativeTimeout);
+      await playingPosition;
+      expect(native.state.duration, greaterThan(const Duration(seconds: 30)));
+      expect(native.state.playing, isTrue);
+      await flush();
+      offline.progressCalls.clear();
+
+      gate.hold = true;
+      await ctrl.pause().timeout(nativeTimeout);
+      await storage.entries.future.timeout(nativeTimeout);
+      final paused = gate.requests.single;
+      expect(paused.position, greaterThan(0));
+      expect(paused.episodeUrl, episode.url);
+
+      // Same controller operation called by PlayerScreen.Back, before the
+      // engine stops or clears its timeline.
+      ctrl.disposeController(player: native);
+      expect(gate.requests, [paused]);
+      gate.finish();
+      final deadline = Stopwatch()..start();
+      while (offline.progressCalls.length < gate.requests.length &&
+          deadline.elapsed < nativeTimeout) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      expect(offline.progressCalls.length, gate.requests.length);
+      expect(Hive.box<dynamic>(StorageService.kContinueWatchingBox).length, 2);
+      final row = storage.getContinueWatching().single;
+      expect(row['position'], paused.position);
+      expect(row['duration'], paused.duration);
+      expect(row['lastEpisodeUrl'], episode.url);
+      expect(row['episodePosterUrl'], isNull);
+      expect(
+        actual.read(continueWatchingProvider).single.position,
+        paused.position,
+      );
+      expect(catalog.streamCalls, 0);
+    },
+    skip: !Platform.isLinux || nativeClip == null || nativeLibrary == null,
+    timeout: const Timeout(Duration(seconds: 24)),
+  );
 
   test('end-of-episode ticks reuse lookup and do not retry a failed warm', () async {
     final first = _CountedEpisode();

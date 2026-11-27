@@ -16,6 +16,7 @@ import '../../../details/presentation/widgets/episode_action_chip.dart';
 import '../../../library/presentation/download_progress_v2_provider.dart';
 import '../../../library/presentation/downloads_provider.dart';
 import 'manga_chapter_browse.dart';
+import 'manga_chapter_download_index.dart';
 import 'manga_chapter_row.dart';
 
 class MangaChapterSortButton extends ConsumerWidget {
@@ -98,6 +99,17 @@ class MangaChapterList extends ConsumerStatefulWidget {
 
 class _MangaChapterListState extends ConsumerState<MangaChapterList> {
   final Set<String> _selectedChapterIds = <String>{};
+  List<DownloadItem>? _indexedDownloads;
+  late MangaChapterDownloadIndex _downloadIndex;
+
+  MangaChapterDownloadIndex get _chapterDownloads {
+    final downloads = widget.downloads;
+    if (!identical(downloads, _indexedDownloads)) {
+      _downloadIndex = MangaChapterDownloadIndex(downloads);
+      _indexedDownloads = downloads;
+    }
+    return _downloadIndex;
+  }
 
   Widget _withTransition(Widget child, {Key? key}) {
     final animation = widget.transition;
@@ -168,6 +180,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     MangaChapter chapter,
     Map<String, DownloadProgressData> progressById,
   ) {
+    if (progressById.isEmpty) return null;
     DownloadProgressData? data;
     final mangaId = chapter.mangaId.trim();
     if (mangaId.isNotEmpty && chapter.id.trim().isNotEmpty) {
@@ -184,7 +197,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     MangaChapter chapter,
     Map<String, DownloadProgressData> progressById,
   ) =>
-      completedMangaChapterDownload(widget.downloads, chapter) != null ||
+      _chapterDownloads.completed(chapter) != null ||
       _progressFor(chapter, progressById)?.status == TaskStatus.complete;
 
   /// The range menu: every chapter, or one run of fifty, each with how many
@@ -449,11 +462,9 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     final selected = widget.chapters
         .where((chapter) => _selectedChapterIds.contains(chapter.id))
         .toList();
+    final existing = _chapterDownloads;
     final chapters = selected
-        .where(
-          (chapter) =>
-              !mangaChapterDownloadAlreadyPresent(widget.downloads, chapter),
-        )
+        .where((chapter) => !existing.alreadyPresent(chapter))
         .toList();
     final skipped = selected.length - chapters.length;
     chapters.sort((a, b) {
@@ -633,7 +644,9 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     DownloadProgressData? data;
     var progressIdentity = chapter.url;
     final mangaId = chapter.mangaId.trim();
-    if (mangaId.isNotEmpty && chapter.id.trim().isNotEmpty) {
+    if (progressById.isNotEmpty &&
+        mangaId.isNotEmpty &&
+        chapter.id.trim().isNotEmpty) {
       final logicalId = logicalDownloadIdForMangaChapter(
         mangaId: mangaId,
         chapterId: chapter.id,
@@ -643,10 +656,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     }
     data ??= progressById[chapter.url];
 
-    final completedDownload = completedMangaChapterDownload(
-      widget.downloads,
-      chapter,
-    );
+    final completedDownload = _chapterDownloads.completed(chapter);
     final status = data?.status;
     final active =
         status == TaskStatus.running ||

@@ -340,6 +340,17 @@ final class DownloadManagerV2 {
   }
 
   Future<void> _initialize() async {
+    final verification = _integrityVerifier.startupSession();
+    try {
+      await _initializeWithVerification(verification);
+    } finally {
+      verification.close();
+    }
+  }
+
+  Future<void> _initializeWithVerification(
+    DownloadStartupIntegritySessionV2 verification,
+  ) async {
     await _gateway.initialize();
     final rehydrated = await _gateway.rehydrate();
     final byTaskId = <String, DownloadTransportHandle>{
@@ -420,6 +431,8 @@ final class DownloadManagerV2 {
         continue;
       }
       if (record.mediaKind == DownloadMediaKind.mangaChapter) {
+        // Video checks finish before chapter recovery begins.
+        verification.close();
         // An unrelated chapter's deep verification must not gate local video controls.
         await _publishLocalReadiness();
       }
@@ -474,10 +487,12 @@ final class DownloadManagerV2 {
             destinationKey != null &&
             startupDestinationOwners[destinationKey] != record.logicalId;
         if (record.completedAtMillis != null) {
-          final result = await _verifyRecordDestination(
-            record,
-            repairManga: true,
-          );
+          final result = record.mediaKind == DownloadMediaKind.videoEpisode
+              ? await verification.verify(
+                  await _destinationFile(record.destinationPath),
+                  expectedBytes: record.expectedBytes,
+                )
+              : await _verifyRecordDestination(record, repairManga: true);
           if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
             await _pauseUnavailableProviderHandle(startupOwnership);
             continue;
@@ -848,6 +863,7 @@ final class DownloadManagerV2 {
         await _recordStartupFailure(record, startupOwnership, error);
       }
     }
+    verification.close();
     await _cleanupEmptyDownloadFolders(sweepOrphans: true);
     await _publishLocalReadiness();
     for (final recover in recoveries) {
