@@ -30,6 +30,13 @@ StorageService storageService(Ref ref) {
   throw UnimplementedError('StorageService must be initialized');
 }
 
+typedef _StoredLibraryCard = ({
+  Map<dynamic, dynamic> row,
+  String url,
+  String title,
+  int updatedAt,
+});
+
 class StorageService {
   StorageService({DownloadPersistenceWorker? downloadPersistenceWorker})
     : _downloadPersistenceWorker = downloadPersistenceWorker == null
@@ -464,55 +471,91 @@ class StorageService {
     return raw == null ? null : _storedLibraryCategory(raw);
   }
 
-  List<MultimediaItem> getLibraryItems({String? category}) {
-    final entries = <({MultimediaItem item, int updatedAt})>[];
+  List<MultimediaItem> getLibraryItems({String? category}) => [
+    for (final card in _orderedLibraryRows(category))
+      _hydrateLibraryCard(card, _storedLibraryContentType(card.row)),
+  ];
+
+  /// Page of the local shelf in the same order as [getLibraryItems], plus
+  /// the full unpaginated count for this media kind. Off-page rows remain raw
+  /// Hive metadata, not transient [MultimediaItem]s.
+  ({List<MultimediaItem> items, int total}) getLocalLibraryShelf({
+    required String category,
+    required bool manga,
+    required int limit,
+  }) {
+    final items = <MultimediaItem>[];
+    var total = 0;
+    for (final card in _orderedLibraryRows(category)) {
+      final type = _storedLibraryContentType(card.row);
+      if ((type == MultimediaContentType.manga) != manga) continue;
+      total++;
+      if (items.length < limit) items.add(_hydrateLibraryCard(card, type));
+    }
+    return (items: items, total: total);
+  }
+
+  List<_StoredLibraryCard> _orderedLibraryRows(String? category) {
+    final entries = <_StoredLibraryCard>[];
     final seen = <String>{};
     final normalizedFilter = category == null
         ? null
         : _normalizeLibraryCategory(category);
-    for (var i = 0; i < _libraryBox.length; i++) {
-      final raw = _libraryBox.getAt(i);
+    for (final raw in _libraryBox.values) {
       if (raw is! Map) continue;
-      final map = Map<String, dynamic>.from(raw);
       if (normalizedFilter == 'favorite') {
         if (!_storedLibraryFavorite(raw)) continue;
       } else if (normalizedFilter != null &&
           _storedLibraryCategory(raw) != normalizedFilter) {
         continue;
       }
-      final canonicalUrl = _canonicalMediaUrl((map['url'] as String?) ?? '');
-      if (canonicalUrl.isEmpty || !seen.add(canonicalUrl)) continue;
-      final storedStatus = (map['status'] ?? '').toString();
-      final updatedAt = (map['updatedAt'] as num?)?.toInt() ?? 0;
+      final url = _canonicalMediaUrl((raw['url'] as String?) ?? '');
+      // The first canonical row in Hive order wins within a category even
+      // when it belongs to another media kind or has an older timestamp.
+      if (url.isEmpty || !seen.add(url)) continue;
       entries.add((
-        item: MultimediaItem(
-          title: (map['title'] as String?) ?? '',
-          url: canonicalUrl,
-          posterUrl: (map['posterUrl'] as String?) ?? '',
-          bannerUrl: map['bannerUrl'] as String?,
-          description: map['description'] as String?,
-          contentType: MultimediaItem.parseContentType(
-            (map['type'] as String?) ?? (map['contentType'] as String?),
-          ),
-          catalogType: map['catalogType'] as String?,
-          year: (map['year'] as num?)?.toInt(),
-          isDubbed: map['isDubbed'] == true,
-          provider: map['provider'] as String?,
-          status: storedStatus == 'completed'
-              ? ShowStatus.completed
-              : storedStatus == 'upcoming'
-              ? ShowStatus.upcoming
-              : ShowStatus.ongoing,
-        ),
-        updatedAt: updatedAt,
+        row: raw,
+        url: url,
+        title: (raw['title'] as String?) ?? '',
+        updatedAt: (raw['updatedAt'] as num?)?.toInt() ?? 0,
       ));
     }
     entries.sort((a, b) {
       final cmp = b.updatedAt.compareTo(a.updatedAt);
       if (cmp != 0) return cmp;
-      return a.item.title.toLowerCase().compareTo(b.item.title.toLowerCase());
+      return a.title.toLowerCase().compareTo(b.title.toLowerCase());
     });
-    return entries.map((e) => e.item).toList();
+    return entries;
+  }
+
+  MultimediaContentType _storedLibraryContentType(Map<dynamic, dynamic> row) =>
+      MultimediaItem.parseContentType(
+        (row['type'] as String?) ?? (row['contentType'] as String?),
+      );
+
+  MultimediaItem _hydrateLibraryCard(
+    _StoredLibraryCard card,
+    MultimediaContentType type,
+  ) {
+    final row = card.row;
+    final status = (row['status'] ?? '').toString();
+    return MultimediaItem(
+      title: card.title,
+      url: card.url,
+      posterUrl: (row['posterUrl'] as String?) ?? '',
+      bannerUrl: row['bannerUrl'] as String?,
+      description: row['description'] as String?,
+      contentType: type,
+      catalogType: row['catalogType'] as String?,
+      year: (row['year'] as num?)?.toInt(),
+      isDubbed: row['isDubbed'] == true,
+      provider: row['provider'] as String?,
+      status: status == 'completed'
+          ? ShowStatus.completed
+          : status == 'upcoming'
+          ? ShowStatus.upcoming
+          : ShowStatus.ongoing,
+    );
   }
 
   /// Number of unique local cards by persisted shelf, without hydrating cards.
@@ -535,10 +578,7 @@ class StorageService {
           favorite && (seenByCategory['favorite'] ??= {}).add(url);
       if (!newPrimary && !newFavorite) continue;
       final isManga =
-          MultimediaItem.parseContentType(
-            (raw['type'] as String?) ?? (raw['contentType'] as String?),
-          ) ==
-          MultimediaContentType.manga;
+          _storedLibraryContentType(raw) == MultimediaContentType.manga;
       void add(String key) {
         final count = counts[key] ?? (anime: 0, manga: 0);
         counts[key] = isManga

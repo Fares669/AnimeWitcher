@@ -173,6 +173,16 @@ class LibraryRepository {
     return _storageService.getLibraryItems(category: category?.storageKey);
   }
 
+  ({List<MultimediaItem> items, int total}) getLocalShelf({
+    required LibraryCategory category,
+    required bool manga,
+    required int limit,
+  }) => _storageService.getLocalLibraryShelf(
+    category: category.storageKey,
+    manga: manga,
+    limit: limit,
+  );
+
   int getLibraryItemUpdatedAt(String url) {
     return _storageService.getLibraryItemUpdatedAt(url);
   }

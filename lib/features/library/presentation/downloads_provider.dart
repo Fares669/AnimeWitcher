@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:path/path.dart' as p;
@@ -421,6 +422,47 @@ final class _DownloadProjectionMetadata {
   }
 }
 
+// Keep a permutation of the previous order only when every row has a logical
+// identity and deduplication kept every row. In that case equal ordering keys
+// imply the published ordering is unchanged even if transport values change.
+final class _DownloadProjectionOrder {
+  _DownloadProjectionOrder(List<DownloadItem> input, this._orderedRows)
+    : indices = Uint32List(input.length) {
+    final indexByRow = Map<DownloadItem, int>.identity();
+    for (var i = 0; i < input.length; i++) {
+      indexByRow[input[i]] = i;
+    }
+    for (var i = 0; i < _orderedRows.length; i++) {
+      indices[i] = indexByRow[_orderedRows[i]]!;
+    }
+  }
+
+  List<DownloadItem> _orderedRows;
+  final Uint32List indices;
+
+  List<DownloadItem>? reorder(List<DownloadItem> current) {
+    if (current.length != indices.length ||
+        indices.length != _orderedRows.length) {
+      return null;
+    }
+    for (var i = 0; i < current.length; i++) {
+      final before = _orderedRows[i];
+      final after = current[indices[i]];
+      if (identical(before, after)) continue;
+      if (before.logicalId != after.logicalId ||
+          before.id != after.id ||
+          before.status != after.status ||
+          before.timestamp != after.timestamp) {
+        return null;
+      }
+    }
+    return _orderedRows = List<DownloadItem>.generate(
+      current.length,
+      (i) => current[indices[i]],
+    );
+  }
+}
+
 @Riverpod(keepAlive: true)
 class DownloadsNotifier extends _$DownloadsNotifier {
   static const Duration _durableRefreshInterval = Duration(seconds: 30);
@@ -449,6 +491,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
   Timer? _durableRefreshTimer;
   Timer? _connectionRefreshTimer;
   Future<void>? _durableReloadInFlight;
+  _DownloadProjectionOrder? _projectionOrder;
 
   @override
   Future<List<DownloadItem>> build() async {
@@ -514,6 +557,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       unawaited(_presentationSubscription?.cancel());
       _durableRefreshTimer?.cancel();
       _connectionRefreshTimer?.cancel();
+      _projectionOrder = null;
     });
 
     return _projectList();
@@ -523,6 +567,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     _metadataByTaskId = metadata;
     _metadataByLogicalId = null;
     _parsedMetadata.clear();
+    _projectionOrder = null;
   }
 
   void _refreshPresentationState() {
@@ -620,8 +665,25 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       }
     }
 
-    items.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-    return _orderDownloads(collapseDuplicateDownloads(items).visible);
+    final reordered = _projectionOrder?.reorder(items);
+    if (reordered != null) return reordered;
+
+    // Visibility, status, or timestamps changed, or this includes legacy
+    // identities. Recompute the exact previous ordering/deduplication rules.
+    if (items.length <= 1) {
+      _projectionOrder = null;
+      return items;
+    }
+    final cacheable = items.every(
+      (row) => row.logicalId?.trim().isNotEmpty == true,
+    );
+    final sorted = cacheable ? List<DownloadItem>.of(items) : items;
+    sorted.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    final ordered = _orderDownloads(collapseDuplicateDownloads(sorted).visible);
+    _projectionOrder = cacheable && ordered.length == items.length
+        ? _DownloadProjectionOrder(items, ordered)
+        : null;
+    return ordered;
   }
 
   List<DownloadItem> _orderDownloads(List<DownloadItem> items) {

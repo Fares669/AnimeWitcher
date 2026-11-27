@@ -137,6 +137,11 @@ class AnimeWitcherAccountService {
       AnimeWitcherAccountSnapshot(profile: _profile, lastSyncAt: _lastSyncAt);
 
   bool get isSignedIn => _session != null && _profile != null;
+
+  /// Read after cached restore. A session without a cached profile still
+  /// needs verification and can recover its profile on this launch.
+  bool get hasRestorableSession => _session != null;
+
   String? get accountUid => _profile?.uid;
 
   /// Whether [comment] belongs to the active AnimeWitcher account.

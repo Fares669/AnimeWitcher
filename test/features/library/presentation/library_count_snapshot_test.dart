@@ -18,6 +18,7 @@ import 'package:animewitcher/core/storage/witanime_library_service.dart';
 import 'package:animewitcher/features/library/presentation/library_media_kind.dart';
 import 'package:animewitcher/features/library/presentation/library_provider.dart';
 import 'package:animewitcher/features/library/presentation/library_screen.dart';
+import 'package:animewitcher/features/library/presentation/widgets/bookmarks_tab.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -40,12 +41,14 @@ class _Storage extends StorageService {
   int scans = 0;
   int diskMaps = 0;
   int shelfReads = 0;
+  int boundedReads = 0;
   int hydratedCards = 0;
   int projectionMicros = 0;
 
   void resetWork() {
     scans = 0;
     shelfReads = 0;
+    boundedReads = 0;
     hydratedCards = 0;
     projectionMicros = 0;
   }
@@ -58,6 +61,24 @@ class _Storage extends StorageService {
     projectionMicros += timer.elapsedMicroseconds;
     hydratedCards += items.length;
     return items;
+  }
+
+  @override
+  ({List<MultimediaItem> items, int total}) getLocalLibraryShelf({
+    required String category,
+    required bool manga,
+    required int limit,
+  }) {
+    boundedReads++;
+    final timer = Stopwatch()..start();
+    final shelf = super.getLocalLibraryShelf(
+      category: category,
+      manga: manga,
+      limit: limit,
+    );
+    projectionMicros += timer.elapsedMicroseconds;
+    hydratedCards += shelf.items.length;
+    return shelf;
   }
 
   @override
@@ -249,7 +270,7 @@ void main() {
   const later = LibraryCategory.continueLater;
   const uninterested = LibraryCategory.notInterested;
 
-  testWidgets('phone badge counts use one metadata scan for a large library', (
+  testWidgets('phone badges and visible shelf hydration stay bounded', (
     tester,
   ) async {
     await tester.runAsync(() async {
@@ -288,7 +309,8 @@ void main() {
     expect(find.text('أشاهده حاليًا 600'), findsOneWidget);
     expect(find.text('المفضلة 1000'), findsOneWidget);
     final library = container.read(libraryProvider.notifier);
-    final profiles = <({int scans, int reads, int cards, int micros})>[];
+    final profiles =
+        <({int scans, int reads, int boundedReads, int cards, int micros})>[];
     for (var iteration = 0; iteration < 5; iteration++) {
       storage.resetWork();
       library.refresh();
@@ -296,19 +318,45 @@ void main() {
       profiles.add((
         scans: storage.scans,
         reads: storage.shelfReads,
+        boundedReads: storage.boundedReads,
         cards: storage.hydratedCards,
         micros: storage.projectionMicros,
       ));
     }
     debugPrint('library-phone-badge-profile $profiles');
     expect(profiles.map((profile) => profile.scans), everyElement(1));
-    expect(profiles.map((profile) => profile.reads), everyElement(2));
-    expect(profiles.map((profile) => profile.cards), everyElement(2400));
+    expect(profiles.map((profile) => profile.reads), everyElement(0));
+    expect(profiles.map((profile) => profile.boundedReads), everyElement(2));
+    expect(profiles.map((profile) => profile.cards), everyElement(60));
+    LibraryItemsGrid currentGrid() =>
+        tester.widget<LibraryItemsGrid>(find.byType(LibraryItemsGrid));
+    expect(currentGrid().items, hasLength(30));
+    expect(currentGrid().items.first.url, 'https://example.test/watching/1198');
+    expect(currentGrid().hasMore, isTrue);
+
+    final shelfScroll = tester.state<ScrollableState>(
+      find.descendant(
+        of: find.byType(LibraryItemsGrid),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    shelfScroll.position.jumpTo(shelfScroll.position.maxScrollExtent);
+    await tester.pump();
+    expect(currentGrid().items, hasLength(60));
+    expect(currentGrid().items.last.url, 'https://example.test/watching/1080');
+    expect(currentGrid().hasMore, isTrue);
+
+    await tester.runAsync(() => box.delete('watching-1198'));
+    library.refresh();
+    await tester.pump();
+    expect(find.text('أشاهده حاليًا 599'), findsOneWidget);
+    expect(find.text('المفضلة 1000'), findsOneWidget);
+    expect(currentGrid().items.first.url, 'https://example.test/watching/1196');
 
     await tester.runAsync(() => box.delete('watching-0'));
     library.refresh();
     await tester.pump();
-    expect(find.text('أشاهده حاليًا 599'), findsOneWidget);
+    expect(find.text('أشاهده حاليًا 598'), findsOneWidget);
     expect(find.text('المفضلة 999'), findsOneWidget);
   });
 
@@ -388,6 +436,76 @@ void main() {
     expect(cleared.values.expand((kind) => kind.values), everyElement(0));
     expect(storage.scans, 4);
   });
+
+  test(
+    'bounded shelf preserves canonical winners, metadata and sort ties',
+    () async {
+      await box.putAll({
+        'a': {
+          ..._row(
+            'http://www.animewitcher.com/watch/same#old',
+            category: 'watching',
+            type: 'manga',
+            favorite: 'true',
+            updatedAt: 1,
+          ),
+          'title': 'Zulu',
+        },
+        'b': {
+          ..._row(
+            'https://animewitcher.com/watch/same/2',
+            category: 'watching',
+            favorite: 1,
+            updatedAt: 1000,
+          ),
+          'title': 'Anime duplicate should not win this shelf',
+        },
+        for (var index = 0; index < 72; index++)
+          'item-$index': {
+            ..._row(
+              'https://example.test/library/$index',
+              type: index.isEven ? 'anime' : 'manga',
+              category: index % 3 == 0 ? 'completed' : 'watching',
+              favorite: index % 3 != 2,
+              updatedAt: index % 9,
+            ),
+            'title': index % 2 == 0 ? 'same' : 'Same',
+            'status': index.isEven ? 'completed' : 'upcoming',
+          },
+      });
+
+      for (final category in [watching, favorite, completed]) {
+        final full = storage.getLibraryItems(category: category.storageKey);
+        for (final kind in LibraryMediaKind.values) {
+          final expected = full.where(kind.accepts).toList();
+          for (final limit in [0, 1, 10, 30, 100]) {
+            final page = storage.getLocalLibraryShelf(
+              category: category.storageKey,
+              manga: kind == manga,
+              limit: limit,
+            );
+            expect(page.total, expected.length);
+            expect(
+              page.items.map((item) => item.toJson()),
+              expected.take(limit).map((item) => item.toJson()),
+            );
+          }
+        }
+      }
+      final library = container.read(libraryProvider.notifier);
+      expect(
+        library.itemsForCategory(anime, watching).map((item) => item.url),
+        isNot(contains('https://animewitcher.com/watch/same')),
+      );
+      await box.delete('a');
+      final projected = storage.getLocalLibraryShelf(
+        category: watching.storageKey,
+        manga: false,
+        limit: 1,
+      );
+      expect(projected.items.single.url, 'https://animewitcher.com/watch/same');
+    },
+  );
 
   test(
     'exact remote count precedence and fresh ownership across held requests',

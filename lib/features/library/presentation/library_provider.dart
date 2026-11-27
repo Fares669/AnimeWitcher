@@ -267,12 +267,19 @@ class Library extends _$Library {
       page.cachedLocalCount = page.items.length;
       return page.items.take(page.visibleLimit).toList(growable: false);
     }
-    final local = _localItems(kind, category);
-    page.cachedLocalCount = local.length;
+    final local = ref
+        .read(libraryRepositoryProvider)
+        .getLocalShelf(
+          category: category,
+          manga: kind == LibraryMediaKind.manga,
+          limit: page.visibleLimit,
+        );
+    page.cachedLocalCount = local.total;
     // After a successful page, Firestore ordering is authoritative. Older
     // local caches can contain more cards than the requested server page.
-    final rows = page.receivedRemotePage ? page.items : local;
-    return rows.take(page.visibleLimit).toList(growable: false);
+    return page.receivedRemotePage
+        ? page.items.take(page.visibleLimit).toList(growable: false)
+        : local.items;
   }
 
   int? _knownTotal(LibraryMediaKind kind, LibraryCategory category) =>

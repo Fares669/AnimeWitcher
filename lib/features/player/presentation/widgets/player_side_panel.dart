@@ -444,65 +444,60 @@ class _PlayerEpisodesPanelState extends ConsumerState<PlayerEpisodesPanel> {
     final seasons = bySeason.keys.toList()..sort();
     final multiSeason = seasons.length > 1;
 
-    final rows = <Widget>[];
-    var anchorAssigned = false;
+    // Keep only the row descriptors here. Creating every card eagerly
+    // projected watch history for the full catalogue at every revision,
+    // even when only its first few rows could be laid out by the scroll view.
+    final rows = <Object>[];
     for (final season in seasons) {
-      if (multiSeason) {
-        rows.add(_PanelSubheader(title: l10n.seasonWithNumber(season)));
-      }
-      for (final ep in bySeason[season]!) {
-        final isCurrent = ep.url == currentUrl;
-        final isAnchor = isCurrent && !anchorAssigned;
-        if (isAnchor) anchorAssigned = true;
-        final pos = historyPositionForItem(
-          historyRepo,
-          widget.item,
-          episodeUrl: ep.url,
-          season: ep.season,
-          episode: ep.episode,
-        );
-        final dur = historyDurationForItem(
-          historyRepo,
-          widget.item,
-          episodeUrl: ep.url,
-          season: ep.season,
-          episode: ep.episode,
-        );
-        final isWatched = episodeIsWatchedFor(
-          episodeWatchRepo,
-          widget.item,
-          ep,
-        );
-        rows.add(
-          _EpisodeRow(
-            parentItem: widget.item,
-            episode: ep,
-            isCurrent: isCurrent,
-            isWatched: isWatched,
-            progress: isWatched
-                ? 1.0
-                : (dur > 0 ? (pos / dur).clamp(0.0, 1.0) : 0.0),
-            isTv: widget.isTv,
-            focusNode: isAnchor ? _anchorNode : null,
-            onTap: () async {
-              widget.onClose();
-              final selected = await ref
-                  .read(playbackLauncherProvider)
-                  .chooseSourceForItem(
-                    context,
-                    widget.item,
-                    ep.url,
-                    episode: ep,
-                  );
-              if (selected == null || !mounted) return;
-              await ref
-                  .read(playerControllerProvider.notifier)
-                  .loadEpisode(ep, selectedSource: selected);
-            },
-          ),
-        );
-      }
+      if (multiSeason) rows.add(season);
+      rows.addAll(bySeason[season]!);
     }
+    final anchorIndex = rows.indexWhere(
+      (row) => row is Episode && row.url == currentUrl,
+    );
+
+    Widget buildRow(BuildContext _, int index) {
+      final row = rows[index];
+      if (row is int) return _PanelSubheader(title: l10n.seasonWithNumber(row));
+      final ep = row as Episode;
+      final pos = historyPositionForItem(
+        historyRepo,
+        widget.item,
+        episodeUrl: ep.url,
+        season: ep.season,
+        episode: ep.episode,
+      );
+      final dur = historyDurationForItem(
+        historyRepo,
+        widget.item,
+        episodeUrl: ep.url,
+        season: ep.season,
+        episode: ep.episode,
+      );
+      final isWatched = episodeIsWatchedFor(episodeWatchRepo, widget.item, ep);
+      return _EpisodeRow(
+        parentItem: widget.item,
+        episode: ep,
+        isCurrent: ep.url == currentUrl,
+        isWatched: isWatched,
+        progress: isWatched
+            ? 1.0
+            : (dur > 0 ? (pos / dur).clamp(0.0, 1.0) : 0.0),
+        isTv: widget.isTv,
+        focusNode: index == anchorIndex ? _anchorNode : null,
+        onTap: () async {
+          widget.onClose();
+          final selected = await ref
+              .read(playbackLauncherProvider)
+              .chooseSourceForItem(context, widget.item, ep.url, episode: ep);
+          if (selected == null || !mounted) return;
+          await ref
+              .read(playerControllerProvider.notifier)
+              .loadEpisode(ep, selectedSource: selected);
+        },
+      );
+    }
+
     return SafeArea(
       left: false,
       child: Column(
@@ -557,7 +552,7 @@ class _PlayerEpisodesPanelState extends ConsumerState<PlayerEpisodesPanel> {
           Expanded(
             child: episodes.isEmpty
                 ? _EmptyHint(text: l10n.noEpisodesFound)
-                : _OptionList(children: rows),
+                : _OptionList(itemCount: rows.length, itemBuilder: buildRow),
           ),
         ],
       ),
@@ -1145,18 +1140,20 @@ class _ThumbPlaceholder extends StatelessWidget {
 }
 
 class _OptionList extends StatelessWidget {
-  final List<Widget> children;
+  final int itemCount;
+  final IndexedWidgetBuilder itemBuilder;
 
-  const _OptionList({required this.children});
+  const _OptionList({required this.itemCount, required this.itemBuilder});
 
   @override
   Widget build(BuildContext context) {
     return FocusTraversalGroup(
       policy: WidgetOrderTraversalPolicy(),
-      child: ListView(
+      child: ListView.builder(
         padding: const EdgeInsets.symmetric(vertical: 12),
         scrollCacheExtent: const ScrollCacheExtent.pixels(1200),
-        children: children,
+        itemCount: itemCount,
+        itemBuilder: itemBuilder,
       ),
     );
   }

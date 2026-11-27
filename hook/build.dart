@@ -17,6 +17,9 @@ void main(List<String> args) async {
       assetName: 'subsampling_scale_image_view.dart',
       sources: ['lib/ffi/image_decoder.cpp'],
       includes: ['lib/ffi/'],
+      libraries: [
+        if (input.config.code.targetOS == OS.linux) ...['dl', 'pthread'],
+      ],
       flags: [
         if (input.config.code.targetOS == OS.iOS ||
             input.config.code.targetOS == OS.macOS) ...[

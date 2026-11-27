@@ -1,12 +1,9 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/account/animewitcher_character_models.dart';
-import '../../../core/utils/artwork_quality.dart';
 import '../../../shared/widgets/cards_wrapper.dart';
 import '../../../shared/widgets/multimedia_card.dart';
-import '../../../shared/widgets/shimmer_placeholder.dart';
-import '../../../shared/widgets/thumbnail_error_placeholder.dart';
+import 'character_portrait_image.dart';
 
 class CharacterPosterCard extends StatelessWidget {
   const CharacterPosterCard({
@@ -43,27 +40,12 @@ class CharacterPosterCard extends StatelessWidget {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    ArtworkDecode(
-                      paintedWidth: 160,
-                      builder: (context, decodeWidth) {
-                        if (imageUrl.isEmpty) {
-                          return ThumbnailErrorPlaceholder(
-                            label: character.name,
-                          );
-                        }
-                        return CachedNetworkImage(
-                          imageUrl: imageUrl,
-                          fit: BoxFit.cover,
-                          memCacheWidth: decodeWidth,
-                          filterQuality: FilterQuality.medium,
-                          placeholder: (_, _) => ShimmerPlaceholder(
-                            borderRadius: MultimediaCardLayout.posterRadius,
-                          ),
-                          errorWidget: (_, _, _) => ThumbnailErrorPlaceholder(
-                            label: character.name,
-                          ),
-                        );
-                      },
+                    CharacterPortraitImage(
+                      url: imageUrl,
+                      name: character.name,
+                      radius: MultimediaCardLayout.posterRadius,
+                      standardWidth: 160,
+                      filterQuality: FilterQuality.medium,
                     ),
                     if (character.likes > 0)
                       Positioned(
@@ -105,7 +87,7 @@ class CharacterPosterCard extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: characterPortraitCaptionGap),
           Directionality(
             textDirection: TextDirection.ltr,
             child: Text(

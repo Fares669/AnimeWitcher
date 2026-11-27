@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
@@ -22,17 +23,22 @@ void main() {
   test('a live download only replaces the changed presentation row', () async {
     const rowCount = 200;
     const progressSamples = 12;
-    final records = List.generate(rowCount, _record);
+    final root = await Directory.systemTemp.createTemp('aw-download-order-');
+    addTearDown(() => root.delete(recursive: true));
+    final records = List.generate(rowCount, (i) => _record(i, root.path));
     final activeRecord = records.first;
     final store = InMemoryLogicalDownloadStoreV2();
     for (final record in records) {
       await store.put(record);
     }
     final transport = _Transport(activeRecord.taskId);
+    var archiveAvailable = true;
     final manager = DownloadManagerV2(
       store: store,
       gateway: _Gateway(transport),
       sourceResolver: StaticSourceResolverV2(),
+      sourceAllowed: (descriptor) =>
+          archiveAvailable || descriptor['providerId'] != 'archive',
     );
     final storage = _Storage(records);
     final container = ProviderContainer(
@@ -67,6 +73,8 @@ void main() {
       (row) => row.id == transport.taskId,
     );
     expect(activeIndex, isNonNegative);
+    expect(previous[activeIndex].status, TaskStatus.enqueued);
+    final initialIds = previous.map((row) => row.id).toList();
     var replacedRows = 0;
     var replacedTasks = 0;
     for (var sample = 1; sample <= progressSamples; sample++) {
@@ -82,6 +90,8 @@ void main() {
       transport.report(sample);
       final current = await currentUpdated.future;
       next.close();
+      expect(current.map((row) => row.id), initialIds);
+      expect(previous[activeIndex].transferredBytes ?? 0, sample - 1);
       expect(current[activeIndex].progress, sample / 100);
       expect(current[activeIndex].activeConnections, sample % 2 + 1);
       expect(current[activeIndex].status, TaskStatus.running);
@@ -93,10 +103,88 @@ void main() {
     }
     expect((replacedRows, replacedTasks), (progressSamples, 0));
     expect(storage.metadataReads, metadataReads);
+
+    // Source availability can change while an unrelated transfer is running.
+    // The same progress callback must still re-project visibility and restore
+    // the exact original ordering when inventory becomes available again.
+    Future<List<DownloadItem>> sampleAfterVisibilityChange(
+      int bytes, {
+      required bool visible,
+    }) async {
+      final refresh = Completer<List<DownloadItem>>();
+      final next = container.listen(downloadsProvider, (_, value) {
+        final rows = value.value;
+        if (rows != null &&
+            rows.any(
+              (row) =>
+                  row.id == transport.taskId && row.transferredBytes == bytes,
+            ) &&
+            !refresh.isCompleted) {
+          refresh.complete(rows);
+        }
+      });
+      try {
+        archiveAvailable = visible;
+        transport.report(bytes);
+        return await refresh.future;
+      } finally {
+        next.close();
+      }
+    }
+
+    final hidden = await sampleAfterVisibilityChange(
+      progressSamples + 1,
+      visible: false,
+    );
+    expect(hidden.map((row) => row.id), [transport.taskId]);
+    final restored = await sampleAfterVisibilityChange(
+      progressSamples + 2,
+      visible: true,
+    );
+    expect(restored.map((row) => row.id), initialIds);
+    expect(storage.metadataReads, metadataReads);
+
+    // Only verified logical completion moves the item behind active/failed
+    // rows. Never mutate the already-emitted, tie-ordered running collection
+    // as completion settles.
+    final complete = Completer<List<DownloadItem>>();
+    final completeSubscription = container.listen(downloadsProvider, (
+      _,
+      value,
+    ) {
+      final rows = value.value;
+      if (rows != null &&
+          rows.last.status == TaskStatus.complete &&
+          !complete.isCompleted) {
+        complete.complete(rows);
+      }
+    });
+    try {
+      await File(activeRecord.destinationPath)
+          .writeAsBytes(List.filled(100, 0));
+      transport.report(100, status: DownloadTransportStatus.complete);
+      final verified = await complete.future.timeout(
+        const Duration(seconds: 5),
+      );
+      expect(
+        verified.take(verified.length - 1).map((row) => row.id),
+        unorderedEquals(initialIds.where((id) => id != transport.taskId)),
+      );
+      expect(verified.last.id, transport.taskId);
+      expect(verified.last.progress, 1);
+      expect(restored[activeIndex].status, TaskStatus.running);
+      expect(restored.map((row) => row.id), initialIds);
+      expect(
+        (await store.get(activeRecord.logicalId))?.completedAtMillis,
+        isNotNull,
+      );
+    } finally {
+      completeSubscription.close();
+    }
   });
 }
 
-LogicalDownloadRecordV2 _record(int i) {
+LogicalDownloadRecordV2 _record(int i, String directory) {
   final id = logicalDownloadIdFor(
     animeId: 'local-fixture',
     episodeKey: '$i',
@@ -111,8 +199,8 @@ LogicalDownloadRecordV2 _record(int i) {
     generation: 1,
     taskId: taskIdForGeneration(id, 1),
     intent: i == 0 ? DownloadUserIntent.active : DownloadUserIntent.failed,
-    destinationPath: 'downloads/row-reuse-test-$i.mp4',
-    sourceDescriptor: const {'providerId': 'test'},
+    destinationPath: '$directory/row-reuse-test-$i.mp4',
+    sourceDescriptor: {'providerId': i == 0 ? 'test' : 'archive'},
     expectedBytes: 100,
     updatedAtMillis: i,
   );
@@ -130,7 +218,7 @@ final class _Storage extends MemoryStorageService {
       for (final record in records)
         record.logicalId.value: {
           'logicalId': record.logicalId.value,
-          'timestamp': record.updatedAtMillis,
+          'timestamp': record.updatedAtMillis ~/ 2,
           'trackingUrl': '/episode/${record.unitKey}',
           'item': MultimediaItem(
             title: 'Local fixture',
@@ -171,18 +259,23 @@ final class _Transport implements DownloadTransportHandle {
 
   final updates = StreamController<DownloadTransportSnapshot>.broadcast();
   int _sent = 0;
+  var _status = DownloadTransportStatus.queued;
 
   @override
   DownloadTransportSnapshot get current => DownloadTransportSnapshot(
     taskId: taskId,
-    status: DownloadTransportStatus.running,
+    status: _status,
     progress: _sent / 100,
     transferredBytes: _sent,
     totalBytes: 100,
     activeConnections: _sent % 2 + 1,
   );
 
-  void report(int bytes) {
+  void report(
+    int bytes, {
+    DownloadTransportStatus status = DownloadTransportStatus.running,
+  }) {
+    _status = status;
     _sent = bytes;
     updates.add(current);
   }

@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,17 +12,15 @@ import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/services/notification_service.dart';
-import '../../../core/utils/artwork_quality.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
 import '../../../shared/widgets/app_page_header.dart';
 import '../../../shared/widgets/loading_indicator.dart';
-import '../../../shared/widgets/shimmer_placeholder.dart';
-import '../../../shared/widgets/thumbnail_error_placeholder.dart';
 import '../../comments/presentation/animewitcher_comments_screen.dart';
 import '../../../core/router/app_router.dart';
 import '../../settings/presentation/account_screen.dart';
 import 'character_animes_grid.dart';
+import 'character_portrait_image.dart';
 
 class CharacterDetailsScreen extends ConsumerStatefulWidget {
   const CharacterDetailsScreen({
@@ -338,23 +335,11 @@ class _CharacterDetailsScreenState
                         tag: 'character-${widget.characterId}',
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(18),
-                          child: ArtworkDecode(
-                            paintedWidth: 240,
-                            builder: (context, decodeWidth) {
-                              final url = imageUrl ?? '';
-                              if (url.isEmpty) {
-                                return ThumbnailErrorPlaceholder(label: name);
-                              }
-                              return CachedNetworkImage(
-                                imageUrl: url,
-                                fit: BoxFit.cover,
-                                memCacheWidth: decodeWidth,
-                                placeholder: (_, _) =>
-                                    ShimmerPlaceholder(borderRadius: 18),
-                                errorWidget: (_, _, _) =>
-                                    ThumbnailErrorPlaceholder(label: name),
-                              );
-                            },
+                          child: CharacterPortraitImage(
+                            url: imageUrl ?? '',
+                            name: name,
+                            radius: 18,
+                            standardWidth: 240,
                           ),
                         ),
                       ),

@@ -1287,15 +1287,10 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
     if (_resolvedFilePath == null) return;
     tile.loading = true;
 
-    final transformer = CoordinateTransformer(
-      scale: _scale,
-      vTranslate: _vTranslate,
-      rotation: widget.rotation,
-      sWidth: _sWidth,
-      sHeight: _sHeight,
-    );
-
-    var fileRect = transformer.fileSRect(tile.sRect);
+    // TilingEngine partitions the unrotated file/region. The painter rotates
+    // those tiles as it draws; inverse-rotating again here can request pixels
+    // outside a non-square file and leave the rotated page blank.
+    var fileRect = tile.sRect;
     if (widget.srcRect != null) {
       fileRect = fileRect.translate(widget.srcRect!.left, widget.srcRect!.top);
     }
