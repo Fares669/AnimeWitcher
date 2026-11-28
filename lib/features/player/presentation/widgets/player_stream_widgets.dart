@@ -877,11 +877,11 @@ class _PlayerVolumeControlState extends ConsumerState<PlayerVolumeControl> {
       });
     });
 
-    // Watched rather than read: a live stream hands playback to ExoPlayer,
-    // which has no amplification, and the ceiling has to come down with it.
-    final maxVolume = ref.watch(playerControllerProvider).supportsVolumeBoost
-        ? 2.0
-        : 1.0;
+    // Keep listening to the ceiling, not to unrelated playback state.
+    final supportsBoost = ref.watch(
+      playerControllerProvider.select((state) => state.supportsVolumeBoost),
+    );
+    final maxVolume = supportsBoost ? 2.0 : 1.0;
     final display = (_dragValue ?? _volume ?? 1.0).clamp(0.0, maxVolume);
     return Row(
       mainAxisSize: MainAxisSize.min,

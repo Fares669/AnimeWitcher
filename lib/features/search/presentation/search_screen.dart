@@ -426,8 +426,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             // controls, so the strip the controls sit on shows the artwork
             // moving behind them rather than a band of background colour.
             Positioned.fill(
-              child: _buildBody(
-                context,
+              child: _searchBody(
                 withFilterChips: true,
                 topInset: _floatingHeaderExtent + 16,
               ),
@@ -656,7 +655,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           ),
         ),
       ),
-      body: _buildBody(context, topInset: barExtent + 8),
+      body: _searchBody(topInset: barExtent + 8),
     );
 
     // The system back gesture leaves a search's results for the search page
@@ -682,15 +681,31 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   /// starts below this and scrolls up under it.
   static const double _floatingHeaderExtent = 56;
 
+  // Cursor advances, append indicators and suggestion responses belong to
+  // the body. Let their watches update that subtree without rebuilding the
+  // search controls (which already observe their own inputs).
+  Widget _searchBody({
+    bool withFilterChips = false,
+    required double topInset,
+  }) => Consumer(
+    builder: (context, bodyRef, _) => _buildBody(
+      context,
+      bodyRef,
+      withFilterChips: withFilterChips,
+      topInset: topInset,
+    ),
+  );
+
   Widget _buildBody(
-    BuildContext context, {
+    BuildContext context,
+    WidgetRef bodyRef, {
     bool withFilterChips = false,
     double topInset = 0,
     bool behindPanel = false,
   }) {
-    final state = ref.watch(searchPagedResultsProvider);
-    final domain = ref.watch(searchDomainProvider);
-    final suggestionState = ref.watch(searchSuggestionControllerProvider);
+    final state = bodyRef.watch(searchPagedResultsProvider);
+    final domain = bodyRef.watch(searchDomainProvider);
+    final suggestionState = bodyRef.watch(searchSuggestionControllerProvider);
     final typedLongEnough = suggestionState.query.trim().length >= 2;
     // Typed but not yet searched: the floating results, in every category
     // but characters — with "no results" in them rather than the catalogue
@@ -701,13 +716,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         !phone &&
         domain != SearchDomain.characters &&
         typedLongEnough &&
-        ref.watch(searchQueryProvider).trim() != suggestionState.query.trim();
+        bodyRef.watch(searchQueryProvider).trim() !=
+            suggestionState.query.trim();
 
     // Only the results scroll, so every other state is simply held clear of
     // the floating controls rather than passing under them.
     final chips = withFilterChips && domain.capabilities.showFilter
         ? _ActiveSearchFilterChips(
-            filters: ref.watch(searchProviderFiltersProvider),
+            filters: bodyRef.watch(searchProviderFiltersProvider),
             onRemove: _removeSearchFilter,
           )
         : const SizedBox.shrink();
@@ -718,7 +734,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         child: Column(
           children: [
             if (withFilterChips) chips,
-            _buildRecentSearches(context),
+            _buildRecentSearches(context, bodyRef),
             Expanded(child: child),
           ],
         ),
@@ -733,10 +749,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         domain != SearchDomain.characters &&
         _controller.text.trim().isNotEmpty &&
         (phone
-            ? ref.watch(searchQueryProvider).trim() != _controller.text.trim()
-            : ref.watch(searchQueryProvider).isEmpty)) {
+            ? bodyRef.watch(searchQueryProvider).trim() !=
+                  _controller.text.trim()
+            : bodyRef.watch(searchQueryProvider).isEmpty)) {
       final base = _buildBody(
         context,
+        bodyRef,
         withFilterChips: withFilterChips,
         topInset: topInset,
         behindPanel: true,
@@ -782,6 +800,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         children: [
           _buildBody(
             context,
+            bodyRef,
             withFilterChips: withFilterChips,
             topInset: topInset,
             behindPanel: true,
@@ -844,7 +863,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         );
       }
       if (state.characters.isEmpty) {
-        return belowHeader(_buildEmptyState(context));
+        return belowHeader(_buildEmptyState(context, bodyRef));
       }
 
       return RepaintBoundary(
@@ -854,7 +873,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
               SliverToBoxAdapter(child: SizedBox(height: topInset)),
-              SliverToBoxAdapter(child: _buildRecentSearches(context)),
+              SliverToBoxAdapter(child: _buildRecentSearches(context, bodyRef)),
               _characterGrid(
                 context,
                 state.characters,
@@ -867,7 +886,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     }
 
     if (domain == SearchDomain.all) {
-      return _buildAllBody(context, state, topInset: topInset);
+      return _buildAllBody(context, bodyRef, state, topInset: topInset);
     }
 
     final hasResults = state.results.any((entry) => entry.results.isNotEmpty);
@@ -883,7 +902,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       );
     }
     if (!hasResults) {
-      return belowHeader(_buildEmptyState(context));
+      return belowHeader(_buildEmptyState(context, bodyRef));
     }
 
     return RepaintBoundary(
@@ -893,7 +912,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           physics: const AlwaysScrollableScrollPhysics(),
           slivers: [
             SliverToBoxAdapter(child: SizedBox(height: topInset)),
-            SliverToBoxAdapter(child: _buildRecentSearches(context)),
+            SliverToBoxAdapter(child: _buildRecentSearches(context, bodyRef)),
             if (withFilterChips) SliverToBoxAdapter(child: chips),
             for (var index = 0; index < state.results.length; index++)
               SearchResultSection(
@@ -937,6 +956,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   /// a few of its results, and a button into that category for the rest.
   Widget _buildAllBody(
     BuildContext context,
+    WidgetRef bodyRef,
     SearchAggregateState state, {
     required double topInset,
   }) {
@@ -947,7 +967,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       padding: EdgeInsets.only(top: topInset),
       child: Column(
         children: [
-          _buildRecentSearches(context),
+          _buildRecentSearches(context, bodyRef),
           Expanded(child: child),
         ],
       ),
@@ -963,7 +983,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         ),
       );
     }
-    if (!hasAny) return clearOfHeader(_buildEmptyState(context));
+    if (!hasAny) return clearOfHeader(_buildEmptyState(context, bodyRef));
 
     final limit = _allSectionLimit(context);
     // The results are laid out left to right, the way posters read; the
@@ -988,7 +1008,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           physics: const AlwaysScrollableScrollPhysics(),
           slivers: [
             SliverToBoxAdapter(child: SizedBox(height: topInset)),
-            SliverToBoxAdapter(child: _buildRecentSearches(context)),
+            SliverToBoxAdapter(child: _buildRecentSearches(context, bodyRef)),
             for (var index = 0; index < state.results.length; index++) ...[
               heading(
                 SearchDomain.values.byName(state.results[index].providerId),
@@ -1160,8 +1180,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     );
   }
 
-  Widget _buildEmptyState(BuildContext context) {
-    final query = ref.watch(searchQueryProvider);
+  Widget _buildEmptyState(BuildContext context, WidgetRef bodyRef) {
+    final query = bodyRef.watch(searchQueryProvider);
     final isInputEmpty = _controller.text.trim().isEmpty;
 
     if (query.isEmpty || isInputEmpty) {
@@ -1180,14 +1200,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     );
   }
 
-  Widget _buildRecentSearches(BuildContext context) {
-    if (ref.watch(searchQueryProvider).trim().isNotEmpty) {
+  Widget _buildRecentSearches(BuildContext context, WidgetRef bodyRef) {
+    if (bodyRef.watch(searchQueryProvider).trim().isNotEmpty) {
       return const SizedBox.shrink();
     }
     return Directionality(
       textDirection: Directionality.of(context),
       child: SearchStartPage(
-        recents: ref.watch(recentSearchesProvider),
+        recents: bodyRef.watch(recentSearchesProvider),
         onRecent: _submitSearch,
         onRemoveRecent: (value) =>
             ref.read(recentSearchesProvider.notifier).remove(value),

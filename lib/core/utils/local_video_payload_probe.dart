@@ -43,7 +43,22 @@ LocalVideoPayloadProblem? probeLocalVideoPayloadSync(File file) {
   try {
     final handle = file.openSync(mode: FileMode.read);
     try {
-      final prefix = utf8.decode(handle.readSync(4096), allowMalformed: true);
+      final bytes = handle.readSync(4096);
+      if (bytes.isEmpty) return null;
+      // After leading whitespace/BOM, every recognized document starts with
+      // '#' or '<'. A different ASCII first byte can neither start a UTF-8
+      // multibyte character nor be removed by Dart's leading whitespace
+      // trim. Avoid decoding the whole prefix of ordinary binary video.
+      // Keep non-ASCII (including malformed UTF-8) on the full decoder path.
+      final first = bytes.first;
+      if (first < 0x80 &&
+          first != 0x23 && // #
+          first != 0x3c && // <
+          first != 0x20 && // space
+          (first < 0x09 || first > 0x0d)) {
+        return null;
+      }
+      final prefix = utf8.decode(bytes, allowMalformed: true);
       final text = _trimDocumentStart(prefix);
       if (RegExp(r'^#EXTM3U(?:[ \t]*(?:[\r\n]|$))').hasMatch(text)) {
         return LocalVideoPayloadProblem.hlsPlaylist;

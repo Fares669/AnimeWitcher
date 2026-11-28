@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/domain/entity/manga.dart';
 import '../../../../core/providers/episode_sort_provider.dart';
 import '../../../../core/services/download_v2/download_v2_identity.dart';
+import '../../../../core/services/download_v2/download_v2_models.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../../../core/storage/manga_reading_repository.dart';
 import '../../../../core/utils/download_progress_data.dart';
@@ -101,7 +102,10 @@ class MangaChapterList extends ConsumerStatefulWidget {
 class _MangaChapterListState extends ConsumerState<MangaChapterList> {
   final Set<String> _selectedChapterIds = <String>{};
   List<DownloadItem>? _indexedDownloads;
-  late MangaChapterDownloadIndex _downloadIndex;
+  List<DownloadItem> _completedRows = const <DownloadItem>[];
+  late MangaChapterDownloadIndex _completedIndex = MangaChapterDownloadIndex(
+    _completedRows,
+  );
   List<List<MangaChapter>>? _ranges;
   ({int index, List<MangaChapter> chapters})? _rangeMembers;
   ({int? range, String query, List<MangaChapter> chapters})? _narrowed;
@@ -148,13 +152,35 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     return chapters;
   }
 
-  MangaChapterDownloadIndex get _chapterDownloads {
+  MangaChapterDownloadIndex get _completedDownloads {
     final downloads = widget.downloads;
-    if (!identical(downloads, _indexedDownloads)) {
-      _downloadIndex = MangaChapterDownloadIndex(downloads);
-      _indexedDownloads = downloads;
+    if (identical(downloads, _indexedDownloads)) return _completedIndex;
+
+    // Transport ticks publish a new list but reuse unchanged download rows.
+    // Compare only the complete Manga rows in source order; that order
+    // decides which record owns an alias. Don't allocate another list or
+    // rebuild the alias tables when that subsequence hasn't changed.
+    List<DownloadItem>? changed;
+    var count = 0;
+    for (final item in downloads) {
+      if (item.mediaKind != DownloadMediaKind.mangaChapter ||
+          item.status != TaskStatus.complete) {
+        continue;
+      }
+      if (changed != null) {
+        changed.add(item);
+      } else if (count >= _completedRows.length ||
+          !identical(_completedRows[count], item)) {
+        changed = <DownloadItem>[..._completedRows.take(count), item];
+      }
+      count++;
     }
-    return _downloadIndex;
+    if (changed != null || count != _completedRows.length) {
+      _completedRows = changed ?? _completedRows.take(count).toList();
+      _completedIndex = MangaChapterDownloadIndex(_completedRows);
+    }
+    _indexedDownloads = downloads;
+    return _completedIndex;
   }
 
   Widget _withTransition(Widget child, {Key? key}) {
@@ -253,7 +279,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     MangaChapter chapter,
     Map<String, DownloadProgressData> progressById,
   ) =>
-      _chapterDownloads.completed(chapter) != null ||
+      _completedDownloads.completed(chapter) != null ||
       _progressFor(chapter, progressById)?.status == TaskStatus.complete;
 
   /// The range menu: every chapter, or one run of fifty, each with how many
@@ -522,7 +548,9 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     final selected = widget.chapters
         .where((chapter) => _selectedChapterIds.contains(chapter.id))
         .toList();
-    final existing = _chapterDownloads;
+    // Batch add also needs active and paused records, unlike row actions.
+    // Use the current snapshot at the time of this user action.
+    final existing = MangaChapterDownloadIndex(widget.downloads);
     final chapters = selected
         .where((chapter) => !existing.alreadyPresent(chapter))
         .toList();
@@ -716,7 +744,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     }
     data ??= progressById[chapter.url];
 
-    final completedDownload = _chapterDownloads.completed(chapter);
+    final completedDownload = _completedDownloads.completed(chapter);
     final status = data?.status;
     final active =
         status == TaskStatus.running ||

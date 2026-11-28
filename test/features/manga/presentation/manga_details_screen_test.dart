@@ -267,7 +267,18 @@ final class _MangaDetailsDownloadFeed extends DownloadsNotifier {
     return const [];
   }
 
+  final removedRows = <DownloadItem>[];
+
   void publishRows(List<DownloadItem> rows) => state = AsyncData(rows);
+
+  @override
+  Future<void> removeDownload(DownloadItem item) async {
+    removedRows.add(item);
+    publishRows([
+      for (final row in state.requireValue)
+        if (!identical(row, item)) row,
+    ]);
+  }
 
   void publishProgress(double progress) {
     state = AsyncData([
@@ -293,6 +304,7 @@ final class _MangaDetailsDownloadFeed extends DownloadsNotifier {
 
 final class _ChapterDownloadReadCounter {
   int statuses = 0;
+  int aliasReads = 0;
 }
 
 final class _TrackedChapterDownload extends DownloadItem {
@@ -301,6 +313,7 @@ final class _TrackedChapterDownload extends DownloadItem {
     required String taskId,
     String? url,
     super.chapter,
+    super.destinationPath,
     DownloadMediaKind kind = DownloadMediaKind.mangaChapter,
     super.status = TaskStatus.complete,
   }) : super(
@@ -328,6 +341,12 @@ final class _TrackedChapterDownload extends DownloadItem {
   TaskStatus get status {
     counter.statuses++;
     return super.status;
+  }
+
+  @override
+  String get trackingUrl {
+    counter.aliasReads++;
+    return super.trackingUrl;
   }
 }
 
@@ -655,6 +674,7 @@ void main() {
             .pixels;
 
         counter.statuses = 0;
+        counter.aliasReads = 0;
         for (var tick = 0; tick < ticks; tick++) {
           feed.publishRows([
             ...standingRows,
@@ -668,8 +688,9 @@ void main() {
           ]);
           await tester.pump(const Duration(milliseconds: 90));
         }
-        // Each of the eight new snapshots should visit the manga rows
-        // once, not once per chapter in the filter or visible action.
+        // These transport ticks change only the unrelated video row. The
+        // installed Manga aliases should not have to be read or parsed again.
+        expect(counter.aliasReads, 0);
         expect(counter.statuses, lessThan(1900));
         expect(
           Scrollable.of(tester.element(downloaded)).position.pixels,
@@ -702,10 +723,61 @@ void main() {
         await tester.pump();
         expect(opened, ['1']);
 
-        feed.publishRows(
-          standingRows.where((entry) => entry.id != 'first').toList(),
+        final freshAlias = _TrackedChapterDownload(
+          counter: counter,
+          taskId: 'fresh-choice',
+          chapter: const MangaChapter(
+            id: '1',
+            mangaId: 'm1',
+            url: 'chapter://new-source/1',
+            name: 'الفصل 1',
+          ),
+          destinationPath: '/offline/fixture/fresh-choice',
         );
+        feed.publishRows([...standingRows, freshAlias]);
         await tester.pump(const Duration(milliseconds: 200));
+
+        Future<void> removeFirstChapter() async {
+          final chip = find.descendant(
+            of: row(1),
+            matching: find.byTooltip('حذف التنزيل'),
+          );
+          await Scrollable.ensureVisible(tester.element(chip), alignment: .35);
+          await tester.pump();
+          await tester.tap(chip.hitTestable());
+          await tester.pumpAndSettle();
+          final confirm = find.widgetWithText(FilledButton, 'حذف');
+          expect(confirm, findsOneWidget);
+          await tester.tap(confirm);
+          await tester.pumpAndSettle();
+        }
+
+        // A later exact-identity match cannot beat the first URL alias.
+        final first = standingRows.firstWhere((entry) => entry.id == 'first');
+        await removeFirstChapter();
+        expect(feed.removedRows, [first]);
+        expect(row(1), findsOneWidget);
+
+        // Replacing the same logical row with a new local destination must
+        // update the action target, even when every visible label is the same.
+        final replacement = _TrackedChapterDownload(
+          counter: counter,
+          taskId: freshAlias.id,
+          chapter: freshAlias.chapter,
+          destinationPath: '/offline/fixture/replacement',
+        );
+        feed.publishRows([
+          for (final entry in standingRows)
+            if (!identical(entry, first)) entry,
+          replacement,
+        ]);
+        await tester.pump(const Duration(milliseconds: 200));
+        await removeFirstChapter();
+        expect(feed.removedRows, [first, replacement]);
+        expect(
+          feed.removedRows.last.destinationPath,
+          '/offline/fixture/replacement',
+        );
         expect(row(1), findsNothing);
         expect(row(2), findsOneWidget);
       },

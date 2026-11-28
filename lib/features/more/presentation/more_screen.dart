@@ -48,16 +48,6 @@ class MoreScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
-    final bottomPadding = MediaQuery.viewPaddingOf(context).bottom + 88;
-    final accountState = ref.watch(animeWitcherAccountControllerProvider);
-    final activeCatalog = ref.watch(activeProviderProvider);
-    final catalogLabel = activeCatalog is WitanimeProvider
-        ? 'Witanime'
-        : 'AnimeWitcher';
-    final accountProfile = accountState.asData?.value.profile;
-    final accountPhotoUrl = accountProfile?.photoUrl?.trim() ?? '';
-
     // A window with room for two columns keeps the list of destinations on
     // screen beside the one being read, and opens on the account rather than
     // on a page of links to press.
@@ -76,10 +66,28 @@ class MoreScreen extends ConsumerWidget {
     // width, and a short window is better served by the single list.
     const twoPaneMinimumShortestSide = 640.0;
     final size = MediaQuery.sizeOf(context);
+    final twoPane =
+        size.width >= twoPaneMinimumWidth &&
+        size.shortestSide >= twoPaneMinimumShortestSide;
+    // Account sync frequently publishes a fresh snapshot without changing
+    // anything shown in this menu. Observe only this layout's visible fields;
+    // its embedded panes still subscribe to their own full inputs.
+    final account = ref.watch(
+      animeWitcherAccountControllerProvider.select((state) {
+        final profile = state.asData?.value.profile;
+        final loading = !twoPane && state.isLoading;
+        return (
+          name: profile == null ? null : _accountDisplayName(profile),
+          photoUrl: profile?.photoUrl?.trim() ?? '',
+          email: twoPane || loading ? null : profile?.email,
+          loading: loading,
+        );
+      }),
+    );
+    final signedIn = account.name != null;
     final headerTop = appPageHeaderContentTopInset(context);
     final pageTitle = 'المزيد';
-    if (size.width >= twoPaneMinimumWidth &&
-        size.shortestSide >= twoPaneMinimumShortestSide) {
+    if (twoPane) {
       return Scaffold(
         extendBodyBehindAppBar: true,
         appBar: AppPageAppBar(title: pageTitle, canPop: false),
@@ -87,13 +95,13 @@ class MoreScreen extends ConsumerWidget {
           padding: EdgeInsets.only(top: headerTop),
           child: MoreSidebarShell(
             header: MoreSidebarHeader(
-              name: accountProfile == null
-                  ? appText(context, english: 'Sign in', arabic: 'تسجيل الدخول')
-                  : _accountDisplayName(accountProfile),
+              name:
+                  account.name ??
+                  appText(context, english: 'Sign in', arabic: 'تسجيل الدخول'),
               // No address here. This card sits on screen the whole time the
               // More section is open, and the account page is where an address
               // belongs — behind an eye, at that.
-              subtitle: accountProfile == null
+              subtitle: !signedIn
                   ? appText(
                       context,
                       english: 'Sync your lists and progress',
@@ -104,7 +112,7 @@ class MoreScreen extends ConsumerWidget {
                       english: 'Signed in',
                       arabic: 'مسجّل الدخول',
                     ),
-              photoUrl: accountPhotoUrl,
+              photoUrl: account.photoUrl,
             ),
             groups: <MoreDestinationGroup>[
               MoreDestinationGroup(
@@ -166,6 +174,13 @@ class MoreScreen extends ConsumerWidget {
       );
     }
 
+    // Only the handset menu displays the catalog provider's name.
+    final witanime = ref.watch(
+      activeProviderProvider.select((provider) => provider is WitanimeProvider),
+    );
+    final catalogLabel = witanime ? 'Witanime' : 'AnimeWitcher';
+    final theme = Theme.of(context);
+    final bottomPadding = MediaQuery.viewPaddingOf(context).bottom + 88;
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(
@@ -181,16 +196,16 @@ class MoreScreen extends ConsumerWidget {
           _MorePanel(
             children: [
               _MoreTile(
-                icon: accountProfile == null
+                icon: !signedIn
                     ? Icons.account_circle_rounded
                     : Icons.cloud_done_rounded,
-                leading: accountPhotoUrl.isEmpty
+                leading: account.photoUrl.isEmpty
                     ? null
                     : CircleAvatar(
                         radius: 24,
                         backgroundColor: theme.colorScheme.primaryContainer,
                         foregroundImage: AccountProfileAvatar(
-                          NetworkImage(accountPhotoUrl),
+                          NetworkImage(account.photoUrl),
                         ),
                         onForegroundImageError: (_, _) {},
                         child: Icon(
@@ -198,16 +213,14 @@ class MoreScreen extends ConsumerWidget {
                           color: theme.colorScheme.onPrimaryContainer,
                         ),
                       ),
-                title: accountProfile == null
-                    ? 'تسجيل الدخول أو إنشاء حساب'
-                    : _accountDisplayName(accountProfile),
-                subtitle: accountState.isLoading
+                title: account.name ?? 'تسجيل الدخول أو إنشاء حساب',
+                subtitle: account.loading
                     ? 'جارٍ التحقق من الحساب...'
-                    : accountProfile == null
+                    : !signedIn
                     ? 'مزامنة القوائم والحلقات المشاهدة '
                           'وتقدم التشغيل'
-                    : accountProfile.email ?? 'المزامنة مفعلة',
-                trailing: accountState.isLoading
+                    : account.email ?? 'المزامنة مفعلة',
+                trailing: account.loading
                     ? const SizedBox.square(
                         dimension: 20,
                         child: CircularProgressIndicator(strokeWidth: 2),

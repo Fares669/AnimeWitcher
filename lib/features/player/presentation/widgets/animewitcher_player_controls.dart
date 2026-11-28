@@ -1057,9 +1057,18 @@ class AnimeWitcherPlayerControlsState
     required double maxPlaybackSpeed,
   }) {
     final l10n = AppLocalizations.of(context)!;
-    final playerSettings =
-        ref.watch(playerSettingsProvider).asData?.value ??
-        const PlayerSettings();
+    final playerSettings = ref.watch(
+      playerSettingsProvider.select((snapshot) {
+        final settings = snapshot.asData?.value ?? const PlayerSettings();
+        return (
+          anime4kEnabled: settings.anime4kEnabled,
+          showAnime4kButton: settings.showAnime4kButton,
+          anime4kMode: settings.anime4kMode,
+          showResize: settings.showResize,
+          showPlaybackSpeed: settings.showPlaybackSpeed,
+        );
+      }),
+    );
     return PlayerSettingsPanel(
       showAnime4k:
           playerSettings.anime4kEnabled &&
@@ -1437,9 +1446,12 @@ class AnimeWitcherPlayerControlsState
     // The note is the viewer's to act on; the setting decides whether they
     // are told at all, and "skip" has already stepped past it by the time
     // the card is built.
-    final fillerBehaviour =
-        ref.watch(playerSettingsProvider).asData?.value.fillerBehaviour ??
-        FillerBehaviour.note;
+    final fillerBehaviour = ref.watch(
+      playerSettingsProvider.select(
+        (snapshot) =>
+            snapshot.asData?.value.fillerBehaviour ?? FillerBehaviour.note,
+      ),
+    );
     final showFillerNote =
         showNextEpOverlay &&
         nextEpTitle != null &&
@@ -1878,9 +1890,29 @@ class AnimeWitcherPlayerControlsState
     final isTouch = !_isTv && (Platform.isAndroid || Platform.isIOS);
     final isDesktop =
         Platform.isMacOS || Platform.isWindows || Platform.isLinux;
-    final playerSettings =
-        ref.watch(playerSettingsProvider).asData?.value ??
-        const PlayerSettings();
+    // Subtitle appearance, buffering and other preferences are owned by
+    // their own consumers. Only preferences that draw this chrome belong here.
+    final playerSettings = ref.watch(
+      playerSettingsProvider.select((snapshot) {
+        final settings = snapshot.asData?.value ?? const PlayerSettings();
+        return (
+          showLock: settings.showLock,
+          showEpisodeNav: settings.showEpisodeNav,
+          showSeekButtons: settings.showSeekButtons,
+          seekDuration: settings.seekDuration,
+          showPlaybackSpeed: settings.showPlaybackSpeed,
+          showPip: settings.showPip,
+          showRotate: settings.showRotate,
+          showEpisodes: settings.showEpisodes,
+          showResize: settings.showResize,
+          showFullscreen: settings.showFullscreen,
+          anime4kEnabled: settings.anime4kEnabled,
+          showAnime4kButton: settings.showAnime4kButton,
+          anime4kMode: settings.anime4kMode,
+          anime4kQuality: settings.anime4kQuality,
+        );
+      }),
+    );
 
     // Playback placement: touch keeps the big thumb-reach triplet centered;
     // TV and desktop fold compact playback into the start of the controls row

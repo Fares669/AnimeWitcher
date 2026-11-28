@@ -6,11 +6,14 @@ import 'package:animewitcher/features/player/presentation/player_controller.dart
 import 'package:animewitcher/features/player/presentation/player_gesture_handler.dart';
 import 'package:animewitcher/features/player/presentation/player_platform_service.dart';
 import 'package:animewitcher/features/player/presentation/widgets/animewitcher_player_controls.dart';
+import 'package:animewitcher/features/player/presentation/widgets/player_control_components.dart';
 import 'package:animewitcher/features/player/presentation/widgets/player_ltr.dart';
+import 'package:animewitcher/features/player/presentation/widgets/player_settings_panel.dart';
 import 'package:animewitcher/features/player/presentation/widgets/player_stream_widgets.dart';
 import 'package:animewitcher/features/settings/presentation/player_settings_provider.dart';
 import 'package:animewitcher/features/skip/data/skip_service.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/rendering.dart';
@@ -22,6 +25,22 @@ import 'package:video_view/video_view.dart' as vv;
 class _Settings extends PlayerSettingsNotifier {
   @override
   Future<PlayerSettings> build() async => const PlayerSettings();
+
+  void change({
+    double? subtitleSize,
+    String? preferredPlayer,
+    bool? showPlaybackSpeed,
+    int? seekDuration,
+  }) {
+    state = AsyncData(
+      state.requireValue.copyWith(
+        subtitleSize: subtitleSize,
+        preferredPlayer: preferredPlayer,
+        showPlaybackSpeed: showPlaybackSpeed,
+        seekDuration: seekDuration,
+      ),
+    );
+  }
 
   @override
   Future<void> setShowRemainingTime(bool value) async {
@@ -35,6 +54,17 @@ class _Controller extends PlayerController {
   final List<SkipSegment> segments;
   final Future<void> Function(Duration)? performSeek;
   final seeks = <Duration>[];
+  final speedWrites = <(double, bool)>[];
+
+  void phase(PlaybackUiPhase value) {
+    state = state.copyWith(uiPhase: value);
+  }
+
+  @override
+  Future<void> setPlaybackSpeed(double rate, {bool persist = false}) async {
+    speedWrites.add((rate, persist));
+    state = state.copyWith(playbackSpeed: rate);
+  }
 
   @override
   PlayerState build() => PlayerState(
@@ -189,6 +219,7 @@ Future<void> _mount(
   _Controller controller, {
   vv.VideoController? videoView,
   GlobalKey? paintBoundaryKey,
+  VoidCallback? onBack,
 }) async {
   _mockVolume(tester);
   final controls = PlayerLtr(
@@ -197,7 +228,7 @@ Future<void> _mount(
       videoViewController: videoView,
       platformService: PlayerPlatformService(nativePip: false),
       title: 'Offline fixture',
-      onBackPointer: () {},
+      onBackPointer: onBack ?? () {},
     ),
   );
   await tester.pumpWidget(
@@ -537,6 +568,124 @@ void main() {
       expect(tester.state(_seekBar), same(state));
     } finally {
       debugOnRebuildDirtyWidget = previousHook;
+      await tester.pumpWidget(const SizedBox.shrink());
+      await player.dispose();
+    }
+  });
+
+  testWidgets('Arabic controls reuse chrome on unrelated preference changes', (
+    tester,
+  ) async {
+    final source = _FixtureMediaKit()
+      ..tick(3000, durationMs: 120000, bufferMs: 42000);
+    final player = mk.Player(platformPlayer: source);
+    final imageKey = GlobalKey();
+    final controller = _Controller();
+    var backs = 0;
+
+    try {
+      await _mount(
+        tester,
+        player,
+        controller,
+        paintBoundaryKey: imageKey,
+        onBack: () => backs++,
+      );
+      await tester.tapAt(_showPoint);
+      await tester.pumpAndSettle();
+      final controls = find.byType(AnimeWitcherPlayerControls);
+      final settings = ProviderScope.containerOf(
+        tester.element(controls),
+      ).read(playerSettingsProvider.notifier) as _Settings;
+      final top = find.byType(PlayerTopBar);
+      final bottom = find.byType(PlayerBottomBar);
+      final panel = find.byType(PlayerSettingsPanel);
+      final speedTab = find.text('السرعة');
+      final gear = find.byKey(const ValueKey<String>('playerSettingsButton'));
+      expect(gear, findsOneWidget);
+      expect(AppLocalizations.of(tester.element(controls))!.localeName, 'ar');
+
+      Future<String> shot() async {
+        final boundary = tester.renderObject<RenderRepaintBoundary>(
+          find.byKey(imageKey),
+        );
+        final image = boundary.toImageSync();
+        try {
+          final rgba = await tester.runAsync(
+            () => image.toByteData(format: ui.ImageByteFormat.rawRgba),
+          );
+          return sha256.convert(rgba!.buffer.asUint8List()).toString();
+        } finally {
+          image.dispose();
+        }
+      }
+
+      await tester.tap(gear);
+      await tester.pumpAndSettle();
+      expect(speedTab, findsOneWidget);
+      await tester.tap(speedTab);
+      await tester.pumpAndSettle();
+      expect(find.text('1x'), findsOneWidget);
+      final hashes = [await shot()];
+      final panelBounds = tester.getRect(panel);
+      final replaces = [0, 0, 0];
+      final probes = [top, bottom, panel];
+      for (var i = 1; i <= 8; i++) {
+        final before = [for (final probe in probes) tester.widget(probe)];
+        settings.change(
+          subtitleSize: 22 + i.toDouble(),
+          preferredPlayer: i.isOdd ? 'mpv' : 'vlc',
+        );
+        await tester.pump(const Duration(milliseconds: 16));
+        for (var j = 0; j < probes.length; j++) {
+          if (!identical(before[j], tester.widget(probes[j]))) replaces[j]++;
+        }
+        expect(tester.getRect(panel), panelBounds);
+      }
+      hashes.add(await shot());
+      expect(hashes.last, hashes.first);
+      expect(replaces, [0, 0, 0]);
+
+      // Speed still applies through the same request and updates selection.
+      await tester.tap(find.text('1.5x'));
+      await tester.pumpAndSettle();
+      expect(controller.speedWrites, [(1.5, true)]);
+      expect(tester.widget<PlayerSettingsPanel>(panel).speed, 1.5);
+      hashes.add(await shot());
+
+      // A relevant persisted setting still hides the speed tab, and showing
+      // it again exposes the same speed through the existing panel.
+      settings.change(showPlaybackSpeed: false);
+      await tester.pumpAndSettle();
+      expect(speedTab, findsNothing);
+      settings.change(showPlaybackSpeed: true, seekDuration: 15);
+      await tester.pumpAndSettle();
+      expect(speedTab, findsOneWidget);
+      expect(tester.widget<PlayerSettingsPanel>(panel).speed, 1.5);
+      expect(find.byTooltip('تقديم 15 ثوانٍ'), findsOneWidget);
+      hashes.add(await shot());
+
+      // Opening a source replaces the chrome with the loading variant.
+      controller.phase(
+        const PlaybackUiPhase(
+          kind: PlaybackUiPhaseKind.openingSource,
+          fullscreenBlocking: true,
+        ),
+      );
+      await tester.pump();
+      expect(find.byType(CircularProgressIndicator), findsWidgets);
+      expect(panel, findsNothing);
+      // Back in the loading view still reaches the caller's same handler.
+      tester.widget<PlayerTopBar>(top).onBack!.call();
+      expect(backs, 1);
+      controller.phase(const PlaybackUiPhase(kind: PlaybackUiPhaseKind.idle));
+      await tester.pumpAndSettle();
+      expect(panel, findsOneWidget);
+      expect(tester.takeException(), isNull);
+      debugPrint(
+        'C23_PLAYER_PREFS replacements=${replaces.join('/')} rgba=${hashes.join(',')}',
+      );
+    } finally {
       await tester.pumpWidget(const SizedBox.shrink());
       await player.dispose();
     }

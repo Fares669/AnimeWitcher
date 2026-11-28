@@ -14,8 +14,11 @@ import 'package:animewitcher/features/search/presentation/search_domain.dart';
 import 'package:animewitcher/features/search/presentation/search_provider.dart';
 import 'package:animewitcher/features/search/presentation/search_screen.dart';
 import 'package:animewitcher/features/search/presentation/widgets/search_result_section.dart';
+import 'package:animewitcher/features/search/presentation/widgets/search_action_buttons.dart';
+import 'package:animewitcher/features/search/presentation/widgets/search_header_bar.dart';
 import 'package:animewitcher/features/search/presentation/widgets/phone_suggestion_box.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+import 'package:animewitcher/shared/widgets/app_search_field.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -119,6 +122,9 @@ class _Source extends AnimeWitcherProvider {
 }
 
 class _PagingSource extends _Source {
+  _PagingSource({this.query = _link});
+
+  final String query;
   static const pageSize = 30;
   static const pageCount = 24;
   int identityReads = 0;
@@ -140,7 +146,7 @@ class _PagingSource extends _Source {
     if (query.isEmpty) {
       return const ProviderMediaPage(items: [], nextOffset: 0, hasMore: false);
     }
-    expect(query, _link);
+    expect(query, this.query);
     expect(limit, pageSize);
     expect(offset % pageSize, 0);
     committedCalls.add((query, offset));
@@ -633,6 +639,183 @@ void main() {
       expect(source.identityReads, _PagingSource.pageCount * pageSize);
     },
   );
+
+  for (final size in [const Size(412, 690), const Size(1200, 800)]) {
+    testWidgets(
+      'committed Arabic pagination does not rebuild search controls at ${size.width.toInt()}',
+      (tester) async {
+        const query = 'العنوان العربي';
+        final source = _PagingSource(query: query);
+        final harness = await _mount(tester, source);
+        tester.view.physicalSize = size;
+        await tester.pump();
+        final field = find.byType(TextField);
+        final searchField = find.byType(AppSearchField);
+        final actions = find.byType(SearchActionButtons);
+        final header = size.shortestSide < 600
+            ? find.byType(AppBar)
+            : find.byType(SearchHeaderBar);
+        final section = find.byType(SearchResultSection);
+        await tester.enterText(field, query);
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await pumpUntil(
+          tester,
+          () => section.evaluate().isNotEmpty,
+          'first page',
+        );
+        await tester.pump(const Duration(milliseconds: 450));
+        await tester.tap(field);
+        await tester.pump();
+        expect(
+          Directionality.of(tester.element(find.byType(SearchScreen))),
+          TextDirection.rtl,
+        );
+        final focus = tester.widget<AppSearchField>(searchField).focusNode!;
+        expect(focus.hasFocus, isTrue);
+        final beforeBounds = tester.getRect(header);
+        final beforeFieldBounds = tester.getRect(searchField);
+
+        final scroll = find
+            .descendant(
+              of: find.byType(CustomScrollView),
+              matching: find.byType(Scrollable),
+            )
+            .first;
+        final position = tester.state<ScrollableState>(scroll).position;
+        var headerReplacements = 0;
+        var fieldReplacements = 0;
+        var actionReplacements = 0;
+        (Widget, Widget, Widget) controls() => (
+          tester.widget(header),
+          tester.widget(searchField),
+          tester.widget(actions),
+        );
+        void compareControls((Widget, Widget, Widget) before) {
+          final after = controls();
+          if (!identical(before.$1, after.$1)) headerReplacements++;
+          if (!identical(before.$2, after.$2)) fieldReplacements++;
+          if (!identical(before.$3, after.$3)) actionReplacements++;
+          expect(tester.getRect(header), beforeBounds);
+          expect(tester.getRect(searchField), beforeFieldBounds);
+          expect(
+            tester.widget<AppSearchField>(searchField).focusNode,
+            same(focus),
+          );
+          expect(focus.hasFocus, isTrue);
+          expect(tester.widget<TextField>(field).controller!.text, query);
+          expect(
+            tester.state<ScrollableState>(scroll).position,
+            same(position),
+          );
+        }
+
+        const pageSize = _PagingSource.pageSize;
+        for (var page = 1; page <= 3; page++) {
+          final offset = page * pageSize;
+          final priorRows = tester.widget<SearchResultSection>(section).results;
+          final beforeLoad = controls();
+          position.jumpTo(position.maxScrollExtent);
+          await pumpUntil(
+            tester,
+            () => source.responses.containsKey(offset),
+            'committed scroll starts offset $offset',
+          );
+          expect(
+            tester.widget<SearchResultSection>(section).isLoadingMore,
+            isTrue,
+          );
+          expect(
+            tester.widget<SearchResultSection>(section).results,
+            same(priorRows),
+          );
+          compareControls(beforeLoad);
+
+          final beforeResult = controls();
+          final reply = source.page(offset);
+          source.responses[offset]!.complete(
+            ProviderMediaPage(
+              items: reply.items,
+              nextOffset: reply.nextOffset,
+              hasMore: page < 3,
+            ),
+          );
+          await pumpUntil(
+            tester,
+            () =>
+                tester.widget<SearchResultSection>(section).results.length ==
+                source.published.length,
+            'committed scroll appends offset $offset',
+          );
+          expect(
+            tester.widget<SearchResultSection>(section).isLoadingMore,
+            isFalse,
+          );
+          expect(
+            tester.widget<SearchResultSection>(section).results,
+            orderedEquals(source.published),
+          );
+          expect(
+            tester.widget<SearchResultSection>(section).results.first,
+            same(priorRows.first),
+          );
+          expect(
+            harness.container.read(searchPagedResultsProvider).nextOffset,
+            reply.nextOffset,
+          );
+          compareControls(beforeResult);
+        }
+
+        final completedCalls = [
+          for (var page = 0; page <= 3; page++) (query, page * pageSize),
+        ];
+        expect(source.committedCalls, completedCalls);
+        expect(find.byType(PhoneSuggestionBox), findsNothing);
+        final item = source.published.last;
+        final card = find.byKey(ValueKey(item.url));
+        position.jumpTo(position.maxScrollExtent);
+        await pumpUntil(
+          tester,
+          () => card.hitTestable().evaluate().isNotEmpty,
+          'last appended card',
+        );
+        final beforeDetailsOffset = position.pixels;
+        await tester.tap(card);
+        await pumpUntil(
+          tester,
+          () => harness.opened.isNotEmpty,
+          'open appended work',
+        );
+        expect(harness.opened.last.item, same(item));
+        await tester.pump(const Duration(milliseconds: 450));
+        await tester.binding.handlePopRoute();
+        await pumpUntil(
+          tester,
+          () => card.hitTestable().evaluate().isNotEmpty,
+          'return to last search row',
+        );
+        expect(tester.state<ScrollableState>(scroll).position, same(position));
+        expect(position.pixels, beforeDetailsOffset);
+        expect(
+          tester.widget<AppSearchField>(searchField).focusNode,
+          same(focus),
+        );
+        expect(source.committedCalls, completedCalls);
+        expect(tester.takeException(), isNull);
+
+        debugPrint(
+          'C23_SEARCH_COMMITTED ${size.width.toInt()} '
+          'header=$headerReplacements field=$fieldReplacements actions=$actionReplacements',
+        );
+        const expectedReplacements = 0;
+        expect(
+          (headerReplacements, fieldReplacements, actionReplacements),
+          (expectedReplacements, expectedReplacements, expectedReplacements),
+        );
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+      },
+    );
+  }
 
   test(
     'character index preserves first winners and resets for account change',
