@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
-import 'dart:ui' as ui;
 
 import 'package:animewitcher/core/network/poster_cache.dart';
 import 'package:animewitcher/core/network/queued_poster_image_provider.dart';
@@ -13,6 +11,7 @@ import 'package:octo_image/octo_image.dart';
 
 import '../../core/services/artwork_fallback_service.dart';
 import '../../core/utils/artwork_host_fallback.dart';
+import '../../core/utils/image_utils.dart';
 
 /// A poster that looks elsewhere when its artwork will not load.
 ///
@@ -119,14 +118,7 @@ class _DisplayCoverPoster extends ImageProvider<_DisplayCoverPoster> {
       key.source,
       (buffer, {getTargetSize}) => decode(
         buffer,
-        getTargetSize: (sourceWidth, sourceHeight) {
-          final widthFromHeight =
-              (key.height * sourceWidth + sourceHeight - 1) ~/ sourceHeight;
-          final upperBound = math.min(sourceWidth, key.maxWidth ?? sourceWidth);
-          return ui.TargetImageSize(
-            width: math.min(math.max(key.width, widthFromHeight), upperBound),
-          );
-        },
+        getTargetSize: coverDecodeTarget(key.width, key.height, key.maxWidth),
       ),
     );
     stream.addEphemeralErrorListener(

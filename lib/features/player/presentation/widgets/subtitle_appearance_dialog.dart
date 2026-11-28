@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -475,20 +474,12 @@ class _SubtitleAppearanceDialogState
     if (path != null && path.isNotEmpty) {
       setState(() => _customFontLoading = true);
       try {
-        final file = File(path);
-        if (await file.exists()) {
-          final bytes = await file.readAsBytes();
-          final fontLoader = FontLoader(customSubtitleFontFamily);
-          fontLoader.addFont(Future.value(ByteData.sublistView(bytes)));
-          await fontLoader.load();
-          if (mounted) {
-            setState(() {
-              _customFontLoaded = true;
-              _customFontLoading = false;
-            });
-          }
-        } else {
-          if (mounted) setState(() => _customFontLoading = false);
+        final loaded = await loadCustomSubtitleFont(path);
+        if (mounted) {
+          setState(() {
+            if (loaded) _customFontLoaded = true;
+            _customFontLoading = false;
+          });
         }
       } catch (e) {
         debugPrint("Failed to load custom font: $e");

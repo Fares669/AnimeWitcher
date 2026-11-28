@@ -17,6 +17,7 @@ import 'package:animewitcher/features/library/presentation/history_provider.dart
     show watchHistoryProvider;
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/shared/widgets/episode_filler_badge.dart';
+import 'package:animewitcher/shared/widgets/episode_watch_presentation.dart';
 import 'package:animewitcher/shared/widgets/thumbnail_error_placeholder.dart';
 
 import '../download_episode_artwork.dart';
@@ -132,12 +133,12 @@ class _CompletedDownloadEpisodeCardState
     );
   }
 
-  _EpisodeWatchPresentation _watchPresentation(
+  EpisodeWatchPresentation _watchPresentation(
     BuildContext context,
     HistoryItem? historyItem,
   ) {
     final episode = widget.item.episode;
-    if (episode == null) return const _EpisodeWatchPresentation();
+    if (episode == null) return noEpisodeWatch;
 
     HistoryRepository? historyRepo;
     EpisodeWatchRepository? episodeWatchRepo;
@@ -159,52 +160,23 @@ class _CompletedDownloadEpisodeCardState
       episodeWatchRepo = ref.watch(episodeWatchRepositoryProvider);
     } catch (_) {}
 
-    if (historyRepo == null) return const _EpisodeWatchPresentation();
+    if (historyRepo == null) return noEpisodeWatch;
 
-    final epPos = historyPositionForItem(historyRepo,
-      widget.item.item,
-      episodeUrl: episode.url,
-      season: episode.season,
-      episode: episode.episode,
-    );
-    final epDur = historyDurationForItem(historyRepo,
-      widget.item.item,
-      episodeUrl: episode.url,
-      season: episode.season,
-      episode: episode.episode,
-    );
-    final progress = epDur > 0 ? (epPos / epDur).clamp(0.0, 1.0) : 0.0;
+    final history = episode.historyProgress(historyRepo, widget.item.item);
+    final progress = history.progress;
 
     final explicitWatchState = episodeWatchRepo == null ? null : episodeExplicitStateFor(
       episodeWatchRepo, widget.item.item, episode,
     );
     final isWatched =
         (episodeWatchRepo == null ? null : episodeIsWatchedFor(episodeWatchRepo, widget.item.item, episode)) ??
-        (epDur > 0 && progress >= 0.90);
-    final displayedProgress = isWatched ? 1.0 : progress;
-
-    final l10n = AppLocalizations.of(context)!;
-    String? statusBadge;
-    if (isWatched) {
-      statusBadge = l10n.watched.toUpperCase();
-    } else if (progress > 0.02) {
-      statusBadge = l10n.watching.toUpperCase();
-    }
-
-    if (historyItem != null &&
-        statusBadge == null &&
-        explicitWatchState != false) {
-      final hSeason = historyItem.season ?? 1;
-      final hEpisode = historyItem.episode ?? 1;
-      if (episode.season == hSeason && episode.episode == hEpisode) {
-        statusBadge = l10n.lastWatched.toUpperCase();
-      }
-    }
-
-    return _EpisodeWatchPresentation(
+        (history.duration > 0 && progress >= 0.90);
+    return episode.watchPresentation(
+      AppLocalizations.of(context)!,
+      historyItem,
+      progress,
       isWatched: isWatched,
-      progress: displayedProgress,
-      statusBadge: statusBadge,
+      explicitWatchState: explicitWatchState,
     );
   }
 
@@ -518,16 +490,4 @@ class _CompletedDownloadEpisodeCardState
       ),
     );
   }
-}
-
-class _EpisodeWatchPresentation {
-  const _EpisodeWatchPresentation({
-    this.isWatched = false,
-    this.progress = 0,
-    this.statusBadge,
-  });
-
-  final bool isWatched;
-  final double progress;
-  final String? statusBadge;
 }

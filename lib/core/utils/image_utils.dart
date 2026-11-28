@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -6,6 +7,17 @@ import 'package:flutter/foundation.dart' show SynchronousFuture, kIsWeb;
 import 'package:flutter/widgets.dart';
 
 import '../network/poster_cache.dart';
+
+/// Width-only cover decode, bounded by its source and optional memory cap.
+ui.TargetImageSizeCallback coverDecodeTarget(int width, int height, int? cap) =>
+    (sourceWidth, sourceHeight) {
+      final widthFromHeight =
+          (height * sourceWidth + sourceHeight - 1) ~/ sourceHeight;
+      final bound = math.min(sourceWidth, cap ?? sourceWidth);
+      return ui.TargetImageSize(
+        width: math.min(math.max(width, widthFromHeight), bound),
+      );
+    };
 
 class ImageUtils {
   /// Resolves the image from the given URL and determines if it is portrait (height >= width).

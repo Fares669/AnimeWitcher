@@ -950,17 +950,8 @@ class _AnimeWitcherEmbeddedSubtitleViewState
     final path = settings.subTypefaceFilePath;
     if (path != null && path.isNotEmpty && !_customFontLoaded) {
       try {
-        final file = File(path);
-        if (await file.exists()) {
-          final bytes = await file.readAsBytes();
-          final fontLoader = FontLoader(customSubtitleFontFamily);
-          fontLoader.addFont(Future.value(ByteData.sublistView(bytes)));
-          await fontLoader.load();
-          if (mounted) {
-            setState(() {
-              _customFontLoaded = true;
-            });
-          }
+        if (await loadCustomSubtitleFont(path) && mounted) {
+          setState(() => _customFontLoaded = true);
         }
       } catch (e) {
         debugPrint("Failed to load custom font: $e");

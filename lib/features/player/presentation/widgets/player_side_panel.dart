@@ -6,7 +6,6 @@ import 'package:cached_network_image/cached_network_image.dart';
 
 import 'dart:ui' show ImageFilter;
 
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:collection/collection.dart';
@@ -33,6 +32,7 @@ import '../../../details/presentation/widgets/download_management_dialog.dart';
 import '../../../details/presentation/widgets/download_progress_dialog.dart';
 import '../../../details/presentation/widgets/episode_action_chip.dart';
 import 'hotstar_player_style.dart';
+import 'player_key_activation.dart';
 
 import 'package:animewitcher/core/utils/artwork_quality.dart';
 import 'package:animewitcher/core/utils/episode_label.dart';
@@ -824,17 +824,8 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
       child: Focus(
         focusNode: widget.focusNode,
         onFocusChange: (v) => setState(() => _focused = v),
-        onKeyEvent: (node, event) {
-          if (event is! KeyDownEvent) return KeyEventResult.ignored;
-          final key = event.logicalKey;
-          if (key == LogicalKeyboardKey.select ||
-              key == LogicalKeyboardKey.enter ||
-              key == LogicalKeyboardKey.space) {
-            widget.onTap();
-            return KeyEventResult.handled;
-          }
-          return KeyEventResult.ignored;
-        },
+        onKeyEvent: (_, event) =>
+            handlePlayerActivationKey(event, widget.onTap),
         child: MouseRegion(
           cursor: SystemMouseCursors.click,
           onEnter: (_) => setState(() => _hovered = true),

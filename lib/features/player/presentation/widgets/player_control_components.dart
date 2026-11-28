@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../../../../shared/widgets/custom_widgets.dart';
 import 'hotstar_player_style.dart';
+import 'player_key_activation.dart';
 
 /// A ±N second seek glyph: lucide's rotate arrows with the configured
 /// duration inside them, the way Harbor draws its seek buttons.
@@ -465,17 +466,8 @@ class _PlayerActionButtonState extends State<PlayerActionButton> {
       child: Focus(
         focusNode: widget.focusNode,
         onFocusChange: (value) => setState(() => _focused = value),
-        onKeyEvent: (node, event) {
-          if (event is! KeyDownEvent) return KeyEventResult.ignored;
-          final key = event.logicalKey;
-          if (key == LogicalKeyboardKey.select ||
-              key == LogicalKeyboardKey.enter ||
-              key == LogicalKeyboardKey.space) {
-            widget.onTap();
-            return KeyEventResult.handled;
-          }
-          return KeyEventResult.ignored;
-        },
+        onKeyEvent: (_, event) =>
+            handlePlayerActivationKey(event, widget.onTap),
         child: MouseRegion(
           cursor: SystemMouseCursors.click,
           onEnter: (_) => setState(() => _hovered = true),

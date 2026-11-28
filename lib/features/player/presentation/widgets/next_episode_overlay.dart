@@ -11,6 +11,7 @@ import 'package:animewitcher/core/utils/episode_label.dart';
 import 'package:animewitcher/shared/widgets/thumbnail_error_placeholder.dart';
 
 import 'hotstar_player_style.dart';
+import 'player_key_activation.dart';
 import 'player_prompt_placement.dart';
 
 class NextEpisodeOverlay extends StatefulWidget {
@@ -807,17 +808,8 @@ class _PlayNowButtonState extends State<_PlayNowButton>
           }
         },
         autofocus: true,
-        onKeyEvent: (node, event) {
-          if (event is! KeyDownEvent) return KeyEventResult.ignored;
-          final key = event.logicalKey;
-          if (key == LogicalKeyboardKey.select ||
-              key == LogicalKeyboardKey.enter ||
-              key == LogicalKeyboardKey.space) {
-            widget.onPressed();
-            return KeyEventResult.handled;
-          }
-          return KeyEventResult.ignored;
-        },
+        onKeyEvent: (_, event) =>
+            handlePlayerActivationKey(event, widget.onPressed),
         child: button,
       );
     }

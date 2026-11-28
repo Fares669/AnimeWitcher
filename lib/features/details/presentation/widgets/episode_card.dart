@@ -24,6 +24,7 @@ import 'package:animewitcher/core/utils/layout_constants.dart';
 import 'package:animewitcher/core/utils/responsive_breakpoints.dart';
 
 import 'package:animewitcher/shared/widgets/episode_filler_badge.dart';
+import 'package:animewitcher/shared/widgets/episode_watch_presentation.dart';
 import '../../../../shared/widgets/thumbnail_error_placeholder.dart';
 import '../../../library/presentation/download_delete_confirmation.dart';
 import '../../../library/presentation/download_progress_v2_provider.dart';
@@ -166,26 +167,12 @@ class EpisodeCard extends HookConsumerWidget {
     ref.watch(watchHistoryProvider);
     final historyItem = historyRepo.getWatchHistoryItem(parentItem);
 
-    final epPos = historyPositionForItem(
-      historyRepo,
-      parentItem,
-      episodeUrl: episode.url,
-      season: episode.season,
-      episode: episode.episode,
-    );
-    final epDur = historyDurationForItem(
-      historyRepo,
-      parentItem,
-      episodeUrl: episode.url,
-      season: episode.season,
-      episode: episode.episode,
-    );
+    final progress = episode.historyProgress(historyRepo, parentItem).progress;
 
     ref.watch(episodeWatchRevisionProvider);
     ref.watch(accountDataRevisionProvider);
     final episodeWatchRepo = ref.watch(episodeWatchRepositoryProvider);
 
-    final double progress = epDur > 0 ? (epPos / epDur).clamp(0.0, 1.0) : 0.0;
     final explicitWatchState = episodeExplicitStateFor(
       episodeWatchRepo,
       parentItem,
@@ -196,27 +183,13 @@ class EpisodeCard extends HookConsumerWidget {
       parentItem,
       episode,
     );
-    final displayedProgress = isWatched ? 1.0 : progress;
-
-    String? statusBadge;
-    if (isWatched) {
-      statusBadge = l10n.watched.toUpperCase();
-    } else if (progress > 0.02) {
-      statusBadge = l10n.watching.toUpperCase();
-    }
-
-    if (historyItem != null &&
-        statusBadge == null &&
-        explicitWatchState != false) {
-      final hSeason = historyItem.season ?? 1;
-      final hEpisode = historyItem.episode ?? 1;
-      final eSeason = episode.season;
-      final eEpisode = episode.episode;
-
-      if (eSeason == hSeason && eEpisode == hEpisode) {
-        statusBadge = l10n.lastWatched.toUpperCase();
-      }
-    }
+    final watch = episode.watchPresentation(
+      l10n,
+      historyItem,
+      progress,
+      isWatched: isWatched,
+      explicitWatchState: explicitWatchState,
+    );
 
     final episodeTrackingUrl = episode.url.trim();
     final downloadIndex = episodeDownloadsForDetailsProvider(
@@ -471,8 +444,8 @@ class EpisodeCard extends HookConsumerWidget {
                 if (vertical)
                   _buildThumbnail(
                     context,
-                    displayedProgress,
-                    statusBadge,
+                    watch.progress,
+                    watch.statusBadge,
                     isWatched: isWatched,
                     width: double.infinity,
                   ),
@@ -483,8 +456,8 @@ class EpisodeCard extends HookConsumerWidget {
                     if (!vertical) ...[
                       _buildThumbnail(
                         context,
-                        displayedProgress,
-                        statusBadge,
+                        watch.progress,
+                        watch.statusBadge,
                         isWatched: isWatched,
                       ),
                       const SizedBox(width: LayoutConstants.spacingMd),

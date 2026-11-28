@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
-import 'dart:ui' as ui;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart' show SynchronousFuture, kIsWeb;
@@ -9,6 +7,7 @@ import 'package:octo_image/octo_image.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/utils/artwork_quality.dart';
+import '../../../../core/utils/image_utils.dart';
 import '../../../../core/account/animewitcher_comment_models.dart';
 import '../../../comments/presentation/animewitcher_comments_screen.dart';
 import '../../../../shared/widgets/taskbar_visibility.dart';
@@ -305,16 +304,7 @@ class _NewsGridCover extends ImageProvider<_NewsGridCover> {
       key.source,
       (buffer, {getTargetSize}) => decode(
         buffer,
-        getTargetSize: (sourceWidth, sourceHeight) {
-          final widthFromHeight =
-              (key.height * sourceWidth + sourceHeight - 1) ~/ sourceHeight;
-          return ui.TargetImageSize(
-            width: math.min(
-              math.max(key.width, widthFromHeight),
-              math.min(sourceWidth, key.maxWidth),
-            ),
-          );
-        },
+        getTargetSize: coverDecodeTarget(key.width, key.height, key.maxWidth),
       ),
     );
     stream.addEphemeralErrorListener(

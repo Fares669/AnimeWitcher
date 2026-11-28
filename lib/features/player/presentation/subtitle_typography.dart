@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/painting.dart';
+import 'package:flutter/services.dart' show ByteData, FontLoader;
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../settings/presentation/player_settings_provider.dart';
@@ -23,6 +26,17 @@ const subtitleBuiltInFonts = [
 ];
 
 const customSubtitleFontFamily = 'CustomSubtitleFont';
+
+/// Returns false for a missing file; callers handle failures and widget state.
+Future<bool> loadCustomSubtitleFont(String path) async {
+  final file = File(path);
+  if (!await file.exists()) return false;
+  final bytes = await file.readAsBytes();
+  final fontLoader = FontLoader(customSubtitleFontFamily);
+  fontLoader.addFont(Future.value(ByteData.sublistView(bytes)));
+  await fontLoader.load();
+  return true;
+}
 
 TextStyle subtitleTextStyle(
   PlayerSettings settings, {
