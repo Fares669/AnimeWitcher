@@ -310,9 +310,8 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     );
   }
 
-  // Browse/search hits are read-only. The JSON decoder already gives typed
-  // maps; don't clone them (and their nested fields) during projection.
-  // Keep [_map] for mutations and for non-JSON/platform map compatibility.
+  // JSON projections only inspect these maps. Keep [_map] for output that
+  // needs ownership, and for normalizing legacy strings/non-JSON maps.
   Map<String, dynamic> _readHitMap(dynamic raw) {
     if (raw is Map<String, dynamic>) return raw;
     return _map(raw);
@@ -405,8 +404,10 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         : '$base/${_encodeFirestorePath(cleanParent)}:runQuery';
   }
 
+  // These transport wrappers are only read synchronously. Arrays, field maps
+  // and geo points still get their own decoded containers before caching.
   dynamic _firestoreValue(dynamic raw) {
-    final value = _map(raw);
+    final value = _readHitMap(raw);
     if (value.isEmpty) return null;
     if (value.containsKey('stringValue')) {
       return value['stringValue']?.toString() ?? '';
@@ -431,19 +432,19 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       return value['bytesValue']?.toString() ?? '';
     if (value.containsKey('geoPointValue')) return _map(value['geoPointValue']);
 
-    final arrayValue = _map(value['arrayValue']);
+    final arrayValue = _readHitMap(value['arrayValue']);
     if (arrayValue.isNotEmpty) {
       return _list(arrayValue['values'])
           .map<dynamic>(_firestoreValue)
           .toList(growable: false);
     }
-    final mapValue = _map(value['mapValue']);
+    final mapValue = _readHitMap(value['mapValue']);
     if (mapValue.isNotEmpty) return _firestoreFields(mapValue['fields']);
     return null;
   }
 
   Map<String, dynamic> _firestoreFields(dynamic raw) {
-    final fields = _map(raw);
+    final fields = _readHitMap(raw);
     final output = <String, dynamic>{};
     for (final entry in fields.entries) {
       output[entry.key] = _firestoreValue(entry.value);
@@ -452,7 +453,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   }
 
   Map<String, dynamic> _firestoreDocumentHit(dynamic raw) {
-    final document = _map(raw);
+    final document = _readHitMap(raw);
     if (document.isEmpty) return <String, dynamic>{};
     final hit = _firestoreFields(document['fields']);
     final name = _text(document['name']);
@@ -2429,9 +2430,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     }
     final hits = <Map<String, dynamic>>[];
     for (final rowRaw in raw) {
-      final document = _map(_map(rowRaw)['document']);
-      if (document.isEmpty) continue;
-      final hit = _firestoreDocumentHit(document);
+      final hit = _firestoreDocumentHit(_readHitMap(rowRaw)['document']);
       if (hit.isNotEmpty) hits.add(hit);
     }
     final items = await _dedupeHits(hits);

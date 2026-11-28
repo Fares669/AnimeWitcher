@@ -51,7 +51,6 @@ class AnimeWitcherPlayerControls extends ConsumerStatefulWidget {
   final List<StreamResult>? streams;
   final StreamResult? currentStream;
 
-  final List<SubtitleFile>? externalSubtitles;
   final void Function(StreamResult)? onStreamSelected;
   final void Function(BoxFit)? onResize;
   final void Function(bool)? onVisibilityChanged;
@@ -73,7 +72,6 @@ class AnimeWitcherPlayerControls extends ConsumerStatefulWidget {
     this.onBackPointer,
     this.streams,
     this.currentStream,
-    this.externalSubtitles,
     this.onStreamSelected,
     this.onResize,
     this.onVisibilityChanged,
@@ -1396,9 +1394,6 @@ class AnimeWitcherPlayerControlsState
     final currentStream = ref.watch(
       playerControllerProvider.select((s) => s.currentStream),
     );
-    final externalSubtitles = ref.watch(
-      playerControllerProvider.select((s) => s.externalSubtitles),
-    );
     final showNextEpOverlay = ref.watch(
       playerControllerProvider.select((s) => s.showNextEpisodeOverlay),
     );
@@ -1592,7 +1587,6 @@ class AnimeWitcherPlayerControlsState
                     episodeLabel: episodeLabel,
                     streams: streams,
                     currentStream: currentStream,
-                    externalSubtitles: externalSubtitles,
                     showEpisodeList: showEpisodeList,
                     isSeries: isSeries,
                     hasPreviousEpisode: navigation.previous != null,
@@ -1876,7 +1870,6 @@ class AnimeWitcherPlayerControlsState
     String? episodeLabel,
     List<StreamResult>? streams,
     StreamResult? currentStream,
-    List<SubtitleFile>? externalSubtitles,
     required bool showEpisodeList,
     required bool isSeries,
     required bool hasPreviousEpisode,

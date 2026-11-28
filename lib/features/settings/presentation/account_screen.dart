@@ -51,19 +51,28 @@ class _AnimeWitcherAccountScreenState
 
   @override
   Widget build(BuildContext context) {
-    final account = ref.watch(animeWitcherAccountControllerProvider);
-    final snapshot = account.asData?.value;
-    final profile = snapshot?.profile;
+    // A background sync can advance lastSyncAt without changing the account
+    // page. Keep the complete profile for editing and privacy actions, but
+    // only listen to the parts of the snapshot this page actually uses.
+    final account = ref.watch(
+      animeWitcherAccountControllerProvider.select(
+        (state) => (
+          profile: state.asData?.value.profile,
+          isLoading: state.isLoading,
+          error: state.when<Object?>(
+            data: (_) => null,
+            error: (error, _) => error,
+            loading: () => null,
+          ),
+        ),
+      ),
+    );
+    final profile = account.profile;
     final configured = AnimeWitcherAccountConfig.firebaseConfigured;
     // Missing configuration disables auth, but it is not ongoing work.
     final inProgress = _submitting || account.isLoading;
     final busy = inProgress || !configured;
     final canPop = Navigator.of(context).canPop();
-    final asyncError = account.when<Object?>(
-      data: (_) => null,
-      error: (error, _) => error,
-      loading: () => null,
-    );
 
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -98,7 +107,11 @@ class _AnimeWitcherAccountScreenState
                   if (profile != null)
                     _buildSignedIn(profile, busy)
                   else
-                    _buildSignedOut(busy, asyncError, inProgress: inProgress),
+                    _buildSignedOut(
+                      busy,
+                      account.error,
+                      inProgress: inProgress,
+                    ),
                   _anime3rbAccountTile(),
                   _witanimeAccountTile(),
                 ],

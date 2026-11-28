@@ -1,18 +1,24 @@
 import 'home_hero_layout.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
+
 import '../../../../core/router/app_router.dart';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:visibility_detector/visibility_detector.dart';
+
 import '../../../../core/utils/artwork_quality.dart';
 import '../../../../core/utils/storyblok_image.dart';
 import '../../../../core/utils/layout_constants.dart';
 import '../../../../shared/widgets/fallback_poster_image.dart';
 import '../../../../shared/widgets/cards_wrapper.dart';
 import '../../../../core/utils/responsive_breakpoints.dart';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../../../core/providers/device_info_provider.dart';
 
 import '../../../../shared/widgets/thumbnail_error_placeholder.dart';
@@ -91,6 +97,11 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
   int? _previousSlide;
   bool _isTransitioning = false;
 
+  // A slide's animation wrappers change when it enters or exits. Reparent
+  // only its still-visible artwork, not the slide's gesture/focus controls.
+  // The exiting key is released when that slide leaves the stack.
+  final _slideArtworkKeys = <int, GlobalKey<State<StatefulWidget>>>{};
+
   // Progress bar fill — also serves as the auto-advance timer (5s).
   late final AnimationController _fillController;
 
@@ -110,6 +121,7 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
       if (status == AnimationStatus.completed && mounted) {
         setState(() {
           _isTransitioning = false;
+          _slideArtworkKeys.remove(_previousSlide);
           _previousSlide = null;
         });
       }
@@ -465,10 +477,23 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
     required bool isDesktop,
   }) {
     final movie = widget.movies[index];
+    final artworkKey = _slideArtworkKeys.putIfAbsent(index, GlobalKey.new);
     if (widget.scrollController == null) {
-      return _buildStaticItem(context, movie, height, isDesktop: isDesktop);
+      return _buildStaticItem(
+        context,
+        movie,
+        height,
+        artworkKey: artworkKey,
+        isDesktop: isDesktop,
+      );
     }
-    return _buildCarouselItem(context, movie, height, isDesktop: isDesktop);
+    return _buildCarouselItem(
+      context,
+      movie,
+      height,
+      artworkKey: artworkKey,
+      isDesktop: isDesktop,
+    );
   }
 
   void _navigateToDetails(BuildContext context, MultimediaItem item) {
@@ -479,6 +504,7 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
     BuildContext context,
     MultimediaItem movie,
     double height, {
+    required Key artworkKey,
     bool isDesktop = false,
   }) {
     final theme = Theme.of(context);
@@ -499,6 +525,7 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
           builder: (context) => _buildSlideBase(
             context: context,
             movie: movie,
+            artworkKey: artworkKey,
             height: height,
             isDesktop: isDesktop,
             parallax: true,
@@ -514,6 +541,7 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
     BuildContext context,
     MultimediaItem movie,
     double height, {
+    required Key artworkKey,
     bool isDesktop = false,
   }) {
     final theme = Theme.of(context);
@@ -530,6 +558,7 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
       child: _buildSlideBase(
         context: context,
         movie: movie,
+        artworkKey: artworkKey,
         height: height,
         isDesktop: isDesktop,
         parallax: false,
@@ -542,6 +571,7 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
   Widget _buildSlideBase({
     required BuildContext context,
     required MultimediaItem movie,
+    required Key artworkKey,
     required double height,
     required bool isDesktop,
     required bool parallax,
@@ -574,6 +604,7 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
     // these widget instances avoids rebuilding providers and rich text on
     // every offset; inherited changes still run the outer build normally.
     final artwork = ArtworkDecode(
+      key: artworkKey,
       paintedWidth: size.width,
       sizeHighQualityToDisplay: true,
       builder: (BuildContext context, int? decodeWidth) => FallbackPosterImage(
@@ -855,9 +886,8 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
     }
     // Straight into the episode, rather than the page about it: the button
     // says watching, so it should not stop at a description.
-    DetailsRoute(
-      $extra: DetailsRouteExtra(item: movie, autoPlay: true),
-    ).push<void>(context);
+    DetailsRoute($extra: DetailsRouteExtra(item: movie, autoPlay: true))
+        .push<void>(context);
   }
 
   Widget _buildLogo(
@@ -928,7 +958,6 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
       ),
     );
   }
-
 }
 
 /// A single progress dot whose width animates with spring physics.

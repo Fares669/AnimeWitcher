@@ -1914,7 +1914,7 @@ class PlayerController extends Notifier<PlayerState> {
     // event propagates, making state.track.audio unreliable at error time).
     _trackSub?.cancel();
     _trackSub = _player.stream.track.listen((track) {
-      final id = track.audio.id.toString();
+      final id = track.audio.id;
       if (id != 'no' && id != 'auto') {
         _lastKnownAudioTrackId = id;
       }
@@ -1923,20 +1923,17 @@ class PlayerController extends Notifier<PlayerState> {
     _errorSub = _player.stream.error.listen((error) {
       if (_isReconnectingCurrentStream || _isRecoveringFromStall) return;
       if (kDebugMode) _debugPrint("Player Error: $error");
-      if (error.toString().toLowerCase().contains("abort")) return;
+      final errLower = error.toLowerCase();
+      if (errLower.contains('abort')) return;
 
-      final isAudioDecodeError = error.toString().toLowerCase().contains(
-        'decoding audio',
-      );
+      final isAudioDecodeError = errLower.contains('decoding audio');
 
       // Video decode errors (h264 hardware-accelerator failures, PPS/SPS state
       // loss after an audio track switch) are transient during active playback:
       // the decoder self-heals on the next keyframe. Restarting the entire
       // source would be far worse than letting the stall watchdog handle a
       // truly broken stream (position stuck for 5 s → watchdog calls play()).
-      final isVideoDecodeError = error.toString().toLowerCase().contains(
-        'decoding video',
-      );
+      final isVideoDecodeError = errLower.contains('decoding video');
       if (isVideoDecodeError &&
           !state.isLive &&
           _hasConfirmedPlaybackFrame &&
@@ -1969,25 +1966,28 @@ class PlayerController extends Notifier<PlayerState> {
         }
         _audioFailoverLastTime = now;
 
-        if (_lastKnownAudioTrackId != null) {
-          _failedAudioTrackIds.add(_lastKnownAudioTrackId!);
-        } else {
-          // stream.track hasn't fired yet (error came in before the first
-          // track-change event). Mark the first real track as failed so we
-          // don't loop back to it.
-          final firstReal = _player.state.tracks.audio.firstWhereOrNull(
-            (t) => t.id != 'no' && t.id != 'auto',
-          );
-          if (firstReal != null) {
-            _failedAudioTrackIds.add(firstReal.id.toString());
+        final lastFailed = _lastKnownAudioTrackId;
+        if (lastFailed != null) _failedAudioTrackIds.add(lastFailed);
+        // Before the first track event, assume the first real rendition failed.
+        // In the same scan, remember the first Off entry for exhaustion and
+        // stop at the earliest remaining rendition in backend order.
+        var markFirstAsFailed = lastFailed == null;
+        AudioTrack? nextTrack;
+        AudioTrack? noTrack;
+        for (final track in _player.state.tracks.audio) {
+          final id = track.id;
+          if (id == 'no') {
+            noTrack ??= track;
+          } else if (id != 'auto') {
+            if (markFirstAsFailed) {
+              _failedAudioTrackIds.add(id);
+              markFirstAsFailed = false;
+            } else if (!_failedAudioTrackIds.contains(id)) {
+              nextTrack = track;
+              break;
+            }
           }
         }
-        final nextTrack = _player.state.tracks.audio.firstWhereOrNull(
-          (t) =>
-              t.id != 'no' &&
-              t.id != 'auto' &&
-              !_failedAudioTrackIds.contains(t.id.toString()),
-        );
         if (nextTrack != null) {
           if (kDebugMode) {
             _debugPrint(
@@ -1995,7 +1995,7 @@ class PlayerController extends Notifier<PlayerState> {
               ' — trying next: ${nextTrack.id} (${nextTrack.language})',
             );
           }
-          _lastKnownAudioTrackId = nextTrack.id.toString();
+          _lastKnownAudioTrackId = nextTrack.id;
           _player.setAudioTrack(nextTrack).catchError((_) {});
           return;
         }
@@ -2007,9 +2007,6 @@ class PlayerController extends Notifier<PlayerState> {
             '[Player] All audio tracks failed — disabling audio to preserve video playback.',
           );
         }
-        final noTrack = _player.state.tracks.audio.firstWhereOrNull(
-          (t) => t.id == 'no',
-        );
         if (noTrack != null) {
           _player.setAudioTrack(noTrack).catchError((_) {});
         }
@@ -2024,7 +2021,6 @@ class PlayerController extends Notifier<PlayerState> {
         // decoding once and retry the SAME source. If it still fails,
         // _forceSoftwareDecode is already set so we fall through to the
         // next source.
-        final errLower = error.toString().toLowerCase();
         final looksLikeDecodeFailure =
             errLower.contains('decod') ||
             errLower.contains('codec') ||

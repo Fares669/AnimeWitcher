@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -23,6 +24,7 @@ import 'package:animewitcher/features/manga/reader/manga_reader_settings_provide
 import 'package:animewitcher/features/manga/reader/subsampling/src/subsampling_image_painter.dart'
     show SubsamplingImageRenderWidget;
 import 'package:animewitcher/features/manga/reader/widgets/manga_chapter_transition_page.dart';
+import 'package:animewitcher/features/manga/reader/widgets/manga_paged_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_webtoon_reader.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:background_downloader/background_downloader.dart';
@@ -30,6 +32,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -76,7 +79,10 @@ final class _Storage extends StorageService {
 }
 
 final class _Source extends AnimeWitcherNativeProvider {
-  _Source(_Storage storage) : super(Dio(), SettingsRepository(storage));
+  _Source(_Storage storage, {this.chapters = const [_first, _second]})
+    : super(Dio(), SettingsRepository(storage));
+
+  final List<MangaChapter> chapters;
 
   final remotePageRequests = <String>[];
   late final work = MultimediaItem(
@@ -111,10 +117,7 @@ final class _Source extends AnimeWitcherNativeProvider {
   Future<MultimediaItem> getMangaDetails(String url) async => work;
 
   @override
-  Future<List<MangaChapter>> getMangaChapters(String url) async => [
-    _first,
-    _second,
-  ];
+  Future<List<MangaChapter>> getMangaChapters(String url) async => chapters;
 
   @override
   Future<List<MangaPage>> getMangaChapterPages(
@@ -150,9 +153,13 @@ final class _NoCovers extends MangaReaderCustomCoversNotifier {
 }
 
 final class _Settings extends MangaReaderSettingsNotifier {
+  _Settings([this.defaultMode = MangaReaderMode.webtoon]);
+
+  final MangaReaderMode defaultMode;
+
   @override
-  MangaReaderSettings build() => const MangaReaderSettings(
-    defaultMode: MangaReaderMode.webtoon,
+  MangaReaderSettings build() => MangaReaderSettings(
+    defaultMode: defaultMode,
     fullScreen: false,
     showReadingMode: false,
     keepScreenOn: false,
@@ -210,6 +217,57 @@ Future<DownloadItem> _download(
     destinationPath: folder.path,
   );
 }
+
+GoRouter _offlineRouter() => GoRouter(
+  routes: [
+    GoRoute(path: '/', builder: (_, _) => const MangaHomeScreen()),
+    GoRoute(
+      path: '/manga-details',
+      builder: (context, state) =>
+          MangaDetailsRoute($extra: state.extra! as MangaDetailsRouteExtra)
+              .build(context, state),
+    ),
+    GoRoute(
+      path: '/manga-reader',
+      builder: (context, state) =>
+          MangaReaderRoute($extra: state.extra! as MangaReaderRouteExtra)
+              .build(context, state),
+    ),
+  ],
+);
+
+Widget _offlineApp({
+  required GoRouter router,
+  required _Storage storage,
+  required _Source source,
+  required List<DownloadItem> downloads,
+  required GlobalKey boundaryKey,
+  MangaReaderMode mode = MangaReaderMode.webtoon,
+}) => ProviderScope(
+  overrides: [
+    extensionManagerProvider.overrideWith(() => _Manager(source)),
+    storageServiceProvider.overrideWithValue(storage),
+    mangaReadingRepositoryProvider.overrideWith(
+      (ref) => MangaReadingRepository(
+        storage,
+        onChanged: () => ref.read(mangaReadingRevisionProvider.notifier).bump(),
+      ),
+    ),
+    mangaReaderSettingsProvider.overrideWith(() => _Settings(mode)),
+    mangaReaderCustomCoversProvider.overrideWith(_NoCovers.new),
+    artworkFallbackServiceProvider.overrideWithValue(_NoArtwork(storage)),
+    downloadsProvider.overrideWith(() => _Downloads(downloads)),
+  ],
+  child: RepaintBoundary(
+    key: boundaryKey,
+    child: MaterialApp.router(
+      routerConfig: router,
+      locale: const Locale('ar'),
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+    ),
+  ),
+);
 
 void main() {
   testWidgets(
@@ -323,53 +381,16 @@ void main() {
         ),
       );
 
-      final router = GoRouter(
-        routes: [
-          GoRoute(path: '/', builder: (_, _) => const MangaHomeScreen()),
-          GoRoute(
-            path: '/manga-details',
-            builder: (context, state) => MangaDetailsRoute(
-              $extra: state.extra! as MangaDetailsRouteExtra,
-            ).build(context, state),
-          ),
-          GoRoute(
-            path: '/manga-reader',
-            builder: (context, state) =>
-                MangaReaderRoute($extra: state.extra! as MangaReaderRouteExtra)
-                    .build(context, state),
-          ),
-        ],
-      );
+      final router = _offlineRouter();
       addTearDown(router.dispose);
       final boundaryKey = GlobalKey();
       await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            extensionManagerProvider.overrideWith(() => _Manager(source)),
-            storageServiceProvider.overrideWithValue(storage),
-            mangaReadingRepositoryProvider.overrideWith(
-              (ref) => MangaReadingRepository(
-                storage,
-                onChanged: () =>
-                    ref.read(mangaReadingRevisionProvider.notifier).bump(),
-              ),
-            ),
-            mangaReaderSettingsProvider.overrideWith(_Settings.new),
-            mangaReaderCustomCoversProvider.overrideWith(_NoCovers.new),
-            artworkFallbackServiceProvider.overrideWithValue(
-              _NoArtwork(storage),
-            ),
-            downloadsProvider.overrideWith(() => _Downloads(downloads)),
-          ],
-          child: RepaintBoundary(
-            key: boundaryKey,
-            child: MaterialApp.router(
-              routerConfig: router,
-              locale: const Locale('ar'),
-              localizationsDelegates: AppLocalizations.localizationsDelegates,
-              supportedLocales: AppLocalizations.supportedLocales,
-            ),
-          ),
+        _offlineApp(
+          router: router,
+          storage: storage,
+          source: source,
+          downloads: downloads,
+          boundaryKey: boundaryKey,
         ),
       );
 
@@ -657,6 +678,283 @@ void main() {
       );
       expect(rail, findsOneWidget);
       expect(source.remotePageRequests, isEmpty);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(milliseconds: 500));
+    },
+  );
+
+  testWidgets(
+    'Arabic Manga Home opens local paged chapters, follows RTL keys and restores progress',
+    (tester) async {
+      tester.view.physicalSize = const Size(390, 640);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final root = Directory.systemTemp.createTempSync('aw_manga_paged_');
+      addTearDown(() => root.delete(recursive: true));
+      final storage = _Storage();
+      final source = _Source(storage, chapters: const [_second, _first]);
+      final progress = MangaReadingRepository(storage);
+      final downloads = (await tester.runAsync(
+        () async => [
+          for (final chapter in [_second, _first])
+            await _download(
+              Directory('${root.path}/${chapter.id}'),
+              chapter,
+              source.work,
+            ),
+        ],
+      ))!;
+      await progress.save(
+        const MangaReadingProgress(
+          mangaId: 'offline-manga',
+          chapterId: 'offline-c1',
+          pageIndex: _resumePage,
+          pageCount: _pageCount,
+          updatedAt: 2,
+          isBookmarked: true,
+        ),
+      );
+      await progress.save(
+        const MangaReadingProgress(
+          mangaId: 'offline-manga',
+          chapterId: 'offline-c2',
+          pageIndex: 13,
+          pageCount: _pageCount,
+          updatedAt: 1,
+        ),
+      );
+
+      final router = _offlineRouter();
+      addTearDown(router.dispose);
+      final boundaryKey = GlobalKey();
+      await tester.pumpWidget(
+        _offlineApp(
+          router: router,
+          storage: storage,
+          source: source,
+          downloads: downloads,
+          boundaryKey: boundaryKey,
+          mode: MangaReaderMode.pagedRtl,
+        ),
+      );
+
+      final paged = find.byType(MangaPagedReader);
+      final pageView = find.descendant(
+        of: paged,
+        matching: find.byType(PageView),
+      );
+      final details = find.byType(MangaDetailsScreen);
+      final home = find.byType(MangaHomeScreen);
+      final visited = <String>[];
+      MangaPagedReader reader() => tester.widget<MangaPagedReader>(paged);
+      Future<void> waitFor(String stage, bool Function() ready) async {
+        final clock = Stopwatch()..start();
+        do {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 6)),
+          );
+          await tester.pump(const Duration(milliseconds: 20));
+          if (ready()) return;
+        } while (clock.elapsed < const Duration(seconds: 5));
+        fail(
+          '$stage not reached; visited=$visited, remote=${source.remotePageRequests}',
+        );
+      }
+
+      final retry = find.text('إعادة المحاولة');
+      Future<void> expectPage(
+        MangaChapter chapter,
+        int index, {
+        required MangaChapter? next,
+      }) async {
+        await waitFor('${chapter.id}:$index with a mounted page', () {
+          if (paged.evaluate().length != 1) return false;
+          final value = reader();
+          final transition =
+              value.trailingPage! as MangaReaderChapterTransitionPage;
+          final controller = tester.widget<PageView>(pageView).controller!;
+          return transition.currentChapter.id == chapter.id &&
+              controller.hasClients &&
+              controller.page == index.toDouble();
+        });
+        final value = reader();
+        final transition =
+            value.trailingPage! as MangaReaderChapterTransitionPage;
+        expect(transition.nextChapter?.id, next?.id);
+        expect(value.onTrailingAdvance != null, next != null);
+        expect(value.rtl, isTrue);
+        expect(value.doublePage, isFalse);
+        expect(value.settings.splitWidePages, isFalse);
+        expect(Directionality.of(tester.element(paged)), TextDirection.rtl);
+        expect(
+          value.pages.map((page) => page.index),
+          orderedEquals(List<int>.generate(_pageCount, (i) => i)),
+        );
+        for (final page in value.pages) {
+          final uri = Uri.parse(page.imageUrl);
+          expect(uri.scheme, 'file');
+          expect(uri.pathSegments.reversed.take(2), [
+            '${(page.index + 1).toString().padLeft(4, '0')}.png',
+            chapter.id,
+          ]);
+        }
+        final expected = _color(chapter, index);
+        List<int>? painted;
+        final clock = Stopwatch()..start();
+        do {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 8)),
+          );
+          await tester.pump(const Duration(milliseconds: 24));
+          expect(retry, findsNothing);
+          final boundary = tester.renderObject<RenderRepaintBoundary>(
+            find.byKey(boundaryKey),
+          );
+          if (boundary.debugNeedsPaint) continue;
+          painted = await tester.runAsync(() async {
+            final image = await boundary.toImage();
+            try {
+              final rgba = (await image.toByteData(
+                format: ui.ImageByteFormat.rawRgba,
+              ))!;
+              final offset =
+                  (image.height ~/ 2 * image.width + image.width ~/ 2) * 4;
+              return [for (var i = 0; i < 4; i++) rgba.getUint8(offset + i)];
+            } finally {
+              image.dispose();
+            }
+          });
+          if (listEquals(painted, expected)) break;
+        } while (clock.elapsed < const Duration(seconds: 5));
+        expect(
+          painted,
+          expected,
+          reason: 'offline RGBA of ${chapter.id}:$index',
+        );
+        visited.add('${chapter.id}:$index:${painted!.join(',')}');
+      }
+
+      await waitFor(
+        'Manga Home',
+        () => find.text(source.work.title).evaluate().isNotEmpty,
+      );
+      await tester.tap(find.text(source.work.title).first);
+      final chapterToggle = find.byKey(const ValueKey('manga-chapters-toggle'));
+      await waitFor('Details', () => chapterToggle.evaluate().isNotEmpty);
+      await Scrollable.ensureVisible(
+        tester.element(chapterToggle),
+        alignment: .25,
+      );
+      await tester.pump();
+      await tester.tap(chapterToggle.hitTestable());
+      Future<void> resume(MangaChapter chapter) async {
+        final readPill = find.byKey(const ValueKey('manga-read-pill'));
+        await waitFor(
+          'Details read action',
+          () => readPill.evaluate().isNotEmpty,
+        );
+        await Scrollable.ensureVisible(
+          tester.element(readPill),
+          alignment: .25,
+        );
+        await tester.pump(const Duration(milliseconds: 260));
+        final action = find.text('تابع · ${chapter.name}').hitTestable();
+        await waitFor(
+          'Resume ${chapter.id}',
+          () => action.evaluate().isNotEmpty,
+        );
+        await tester.tap(action);
+      }
+
+      await resume(_first);
+      await expectPage(_first, _resumePage, next: _second);
+      for (final (key, index) in [
+        (LogicalKeyboardKey.arrowLeft, _resumePage + 1),
+        (LogicalKeyboardKey.arrowRight, _resumePage),
+        (LogicalKeyboardKey.arrowRight, _resumePage - 1),
+      ]) {
+        await tester.sendKeyEvent(key);
+        await expectPage(_first, index, next: _second);
+      }
+      await tester.sendKeyEvent(LogicalKeyboardKey.pageDown);
+      await expectPage(_second, 13, next: null);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await expectPage(_second, 14, next: null);
+      await tester.sendKeyEvent(LogicalKeyboardKey.pageUp);
+      await expectPage(_first, _resumePage - 1, next: _second);
+      await tester.sendKeyEvent(LogicalKeyboardKey.pageDown);
+      await expectPage(_second, 14, next: null);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await waitFor(
+        'Back to Details',
+        () => paged.evaluate().isEmpty && details.evaluate().isNotEmpty,
+      );
+      await tester.pump(const Duration(milliseconds: 320));
+      // The Details resume pill intentionally points to the first
+      // unfinished chapter. Here choose the second chapter explicitly.
+      final firstAction = find.text('تابع · ${_first.name}');
+      await waitFor(
+        'First unfinished chapter',
+        () => firstAction.evaluate().isNotEmpty,
+      );
+      await Scrollable.ensureVisible(
+        tester.element(firstAction),
+        alignment: .25,
+      );
+      await tester.pump();
+      final secondRow = find.byKey(ValueKey('manga-chapter-row-${_second.id}'));
+      await waitFor(
+        'Second chapter row',
+        () => secondRow.evaluate().isNotEmpty,
+      );
+      await Scrollable.ensureVisible(tester.element(secondRow), alignment: .5);
+      await tester.pump();
+      await tester.tap(secondRow.hitTestable());
+      await expectPage(_second, 14, next: null);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await waitFor(
+        'Restored Details',
+        () => paged.evaluate().isEmpty && details.evaluate().isNotEmpty,
+      );
+      await tester.pump(const Duration(milliseconds: 320));
+
+      final saved = Map<String, Object?>.fromEntries(
+        storage._values.entries
+            .where((e) => e.key.startsWith('manga_progress:'))
+            .map((e) {
+              final row = jsonDecode(e.value) as Map<String, dynamic>;
+              expect(row.remove('updatedAt'), greaterThan(2));
+              return MapEntry(e.key, row);
+            }),
+      );
+      expect(saved, {
+        'manga_progress:5d627ffeb08abfe290f60a6db6fc1d2b:3ec63289e41198a4c121c057aa9b6cad':
+            {
+              'mangaId': 'offline-manga',
+              'chapterId': 'offline-c1',
+              'pageIndex': _resumePage - 1,
+              'pageCount': _pageCount,
+              'isRead': false,
+              'isBookmarked': true,
+            },
+        'manga_progress:5d627ffeb08abfe290f60a6db6fc1d2b:299bcd3c884984ce35fe0046afa6bd99':
+            {
+              'mangaId': 'offline-manga',
+              'chapterId': 'offline-c2',
+              'pageIndex': 14,
+              'pageCount': _pageCount,
+              'isRead': false,
+              'isBookmarked': false,
+            },
+      });
+      expect(source.remotePageRequests, isEmpty);
+      router.pop();
+      await waitFor(
+        'Back to Manga Home',
+        () => details.evaluate().isEmpty && home.evaluate().isNotEmpty,
+      );
+      expect(find.text('فصول جديدة'), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(milliseconds: 500));
     },

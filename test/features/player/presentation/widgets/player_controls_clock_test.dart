@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
+import 'package:animewitcher/core/providers/device_info_provider.dart';
 import 'package:animewitcher/features/player/presentation/player_controller.dart';
 import 'package:animewitcher/features/player/presentation/player_gesture_handler.dart';
 import 'package:animewitcher/features/player/presentation/player_platform_service.dart';
@@ -96,6 +97,14 @@ class _Controller extends PlayerController {
     skipSegments: segments,
     uiPhase: const PlaybackUiPhase(kind: PlaybackUiPhaseKind.idle),
   );
+
+  void publishSource(StreamResult source) {
+    state = state.copyWith(currentStream: source, streams: [source]);
+  }
+
+  void publishSubtitleInventory(List<SubtitleFile> subtitles) {
+    state = state.copyWith(externalSubtitles: subtitles);
+  }
 
   void useVideoView(bool value) {
     state = state.copyWith(useExoPlayer: value, isSeekable: value);
@@ -250,6 +259,7 @@ Future<void> _mount(
   vv.VideoController? videoView,
   GlobalKey? paintBoundaryKey,
   VoidCallback? onBack,
+  bool tv = false,
 }) async {
   _mockVolume(tester);
   final controls = PlayerLtr(
@@ -266,6 +276,10 @@ Future<void> _mount(
       overrides: [
         playerControllerProvider.overrideWith(() => controller),
         playerSettingsProvider.overrideWith(_Settings.new),
+        if (tv)
+          deviceProfileProvider.overrideWithValue(
+            const AsyncData(DeviceProfile(isTv: true)),
+          ),
       ],
       child: MaterialApp(
         theme: ThemeData(splashFactory: InkRipple.splashFactory),
@@ -715,6 +729,122 @@ void main() {
       debugPrint(
         'C23_PLAYER_PREFS replacements=${replaces.join('/')} rgba=${hashes.join(',')}',
       );
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await player.dispose();
+    }
+  });
+
+  testWidgets('subtitle inventory does not redraw Arabic player chrome', (
+    tester,
+  ) async {
+    final mediaKit = _FixtureMediaKit()..tick(3100, durationMs: 24000);
+    final player = mk.Player(platformPlayer: mediaKit);
+    final videoView = _FixtureVideoView()..tick(8200, durationMs: 26000);
+    final controller = _Controller();
+    final boundaryKey = GlobalKey();
+    var backs = 0;
+
+    Future<String> shot() async {
+      final boundary = tester.renderObject<RenderRepaintBoundary>(
+        find.byKey(boundaryKey),
+      );
+      final image = boundary.toImageSync();
+      try {
+        final rgba = await tester.runAsync(
+          () => image.toByteData(format: ui.ImageByteFormat.rawRgba),
+        );
+        return sha256.convert(rgba!.buffer.asUint8List()).toString();
+      } finally {
+        image.dispose();
+      }
+    }
+
+    try {
+      final controls = find.byType(AnimeWitcherPlayerControls);
+      final top = find.byType(PlayerTopBar);
+      final bottom = find.byType(PlayerBottomBar);
+      await _mount(
+        tester,
+        player,
+        controller,
+        videoView: videoView,
+        paintBoundaryKey: boundaryKey,
+        onBack: () => backs++,
+        tv: true,
+      );
+      final context = tester.element(controls);
+      final container = ProviderScope.containerOf(context);
+      expect(AppLocalizations.of(context)!.localeName, 'ar');
+      expect(
+        Directionality.of(tester.element(find.byType(PlayerLtr))),
+        TextDirection.rtl,
+      );
+      expect(Directionality.of(context), TextDirection.ltr);
+      expect(tester.widget<PlayerTopBar>(top).isTv, isTrue);
+
+      final counts = <int>[];
+      final hashes = <String>[];
+      for (final adaptive in [false, true]) {
+        // Separate metadata-only notifications from a real backend/source
+        // transition: the latter must still redraw and take the new clock.
+        final source = StreamResult(
+          url: adaptive
+              ? 'https://fixture.test/adaptive.m3u8'
+              : 'https://fixture.test/main.mp4',
+          source: adaptive ? 'Adaptive' : 'File',
+        );
+        controller.publishSource(source);
+        controller.useVideoView(adaptive);
+        await tester.pumpAndSettle();
+        expect(
+          container.read(playerControllerProvider).currentStream,
+          same(source),
+        );
+        final clock = adaptive ? '0:08 / 0:26' : '0:03 / 0:24';
+        expect(find.text(clock), findsOneWidget);
+        final focus = FocusManager.instance.primaryFocus;
+        final rgba = await shot();
+        hashes.add(rgba);
+        var replacements = 0;
+        for (var i = 0; i < 8; i++) {
+          final previous = [tester.widget(top), tester.widget(bottom)];
+          final inventory = [
+            for (final language in ['ar', 'ja', 'en'])
+              SubtitleFile(
+                url: 'https://fixture.test/${source.source}/$i/$language.vtt',
+                label: language,
+                lang: language,
+              ),
+          ];
+          controller.publishSubtitleInventory(inventory);
+          await tester.pump();
+          final selected = container.read(playerControllerProvider);
+          expect(selected.currentStream, same(source));
+          expect(selected.externalSubtitles, same(inventory));
+          expect(FocusManager.instance.primaryFocus, same(focus));
+          if (!identical(previous[0], tester.widget(top))) replacements++;
+          if (!identical(previous[1], tester.widget(bottom))) replacements++;
+        }
+        counts.add(replacements);
+        expect(await shot(), rgba);
+        expect(find.text(clock), findsOneWidget);
+      }
+
+      // The real controls still place the Back button in the D-pad focus
+      // chain, and keyboard activation calls the same route callback.
+      final backNode = tester.widget<PlayerTopBar>(top).backFocusNode!;
+      backNode.requestFocus();
+      await tester.pumpAndSettle();
+      expect(backNode.hasPrimaryFocus, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(backs, 1);
+      debugPrint(
+        'C25_TRACK_CHROME replacements=$counts rgba=${hashes.join(",")}',
+      );
+      const stock = bool.fromEnvironment('C25_STOCK');
+      expect(counts, stock ? [16, 16] : [0, 0]);
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
       await player.dispose();
