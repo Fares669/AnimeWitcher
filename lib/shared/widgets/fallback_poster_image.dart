@@ -149,6 +149,27 @@ class _DisplayCoverPoster extends ImageProvider<_DisplayCoverPoster> {
 
 class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
   String? _fallbackUrl;
+  int _artworkGeneration = 0;
+  int _lookupRevision = 0;
+  String? _imageKeyUrl;
+  int _imageKeyRetry = 0;
+  ValueKey<String>? _imageKey;
+
+  ValueKey<String> _keyForImage(String url) {
+    // Quality, density and parent rebuilds can change the image's options
+    // without changing this key. Reuse it for the one mounted image.
+    if (_imageKeyUrl != url || _imageKeyRetry != _retry) {
+      _imageKeyUrl = url;
+      _imageKeyRetry = _retry;
+      _imageKey = ValueKey<String>('$url#$_retry');
+    }
+    return _imageKey!;
+  }
+
+  bool _isCurrentImage(int generation, String url) =>
+      mounted &&
+      generation == _artworkGeneration &&
+      url == (_fallbackUrl ?? widget.imageUrl);
 
   /// Anime look elsewhere only when the viewer turned that on. A manga
   /// always may: much of its artwork sits on MyAnimeList's CDN, which some
@@ -201,10 +222,14 @@ class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
   void _onSwitchChanged() {
     if (!mounted || widget.manga) return;
     if (!_lookupAllowed) {
+      // Invalidate even when a reachability notification already reset the
+      // separate presentation flags for an in-flight lookup.
+      _lookupRevision++;
       // Back to the catalog's own artwork, and anything found while the
       // lookup was on is dropped so the two states cannot be told apart.
       if (_fallbackUrl == null && !_lookedUp) return;
       setState(() {
+        _artworkGeneration++;
         _fallbackUrl = null;
         _primaryFailed = false;
         _lookedUp = false;
@@ -233,7 +258,14 @@ class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
     if (old.imageUrl != widget.imageUrl ||
         old.malId != widget.malId ||
         old.title != widget.title ||
-        old.manga != widget.manga) {
+        old.manga != widget.manga ||
+        old.preferBanner != widget.preferBanner) {
+      _artworkGeneration++;
+      _lookupRevision++;
+      if (old.imageUrl != widget.imageUrl) {
+        _imageKeyUrl = null;
+        _imageKey = null;
+      }
       _fallbackUrl = null;
       _primaryFailed = false;
       _lookedUp = false;
@@ -341,8 +373,9 @@ class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
     final doomed =
         url.isEmpty || (malArtworkUnreachable.value && isMalArtworkUrl(url));
     if (!doomed) return;
+    final generation = _artworkGeneration;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _resolveFallback();
+      if (mounted && generation == _artworkGeneration) _resolveFallback();
     });
   }
 
@@ -352,13 +385,15 @@ class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
     if (service == null) return;
     final malId = widget.malId;
     final title = widget.title?.trim() ?? '';
+    final revision = ++_lookupRevision;
 
     final String? url;
     if (widget.manga) {
       if ((malId == null || malId <= 0) && title.isEmpty) return;
       _lookedUp = true;
+      final preferBanner = widget.preferBanner;
       final art = await service.mangaArtwork(malId: malId, title: title);
-      url = widget.preferBanner ? art.banner : art.cover;
+      url = preferBanner ? art.banner : art.cover;
     } else if (widget.preferBanner) {
       if (malId == null || malId <= 0) return;
       _lookedUp = true;
@@ -380,7 +415,9 @@ class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
       return;
     }
 
-    if (!mounted) return;
+    // The service can still cache the answer for its original request, but
+    // only the current artwork may install it and start an image decode.
+    if (!mounted || revision != _lookupRevision || !_lookupAllowed) return;
     if (url == null || url.isEmpty) {
       setState(() => _lookupFinished = true);
       return;
@@ -407,22 +444,25 @@ class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
           : widget.placeholder(context);
     }
 
+    final generation = _artworkGeneration;
     Widget errorBuilder(BuildContext context, Object error, StackTrace? stack) {
-      // Only the catalog's own URL is worth replacing; if the replacement
-      // fails too there is nothing further to try.
-      if (_fallbackUrl == null && !_primaryFailed) {
-        _primaryFailed = true;
+      if (_isCurrentImage(generation, url)) {
+        // Only the catalog's own URL is worth replacing; if the replacement
+        // fails too there is nothing further to try.
+        if (_fallbackUrl == null && !_primaryFailed) {
+          _primaryFailed = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (_isCurrentImage(generation, url)) _resolveFallback();
+          });
+        }
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _resolveFallback();
+          if (_isCurrentImage(generation, url)) _scheduleRetry(url);
         });
       }
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _scheduleRetry(url);
-      });
       return widget.errorWidget(context);
     }
 
-    final key = ValueKey<String>('$url#$_retry');
+    final key = _keyForImage(url);
     final Widget image;
     final coverDecodeSize = widget.coverDecodeSize;
     if (widget.queueStaticPosterDecode || coverDecodeSize != null) {

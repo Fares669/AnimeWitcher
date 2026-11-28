@@ -13,6 +13,7 @@ import 'package:animewitcher/features/player/presentation/widgets/player_ltr.dar
 import 'package:animewitcher/features/player/presentation/widgets/player_metadata_scrim.dart';
 import 'package:animewitcher/features/player/presentation/widgets/player_settings_panel.dart';
 import 'package:animewitcher/features/player/presentation/widgets/player_stream_widgets.dart';
+import 'package:animewitcher/features/player/presentation/widgets/skip_segment_overlay.dart';
 import 'package:animewitcher/features/settings/presentation/player_settings_provider.dart';
 import 'package:animewitcher/features/skip/data/skip_service.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
@@ -54,6 +55,7 @@ class _Settings extends PlayerSettingsNotifier {
 class _Controller extends PlayerController {
   _Controller({
     this.segments = const [],
+    this.initialVideoView = false,
     this.performSeek,
     this.multimediaItem,
     this.currentEpisode,
@@ -78,6 +80,7 @@ class _Controller extends PlayerController {
   }
 
   final List<SkipSegment> segments;
+  final bool initialVideoView;
   final Future<void> Function(Duration)? performSeek;
   final seeks = <Duration>[];
   final speedWrites = <(double, bool)>[];
@@ -95,6 +98,8 @@ class _Controller extends PlayerController {
   @override
   PlayerState build() => PlayerState(
     skipSegments: segments,
+    useExoPlayer: initialVideoView,
+    isSeekable: initialVideoView,
     uiPhase: const PlaybackUiPhase(kind: PlaybackUiPhaseKind.idle),
   );
 
@@ -1157,19 +1162,187 @@ void main() {
       expect(tester.state(_seekBar), same(seekState));
       expect(tester.getRect(_seekTrack), track);
       debugPrint(
-        'C19 real player clip invalidations: '
+        'C27 checked player clip invalidations: '
         'position=$positionWork buffer=$bufferWork '
         'heldPosition=$scrubWork heldBuffer=$scrubBufferWork',
       );
-      expect(positionWork, (played: 108, buffered: 0, thumb: 18, frames: 18));
-      expect(bufferWork, (played: 0, buffered: 108, thumb: 0, frames: 18));
+      // The first seek sample fills four additional intervals across the jump.
+      expect(positionWork, (played: 22, buffered: 0, thumb: 18, frames: 18));
+      expect(bufferWork, (played: 0, buffered: 18, thumb: 0, frames: 18));
       expect(scrubWork, (played: 0, buffered: 0, thumb: 0, frames: 0));
-      expect(scrubBufferWork, (played: 0, buffered: 108, thumb: 0, frames: 18));
+      // After rebuilding for a held scrub, a clip may conservatively
+      // initialize on its first sample before stable widths are suppressed.
+      expect(scrubBufferWork, (played: 0, buffered: 23, thumb: 0, frames: 18));
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
       await player.dispose();
     }
   });
+
+  for (final useVideoView in [false, true]) {
+    final backend = useVideoView ? 'VideoView' : 'MediaKit';
+    testWidgets('Arabic saturated seek fills stay clean on $backend', (
+      tester,
+    ) async {
+      final mkBackend = _FixtureMediaKit()
+        ..tick(3000, durationMs: 120000, bufferMs: 42000);
+      final player = mk.Player(platformPlayer: mkBackend);
+      final vvBackend = useVideoView
+          ? (_FixtureVideoView()..tick(3000, durationMs: 120000))
+          : null;
+      final controller = _Controller(
+        initialVideoView: useVideoView,
+        segments: [
+          SkipSegment(startTime: 15, endTime: 27, type: SkipType.intro),
+          SkipSegment(startTime: 31.5, endTime: 35.8, type: SkipType.recap),
+          SkipSegment(startTime: 100, endTime: 120, type: SkipType.outro),
+        ],
+      );
+      final key = GlobalKey();
+      var backs = 0;
+
+      void tick(int ms, {int? durationMs, int? bufferMs}) {
+        if (vvBackend != null) {
+          vvBackend.tick(ms, durationMs: durationMs);
+        } else {
+          mkBackend.tick(ms, durationMs: durationMs, bufferMs: bufferMs);
+        }
+      }
+
+      Future<String> shot() async {
+        final boundary = tester.renderObject<RenderRepaintBoundary>(
+          find.byKey(key),
+        );
+        final image = boundary.toImageSync();
+        try {
+          final data = (await tester.runAsync(
+            () => image.toByteData(format: ui.ImageByteFormat.rawRgba),
+          ))!;
+          return sha256
+              .convert(
+                data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+              )
+              .toString();
+        } finally {
+          image.dispose();
+        }
+      }
+
+      try {
+        await _mount(
+          tester,
+          player,
+          controller,
+          videoView: vvBackend,
+          paintBoundaryKey: key,
+          onBack: () => backs++,
+        );
+        final controls = find.byType(AnimeWitcherPlayerControls);
+        final l10n = AppLocalizations.of(tester.element(controls))!;
+        expect(l10n.localeName, 'ar');
+        await tester.tapAt(_showPoint);
+        await tester.pumpAndSettle();
+        expect(find.text('0:03 / 2:00'), findsOneWidget);
+        final hashes = [await shot()];
+        final playedFills = find.descendant(
+          of: _seekBar,
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is ClipRRect &&
+                widget.clipper.runtimeType.toString() == '_TimelineClipper' &&
+                (widget.child! as ColoredBox).color !=
+                    Colors.white.withValues(alpha: .25),
+          ),
+        );
+        final clips = tester
+            .renderObjectList<RenderClipRRect>(playedFills)
+            .toList(growable: false);
+        expect(clips.length, 6);
+        var invalidated = 0;
+        for (var i = 1; i <= 18; i++) {
+          expect(clips.every((clip) => !clip.debugNeedsPaint), isTrue);
+          tick(3000 + 83 * i);
+          await tester.idle();
+          invalidated += clips.where((clip) => clip.debugNeedsPaint).length;
+          await tester.pump();
+        }
+        expect(invalidated, 18);
+        expect(find.text('0:04 / 2:00'), findsOneWidget);
+        hashes.add(await shot());
+
+        // Several backend samples can arrive before Flutter paints a frame.
+        // The moving clip must paint its final (not first) fractional width.
+        for (var i = 1; i <= 12; i++) {
+          tick(4499 + 9 * i);
+          await tester.idle();
+        }
+        final burstDirty = clips.where((clip) => clip.debugNeedsPaint).length;
+        expect(burstDirty, 1);
+        await tester.pump();
+        hashes.add(await shot());
+
+        // Cross a segment boundary in both directions, keeping the exact
+        // fractional geometry, then activate the actual localized skip pill.
+        final skip = find.byType(SkipPill);
+        tick(14999, bufferMs: 56531);
+        await tester.idle();
+        await tester.pumpAndSettle();
+        expect(skip, findsNothing);
+        hashes.add(await shot());
+
+        tick(15000, bufferMs: 56545);
+        await tester.idle();
+        await tester.pumpAndSettle();
+        expect(find.text(l10n.skipIntro), findsOneWidget);
+        hashes.add(await shot());
+
+        tick(14997, bufferMs: 56548);
+        await tester.idle();
+        await tester.pumpAndSettle();
+        expect(skip, findsNothing);
+        hashes.add(await shot());
+
+        tick(31505, bufferMs: 70283);
+        await tester.idle();
+        await tester.pumpAndSettle();
+        expect(find.text(l10n.skipRecap), findsOneWidget);
+        final skipFocus = tester.widget<SkipPill>(skip).focusNode;
+        skipFocus.requestFocus();
+        await tester.pumpAndSettle();
+        expect(skipFocus.hasFocus, isTrue);
+        hashes.add(await shot());
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pump();
+        expect(controller.seeks, [const Duration(milliseconds: 35800)]);
+        await tester.pump(const Duration(milliseconds: 2001));
+        tick(46017, durationMs: 121000, bufferMs: 72781);
+        await tester.idle();
+        await tester.pumpAndSettle();
+        expect(skip, findsNothing);
+        expect(find.text('0:46 / 2:01'), findsOneWidget);
+        expect(skipFocus.hasFocus, isFalse);
+        hashes.add(await shot());
+
+        final track = tester.getRect(_seekTrack);
+        await tester.tapAt(
+          Offset(track.left + track.width * .55, track.center.dy),
+        );
+        await tester.pump();
+        expect(controller.seeks.length, 2);
+        expect(controller.seeks.last.inMilliseconds, closeTo(66550, 3));
+        tester.widget<PlayerTopBar>(find.byType(PlayerTopBar)).onBack!.call();
+        expect(backs, 1);
+        expect(tester.takeException(), isNull);
+        debugPrint(
+          'C27_TIMELINE $backend dirty=$invalidated rgba=${hashes.join(',')}',
+        );
+      } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
+        await player.dispose();
+        vvBackend?.dispose();
+      }
+    });
+  }
 
   testWidgets('TV seek steps and drag use the latest clock without relayout', (
     tester,

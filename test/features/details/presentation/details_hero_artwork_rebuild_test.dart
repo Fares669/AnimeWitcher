@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -6,6 +8,7 @@ import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/network/poster_cache.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_provider.dart';
 import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
+import 'package:animewitcher/core/services/artwork_fallback_service.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/core/utils/artwork_host_fallback.dart';
@@ -21,6 +24,7 @@ import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/shared/widgets/fallback_poster_image.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:crypto/crypto.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 // Match the route's Material compatibility API.
 // ignore: deprecated_member_use
@@ -48,6 +52,46 @@ const _revised = Color(0xff298443);
 const _frame = ValueKey<String>('c14-details-artwork-frame');
 const _posterKey = ValueKey<String>('details-hero-poster');
 const _scrollKey = PageStorageKey<String>('desktop-details-info-tab');
+const _superseded = 'https://fixture.invalid/c27-old-cover.png';
+const _switchedOff = 'https://fixture.invalid/c27-disabled-cover.png';
+const _oldId = 961033;
+const _disabledId = 961035;
+const _stockArtwork = bool.fromEnvironment('C27_ARTWORK_STOCK');
+
+class _DeferredArtwork extends ArtworkFallbackService {
+  _DeferredArtwork() : super(Dio(), MemoryStorageService());
+
+  final calls = <int>[];
+  final pending = <int, Completer<String?>>{};
+  final resolved = <int, String>{};
+
+  @override
+  bool hasResolved(int malId) => resolved.containsKey(malId);
+
+  @override
+  String? cached(int malId) => resolved[malId];
+
+  // The mock has no wide fallback. Negative cache hits do not call Dio.
+  @override
+  bool hasResolvedBanner(int malId) => true;
+
+  @override
+  String? cachedBanner(int malId) => null;
+
+  @override
+  bool hasResolvedTitle(String title) => false;
+
+  @override
+  Future<String?> posterFor(int malId) {
+    calls.add(malId);
+    return pending.putIfAbsent(malId, Completer<String?>.new).future;
+  }
+
+  void complete(int malId, String url) {
+    resolved[malId] = url;
+    pending.remove(malId)!.complete(url);
+  }
+}
 
 class _Paths extends PathProviderPlatform {
   _Paths(this.root);
@@ -215,6 +259,17 @@ void main() {
       fileExtension: 'png',
       maxAge: const Duration(hours: 1),
     );
+    for (final (url, color) in [
+      (_superseded, const Color(0xffbd2665)),
+      (_switchedOff, const Color(0xff1583bd)),
+    ]) {
+      await posterCacheManager.putFile(
+        url,
+        await _png(400, 600, color),
+        fileExtension: 'png',
+        maxAge: const Duration(hours: 1),
+      );
+    }
     for (final url in [_viewer, _freshViewer, _cover]) {
       await fullCache.putFile(
         url,
@@ -444,4 +499,218 @@ void main() {
       }),
     );
   }
+  testWidgets(
+    'Arabic Details displays only current artwork across quality and fallback changes',
+    (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final quality = highQualityArtwork.value;
+      final fallback = artworkFallbackEnabled.value;
+      final unreachable = malArtworkUnreachable.value;
+      highQualityArtwork.value = true;
+      artworkFallbackEnabled.value = true;
+      malArtworkUnreachable.value = false;
+      imageCache
+        ..clear()
+        ..clearLiveImages();
+      final messenger = tester.binding.defaultBinaryMessenger;
+      const secure = MethodChannel(
+        'plugins.it_nomads.com/flutter_secure_storage',
+      );
+      messenger.setMockMethodCallHandler(secure, (_) async => null);
+      addTearDown(() {
+        highQualityArtwork.value = quality;
+        artworkFallbackEnabled.value = fallback;
+        malArtworkUnreachable.value = unreachable;
+        imageCache
+          ..clear()
+          ..clearLiveImages();
+        messenger.setMockMethodCallHandler(secure, null);
+      });
+      final source = MultimediaItem(
+        url: _route,
+        title: _item,
+        posterUrl: '',
+        fullPosterUrl: _viewer,
+        syncData: const {'malId': '961033'},
+        provider: 'Local',
+        contentType: MultimediaContentType.anime,
+        episodes: [
+          Episode(
+            name: 'الحلقة الأولى',
+            url: 'episode://hero/first',
+            season: 1,
+            episode: 1,
+          ),
+        ],
+      );
+      final delayed = _DeferredArtwork();
+      final provider = detailsControllerProvider(_route);
+      final container = ProviderContainer(
+        overrides: [
+          provider.overrideWith(() => _Details(source)),
+          storageServiceProvider.overrideWithValue(MemoryStorageService()),
+          libraryProvider.overrideWith(_Library.new),
+          downloadsProvider.overrideWith(_Downloads.new),
+          logicalDownloadStoreV2Provider.overrideWithValue(
+            InMemoryLogicalDownloadStoreV2(),
+          ),
+          artworkFallbackServiceProvider.overrideWithValue(delayed),
+        ],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: _frame,
+          child: UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(
+              locale: const Locale('ar'),
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              theme: ThemeData.dark(),
+              home: Builder(
+                builder: (context) => Scaffold(
+                  body: TextButton(
+                    onPressed: () => Navigator.of(context).push<void>(
+                      MaterialPageRoute<void>(
+                        builder: (_) => DetailsScreen(item: source),
+                      ),
+                    ),
+                    child: const Text(_open),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text(_open));
+      await tester.pumpAndSettle();
+      expect(
+        Directionality.of(tester.element(find.byType(DetailsScreen))),
+        TextDirection.rtl,
+      );
+      expect(delayed.calls, [_oldId]);
+      final coverLeaf = find.descendant(
+        of: find.byKey(_posterKey),
+        matching: find.byType(FallbackPosterImage),
+      );
+      final coverOwner = tester.state(coverLeaf);
+
+      final controller = container.read(provider.notifier) as _Details;
+      final cover = source.copyWith(
+        posterUrl: _cover,
+        bannerUrl: _banner,
+        syncData: const {'malId': '961034'},
+      );
+      controller.publishArtwork(cover);
+      await _pumpDecoded(tester, [_cover, _banner]);
+      expect(tester.state(coverLeaf), same(coverOwner));
+
+      CachedNetworkImage imageWidget(String url) =>
+          tester.widget<CachedNetworkImage>(
+            find.descendant(
+              of: _art(url),
+              matching: find.byType(CachedNetworkImage),
+            ),
+          );
+      final posterKeys = HashSet<Key>.identity();
+      final bannerKeys = HashSet<Key>.identity();
+      final qualityFrames = <String>[];
+      final dimensions = <List<int>>[];
+      for (var i = 0; i < 7; i++) {
+        highQualityArtwork.value = i.isEven;
+        await tester.pump();
+        // Wait for the actual quality-specific decode, not merely for an old
+        // non-null frame kept by the image widget during a quality transition.
+        for (var j = 0; j < 100; j++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 10)),
+          );
+          await tester.pump(const Duration(milliseconds: 16));
+          final poster = _raw(_cover);
+          final banner = _raw(_banner);
+          if (poster.evaluate().length == 1 &&
+              banner.evaluate().length == 1 &&
+              tester.widget<RawImage>(poster).image!.width ==
+                  (i.isEven ? 192 : 160) &&
+              tester.widget<RawImage>(banner).image!.width ==
+                  (i.isEven ? 512 : 390)) {
+            break;
+          }
+        }
+        await tester.pumpAndSettle();
+        expect(imageWidget(_cover).imageUrl, _cover);
+        expect(imageWidget(_banner).imageUrl, _banner);
+        final sizes = [
+          tester.widget<RawImage>(_raw(_cover)).image!.width,
+          tester.widget<RawImage>(_raw(_banner)).image!.width,
+        ];
+        expect(sizes, i.isEven ? [192, 512] : [160, 390]);
+        dimensions.add(sizes);
+        posterKeys.add(imageWidget(_cover).key!);
+        bannerKeys.add(imageWidget(_banner).key!);
+        qualityFrames.add(await _frameHash(tester));
+      }
+      expect(posterKeys.length, _stockArtwork ? 7 : 1);
+      expect(bannerKeys.length, _stockArtwork ? 7 : 1);
+      expect(delayed.calls, [_oldId]);
+
+      delayed.complete(_oldId, _superseded);
+      await tester.pump();
+      await _pumpDecoded(tester, [_cover, _banner]);
+      final sourceColor = await _decodedColor(tester, _cover);
+      expect(
+        imageWidget(_cover).imageUrl,
+        _stockArtwork ? _superseded : _cover,
+      );
+      expect(sourceColor, _stockArtwork ? 0xbd2665ff : 0xb75c27ff);
+      var staleDecoded = sourceColor == 0xbd2665ff ? 1 : 0;
+      final afterOld = await _frameHash(tester);
+      if (!_stockArtwork) expect(afterOld, qualityFrames.last);
+
+      // Same mounted leaf but no catalog artwork; disabling fallback while its
+      // lookup is pending should not let the result become visible.
+      controller.publishArtwork(
+        source.copyWith(syncData: const {'malId': '961035'}),
+      );
+      await tester.pumpAndSettle();
+      expect(delayed.calls, [_oldId, _disabledId]);
+      artworkFallbackEnabled.value = false;
+      await tester.pumpAndSettle();
+      final withoutFallback = await _frameHash(tester);
+      delayed.complete(_disabledId, _switchedOff);
+      await tester.pump();
+      if (_stockArtwork) {
+        await _pumpDecoded(tester, ['']);
+        expect(await _decodedColor(tester, ''), 0x1583bdff);
+        staleDecoded++;
+      } else {
+        await tester.pumpAndSettle();
+        expect(_raw(''), findsNothing);
+        expect(await _frameHash(tester), withoutFallback);
+      }
+
+      // Retained service answer is valid on explicit re-enable, not evicted.
+      artworkFallbackEnabled.value = true;
+      await _pumpDecoded(tester, ['']);
+      expect(imageWidget('').imageUrl, _switchedOff);
+      expect(await _decodedColor(tester, ''), 0x1583bdff);
+      expect(delayed.calls, [_oldId, _disabledId]);
+      final enabled = await _frameHash(tester);
+      debugPrint(
+        'C27_ARTWORK keys=${posterKeys.length + bannerKeys.length} '
+        'staleDecoded=$staleDecoded quality=$dimensions '
+        'rgba=$qualityFrames enabled=$enabled',
+      );
+      tester.state<NavigatorState>(find.byType(Navigator)).pop();
+      await tester.pumpAndSettle();
+      expect(find.text(_open), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.android),
+  );
 }

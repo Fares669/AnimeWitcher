@@ -1207,8 +1207,8 @@ class _SeekBarState extends State<_SeekBar> {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final trackWidth = constraints.maxWidth;
-            final motion = widget.motion(trackWidth);
-            final progressWidth = _trackExtent(motion, buffered: false);
+            final extent = _TrackExtentCache(widget.motion(trackWidth));
+            final progressWidth = extent.value(buffered: false);
 
             // Calculate track intervals based on skip segments
             final List<_TrackInterval> intervals = [];
@@ -1448,7 +1448,7 @@ class _SeekBarState extends State<_SeekBar> {
                         for (var i = 0; i < visualIntervals.length; i++)
                           _buildIntervalFill(
                             visualIntervals[i],
-                            motion,
+                            extent,
                             intervalHeights[i],
                             buffered: buffered,
                           ),
@@ -1553,7 +1553,7 @@ class _SeekBarState extends State<_SeekBar> {
                           left: 0,
                           child: IgnorePointer(
                             child: _PlayheadOffset(
-                              motion: motion,
+                              extent: extent,
                               child: FractionalTranslation(
                                 translation: const Offset(-0.5, 0.0),
                                 child: AnimatedContainer(
@@ -1586,7 +1586,7 @@ class _SeekBarState extends State<_SeekBar> {
 
   Widget _buildIntervalFill(
     _TrackInterval interval,
-    _TrackMotion motion,
+    _TrackExtentCache extent,
     double height, {
     required bool buffered,
   }) {
@@ -1602,7 +1602,7 @@ class _SeekBarState extends State<_SeekBar> {
           width: double.infinity,
           child: ClipRRect(
             clipper: _TimelineClipper(
-              motion,
+              extent,
               interval.start,
               buffered: buffered,
             ),
@@ -1637,36 +1637,103 @@ extension on _TrackMotion {
       fixedValue == null ? signals.position : null;
 }
 
-double _trackExtent(_TrackMotion motion, {required bool buffered}) {
-  if (buffered) {
-    return motion.durationMs > 0
-        ? (motion.signals.buffer.value.inMilliseconds / motion.durationMs)
-                  .clamp(0.0, 1.0) *
-              motion.width
+/// Share normalization across all fills and the thumb. Those render objects
+/// observe the same sample, even when several samples arrive before a frame.
+class _TrackExtentCache {
+  _TrackExtentCache(this.motion);
+
+  final _TrackMotion motion;
+  int? _positionMs;
+  int? _bufferMs;
+  double? _played;
+  double _buffered = 0.0;
+
+  double value({required bool buffered}) {
+    if (buffered) {
+      final ms = motion.signals.buffer.value.inMilliseconds;
+      if (_bufferMs != ms) {
+        _bufferMs = ms;
+        _buffered = _bufferExtent(ms);
+      }
+      return _buffered;
+    }
+    final fixed = motion.fixedValue;
+    if (fixed != null) return _played ??= _playedExtent(fixed);
+
+    final ms = motion.signals.position.value.inMilliseconds;
+    if (_positionMs != ms) {
+      _positionMs = ms;
+      _played = _playedExtent(ms);
+    }
+    return _played!;
+  }
+
+  double _bufferExtent(int ms) => motion.durationMs > 0
+      ? (ms / motion.durationMs).clamp(0.0, 1.0) * motion.width
+      : 0.0;
+
+  double _playedExtent(num ms) {
+    final range = motion.max - motion.min;
+    return range > 0
+        ? ((ms - motion.min) / range).clamp(0.0, 1.0) * motion.width
         : 0.0;
   }
-  final value =
-      motion.fixedValue ?? motion.signals.position.value.inMilliseconds;
-  final range = motion.max - motion.min;
-  return range > 0
-      ? ((value - motion.min) / range).clamp(0.0, 1.0) * motion.width
-      : 0.0;
 }
 
 class _TimelineClipper extends CustomClipper<RRect> {
-  _TimelineClipper(this.motion, this.start, {required this.buffered})
-    : super(reclip: buffered ? motion.signals.buffer : motion.livePlayhead);
+  _TimelineClipper(this.extent, this.start, {required this.buffered})
+    : _signal = buffered
+          ? extent.motion.signals.buffer
+          : extent.motion.livePlayhead;
 
-  final _TrackMotion motion;
+  final _TrackExtentCache extent;
   final double start;
   final bool buffered;
+  final ValueListenable<Duration>? _signal;
+  double? _laidOutWidth;
+  double? _lastClipWidth;
+
+  // Each instance belongs to exactly one ClipRRect. Follow that render
+  // object's attachment rather than keeping any clock listeners alive.
+  VoidCallback? _invalidate;
+
+  @override
+  void addListener(VoidCallback listener) {
+    assert(_invalidate == null);
+    _invalidate = listener;
+    _signal?.addListener(_onSample);
+  }
+
+  @override
+  void removeListener(VoidCallback listener) {
+    assert(_invalidate == listener);
+    _signal?.removeListener(_onSample);
+    _invalidate = null;
+    _laidOutWidth = null;
+    _lastClipWidth = null;
+  }
+
+  double _clipWidth(double width) =>
+      (extent.value(buffered: buffered) - start).clamp(0.0, width);
+
+  void _onSample() {
+    final laidOutWidth = _laidOutWidth;
+    if (laidOutWidth != null) {
+      final next = _clipWidth(laidOutWidth);
+      // A clock sample cannot change an already full or still empty fill
+      // unless it crosses that interval. Keep the exact fractional clip
+      // in the moving interval; no rounding or sampling changes.
+      if (_lastClipWidth == next) return;
+      _lastClipWidth = next;
+    }
+    _invalidate?.call();
+  }
 
   @override
   RRect getClip(Size size) {
-    final width = (_trackExtent(motion, buffered: buffered) - start).clamp(
-      0.0,
-      size.width,
-    );
+    _laidOutWidth = size.width;
+    final width = _clipWidth(size.width);
+    _lastClipWidth = width;
     return RRect.fromRectAndRadius(
       Rect.fromLTWH(0, 0, width, size.height),
       const Radius.circular(4),
@@ -1675,39 +1742,41 @@ class _TimelineClipper extends CustomClipper<RRect> {
 
   @override
   bool shouldReclip(_TimelineClipper oldClipper) =>
-      oldClipper.motion != motion ||
+      oldClipper.extent.motion != extent.motion ||
       oldClipper.start != start ||
       oldClipper.buffered != buffered;
 }
 
 class _PlayheadOffset extends SingleChildRenderObjectWidget {
-  const _PlayheadOffset({required this.motion, required super.child});
+  const _PlayheadOffset({required this.extent, required super.child});
 
-  final _TrackMotion motion;
+  final _TrackExtentCache extent;
 
   @override
   _RenderPlayheadOffset createRenderObject(BuildContext context) =>
-      _RenderPlayheadOffset(motion);
+      _RenderPlayheadOffset(extent);
 
   @override
   void updateRenderObject(
     BuildContext context,
     _RenderPlayheadOffset renderObject,
-  ) => renderObject.motion = motion;
+  ) => renderObject.extent = extent;
 }
 
 /// The thumb is decorative (the whole track handles pointer/keyboard input).
 /// Its translation cannot affect layout or hit testing.
 class _RenderPlayheadOffset extends RenderProxyBox {
-  _RenderPlayheadOffset(this._motion);
+  _RenderPlayheadOffset(this._extent);
 
-  _TrackMotion _motion;
+  _TrackExtentCache _extent;
 
-  set motion(_TrackMotion value) {
-    if (value == _motion) return;
-    final previous = _motion.livePlayhead;
-    _motion = value;
-    final next = value.livePlayhead;
+  set extent(_TrackExtentCache value) {
+    if (identical(value, _extent)) return;
+    final oldMotion = _extent.motion;
+    _extent = value;
+    if (value.motion == oldMotion) return;
+    final previous = oldMotion.livePlayhead;
+    final next = value.motion.livePlayhead;
     if (attached && previous != next) {
       previous?.removeListener(markNeedsPaint);
       next?.addListener(markNeedsPaint);
@@ -1718,12 +1787,12 @@ class _RenderPlayheadOffset extends RenderProxyBox {
   @override
   void attach(PipelineOwner owner) {
     super.attach(owner);
-    _motion.livePlayhead?.addListener(markNeedsPaint);
+    _extent.motion.livePlayhead?.addListener(markNeedsPaint);
   }
 
   @override
   void detach() {
-    _motion.livePlayhead?.removeListener(markNeedsPaint);
+    _extent.motion.livePlayhead?.removeListener(markNeedsPaint);
     super.detach();
   }
 
@@ -1733,7 +1802,7 @@ class _RenderPlayheadOffset extends RenderProxyBox {
     if (thumb == null) return;
     context.paintChild(
       thumb,
-      offset + Offset(_trackExtent(_motion, buffered: false), 0),
+      offset + Offset(_extent.value(buffered: false), 0),
     );
   }
 }

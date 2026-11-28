@@ -42,7 +42,7 @@ class CharacterDetailsScreen extends ConsumerStatefulWidget {
 class _CharacterDetailsScreenState
     extends ConsumerState<CharacterDetailsScreen> {
   AnimeWitcherCharacterDocument? _document;
-  List<AnimeWitcherCharacterShow> _animes = const <AnimeWitcherCharacterShow>[];
+  CharacterAnimesGrid? _animesGrid;
   Object? _error;
   Object? _animesError;
   bool _loading = true;
@@ -96,7 +96,7 @@ class _CharacterDetailsScreenState
         _document = document;
         _favorite = favorite;
         _loading = false;
-        _animes = const <AnimeWitcherCharacterShow>[];
+        _animesGrid = null;
         _animesError = null;
         _animesLoading = true;
       });
@@ -117,8 +117,21 @@ class _CharacterDetailsScreenState
     try {
       final animes = await provider.getCharacterAnimes(document);
       if (!mounted) return;
+      // This grid depends on the fetched shows, not on favorite or header
+      // state. Keep its role-labelled items and widget while that page is
+      // current so unrelated updates do not rebuild every poster.
+      final grid = animes.isEmpty
+          ? null
+          : CharacterAnimesGrid(
+              title: 'الأنميات',
+              items: [
+                for (final show in animes)
+                  show.item.copyWith(relationLabel: show.roleLabel),
+              ],
+              onItemTap: _openAnime,
+            );
       setState(() {
-        _animes = animes;
+        _animesGrid = grid;
         _animesError = null;
         _animesLoading = false;
       });
@@ -416,7 +429,7 @@ class _CharacterDetailsScreenState
                         ),
                       ],
                     )
-                  else if (_animes.isEmpty)
+                  else if (_animesGrid == null)
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -438,14 +451,7 @@ class _CharacterDetailsScreenState
                       ],
                     )
                   else
-                    CharacterAnimesGrid(
-                      title: 'الأنميات',
-                      items: [
-                        for (final show in _animes)
-                          show.item.copyWith(relationLabel: show.roleLabel),
-                      ],
-                      onItemTap: _openAnime,
-                    ),
+                    _animesGrid!,
                 ],
               ),
             ),

@@ -13,6 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
+import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
@@ -48,6 +49,11 @@ class _BroadcastScheduleDayState {
   final Object? error;
 }
 
+typedef _NativeScheduleInputs = ({
+  AnimeWitcherNativeProvider provider,
+  ({bool hideEcchi, bool highQualityPosters}) preferences,
+});
+
 class _BroadcastScheduleScreenState
     extends ConsumerState<BroadcastScheduleScreen>
     with SingleTickerProviderStateMixin {
@@ -60,6 +66,8 @@ class _BroadcastScheduleScreenState
       day: ValueNotifier(const _BroadcastScheduleDayState()),
   };
   final Map<String, CancelToken> _requestTokens = <String, CancelToken>{};
+  _NativeScheduleInputs? _nativeInputsAtLoad;
+  bool _hasMixedOrUnknownInputs = false;
 
   @override
   void initState() {
@@ -113,14 +121,53 @@ class _BroadcastScheduleScreenState
     };
   }
 
+  AnimeWitcherProvider? _readCatalogProvider() {
+    final active = ref.read(activeProviderProvider);
+    return active?.supportsBroadcastSchedule == true
+        ? active
+        : ref.nativeProvider;
+  }
+
+  _NativeScheduleInputs? _nativeInputs(AnimeWitcherProvider? provider) {
+    // The shipped native implementation has known local inputs. Other
+    // implementations or overrides may depend on broader account changes.
+    if (provider is! AnimeWitcherNativeProvider ||
+        provider.runtimeType != AnimeWitcherNativeProvider) {
+      return null;
+    }
+    return (provider: provider, preferences: provider.broadcastScheduleInputs);
+  }
+
+  void _rememberInputs(AnimeWitcherProvider? provider) {
+    if (_hasMixedOrUnknownInputs) return;
+    final native = _nativeInputs(provider);
+    _nativeInputsAtLoad ??= native;
+    if (native == null || native != _nativeInputsAtLoad) {
+      _hasMixedOrUnknownInputs = true;
+    }
+  }
+
+  void _onAccountRevision() {
+    final native = _nativeInputs(_readCatalogProvider());
+    if (!_hasMixedOrUnknownInputs &&
+        native != null &&
+        native == _nativeInputsAtLoad &&
+        !_dayStates.values.any(
+          (day) => day.value.loading || day.value.error != null,
+        )) {
+      // A background sync does not change settled native pages. If a request
+      // is running or failed, keep the existing cancellation and retry path.
+      return;
+    }
+    _resetSchedule();
+  }
+
   Future<void> _loadDay(String day, {required bool refresh}) async {
     final state = _dayStates[day]!;
     final previous = state.value;
     if (!refresh && (previous.loading || !previous.hasMore)) return;
-    final active = ref.read(activeProviderProvider);
-    final provider = active?.supportsBroadcastSchedule == true
-        ? active
-        : ref.nativeProvider;
+    final provider = _readCatalogProvider();
+    _rememberInputs(provider);
     if (provider == null) {
       if (!mounted) return;
       state.value = _BroadcastScheduleDayState(
@@ -197,6 +244,8 @@ class _BroadcastScheduleScreenState
   }
 
   void _resetSchedule() {
+    _nativeInputsAtLoad = null;
+    _hasMixedOrUnknownInputs = false;
     for (final token in _requestTokens.values) {
       token.cancel('Broadcast schedule source or preferences changed');
     }
@@ -210,7 +259,7 @@ class _BroadcastScheduleScreenState
   @override
   Widget build(BuildContext context) {
     ref.listen(accountDataRevisionProvider, (previous, next) {
-      if (previous != next) _resetSchedule();
+      if (previous != next) _onAccountRevision();
     });
     ref.listen(activeProviderProvider, (previous, next) {
       if (previous?.packageName != next?.packageName &&

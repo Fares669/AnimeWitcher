@@ -14,6 +14,14 @@ import '../../../shared/widgets/app_page_header.dart';
 import '../../../shared/widgets/mouse_drag_refresh_indicator.dart';
 import '../../comments/presentation/animewitcher_replies_screen.dart';
 
+// The inbox only needs to know whether the signed-in owner changed.
+// Profile edits and sync timestamps don't affect any inbox row.
+final _inboxAccount = animeWitcherAccountControllerProvider.select((state) {
+  final profile = state.asData?.value.profile;
+  if (profile == null) return null;
+  return (documentId: profile.documentId, uid: profile.uid);
+});
+
 class AnimeWitcherNotificationsScreen extends ConsumerStatefulWidget {
   const AnimeWitcherNotificationsScreen({super.key});
 
@@ -96,10 +104,11 @@ class _NotificationsState
           .loadNotifications(cursor: more ? _cursor : null);
       if (!_current(generation, accountId)) return;
       setState(() {
-        final paths = _items.map((item) => item.path).toSet();
-        _items = more
-            ? [..._items, ...page.items.where((item) => paths.add(item.path))]
-            : page.items;
+        if (more) {
+          _appendItems(page.items);
+        } else {
+          _items.addAll(page.items);
+        }
         _cursor = page.cursor;
         _hasMore = page.hasMore;
         _loading = false;
@@ -119,6 +128,20 @@ class _NotificationsState
         _loadingMore = false;
         _error = error;
       });
+    }
+  }
+
+  void _appendItems(List<AnimeWitcherNotification> incoming) {
+    if (incoming.isEmpty) return;
+    // Index only the new page. Keep existing payloads and the first payload
+    // within the page for each new path, in the same server order.
+    final pending = {for (final item in incoming) item.path};
+    for (final item in _items) {
+      pending.remove(item.path);
+      if (pending.isEmpty) return;
+    }
+    for (final item in incoming) {
+      if (pending.remove(item.path)) _items.add(item);
     }
   }
 
@@ -217,15 +240,9 @@ class _NotificationsState
 
   @override
   Widget build(BuildContext context) {
-    final account = ref
-        .watch(animeWitcherAccountControllerProvider)
-        .asData
-        ?.value
-        .profile;
-    ref.listen(animeWitcherAccountControllerProvider, (previous, next) {
-      final old = previous?.asData?.value.profile;
-      final current = next.asData?.value.profile;
-      if (old?.documentId != current?.documentId || old?.uid != current?.uid) {
+    final account = ref.watch(_inboxAccount);
+    ref.listen(_inboxAccount, (previous, next) {
+      if (previous != next) {
         // Clear private rows immediately; fetch the replacement account next frame.
         _generation.begin();
         _pending.clear();
