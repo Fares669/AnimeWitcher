@@ -4,11 +4,13 @@ import '../../../../core/account/animewitcher_character_models.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/utils/responsive_breakpoints.dart';
 import '../../../../shared/widgets/cards_wrapper.dart';
+import '../../../../shared/widgets/embedded_poster_grid.dart';
 import '../../../../shared/widgets/multimedia_card.dart';
 
 const int detailsExtraTabGridColumns = 3;
-const double detailsExtraTabCrossAxisSpacing = 12;
-const double detailsExtraTabMainAxisSpacing = 14;
+const double detailsExtraTabCrossAxisSpacing =
+    embeddedPosterGridCrossAxisSpacing;
+const double detailsExtraTabMainAxisSpacing = embeddedPosterGridMainAxisSpacing;
 
 /// How many cards the grid lays across its actual [width], which can
 /// differ from the window width. Keep height measurement in step with
@@ -112,51 +114,27 @@ class DetailsPosterGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDesktop = context.isDesktop;
     final extra = hasMore && onShowMore != null ? 1 : 0;
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: GridView.builder(
-        key: ValueKey('$keyPrefix-grid'),
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        padding: EdgeInsets.zero,
-        gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
-          context,
-          maxCrossAxisExtent: isDesktop ? 240 : 150,
-          childAspectRatio: MultimediaCardLayout.gridAspectRatio(
-            isPortrait: true,
-            isDesktop: isDesktop,
-          ),
-          crossAxisSpacing: MultimediaCardLayout.catalogGridCrossAxisSpacing(
-            context,
-            fallback: detailsExtraTabCrossAxisSpacing,
-          ),
-          mainAxisSpacing: MultimediaCardLayout.catalogGridMainAxisSpacing(
-            context,
-            fallback: detailsExtraTabMainAxisSpacing,
-          ),
-          handsetPortraitCrossAxisCount:
-              MultimediaCardLayout.handsetPortraitGridColumns,
-        ),
-        itemCount: items.length + extra,
-        itemBuilder: (context, index) {
-          if (index >= items.length) {
-            return DetailsShowMoreTile(
-              key: ValueKey('$keyPrefix-more'),
-              onTap: onShowMore!,
-            );
-          }
-          final item = items[index];
-          return MultimediaCard.fromItem(
-            key: ValueKey('$keyPrefix-$index'),
-            item: item,
-            heroTag: heroTagWithUrl(keyPrefix, item, index),
-            showRelationBadge: showRelationBadge,
-            onTap: () => onItemTap(item),
+    return buildEmbeddedPosterGrid(
+      context,
+      key: ValueKey('$keyPrefix-grid'),
+      itemCount: items.length + extra,
+      itemBuilder: (context, index) {
+        if (index >= items.length) {
+          return DetailsShowMoreTile(
+            key: ValueKey('$keyPrefix-more'),
+            onTap: onShowMore!,
           );
-        },
-      ),
+        }
+        final item = items[index];
+        return MultimediaCard.fromItem(
+          key: ValueKey('$keyPrefix-$index'),
+          item: item,
+          heroTag: heroTagWithUrl(keyPrefix, item, index),
+          showRelationBadge: showRelationBadge,
+          onTap: () => onItemTap(item),
+        );
+      },
     );
   }
 }

@@ -3,6 +3,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../core/utils/layout_constants.dart';
 
+/// Material frame for a multi-selection dock. Its caller owns placement,
+/// safe-area behavior, and the controls inside it.
+Material buildBatchSelectionDockFrame({
+  required ColorScheme colors,
+  required Widget child,
+}) => Material(
+  elevation: 10,
+  shadowColor: Colors.black.withValues(alpha: 0.30),
+  color: colors.surfaceContainerHigh,
+  shape: RoundedRectangleBorder(
+    borderRadius: BorderRadius.circular(20),
+    side: BorderSide(color: colors.outlineVariant.withValues(alpha: 0.45)),
+  ),
+  clipBehavior: Clip.antiAlias,
+  child: child,
+);
+
 /// A Slider widget that handles D-pad navigation properly on TV.
 /// Left/Right D-pad adjusts the value, Up/Down D-pad navigates to other focusable elements.
 class CustomSlider extends StatefulWidget {

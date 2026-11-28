@@ -23,6 +23,7 @@ import 'package:animewitcher/features/library/presentation/history_provider.dart
 
 import 'widgets/home_hero_carousel.dart';
 import 'widgets/home_hero_layout.dart';
+import 'widgets/home_poster_rail_layout.dart';
 import 'widgets/latest_manga_chapters_section.dart';
 import 'widgets/media_horizontal_list.dart';
 import 'view_all_screen.dart';
@@ -38,7 +39,6 @@ import 'package:animewitcher/core/router/app_router.dart';
 
 import '../../../shared/widgets/shimmer_placeholder.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
-import '../../../shared/widgets/multimedia_card.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
 import '../../../shared/widgets/recoverable_network_state.dart';
 import '../../../../core/utils/layout_constants.dart';
@@ -747,28 +747,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   }
 
   Widget _buildListShimmer(BuildContext context) {
-    final isDesktop = context.isDesktop;
-    final isHandsetLandscape = context.isHandsetLandscape;
-    final spacing = isDesktop
-        ? LayoutConstants.spacingLg
-        : isHandsetLandscape
-        ? ResponsiveBreakpoints.handsetLandscapeGridMaxSpacing
-        : LayoutConstants.spacingSm;
-    // Must match MediaHorizontalList exactly, otherwise the rail visibly
-    // resizes when the shimmer is replaced by the real cards.
-    final cardWidth = MultimediaCardLayout.cardWidth(
-      context,
-      isPortrait: true,
-      horizontalPadding: isDesktop
-          ? LayoutConstants.dashboardContentPadding
-          : LayoutConstants.spacingMd,
-      spacing: spacing,
-    );
-    final listHeight = MultimediaCardLayout.listHeight(
-      cardWidth,
-      isPortrait: true,
-      isDesktop: isDesktop,
-    );
+    final (:cardWidth, :listHeight, :spacing, :horizontalPadding) =
+        homePosterRailLayout(context, isPortrait: true);
 
     return Directionality(
       textDirection: TextDirection.rtl,
@@ -777,13 +757,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         children: [
           Padding(
             padding: EdgeInsets.fromLTRB(
-              isDesktop
-                  ? LayoutConstants.dashboardContentPadding
-                  : LayoutConstants.spacingMd,
+              horizontalPadding,
               LayoutConstants.spacingLg,
-              isDesktop
-                  ? LayoutConstants.dashboardContentPadding
-                  : LayoutConstants.spacingMd,
+              horizontalPadding,
               LayoutConstants.spacingSm,
             ),
             child: Row(
@@ -811,11 +787,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           SizedBox(
             height: listHeight,
             child: ListView.separated(
-              padding: EdgeInsets.symmetric(
-                horizontal: isDesktop
-                    ? LayoutConstants.dashboardContentPadding
-                    : LayoutConstants.spacingMd,
-              ),
+              padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
               scrollDirection: Axis.horizontal,
               itemCount: 10,
               separatorBuilder: (_, _) => SizedBox(width: spacing),

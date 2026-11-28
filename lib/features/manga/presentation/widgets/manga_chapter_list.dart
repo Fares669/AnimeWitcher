@@ -11,6 +11,7 @@ import '../../../../core/storage/manga_reading_repository.dart';
 import '../../../../core/utils/download_progress_data.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../../../shared/widgets/apple_liquid_glass.dart';
+import '../../../../shared/widgets/custom_widgets.dart';
 import '../../../details/presentation/widgets/details_hero_actions.dart';
 import '../../../details/presentation/widgets/download_progress_dialog.dart';
 import '../../../details/presentation/widgets/episode_action_chip.dart';
@@ -625,17 +626,8 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
       top: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
-        child: Material(
-          elevation: 10,
-          shadowColor: Colors.black.withValues(alpha: 0.30),
-          color: colors.surfaceContainerHigh,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-            side: BorderSide(
-              color: colors.outlineVariant.withValues(alpha: 0.45),
-            ),
-          ),
-          clipBehavior: Clip.antiAlias,
+        child: buildBatchSelectionDockFrame(
+          colors: colors,
           child: SizedBox(
             height: widget.onDownloadSelected == null ? 120 : 168,
             child: Padding(

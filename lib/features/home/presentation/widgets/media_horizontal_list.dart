@@ -5,15 +5,14 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/network/poster_cache.dart';
 import '../../../../core/router/app_router.dart';
-import '../../../../core/utils/layout_constants.dart';
 import '../../../../shared/widgets/paged_rail.dart';
 
-import '../../../../core/utils/responsive_breakpoints.dart';
 import '../../../../shared/widgets/multimedia_card.dart';
 import '../view_all_screen.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/extensions/base_provider.dart';
 import '../../../../core/utils/image_utils.dart';
+import 'home_poster_rail_layout.dart';
 import 'home_section_header.dart';
 
 class MediaHorizontalList extends StatefulWidget {
@@ -159,30 +158,9 @@ class _MediaHorizontalListState extends State<MediaHorizontalList> {
     if (widget.mediaList.isEmpty && !widget.showWhenEmpty) {
       return const SizedBox.shrink();
     }
-    final isDesktop = context.isDesktop;
-    final isHandsetLandscape = context.isHandsetLandscape;
     final isPortrait = widget.forcePortrait || _isPortrait;
-    final double spacing = isDesktop
-        ? LayoutConstants.spacingLg
-        : isHandsetLandscape
-        ? ResponsiveBreakpoints.handsetLandscapeGridMaxSpacing
-        : LayoutConstants.spacingSm;
-    // Shared helper: rail, shimmer and grid all derive their poster width
-    // from MultimediaCardLayout so the reserved height always matches.
-    final double cardWidth = MultimediaCardLayout.cardWidth(
-      context,
-      isPortrait: isPortrait,
-      horizontalPadding: isDesktop
-          ? LayoutConstants.dashboardContentPadding
-          : LayoutConstants.spacingMd,
-      spacing: spacing,
-    );
-
-    final double listHeight = MultimediaCardLayout.listHeight(
-      cardWidth,
-      isPortrait: isPortrait,
-      isDesktop: isDesktop,
-    );
+    final (:cardWidth, :listHeight, :spacing, :horizontalPadding) =
+        homePosterRailLayout(context, isPortrait: isPortrait);
 
     return Directionality(
       textDirection: TextDirection.rtl,
@@ -220,11 +198,7 @@ class _MediaHorizontalListState extends State<MediaHorizontalList> {
                 controller: _scrollController,
                 itemExtent: cardWidth + spacing,
                 clipBehavior: Clip.none,
-                padding: EdgeInsets.symmetric(
-                  horizontal: isDesktop
-                      ? LayoutConstants.dashboardContentPadding
-                      : LayoutConstants.spacingMd,
-                ),
+                padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
                 itemCount: widget.mediaList.length,
                 itemBuilder: (context, index) {
                   final item = widget.mediaList[index];

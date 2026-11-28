@@ -2,10 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/domain/entity/manga.dart';
 import '../../../../core/utils/image_fallbacks.dart';
-import '../../../../core/utils/layout_constants.dart';
-import '../../../../core/utils/responsive_breakpoints.dart';
 import '../../../../shared/widgets/multimedia_card.dart';
 import '../../../../shared/widgets/paged_rail.dart';
+import 'home_poster_rail_layout.dart';
 import 'home_section_header.dart';
 
 /// "منذ 9 ساعة": how long ago a chapter came out.
@@ -90,27 +89,8 @@ class _LatestMangaChaptersSectionState
   Widget build(BuildContext context) {
     if (widget.items.isEmpty) return const SizedBox.shrink();
 
-    final isDesktop = context.isDesktop;
-    final isHandsetLandscape = context.isHandsetLandscape;
-    final spacing = isDesktop
-        ? LayoutConstants.spacingLg
-        : isHandsetLandscape
-        ? ResponsiveBreakpoints.handsetLandscapeGridMaxSpacing
-        : LayoutConstants.spacingSm;
-    final horizontalPadding = isDesktop
-        ? LayoutConstants.dashboardContentPadding
-        : LayoutConstants.spacingMd;
-    final cardWidth = MultimediaCardLayout.cardWidth(
-      context,
-      isPortrait: true,
-      horizontalPadding: horizontalPadding,
-      spacing: spacing,
-    );
-    final listHeight = MultimediaCardLayout.listHeight(
-      cardWidth,
-      isPortrait: true,
-      isDesktop: isDesktop,
-    );
+    final (:cardWidth, :listHeight, :spacing, :horizontalPadding) =
+        homePosterRailLayout(context, isPortrait: true);
 
     return Directionality(
       textDirection: TextDirection.rtl,

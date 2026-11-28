@@ -13,6 +13,7 @@ import '../base_provider.dart';
 import 'anime3rb_filter_values.dart';
 import 'anime3rb_playback.dart';
 import 'anime3rb_transport.dart';
+import 'show_json_ld.dart';
 
 /// Anime3rb (`https://anime3rb.com`) catalog, search, details, and playback provider.
 class Anime3rbProvider extends AnimeWitcherProvider {
@@ -535,7 +536,7 @@ class Anime3rbProvider extends AnimeWitcherProvider {
 
   Future<MultimediaItem> _fetchDetailsUncached(Uri uri) async {
     final doc = await _document(uri);
-    final json = _metadata(doc);
+    final json = readShowJsonLdMetadata(doc);
 
     final h1Ltr = _text(doc.querySelector('h1 span[dir="ltr"]'));
     final h1Full = _text(doc.querySelector('h1'))
@@ -1324,23 +1325,6 @@ class Anime3rbProvider extends AnimeWitcherProvider {
         ? raw.replaceAll(RegExp(r'\s+'), ' ').trim()
         : '';
     return text.isEmpty ? null : text;
-  }
-
-  static Map<String, dynamic> _metadata(Document document) {
-    for (final script in document.querySelectorAll(
-      'script[type="application/ld+json"]',
-    )) {
-      try {
-        final value = jsonDecode(script.text);
-        if (value is Map<String, dynamic> &&
-            const {'TVSeries', 'Movie'}.contains(value['@type'])) {
-          return value;
-        }
-      } on FormatException {
-        continue;
-      }
-    }
-    return const {};
   }
 
   static String? _extractSynopsis(Document doc, Map<String, dynamic> json) {

@@ -857,34 +857,21 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         );
       }
       if (state.characters.isEmpty && state.errorMessage != null) {
-        return belowHeader(
-          RecoverableNetworkState(
-            onRetry: _retrySearch,
-            onOpenDownloads: () => const DownloadsRoute().go(context),
-          ),
-        );
+        return belowHeader(_buildSearchError(context));
       }
       if (state.characters.isEmpty) {
         return belowHeader(_buildEmptyState(context, bodyRef));
       }
 
-      return RepaintBoundary(
-        child: CatalogDirection(
-          child: CustomScrollView(
-            controller: _resultsScrollController,
-            physics: const AlwaysScrollableScrollPhysics(),
-            slivers: [
-              SliverToBoxAdapter(child: SizedBox(height: topInset)),
-              SliverToBoxAdapter(child: _buildRecentSearches(context, bodyRef)),
-              _characterGrid(
-                context,
-                state.characters,
-                loadingMore: state.isLoadingMore,
-              ),
-            ],
-          ),
+      return _buildResultsScroll([
+        SliverToBoxAdapter(child: SizedBox(height: topInset)),
+        SliverToBoxAdapter(child: _buildRecentSearches(context, bodyRef)),
+        _characterGrid(
+          context,
+          state.characters,
+          loadingMore: state.isLoadingMore,
         ),
-      );
+      ]);
     }
 
     if (domain == SearchDomain.all) {
@@ -896,42 +883,44 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       return belowHeader(_buildLoadingIndicator(context));
     }
     if (!hasResults && state.errorMessage != null) {
-      return belowHeader(
-        RecoverableNetworkState(
-          onRetry: _retrySearch,
-          onOpenDownloads: () => const DownloadsRoute().go(context),
-        ),
-      );
+      return belowHeader(_buildSearchError(context));
     }
     if (!hasResults) {
       return belowHeader(_buildEmptyState(context, bodyRef));
     }
 
-    return RepaintBoundary(
-      child: CatalogDirection(
-        child: CustomScrollView(
-          controller: _resultsScrollController,
-          physics: const AlwaysScrollableScrollPhysics(),
-          slivers: [
-            SliverToBoxAdapter(child: SizedBox(height: topInset)),
-            SliverToBoxAdapter(child: _buildRecentSearches(context, bodyRef)),
-            if (withFilterChips) SliverToBoxAdapter(child: chips),
-            for (var index = 0; index < state.results.length; index++)
-              SearchResultSection(
-                key: ValueKey(state.results[index].providerId),
-                providerName: state.results[index].providerName,
-                providerId: state.results[index].providerId,
-                results: state.results[index].results,
-                isLoadingMore:
-                    state.isLoadingMore && index == state.results.length - 1,
-                firstCardFocusNode: index == 0 ? _firstResultFocusNode : null,
-              ),
-            const SliverToBoxAdapter(child: SizedBox(height: 100)),
-          ],
+    return _buildResultsScroll([
+      SliverToBoxAdapter(child: SizedBox(height: topInset)),
+      SliverToBoxAdapter(child: _buildRecentSearches(context, bodyRef)),
+      if (withFilterChips) SliverToBoxAdapter(child: chips),
+      for (var index = 0; index < state.results.length; index++)
+        SearchResultSection(
+          key: ValueKey(state.results[index].providerId),
+          providerName: state.results[index].providerName,
+          providerId: state.results[index].providerId,
+          results: state.results[index].results,
+          isLoadingMore:
+              state.isLoadingMore && index == state.results.length - 1,
+          firstCardFocusNode: index == 0 ? _firstResultFocusNode : null,
         ),
-      ),
-    );
+      const SliverToBoxAdapter(child: SizedBox(height: 100)),
+    ]);
   }
+
+  Widget _buildSearchError(BuildContext context) => RecoverableNetworkState(
+    onRetry: _retrySearch,
+    onOpenDownloads: () => const DownloadsRoute().go(context),
+  );
+
+  Widget _buildResultsScroll(List<Widget> slivers) => RepaintBoundary(
+    child: CatalogDirection(
+      child: CustomScrollView(
+        controller: _resultsScrollController,
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: slivers,
+      ),
+    ),
+  );
 
   /// How many of each category "all" shows before its "see all" button:
   /// a few full rows at the grid's own width, so no section ends on a
@@ -978,12 +967,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       return clearOfHeader(_buildLoadingIndicator(context));
     }
     if (!hasAny && state.errorMessage != null) {
-      return clearOfHeader(
-        RecoverableNetworkState(
-          onRetry: _retrySearch,
-          onOpenDownloads: () => const DownloadsRoute().go(context),
-        ),
-      );
+      return clearOfHeader(_buildSearchError(context));
     }
     if (!hasAny) return clearOfHeader(_buildEmptyState(context, bodyRef));
 
@@ -1003,42 +987,32 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       ),
     );
 
-    return RepaintBoundary(
-      child: CatalogDirection(
-        child: CustomScrollView(
-          controller: _resultsScrollController,
-          physics: const AlwaysScrollableScrollPhysics(),
-          slivers: [
-            SliverToBoxAdapter(child: SizedBox(height: topInset)),
-            SliverToBoxAdapter(child: _buildRecentSearches(context, bodyRef)),
-            for (var index = 0; index < state.results.length; index++) ...[
-              heading(
-                SearchDomain.values.byName(state.results[index].providerId),
-              ),
-              SearchResultSection(
-                key: ValueKey('search-all-${state.results[index].providerId}'),
-                providerName: state.results[index].providerName,
-                providerId: state.results[index].providerId,
-                results: state.results[index].results
-                    .take(limit)
-                    .toList(growable: false),
-                isLoadingMore: false,
-                firstCardFocusNode: index == 0 ? _firstResultFocusNode : null,
-              ),
-            ],
-            if (state.characters.isNotEmpty) ...[
-              heading(SearchDomain.characters),
-              _characterGrid(
-                context,
-                state.characters.take(limit).toList(growable: false),
-                loadingMore: false,
-              ),
-            ],
-            const SliverToBoxAdapter(child: SizedBox(height: 100)),
-          ],
+    return _buildResultsScroll([
+      SliverToBoxAdapter(child: SizedBox(height: topInset)),
+      SliverToBoxAdapter(child: _buildRecentSearches(context, bodyRef)),
+      for (var index = 0; index < state.results.length; index++) ...[
+        heading(SearchDomain.values.byName(state.results[index].providerId)),
+        SearchResultSection(
+          key: ValueKey('search-all-${state.results[index].providerId}'),
+          providerName: state.results[index].providerName,
+          providerId: state.results[index].providerId,
+          results: state.results[index].results
+              .take(limit)
+              .toList(growable: false),
+          isLoadingMore: false,
+          firstCardFocusNode: index == 0 ? _firstResultFocusNode : null,
         ),
-      ),
-    );
+      ],
+      if (state.characters.isNotEmpty) ...[
+        heading(SearchDomain.characters),
+        _characterGrid(
+          context,
+          state.characters.take(limit).toList(growable: false),
+          loadingMore: false,
+        ),
+      ],
+      const SliverToBoxAdapter(child: SizedBox(height: 100)),
+    ]);
   }
 
   Widget _characterGrid(

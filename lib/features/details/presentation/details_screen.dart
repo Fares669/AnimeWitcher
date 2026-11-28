@@ -36,6 +36,7 @@ import 'package:animewitcher/core/utils/responsive_breakpoints.dart';
 
 import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/custom_widgets.dart';
 import 'package:animewitcher/shared/widgets/multimedia_card.dart';
 import 'package:animewitcher/shared/widgets/recoverable_network_state.dart';
 
@@ -1300,17 +1301,8 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       top: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
-        child: Material(
-          elevation: 10,
-          shadowColor: Colors.black.withValues(alpha: 0.30),
-          color: colors.surfaceContainerHigh,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-            side: BorderSide(
-              color: colors.outlineVariant.withValues(alpha: 0.45),
-            ),
-          ),
-          clipBehavior: Clip.antiAlias,
+        child: buildBatchSelectionDockFrame(
+          colors: colors,
           child: SizedBox(
             height: 168,
             child: Padding(

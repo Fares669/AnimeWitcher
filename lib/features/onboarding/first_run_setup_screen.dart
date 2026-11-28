@@ -15,6 +15,8 @@ import 'package:animewitcher/features/player/presentation/widgets/anime4k_player
 import 'package:animewitcher/features/settings/presentation/account_screen.dart';
 import 'package:animewitcher/features/settings/presentation/general_settings_provider.dart';
 import 'package:animewitcher/features/settings/presentation/player_settings_provider.dart';
+import 'package:animewitcher/features/settings/presentation/widgets/settings_widgets.dart'
+    show SettingsChoices;
 import 'package:animewitcher/shared/widgets/live_previews.dart';
 
 /// Whether the first-launch setup has been completed on this install.
@@ -225,7 +227,7 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
       children: switch (step) {
         _Step.appearance => [
           _Heading('الألوان'),
-          _Choices<AppThemeStyle>(
+          SettingsChoices<AppThemeStyle>.onboarding(
             values: AppThemeStyle.values,
             selected: themeStyle,
             label: (style) => style.label(),
@@ -306,7 +308,7 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _Choices<Anime4kMode>(
+                  SettingsChoices<Anime4kMode>.onboarding(
                     values: [
                       for (final mode in Anime4kMode.values)
                         if (mode != Anime4kMode.off) mode,
@@ -351,7 +353,7 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
             ),
           ],
           _Heading('حلقات الفلر'),
-          _Choices<FillerBehaviour>(
+          SettingsChoices<FillerBehaviour>.onboarding(
             values: FillerBehaviour.values,
             selected: _filler,
             label: (option) => switch (option) {
@@ -661,63 +663,6 @@ class _Heading extends StatelessWidget {
           fontWeight: FontWeight.w700,
         ),
       ),
-    );
-  }
-}
-
-/// A row of pill buttons, one of them chosen.
-class _Choices<T> extends StatelessWidget {
-  const _Choices({
-    required this.values,
-    required this.selected,
-    required this.label,
-    required this.onSelected,
-    this.swatch,
-  });
-
-  final List<T> values;
-  final T selected;
-  final String Function(T value) label;
-  final ValueChanged<T> onSelected;
-  final Color Function(T value)? swatch;
-
-  @override
-  Widget build(BuildContext context) {
-    final accent = Theme.of(context).colorScheme.primary;
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: [
-        for (final value in values)
-          ChoiceChip(
-            avatar: swatch == null
-                ? null
-                : Container(
-                    width: 16,
-                    height: 16,
-                    decoration: BoxDecoration(
-                      color: swatch!(value),
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white38),
-                    ),
-                  ),
-            label: Text(label(value)),
-            selected: value == selected,
-            onSelected: (_) => onSelected(value),
-            showCheckmark: false,
-            backgroundColor: const Color(0xFF232322),
-            selectedColor: accent,
-            labelStyle: TextStyle(
-              color: value == selected ? Colors.black : Colors.white,
-              fontWeight: FontWeight.w700,
-            ),
-            side: BorderSide.none,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(99),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-          ),
-      ],
     );
   }
 }

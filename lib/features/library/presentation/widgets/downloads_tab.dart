@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../../../../shared/widgets/confirm_dialog.dart';
+import '../../../../shared/widgets/custom_widgets.dart';
 
 import 'dart:io';
 
@@ -263,17 +264,8 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
       top: false,
       child: Directionality(
         textDirection: TextDirection.rtl,
-        child: Material(
-          elevation: 10,
-          shadowColor: Colors.black.withValues(alpha: 0.30),
-          color: colors.surfaceContainerHigh,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-            side: BorderSide(
-              color: colors.outlineVariant.withValues(alpha: 0.45),
-            ),
-          ),
-          clipBehavior: Clip.antiAlias,
+        child: buildBatchSelectionDockFrame(
+          colors: colors,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Column(
