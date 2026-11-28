@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
+import '../../../../shared/widgets/details_information_grid.dart';
 
 class MangaInformationSection extends StatelessWidget {
   const MangaInformationSection({super.key, required this.item});
@@ -56,60 +57,36 @@ class MangaInformationSection extends StatelessWidget {
 
     final colors = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: colors.surfaceContainerHighest.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: colors.outlineVariant.withValues(alpha: 0.38),
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final cellWidth = (constraints.maxWidth - 20) / 2;
-            return Wrap(
-              spacing: 20,
-              runSpacing: 22,
-              children: <Widget>[
-                for (final entry in entries)
-                  SizedBox(
-                    width: cellWidth,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        Text(
-                          entry.label,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: textTheme.titleSmall?.copyWith(
-                            color: colors.onSurface,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          entry.value,
-                          maxLines: entry.label == 'العنوان الإنجليزي'
-                              ? null
-                              : 2,
-                          overflow: entry.label == 'العنوان الإنجليزي'
-                              ? TextOverflow.visible
-                              : TextOverflow.ellipsis,
-                          style: textTheme.bodyMedium?.copyWith(
-                            color: colors.onSurfaceVariant,
-                            height: 1.25,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-              ],
-            );
-          },
-        ),
+    return buildDetailsInformationGrid(
+      surface: colors.surfaceContainerHighest,
+      outline: colors.outlineVariant,
+      entries: entries,
+      buildCell: (entry) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Text(
+            entry.label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: textTheme.titleSmall?.copyWith(
+              color: colors.onSurface,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            entry.value,
+            maxLines: entry.label == 'العنوان الإنجليزي' ? null : 2,
+            overflow: entry.label == 'العنوان الإنجليزي'
+                ? TextOverflow.visible
+                : TextOverflow.ellipsis,
+            style: textTheme.bodyMedium?.copyWith(
+              color: colors.onSurfaceVariant,
+              height: 1.25,
+            ),
+          ),
+        ],
       ),
     );
   }

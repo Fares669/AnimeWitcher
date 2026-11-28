@@ -404,49 +404,21 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
     final extra = _catalogLoading && _activeQuery.isEmpty
         ? AnimeCatalogShimmer.loadMoreCount
         : 0;
-    return MouseDragRefreshIndicator(
+    return _buildCharacterGrid(
+      controller: _catalogController,
       onRefresh: _refreshVisible,
-      child: CatalogDirection(
-        child: GridView.builder(
-          controller: _catalogController,
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.fromLTRB(
-            MultimediaCardLayout.catalogGridHorizontalPadding(context),
-            16,
-            MultimediaCardLayout.catalogGridHorizontalPadding(context),
-            110,
-          ),
-          gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
-            context,
-            maxCrossAxisExtent: 140,
-            childAspectRatio: MultimediaCardLayout.characterGridAspectRatio,
-            crossAxisSpacing: MultimediaCardLayout.catalogGridCrossAxisSpacing(
-              context,
-              fallback: 12,
-            ),
-            mainAxisSpacing: MultimediaCardLayout.catalogGridMainAxisSpacing(
-              context,
-              fallback: 14,
-            ),
-            handsetPortraitCrossAxisCount:
-                MultimediaCardLayout.handsetPortraitGridColumns,
-            horizontalPadding:
-                MultimediaCardLayout.catalogGridHorizontalPadding(context),
-          ),
-          itemCount: _catalog.length + extra,
-          itemBuilder: (context, index) {
-            if (index >= _catalog.length) {
-              return const AnimePosterShimmer(characterCaptionSpace: true);
-            }
-            final character = _catalog[index];
-            return CharacterPosterCard(
-              key: ValueKey('catalog-${character.id}'),
-              character: character,
-              onTap: () => _openCharacter(character),
-            );
-          },
-        ),
-      ),
+      itemCount: _catalog.length + extra,
+      itemBuilder: (context, index) {
+        if (index >= _catalog.length) {
+          return const AnimePosterShimmer(characterCaptionSpace: true);
+        }
+        final character = _catalog[index];
+        return CharacterPosterCard(
+          key: ValueKey('catalog-${character.id}'),
+          character: character,
+          onTap: () => _openCharacter(character),
+        );
+      },
     );
   }
 
@@ -491,18 +463,40 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
     }
 
     final extra = _favoritesLoading ? AnimeCatalogShimmer.loadMoreCount : 0;
-    return MouseDragRefreshIndicator(
+    return _buildCharacterGrid(
+      controller: _favoritesController,
       onRefresh: () => _loadFavorites(reset: true),
+      itemCount: _favorites.length + extra,
+      itemBuilder: (context, index) {
+        if (index >= _favorites.length) {
+          return const AnimePosterShimmer(characterCaptionSpace: true);
+        }
+        final favorite = _favorites[index];
+        return CharacterPosterCard(
+          key: ValueKey('fav-${favorite.malId}'),
+          character: favorite.asHit,
+          onTap: () => _openCharacter(favorite.asHit),
+        );
+      },
+    );
+  }
+
+  Widget _buildCharacterGrid({
+    required ScrollController controller,
+    required RefreshCallback onRefresh,
+    required int itemCount,
+    required IndexedWidgetBuilder itemBuilder,
+  }) {
+    final sidePadding = MultimediaCardLayout.catalogGridHorizontalPadding(
+      context,
+    );
+    return MouseDragRefreshIndicator(
+      onRefresh: onRefresh,
       child: CatalogDirection(
         child: GridView.builder(
-          controller: _favoritesController,
+          controller: controller,
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.fromLTRB(
-            MultimediaCardLayout.catalogGridHorizontalPadding(context),
-            16,
-            MultimediaCardLayout.catalogGridHorizontalPadding(context),
-            110,
-          ),
+          padding: EdgeInsets.fromLTRB(sidePadding, 16, sidePadding, 110),
           gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
             context,
             maxCrossAxisExtent: 140,
@@ -517,21 +511,10 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
             ),
             handsetPortraitCrossAxisCount:
                 MultimediaCardLayout.handsetPortraitGridColumns,
-            horizontalPadding:
-                MultimediaCardLayout.catalogGridHorizontalPadding(context),
+            horizontalPadding: sidePadding,
           ),
-          itemCount: _favorites.length + extra,
-          itemBuilder: (context, index) {
-            if (index >= _favorites.length) {
-              return const AnimePosterShimmer(characterCaptionSpace: true);
-            }
-            final favorite = _favorites[index];
-            return CharacterPosterCard(
-              key: ValueKey('fav-${favorite.malId}'),
-              character: favorite.asHit,
-              onTap: () => _openCharacter(favorite.asHit),
-            );
-          },
+          itemCount: itemCount,
+          itemBuilder: itemBuilder,
         ),
       ),
     );

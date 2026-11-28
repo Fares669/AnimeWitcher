@@ -17,11 +17,11 @@ import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
-import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../../core/router/app_router.dart';
+import 'more_catalog_grid_layout.dart';
 
 class BroadcastScheduleScreen extends ConsumerStatefulWidget {
   const BroadcastScheduleScreen({super.key});
@@ -410,7 +410,7 @@ class _ScheduleGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDesktop = context.isDesktop;
+    final grid = moreCatalogGridLayout(context);
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
         if (notification.depth == 0 &&
@@ -425,30 +425,8 @@ class _ScheduleGrid extends StatelessWidget {
         child: GridView.builder(
           key: PageStorageKey<String>('broadcast-$day'),
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.fromLTRB(
-            MultimediaCardLayout.catalogGridHorizontalPadding(context),
-            16,
-            MultimediaCardLayout.catalogGridHorizontalPadding(context),
-            110,
-          ),
-          gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
-            context,
-            maxCrossAxisExtent: isDesktop ? 240 : 150,
-            childAspectRatio: MultimediaCardLayout.gridAspectRatio(
-              isPortrait: true,
-              isDesktop: isDesktop,
-            ),
-            crossAxisSpacing: MultimediaCardLayout.catalogGridCrossAxisSpacing(
-              context,
-            ),
-            mainAxisSpacing: MultimediaCardLayout.catalogGridMainAxisSpacing(
-              context,
-            ),
-            handsetPortraitCrossAxisCount:
-                MultimediaCardLayout.handsetPortraitGridColumns,
-            horizontalPadding:
-                MultimediaCardLayout.catalogGridHorizontalPadding(context),
-          ),
+          padding: grid.padding,
+          gridDelegate: grid.delegate,
           itemCount: items.length + (isLoadingMore ? 1 : 0),
           itemBuilder: (context, index) {
             if (index >= items.length) {

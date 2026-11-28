@@ -14,11 +14,11 @@ import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
-import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../../core/router/app_router.dart';
+import 'more_catalog_grid_layout.dart';
 
 typedef _RankingPageLoader = Future<ProviderMediaPage> Function(
   AnimeWitcherGlobalRanking ranking, {
@@ -425,7 +425,7 @@ class _RankingGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDesktop = context.isDesktop;
+    final grid = moreCatalogGridLayout(context);
     final footerCount = loadingMore
         ? AnimeCatalogShimmer.loadMoreCount
         : loadMoreError
@@ -438,30 +438,8 @@ class _RankingGrid extends StatelessWidget {
           key: PageStorageKey<String>('global-ranking-${ranking.queryType}'),
           controller: controller,
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.fromLTRB(
-            MultimediaCardLayout.catalogGridHorizontalPadding(context),
-            16,
-            MultimediaCardLayout.catalogGridHorizontalPadding(context),
-            110,
-          ),
-          gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
-            context,
-            maxCrossAxisExtent: isDesktop ? 240 : 150,
-            childAspectRatio: MultimediaCardLayout.gridAspectRatio(
-              isPortrait: true,
-              isDesktop: isDesktop,
-            ),
-            crossAxisSpacing: MultimediaCardLayout.catalogGridCrossAxisSpacing(
-              context,
-            ),
-            mainAxisSpacing: MultimediaCardLayout.catalogGridMainAxisSpacing(
-              context,
-            ),
-            handsetPortraitCrossAxisCount:
-                MultimediaCardLayout.handsetPortraitGridColumns,
-            horizontalPadding:
-                MultimediaCardLayout.catalogGridHorizontalPadding(context),
-          ),
+          padding: grid.padding,
+          gridDelegate: grid.delegate,
           itemCount: items.length + footerCount,
           itemBuilder: (context, index) {
             if (index >= items.length) {

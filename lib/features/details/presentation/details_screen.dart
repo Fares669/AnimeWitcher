@@ -37,6 +37,7 @@ import 'package:animewitcher/core/utils/responsive_breakpoints.dart';
 import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import 'package:animewitcher/shared/widgets/multimedia_card.dart';
+import 'package:animewitcher/shared/widgets/recoverable_network_state.dart';
 
 import '../../library/presentation/library_provider.dart';
 import '../../library/presentation/library_auth.dart';
@@ -86,18 +87,10 @@ class _DetailsLoadFailure extends StatefulWidget {
   State<_DetailsLoadFailure> createState() => _DetailsLoadFailureState();
 }
 
-class _DetailsLoadFailureState extends State<_DetailsLoadFailure> {
-  bool _isRetrying = false;
-
-  Future<void> _retry() async {
-    if (_isRetrying) return;
-    setState(() => _isRetrying = true);
-    try {
-      await widget.onRetry();
-    } finally {
-      if (mounted) setState(() => _isRetrying = false);
-    }
-  }
+class _DetailsLoadFailureState extends State<_DetailsLoadFailure>
+    with NetworkRetryState<_DetailsLoadFailure> {
+  @override
+  Future<void> Function() get onRetry => widget.onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -134,18 +127,7 @@ class _DetailsLoadFailureState extends State<_DetailsLoadFailure> {
             spacing: 12,
             runSpacing: 12,
             children: [
-              FilledButton.icon(
-                onPressed: _isRetrying ? null : _retry,
-                icon: _isRetrying
-                    ? const SizedBox.square(
-                        dimension: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.refresh_rounded),
-                label: Text(
-                  appText(context, english: 'Retry', arabic: 'إعادة المحاولة'),
-                ),
-              ),
+              buildRetryButton(context),
               OutlinedButton.icon(
                 onPressed: () {
                   if (GoRouter.maybeOf(context) == null) return;

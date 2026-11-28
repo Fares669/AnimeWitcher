@@ -1,6 +1,7 @@
 import '../domain/entity/multimedia_item.dart';
 import 'animewitcher_account_payload.dart';
 import 'animewitcher_comment_models.dart';
+import 'animewitcher_model_fields.dart' as decode;
 import 'firestore_rest_client.dart';
 
 /// MAL placeholder icon used when a character has no real artwork.
@@ -89,19 +90,19 @@ bool isAnimeWitcherMalPlaceholderImage(String? url) {
 }
 
 String? animeWitcherSanitizedCharacterImage(dynamic raw) {
-  final value = _text(raw);
+  final value = decode.text(raw);
   if (isAnimeWitcherMalPlaceholderImage(value)) return null;
   return value;
 }
 
 String animeWitcherCharacterRoleLabel(dynamic raw) {
-  switch (_text(raw).toUpperCase()) {
+  switch (decode.text(raw).toUpperCase()) {
     case 'MAIN':
       return 'شخصية رئيسية';
     case 'SUPPORTING':
       return 'شخصية ثانوية';
     default:
-      return _text(raw).isEmpty ? 'شخصية' : _text(raw);
+      return decode.text(raw).isEmpty ? 'شخصية' : decode.text(raw);
   }
 }
 
@@ -119,19 +120,23 @@ class AnimeWitcherSearchServiceSettings {
   final String errorMessage;
 
   factory AnimeWitcherSearchServiceSettings.fromFields(dynamic raw) {
-    final fields = _map(raw);
+    final fields = decode.stringMap(raw);
     return AnimeWitcherSearchServiceSettings(
       isSearchActive: readAnimeWitcherPayloadBool(
         fields['is_search_active'] ?? fields['isSearchActive'],
         true,
       ),
-      appId: _text(fields['app_id'] ?? fields['appId'] ?? fields['application_id']),
-      browseApiKey: _text(
+      appId: decode.text(
+        fields['app_id'] ?? fields['appId'] ?? fields['application_id'],
+      ),
+      browseApiKey: decode.text(
         fields['browseApiKey'] ??
             fields['browse_api_key'] ??
             fields['browseAPIKey'],
       ),
-      errorMessage: _text(fields['error_message'] ?? fields['errorMessage']),
+      errorMessage: decode.text(
+        fields['error_message'] ?? fields['errorMessage'],
+      ),
     );
   }
 }
@@ -161,11 +166,11 @@ class AnimeWitcherCharacterHit {
   String get documentPath => animeWitcherCharactersListPath(id);
 
   factory AnimeWitcherCharacterHit.fromAlgolia(dynamic raw) {
-    final hit = _map(raw);
-    final id = _text(hit['objectID'] ?? hit['objectId'] ?? hit['id']);
+    final hit = decode.stringMap(raw);
+    final id = decode.text(hit['objectID'] ?? hit['objectId'] ?? hit['id']);
     return AnimeWitcherCharacterHit(
       id: id,
-      name: _text(hit['name']),
+      name: decode.text(hit['name']),
       imageUrl: animeWitcherSanitizedCharacterImage(hit['main_picture']),
       likes: _positiveInt(hit['likes']),
     );
@@ -201,17 +206,15 @@ class AnimeWitcherCharacterDocument {
   final String? imageUrl;
   final List<AnimeWitcherCharacterAnimeRef> animes;
 
-  String get commentsCollectionPath => '${animeWitcherCharactersListPath(id)}/comments';
+  String get commentsCollectionPath =>
+      '${animeWitcherCharactersListPath(id)}/comments';
 
-  factory AnimeWitcherCharacterDocument.fromFields(
-    String id,
-    dynamic raw,
-  ) {
-    final fields = _map(raw);
-    final data = _map(fields['data']);
-    final images = _map(data['images'] ?? fields['images']);
-    final jpg = _map(images['jpg']);
-    final webp = _map(images['webp']);
+  factory AnimeWitcherCharacterDocument.fromFields(String id, dynamic raw) {
+    final fields = decode.stringMap(raw);
+    final data = decode.stringMap(fields['data']);
+    final images = decode.stringMap(data['images'] ?? fields['images']);
+    final jpg = decode.stringMap(images['jpg']);
+    final webp = decode.stringMap(images['webp']);
     final image = animeWitcherSanitizedCharacterImage(
       jpg['image_url'] ??
           jpg['large_image_url'] ??
@@ -223,11 +226,13 @@ class AnimeWitcherCharacterDocument {
     );
     return AnimeWitcherCharacterDocument(
       id: id.trim(),
-      name: _text(data['name'] ?? fields['name']),
+      name: decode.text(data['name'] ?? fields['name']),
       likes: _positiveInt(fields['likes']),
-      url: _optionalText(data['url'] ?? fields['url']),
+      url: decode.optionalText(data['url'] ?? fields['url']),
       imageUrl: image,
-      animes: parseAnimeWitcherCharacterAnimes(data['anime'] ?? fields['anime']),
+      animes: parseAnimeWitcherCharacterAnimes(
+        data['anime'] ?? fields['anime'],
+      ),
     );
   }
 }
@@ -252,29 +257,32 @@ class AnimeWitcherFavoriteCharacter {
   final bool needsDenorm;
 
   AnimeWitcherCharacterHit get asHit => AnimeWitcherCharacterHit(
-        id: malId,
-        name: name,
-        imageUrl: imageUrl,
-        likes: likes,
-      );
+    id: malId,
+    name: name,
+    imageUrl: imageUrl,
+    likes: likes,
+  );
 
   factory AnimeWitcherFavoriteCharacter.fromFields(
     String documentId,
     dynamic raw,
   ) {
-    final fields = _map(raw);
-    final malId = _text(fields['mal_id'] ?? fields['malId'] ?? documentId);
-    final name = _text(fields['name']);
+    final fields = decode.stringMap(raw);
+    final malId = decode.text(
+      fields['mal_id'] ?? fields['malId'] ?? documentId,
+    );
+    final name = decode.text(fields['name']);
     final image = animeWitcherSanitizedCharacterImage(fields['main_picture']);
     final likes = _positiveInt(fields['likes']);
-    final needsDenorm = name.isEmpty || image == null || !fields.containsKey('likes');
+    final needsDenorm =
+        name.isEmpty || image == null || !fields.containsKey('likes');
     return AnimeWitcherFavoriteCharacter(
       id: documentId.trim(),
       malId: malId.isEmpty ? documentId.trim() : malId,
       name: name,
       imageUrl: image,
       likes: likes,
-      date: _dateValue(fields['date']),
+      date: decode.localDate(fields['date']),
       needsDenorm: needsDenorm,
     );
   }
@@ -322,10 +330,7 @@ class AnimeWitcherFavoriteCharacterPage {
 }
 
 class AnimeWitcherCharacterShow {
-  const AnimeWitcherCharacterShow({
-    required this.item,
-    required this.role,
-  });
+  const AnimeWitcherCharacterShow({required this.item, required this.role});
 
   final MultimediaItem item;
   final String role;
@@ -341,8 +346,8 @@ List<AnimeWitcherCharacterAnimeRef> parseAnimeWitcherCharacterAnimes(
   final output = <AnimeWitcherCharacterAnimeRef>[];
   final seen = <String>{};
   for (final entry in entries) {
-    final row = _map(entry);
-    final anime = _map(row['anime']);
+    final row = decode.stringMap(entry);
+    final anime = decode.stringMap(row['anime']);
     final malId = _digits(
       anime['mal_id'] ??
           anime['malId'] ??
@@ -354,7 +359,7 @@ List<AnimeWitcherCharacterAnimeRef> parseAnimeWitcherCharacterAnimes(
     output.add(
       AnimeWitcherCharacterAnimeRef(
         malId: malId,
-        role: _text(row['role'] ?? anime['role']),
+        role: decode.text(row['role'] ?? anime['role']),
       ),
     );
   }
@@ -365,13 +370,13 @@ List<dynamic> _characterAnimeEntries(dynamic raw) {
   if (raw is Iterable && raw is! String) {
     return raw.map<dynamic>((entry) => entry).toList(growable: false);
   }
-  final map = _map(raw);
+  final map = decode.stringMap(raw);
   if (map.isEmpty) return const <dynamic>[];
   final nested = map['arrayValue'] ?? map['values'] ?? map['anime'];
   if (nested is Iterable && nested is! String) {
     return nested.map<dynamic>((entry) => entry).toList(growable: false);
   }
-  final values = _map(map['arrayValue'])['values'];
+  final values = decode.stringMap(map['arrayValue'])['values'];
   if (values is Iterable && values is! String) {
     return values.map<dynamic>((entry) => entry).toList(growable: false);
   }
@@ -385,7 +390,7 @@ List<dynamic> _characterAnimeEntries(dynamic raw) {
 }
 
 String _digits(dynamic raw) {
-  final match = RegExp(r'\d+').firstMatch(_text(raw));
+  final match = RegExp(r'\d+').firstMatch(decode.text(raw));
   return match?.group(0) ?? '';
 }
 
@@ -404,32 +409,12 @@ AnimeWitcherCommentTarget animeWitcherCharacterCommentTarget({
   );
 }
 
-Map<String, dynamic> _map(dynamic raw) {
-  if (raw is! Map) return const <String, dynamic>{};
-  return raw.map<String, dynamic>(
-    (key, value) => MapEntry(key.toString(), value),
-  );
-}
-
-String _text(dynamic raw) => raw?.toString().trim() ?? '';
-
-String? _optionalText(dynamic raw) {
-  final value = _text(raw);
-  return value.isEmpty ? null : value;
-}
-
 int _positiveInt(dynamic raw) {
   if (raw is num) {
     final value = raw.toInt();
     return value > 0 ? value : 0;
   }
-  final match = RegExp(r'\d+').firstMatch(_text(raw));
+  final match = RegExp(r'\d+').firstMatch(decode.text(raw));
   final value = match == null ? 0 : int.tryParse(match.group(0)!) ?? 0;
   return value > 0 ? value : 0;
-}
-
-DateTime? _dateValue(dynamic raw) {
-  if (raw is DateTime) return raw.toLocal();
-  final parsed = DateTime.tryParse(raw?.toString() ?? '');
-  return parsed?.toLocal();
 }

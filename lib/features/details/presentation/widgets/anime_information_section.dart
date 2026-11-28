@@ -5,6 +5,7 @@ import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/extensions/base_provider.dart';
 import '../../../../core/extensions/item_provider_resolution.dart';
 import '../../../../core/extensions/providers/animewitcher_native_provider.dart';
+import '../../../../shared/widgets/details_information_grid.dart';
 import '../../../home/presentation/view_all_screen.dart';
 
 /// Trims empty, unknown, and "?" placeholders out of details metadata.
@@ -102,8 +103,9 @@ class AnimeInformationSection extends StatelessWidget {
       context,
       listen: false,
     ).read(itemSourceProvider(item.provider));
-    final nativeProvider =
-        provider is AnimeWitcherNativeProvider ? provider : null;
+    final nativeProvider = provider is AnimeWitcherNativeProvider
+        ? provider
+        : null;
     if (provider == null || (nativeProvider == null && !provider.hasSearch)) {
       return;
     }
@@ -186,33 +188,11 @@ class AnimeInformationSection extends StatelessWidget {
 
     if (entries.isEmpty) return const SizedBox.shrink();
 
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: colors.surfaceContainerHighest.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: colors.outlineVariant.withValues(alpha: 0.38),
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final cellWidth = (constraints.maxWidth - 20) / 2;
-            return Wrap(
-              spacing: 20,
-              runSpacing: 22,
-              children: [
-                for (final value in entries)
-                  SizedBox(
-                    width: cellWidth,
-                    child: _AnimeInfoValue(entry: value),
-                  ),
-              ],
-            );
-          },
-        ),
-      ),
+    return buildDetailsInformationGrid(
+      surface: colors.surfaceContainerHighest,
+      outline: colors.outlineVariant,
+      entries: entries,
+      buildCell: (entry) => _AnimeInfoValue(entry: entry),
     );
   }
 }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../core/storage/library_category.dart';
+import '../../../../shared/widgets/desktop_sidebar_row.dart';
 import '../library_lists.dart';
 import '../library_media_kind.dart';
 
@@ -166,91 +167,33 @@ class LibrarySideRow extends StatefulWidget {
   State<LibrarySideRow> createState() => _LibrarySideRowState();
 }
 
-class _LibrarySideRowState extends State<LibrarySideRow> {
-  bool _hovered = false;
-
+class _LibrarySideRowState extends DesktopSidebarRowState<LibrarySideRow> {
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final selected = widget.selected;
-    final accent = colors.primary;
-    final background = selected
-        ? accent.withValues(alpha: 0.13)
-        : _hovered
-        ? colors.onSurface.withValues(alpha: 0.06)
-        : Colors.transparent;
-    final foreground = selected
-        ? colors.onSurface
-        : _hovered
-        ? colors.onSurface.withValues(alpha: 0.9)
-        : colors.onSurfaceVariant;
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 2),
-      child: MouseRegion(
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
-        child: Semantics(
-          button: true,
-          selected: selected,
-          label: widget.label,
-          child: GestureDetector(
-            onTap: widget.onTap,
-            behavior: HitTestBehavior.opaque,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 130),
-              curve: Curves.easeOut,
-              decoration: BoxDecoration(
-                color: background,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-              child: Row(
-                children: [
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 130),
-                    curve: Curves.easeOut,
-                    width: 3,
-                    height: selected ? 18 : 0,
-                    decoration: BoxDecoration(
-                      color: accent,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  const SizedBox(width: 9),
-                  Icon(
-                    widget.icon,
-                    size: 20,
-                    color: selected ? accent : foreground,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      widget.label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        color: foreground,
-                        fontWeight: selected
-                            ? FontWeight.w700
-                            : FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                  if (widget.count case final count?)
-                    Text(
-                      '$count',
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: selected ? accent : colors.onSurfaceVariant,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                ],
+    final count = widget.count;
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    return buildRow(
+      icon: widget.icon,
+      label: widget.label,
+      selected: widget.selected,
+      onTap: widget.onTap,
+      verticalPadding: 10,
+      accent: colors.primary,
+      onSurface: colors.onSurface,
+      onSurfaceVariant: colors.onSurfaceVariant,
+      labelStyle: theme.textTheme.titleSmall,
+      trailing: count == null
+          ? null
+          : Text(
+              '$count',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: widget.selected
+                    ? colors.primary
+                    : colors.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
               ),
             ),
-          ),
-        ),
-      ),
     );
   }
 }
