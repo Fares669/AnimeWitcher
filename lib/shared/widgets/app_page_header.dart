@@ -8,6 +8,39 @@ import '../../core/utils/window_controls_inset.dart';
 import 'app_back_button.dart';
 import 'apple_liquid_glass.dart';
 
+/// A back button over the artwork on wide detail pages. Page actions
+/// remain beside the title, and Apple can provide its own native header.
+PreferredSizeWidget buildDesktopArtworkBackBar(BuildContext context) {
+  final theme = Theme.of(context);
+  final isDark = theme.brightness == Brightness.dark;
+
+  return PreferredSize(
+    preferredSize: const Size.fromHeight(kToolbarHeight),
+    child: Directionality(
+      textDirection: TextDirection.ltr,
+      child: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        automaticallyImplyLeading: false,
+        leadingWidth: appleUsesPersistentLiquidGlassHeader ? 0 : 64,
+        leading: appleUsesPersistentLiquidGlassHeader
+            ? null
+            : Padding(
+                padding: EdgeInsets.only(left: 8 + windowControlsLeadingInset),
+                child: AppleLiquidGlassBackButton(
+                  size: 46,
+                  foregroundColor: theme.colorScheme.onSurface,
+                  fallbackColor: isDark ? Colors.black45 : Colors.white54,
+                  onPressed: () => Navigator.of(context).maybePop(),
+                ),
+              ),
+        actions: const <Widget>[],
+      ),
+    ),
+  );
+}
+
 /// A compact translucent header backdrop.
 ///
 /// On Impeller this uses one captured backdrop with a two-pass separable

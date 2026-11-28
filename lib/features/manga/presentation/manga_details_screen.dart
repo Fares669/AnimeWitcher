@@ -17,8 +17,8 @@ import '../../../core/utils/image_fallbacks.dart';
 import '../../../core/storage/manga_reading_repository.dart';
 import '../../../core/utils/localized_text.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
-import '../../../core/utils/window_controls_inset.dart';
 import '../../../l10n/generated/app_localizations.dart';
+import '../../../shared/widgets/app_page_header.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
 import '../../../shared/widgets/expandable_text.dart';
 import '../../../shared/widgets/loading_indicator.dart';
@@ -485,41 +485,6 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     );
   }
 
-  /// The bare bar the anime page uses on a wide window: one back button
-  /// floating over the artwork, and nothing else, since the actions sit in
-  /// the hero under the title.
-  PreferredSizeWidget _wideAppBar(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    return PreferredSize(
-      preferredSize: const Size.fromHeight(kToolbarHeight),
-      child: Directionality(
-        textDirection: TextDirection.ltr,
-        child: AppBar(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          scrolledUnderElevation: 0,
-          automaticallyImplyLeading: false,
-          leadingWidth: appleUsesPersistentLiquidGlassHeader ? 0 : 64,
-          leading: appleUsesPersistentLiquidGlassHeader
-              ? null
-              : Padding(
-                  padding: EdgeInsets.only(
-                    left: 8 + windowControlsLeadingInset,
-                  ),
-                  child: AppleLiquidGlassBackButton(
-                    size: 46,
-                    foregroundColor: theme.colorScheme.onSurface,
-                    fallbackColor: isDark ? Colors.black45 : Colors.white54,
-                    onPressed: () => Navigator.of(context).maybePop(),
-                  ),
-                ),
-          actions: const <Widget>[],
-        ),
-      ),
-    );
-  }
-
   /// The white read pill: the chapter the reader is up to, named.
   Widget _readPill(
     BuildContext context,
@@ -834,7 +799,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
 
     return Scaffold(
       extendBodyBehindAppBar: true,
-      appBar: _wideAppBar(context),
+      appBar: buildDesktopArtworkBackBar(context),
       bottomNavigationBar: _chapterSelectionBar == null
           ? null
           : KeyedSubtree(

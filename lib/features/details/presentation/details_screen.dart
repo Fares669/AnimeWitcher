@@ -25,7 +25,6 @@ import '../../characters/presentation/character_details_screen.dart';
 import 'related_anime_screen.dart';
 import '../../comments/presentation/anime3rb_comments_screen.dart';
 import '../../comments/presentation/animewitcher_comments_screen.dart';
-import '../../../core/utils/window_controls_inset.dart';
 import '../../../core/utils/image_fallbacks.dart';
 import '../../../core/utils/resume_episode.dart';
 import '../../../core/theme/app_theme.dart';
@@ -35,6 +34,7 @@ import 'details_library_membership.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:animewitcher/core/utils/responsive_breakpoints.dart';
 
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import 'package:animewitcher/shared/widgets/multimedia_card.dart';
 
@@ -1040,7 +1040,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         // header instead, the desktop page opened on a row of buttons that
         // vanished a moment later, once the details arrived.
         extendBodyBehindAppBar: true,
-        appBar: _buildDesktopChromeAppBar(context),
+        appBar: buildDesktopArtworkBackBar(context),
         body: Center(
           child: AppLoadingIndicator(
             color: Theme.of(context).colorScheme.primary,
@@ -1086,7 +1086,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       bottomNavigationBar: selectedEpisodeCount == 0
           ? null
           : _buildEpisodeSelectionBar(context, selectedEpisodeCount),
-      appBar: _buildDesktopChromeAppBar(context),
+      appBar: buildDesktopArtworkBackBar(context),
       body: DetailsDesktopHero(
         compact: true,
         showPoster: true,
@@ -1615,41 +1615,6 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     );
   }
 
-  /// The bare bar the desktop page wears: a back button over the artwork and
-  /// nothing else, since the anime's own actions sit under its title.
-  PreferredSizeWidget _buildDesktopChromeAppBar(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-
-    return PreferredSize(
-      preferredSize: const Size.fromHeight(kToolbarHeight),
-      child: Directionality(
-        textDirection: TextDirection.ltr,
-        child: AppBar(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          scrolledUnderElevation: 0,
-          automaticallyImplyLeading: false,
-          leadingWidth: appleUsesPersistentLiquidGlassHeader ? 0 : 64,
-          leading: appleUsesPersistentLiquidGlassHeader
-              ? null
-              : Padding(
-                  padding: EdgeInsets.only(
-                    left: 8 + windowControlsLeadingInset,
-                  ),
-                  child: AppleLiquidGlassBackButton(
-                    size: 46,
-                    foregroundColor: theme.colorScheme.onSurface,
-                    fallbackColor: isDark ? Colors.black45 : Colors.white54,
-                    onPressed: () => Navigator.of(context).maybePop(),
-                  ),
-                ),
-          actions: const <Widget>[],
-        ),
-      ),
-    );
-  }
-
   Widget _buildDesktopLayout(
     BuildContext context,
     MultimediaItem item,
@@ -1688,7 +1653,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       // own above the artwork, which cut a black strip across the top of
       // every anime.
       extendBodyBehindAppBar: true,
-      appBar: _buildDesktopChromeAppBar(context),
+      appBar: buildDesktopArtworkBackBar(context),
       body: DetailsDesktopHero(
         showPoster: !kIsWeb && defaultTargetPlatform == TargetPlatform.windows,
         displayItem: item,
