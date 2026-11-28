@@ -87,8 +87,11 @@ class _RecentWatchedBodyState extends ConsumerState<RecentWatchedBody> {
       // Keep the last local snapshot available when the network/server is
       // temporarily unavailable. Pull-to-refresh can retry at any time.
     } finally {
-      if (mounted && generation == _refreshGeneration) {
-        setState(() => _initialSyncRunning = false);
+      if (mounted && generation == _refreshGeneration && _initialSyncRunning) {
+        _initialSyncRunning = false;
+        // Only an empty catalogue renders the entry-sync placeholder. The
+        // history listener already rebuilds this view for changed rows.
+        if (_sortedHistory.isEmpty) setState(() {});
       }
     }
   }
@@ -120,7 +123,8 @@ class _RecentWatchedBodyState extends ConsumerState<RecentWatchedBody> {
 
     return CatalogBody(
       topInset: widget.topPadding,
-      isLoading: _initialSyncRunning,
+      isLoading: history.isEmpty && _initialSyncRunning,
+      itemsHaveRepaintBoundaries: true,
       emptyWidget: const _EmptyRecentWatched(),
       onRefresh: _refreshFromServer,
       itemCount: history.length,

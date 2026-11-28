@@ -878,6 +878,39 @@ void main() {
         await tester.pump(const Duration(milliseconds: 240));
         expect(container.read(episodeSortAscendingProvider), isTrue);
         expectOrdered(['50', '49', '48']);
+
+        // Repeated Arabic prefix searches stay inside the chosen 50-chapter
+        // range, even if another range has a matching number.
+        final editor = find.descendant(
+          of: search,
+          matching: find.byType(EditableText),
+        );
+        final focus = tester.widget<EditableText>(editor).focusNode;
+        await tester.enterText(search, '٤٩');
+        await tester.pump(const Duration(milliseconds: 200));
+        expect(focus.hasFocus, isTrue);
+        expectOrdered(['49']);
+        expect(row('48'), findsNothing);
+        await tester.enterText(search, '٤٩٠');
+        await tester.pump(const Duration(milliseconds: 200));
+        expect(row('490'), findsNothing);
+        expect(
+          find.byKey(const ValueKey('manga-chapter-filter-empty')),
+          findsOneWidget,
+        );
+        await tester.enterText(search, '٤٨');
+        await tester.pump(const Duration(milliseconds: 200));
+        expectOrdered(['48']);
+        expect(row('49'), findsNothing);
+        await tester.enterText(search, '٤');
+        await tester.pump(const Duration(milliseconds: 200));
+        expectOrdered(['49', '48', '47']);
+        expect(row('50'), findsNothing);
+        await tester.enterText(search, '');
+        await tester.testTextInput.receiveAction(TextInputAction.go);
+        await tester.pump(const Duration(milliseconds: 200));
+        expectOrdered(['50', '49', '48']);
+        expect(find.text('الفصول 1–50'), findsOneWidget);
         final target = row('49');
         await Scrollable.ensureVisible(tester.element(target), alignment: .5);
         await tester.pump(const Duration(milliseconds: 200));

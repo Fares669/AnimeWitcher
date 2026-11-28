@@ -103,12 +103,30 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
   List<DownloadItem>? _indexedDownloads;
   late MangaChapterDownloadIndex _downloadIndex;
   List<List<MangaChapter>>? _ranges;
+  ({int index, List<MangaChapter> chapters})? _rangeMembers;
   ({int? range, String query, List<MangaChapter> chapters})? _narrowed;
 
   List<List<MangaChapter>> get _chapterRanges =>
       _ranges ??= mangaChapterRanges(widget.chapters);
 
+  List<MangaChapter> _membersForRange(int range) {
+    final previous = _rangeMembers;
+    if (previous != null && previous.index == range) return previous.chapters;
+    final allowedIds = _chapterRanges[range]
+        .map((chapter) => chapter.id)
+        .toSet();
+    // The menu groups use reading order, but the list has always displayed
+    // membership in source order (including any repeated chapter IDs).
+    final chapters = <MangaChapter>[
+      for (final chapter in widget.chapters)
+        if (allowedIds.contains(chapter.id)) chapter,
+    ];
+    _rangeMembers = (index: range, chapters: chapters);
+    return chapters;
+  }
+
   List<MangaChapter> _chaptersForRangeAndQuery(int? range) {
+    if (range == null) _rangeMembers = null;
     final query = _query.trim();
     if (range == null && query.isEmpty) {
       _narrowed = null;
@@ -120,16 +138,12 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
         previous.query == query) {
       return previous.chapters;
     }
-    final allowedIds = range == null
-        ? null
-        : _chapterRanges[range].map((chapter) => chapter.id).toSet();
-    final matchesQuery = mangaChapterMatcher(query);
-    final chapters = <MangaChapter>[
-      for (final chapter in widget.chapters)
-        if ((allowedIds == null || allowedIds.contains(chapter.id)) &&
-            matchesQuery(chapter))
-          chapter,
-    ];
+    final candidates = range == null
+        ? widget.chapters
+        : _membersForRange(range);
+    final chapters = query.isEmpty
+        ? candidates
+        : candidates.where(mangaChapterMatcher(query)).toList(growable: false);
     _narrowed = (range: range, query: query, chapters: chapters);
     return chapters;
   }
@@ -175,6 +189,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.chapters, widget.chapters)) {
       _ranges = null;
+      _rangeMembers = null;
       _narrowed = null;
     }
   }

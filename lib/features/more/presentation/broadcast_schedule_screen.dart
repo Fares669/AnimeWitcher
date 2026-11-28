@@ -406,20 +406,89 @@ class _ScheduleGrid extends StatelessWidget {
               return const Center(child: CircularProgressIndicator.adaptive());
             }
             final item = items[index];
-            return MultimediaCard.fromItem(
-              key: ValueKey('broadcast-$day-${item.url}'),
+            return _ScheduleCard(
+              key: ValueKey((day, item.url)),
+              day: day,
               item: item,
-              heroTag: heroTagWithId(
-                'broadcast-$day',
-                item,
-                index,
-                dashed: true,
-              ),
-              onTap: () => item.openDetails(context),
+              index: index,
             );
           },
         ),
       ),
+    );
+  }
+}
+
+// A pending page changes the grid's footer, not the existing rows. Keep each
+// immutable row's card configuration in its own lazy viewport lifetime rather
+// than rebuilding its artwork and title subtree or caching the entire day.
+class _ScheduleCard extends StatefulWidget {
+  const _ScheduleCard({
+    required super.key,
+    required this.day,
+    required this.item,
+    required this.index,
+  });
+
+  final String day;
+  final MultimediaItem item;
+  final int index;
+
+  @override
+  State<_ScheduleCard> createState() => _ScheduleCardState();
+}
+
+class _ScheduleCardState extends State<_ScheduleCard> {
+  MultimediaCard? _card;
+  (String?, String?, String?, String?, String?)? _artAndRatingInputs;
+
+  @override
+  void didUpdateWidget(covariant _ScheduleCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.item, widget.item) ||
+        oldWidget.day != widget.day ||
+        oldWidget.index != widget.index) {
+      _card = null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final item = widget.item;
+    // Subtypes may override getters, and an episode caption uses wall time.
+    if (item.runtimeType != MultimediaItem ||
+        item.episodeBadge?.trim().isNotEmpty == true) {
+      return _buildCard(item);
+    }
+    // These are the artwork lookup and rating inputs read by fromItem.
+    // syncData can be provider-owned and mutable, even on a plain item.
+    final data = item.syncData;
+    final inputs = data == null
+        ? null
+        : (
+            data['malId'] ?? data['mal_id'],
+            data['englishTitle'],
+            data['awMalScore'],
+            data['awImdbScore'] ?? data['imdbRate'] ?? data['imdb_rate'],
+            data['awScore'],
+          );
+    if (_card case final card? when _artAndRatingInputs == inputs) return card;
+    _artAndRatingInputs = inputs;
+    return _card = _buildCard(item);
+  }
+
+  MultimediaCard _buildCard(MultimediaItem item) {
+    final day = widget.day;
+    return MultimediaCard.fromItem(
+      key: ValueKey('broadcast-$day-${item.url}'),
+      item: item,
+      heroTag: heroTagWithId(
+        'broadcast-$day',
+        item,
+        widget.index,
+        dashed: true,
+      ),
+      onTap: () => item.openDetails(context),
     );
   }
 }

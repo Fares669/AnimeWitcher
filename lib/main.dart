@@ -362,6 +362,10 @@ class MyApp extends ConsumerStatefulWidget {
 class _MyAppState extends ConsumerState<MyApp>
     with WindowListener, WidgetsBindingObserver {
   DateTime? _lastForegroundAccountSyncAt;
+  TargetPlatform? _themePlatform;
+  AppThemeStyle? _darkThemeStyle;
+  late ThemeData _lightTheme;
+  late ThemeData _darkTheme;
 
   @override
   void initState() {
@@ -549,6 +553,20 @@ class _MyAppState extends ConsumerState<MyApp>
       }
     });
 
+    // ThemeData's defaults depend on the platform, not on the router,
+    // locale or late device profile. Keep both slots available without
+    // rebuilding their color, font and component graphs on those updates.
+    final platform = defaultTargetPlatform;
+    if (_themePlatform != platform) {
+      _lightTheme = AppTheme.createLightTheme(null);
+      _themePlatform = platform;
+      _darkThemeStyle = null;
+    }
+    if (_darkThemeStyle != themeStyle) {
+      _darkTheme = AppTheme.darkThemeFor(themeStyle, null);
+      _darkThemeStyle = themeStyle;
+    }
+
     final materialApp = MaterialApp.router(
       scaffoldMessengerKey: ref.read(notificationServiceProvider).messengerKey,
       title: 'AnimeWitcher',
@@ -559,8 +577,8 @@ class _MyAppState extends ConsumerState<MyApp>
       // The chosen theme decides both the mode and which dark theme is
       // drawn; there is no longer a system-following choice.
       themeMode: themeStyle.themeMode,
-      theme: AppTheme.createLightTheme(null),
-      darkTheme: AppTheme.darkThemeFor(themeStyle, null),
+      theme: _lightTheme,
+      darkTheme: _darkTheme,
       routerConfig: appRouter,
       locale: locale,
       localizationsDelegates: const [

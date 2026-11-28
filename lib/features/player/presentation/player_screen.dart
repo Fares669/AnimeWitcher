@@ -23,8 +23,8 @@ import '../../../../core/storage/settings_repository.dart';
 import '../../../../features/settings/presentation/player_settings_provider.dart';
 import '../data/anime4k.dart';
 import 'widgets/animewitcher_player_controls.dart';
-import 'widgets/hotstar_player_style.dart';
 import 'widgets/player_ltr.dart';
+import 'widgets/player_subtitle_overlay.dart';
 import 'player_controller.dart';
 import 'player_shortcuts.dart';
 import 'player_teardown.dart';
@@ -681,10 +681,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     return false;
   }
 
-  Future<void> _restoreOrientation() => _platformService.restoreOrientation(
-    isTablet: _isTablet,
-    isTv: _isTv,
-  );
+  Future<void> _restoreOrientation() =>
+      _platformService.restoreOrientation(isTablet: _isTablet, isTv: _isTv);
 
   Future<void> _handleBack() async {
     if (!context.mounted || _isExiting) return;
@@ -833,166 +831,96 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     }
 
     return PlayerLtr(
-      child: ValueListenableBuilder<bool>(
-        valueListenable: _controlsVisible,
-        builder: (context, controlsVisible, _) {
-          return PopScope(
-            canPop: false,
-            onPopInvokedWithResult: (didPop, result) async {
-              if (didPop) return;
-              // Single guarded path (shared with the root key handler): close the
-              // sources panel, else hide TV controls. Only exit when nothing is
-              // left to dismiss. The de-dupe inside prevents the dual Back
-              // delivery (KeyEvent + route-pop) from skipping a step into exit.
-              if (_consumeBack()) return;
-              await _handleBack();
-            },
-            child: Scaffold(
-              body: Focus(
-                focusNode: _rootFocusNode,
-                autofocus: true,
-                onKeyEvent: _handleKey,
-                // Map the TV remote OK key (select) to ActivateIntent so the
-                // focused control activates natively (Enter/Space/gameButtonA are
-                // already mapped by WidgetsApp). When no control is focused this
-                // bubbles up to the root handler instead.
-                child: Shortcuts(
-                  shortcuts: const <ShortcutActivator, Intent>{
-                    SingleActivator(LogicalKeyboardKey.select):
-                        ActivateIntent(),
-                  },
-                  child: Stack(
-                    children: [
-                      RepaintBoundary(
-                        child: ValueListenableBuilder<BoxFit>(
-                          valueListenable: _videoFit,
-                          builder: (_, fit, child) => Center(
-                            // Phase 8: Switch engine based on stream type
-                            child: Consumer(
-                              builder: (context, ref, _) {
-                                final useExoPlayer = ref.watch(
-                                  playerControllerProvider.select(
-                                    (s) => s.useExoPlayer,
+      child: PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, result) async {
+          if (didPop) return;
+          // Single guarded path (shared with the root key handler): close the
+          // sources panel, else hide TV controls. Only exit when nothing is
+          // left to dismiss. The de-dupe inside prevents the dual Back
+          // delivery (KeyEvent + route-pop) from skipping a step into exit.
+          if (_consumeBack()) return;
+          await _handleBack();
+        },
+        child: Scaffold(
+          body: Focus(
+            focusNode: _rootFocusNode,
+            autofocus: true,
+            onKeyEvent: _handleKey,
+            // Map the TV remote OK key (select) to ActivateIntent so the
+            // focused control activates natively (Enter/Space/gameButtonA are
+            // already mapped by WidgetsApp). When no control is focused this
+            // bubbles up to the root handler instead.
+            child: Shortcuts(
+              shortcuts: const <ShortcutActivator, Intent>{
+                SingleActivator(LogicalKeyboardKey.select): ActivateIntent(),
+              },
+              child: Stack(
+                children: [
+                  RepaintBoundary(
+                    child: ValueListenableBuilder<BoxFit>(
+                      valueListenable: _videoFit,
+                      builder: (_, fit, child) => Center(
+                        // Phase 8: Switch engine based on stream type
+                        child: Consumer(
+                          builder: (context, ref, _) {
+                            final useExoPlayer = ref.watch(
+                              playerControllerProvider.select(
+                                (s) => s.useExoPlayer,
+                              ),
+                            );
+                            if (useExoPlayer) {
+                              return vv.VideoView(
+                                controller: _videoViewController,
+                                videoFit: fit,
+                              );
+                            }
+                            return Video(
+                              controller: _videoController,
+                              fit: fit,
+                              subtitleViewConfiguration:
+                                  const SubtitleViewConfiguration(
+                                    visible: false,
+                                    style: TextStyle(color: Colors.transparent),
                                   ),
-                                );
-                                if (useExoPlayer) {
-                                  return vv.VideoView(
-                                    controller: _videoViewController,
-                                    videoFit: fit,
-                                  );
-                                }
-                                return Video(
-                                  controller: _videoController,
-                                  fit: fit,
-                                  subtitleViewConfiguration:
-                                      const SubtitleViewConfiguration(
-                                        visible: false,
-                                        style: TextStyle(
-                                          color: Colors.transparent,
-                                        ),
-                                      ),
-                                  controls: (state) => const SizedBox.shrink(),
-                                );
-                              },
-                            ),
-                          ),
+                              controls: (state) => const SizedBox.shrink(),
+                            );
+                          },
                         ),
                       ),
-                      Consumer(
-                        builder: (context, ref, _) {
-                          final useExoPlayer = ref.watch(
-                            playerControllerProvider.select(
-                              (s) => s.useExoPlayer,
-                            ),
-                          );
-                          if (useExoPlayer) {
-                            return const SizedBox.shrink();
-                          }
-
-                          final subtitleSettings = ref
-                              .watch(playerSettingsProvider)
-                              .asData
-                              ?.value;
-
-                          return Positioned(
-                            bottom:
-                                (controlsVisible
-                                    ? HotstarPlayerStyle.bottomChromeHeight
-                                    : 20.0) +
-                                ((100 -
-                                        (subtitleSettings?.subtitlePosition ??
-                                            100.0)) *
-                                    (MediaQuery.sizeOf(context).height *
-                                        0.008)),
-                            left: 20,
-                            right: 20,
-                            child: SubtitleView(
-                              controller: _videoController,
-                              configuration: SubtitleViewConfiguration(
-                                style: TextStyle(
-                                  fontSize:
-                                      subtitleSettings?.subtitleSize ?? 22.0,
-                                  color: Color(
-                                    subtitleSettings?.subtitleColor ??
-                                        0xFFFFFFFF,
-                                  ),
-                                  backgroundColor:
-                                      Color(
-                                        subtitleSettings
-                                                ?.subtitleBackgroundColor ??
-                                            0x00000000,
-                                      ).withValues(
-                                        alpha:
-                                            subtitleSettings
-                                                ?.subtitleBackgroundOpacity ??
-                                            0.0,
-                                      ),
-                                  shadows: const [
-                                    Shadow(
-                                      offset: Offset(0, 1),
-                                      blurRadius: 2,
-                                      color: Colors.black,
-                                    ),
-                                  ],
-                                ),
-                                padding: EdgeInsets.zero,
-                              ),
-                            ),
-                          );
+                    ),
+                  ),
+                  PlayerSubtitleOverlay(
+                    controller: _videoController,
+                    controlsVisible: _controlsVisible,
+                  ),
+                  Positioned.fill(
+                    child: RepaintBoundary(
+                      child: AnimeWitcherPlayerControls(
+                        platformService: _platformService,
+                        key: _controlsKeyFinal,
+                        isLoading: isLoading,
+                        player: _player,
+                        videoViewController: _videoViewController,
+                        title: widget.item.title,
+                        backdropUrl: widget.item.backdropImageUrl,
+                        logoUrl: widget.item.logoUrl,
+                        onResize: _updateResizeMode,
+                        onBackPointer: _handleBack,
+                        onRequestRootFocus: () => _rootFocusNode.requestFocus(),
+                        onVisibilityChanged: (v) {
+                          if (!mounted) return;
+                          _controlsVisible.value = v;
+                          _publishPersistentPlayerHeader(controlsVisible: v);
                         },
                       ),
-                      Positioned.fill(
-                        child: RepaintBoundary(
-                          child: AnimeWitcherPlayerControls(
-                            platformService: _platformService,
-                            key: _controlsKeyFinal,
-                            isLoading: isLoading,
-                            player: _player,
-                            videoViewController: _videoViewController,
-                            title: widget.item.title,
-                            backdropUrl: widget.item.backdropImageUrl,
-                            logoUrl: widget.item.logoUrl,
-                            onResize: _updateResizeMode,
-                            onBackPointer: _handleBack,
-                            onRequestRootFocus: () =>
-                                _rootFocusNode.requestFocus(),
-                            onVisibilityChanged: (v) {
-                              if (!mounted) return;
-                              _controlsVisible.value = v;
-                              _publishPersistentPlayerHeader(
-                                controlsVisible: v,
-                              );
-                            },
-                          ),
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
-                ),
+                ],
               ),
             ),
-          );
-        },
+          ),
+        ),
       ),
     );
   }

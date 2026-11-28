@@ -20,6 +20,8 @@ import 'package:animewitcher/features/manga/reader/manga_reader_cover_provider.d
 import 'package:animewitcher/features/manga/reader/manga_reader_screen.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings_provider.dart';
+import 'package:animewitcher/features/manga/reader/subsampling/src/subsampling_image_painter.dart'
+    show SubsamplingImageRenderWidget;
 import 'package:animewitcher/features/manga/reader/widgets/manga_chapter_transition_page.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_webtoon_reader.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
@@ -431,16 +433,34 @@ void main() {
         MangaChapter chapter,
         int page,
       ) async {
+        // Mounting a row is not the readiness signal for a local PNG.
+        // The real decode isolate and engine upload must publish its tile
+        // before this page owns an image painter, even if fake frames pass.
+        final pageRow = row(flatPage);
+        final painter = find.descendant(
+          of: pageRow,
+          matching: find.byType(SubsamplingImageRenderWidget),
+        );
+        final retry = find.descendant(
+          of: pageRow,
+          matching: find.text('إعادة المحاولة'),
+        );
+        final clock = Stopwatch()..start();
+        var painterSeen = false;
         List<int>? painted;
         final wanted = _color(chapter, page);
-        for (var i = 0; i < 60; i++) {
+        do {
           await tester.runAsync(
-            () => Future<void>.delayed(const Duration(milliseconds: 5)),
+            () => Future<void>.delayed(const Duration(milliseconds: 8)),
           );
           await tester.pump(const Duration(milliseconds: 32));
+          expect(retry, findsNothing, reason: 'local page ${chapter.id}:$page');
+          if (painter.evaluate().isEmpty) continue;
+          painterSeen = true;
           painted = await renderedPixel(flatPage);
           if (listEquals(painted, wanted)) return;
-        }
+        } while (clock.elapsed < const Duration(seconds: 4));
+        expect(painterSeen, isTrue, reason: 'decoded ${chapter.id}:$page');
         expect(
           painted,
           wanted,
