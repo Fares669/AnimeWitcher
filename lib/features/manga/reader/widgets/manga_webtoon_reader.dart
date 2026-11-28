@@ -5,10 +5,10 @@ import 'package:visibility_detector/visibility_detector.dart';
 
 import '../../../../core/domain/entity/manga.dart';
 import '../manga_reader_settings.dart';
-import 'manga_chapter_transition_page.dart';
 import 'manga_page_image.dart';
 import 'manga_reader_load_scheduler.dart';
 import 'manga_reader_page_loading.dart';
+import 'manga_reader_trailing_advance.dart';
 import 'manga_continuous_zoom_surface.dart';
 
 /// One row of the webtoon stream: a page spread, or a between-chapters
@@ -58,7 +58,8 @@ class MangaWebtoonReader extends StatefulWidget {
   State<MangaWebtoonReader> createState() => _MangaWebtoonReaderState();
 }
 
-class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
+class _MangaWebtoonReaderState extends State<MangaWebtoonReader>
+    with MangaReaderTrailingAdvance<MangaWebtoonReader> {
   final GlobalKey _centerKey = GlobalKey();
   final Map<int, double> _visibleFractions = <int, double>{};
   final Map<int, int> _visibleRounds = <int, int>{};
@@ -70,10 +71,18 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
   late final ScrollController _controller =
       widget.controller ?? ScrollController();
   late final bool _ownsController = widget.controller == null;
-  bool _trailingAdvanceRequested = false;
   MangaReaderLoadBatchController? _loadBatches;
   MangaReaderLoadBatchController? _deferredLoadBatchUpdate;
   bool _replayingSettledLoads = false;
+
+  @override
+  ScrollController get trailingScrollController => _controller;
+
+  @override
+  bool get hasTrailingChapterPage => widget.trailingPage != null;
+
+  @override
+  VoidCallback? get trailingAdvanceCallback => widget.onTrailingAdvance;
 
   /// Double-page spreads must honor the first page and chapter boundaries.
   List<_WebtoonItem> get _doublePageItems {
@@ -152,7 +161,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
         : widget.initialPage.clamp(0, widget.pages.length - 1).toInt();
     _lastReported = _startPage;
     _resetLoadBatches();
-    _checkTrailingProximitySoon();
+    checkTrailingProximitySoon();
   }
 
   void _resetLoadBatches() {
@@ -183,13 +192,13 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
     // A reset already has a build pending. Keep checking the tail as
     // settled pages are replayed, without scheduling another rebuild.
     if (_replayingSettledLoads) {
-      _checkTrailingProximitySoon();
+      checkTrailingProximitySoon();
       return;
     }
     if (SchedulerBinding.instance.schedulerPhase !=
         SchedulerPhase.persistentCallbacks) {
       setState(() {});
-      _checkTrailingProximitySoon();
+      checkTrailingProximitySoon();
       return;
     }
 
@@ -207,7 +216,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
       if (!mounted || !identical(_loadBatches, batches)) return;
       setState(() {});
       if (_controller.hasClients) {
-        _checkTrailingProximity(_controller.position);
+        checkTrailingProximity(_controller.position);
       }
     });
   }
@@ -319,65 +328,6 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
     return _spread(context, item.indices!);
   }
 
-  void _requestTrailingAdvance() {
-    final callback = widget.onTrailingAdvance;
-    if (_trailingAdvanceRequested ||
-        widget.trailingPage == null ||
-        callback == null) {
-      return;
-    }
-    _trailingAdvanceRequested = true;
-    callback();
-  }
-
-  bool _handleOverscroll(OverscrollNotification notification) {
-    if (!mangaReaderShouldAdvancePastTransition(
-      extentAfter: notification.metrics.extentAfter,
-      overscroll: notification.overscroll,
-    )) {
-      return false;
-    }
-    _requestTrailingAdvance();
-    return true;
-  }
-
-  bool _handleScrollNotification(ScrollNotification notification) {
-    if (notification is OverscrollNotification) {
-      return _handleOverscroll(notification);
-    }
-    if (notification is ScrollUpdateNotification ||
-        notification is ScrollEndNotification) {
-      _checkTrailingProximity(notification.metrics);
-    }
-    return false;
-  }
-
-  /// The trailing divider is the end of the chapter: once less than a
-  /// quarter of the viewport is left below the fold, the reader moves on
-  /// by itself — no tap, no extra fling, and no dependence on a visibility
-  /// report for the divider. Scrolling clearly away from the end re-arms
-  /// the advance, so one that was dropped (a chapter navigation already
-  /// in flight, a chapter list not ready yet) is retried on the next
-  /// approach instead of never.
-  void _checkTrailingProximity(ScrollMetrics metrics) {
-    if (widget.trailingPage == null || widget.onTrailingAdvance == null) {
-      return;
-    }
-    final threshold = metrics.viewportDimension * 0.25;
-    if (metrics.extentAfter <= threshold) {
-      _requestTrailingAdvance();
-    } else if (metrics.extentAfter > threshold * 2) {
-      _trailingAdvanceRequested = false;
-    }
-  }
-
-  void _checkTrailingProximitySoon() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_controller.hasClients) return;
-      _checkTrailingProximity(_controller.position);
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     if (widget.pages.isEmpty) return const SizedBox.shrink();
@@ -455,7 +405,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
       settings: widget.settings,
       onDoubleTap: widget.onDoubleTap,
       child: NotificationListener<ScrollNotification>(
-        onNotification: _handleScrollNotification,
+        onNotification: handleTrailingScrollNotification,
         child: scrollable,
       ),
     );

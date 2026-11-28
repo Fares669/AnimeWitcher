@@ -5,10 +5,10 @@ import 'package:visibility_detector/visibility_detector.dart';
 
 import '../../../../core/domain/entity/manga.dart';
 import '../manga_reader_settings.dart';
-import 'manga_chapter_transition_page.dart';
 import 'manga_page_image.dart';
 import 'manga_reader_load_scheduler.dart';
 import 'manga_reader_page_loading.dart';
+import 'manga_reader_trailing_advance.dart';
 import 'manga_continuous_zoom_surface.dart';
 
 class _ContinuousPagePart {
@@ -96,7 +96,8 @@ class MangaContinuousReader extends StatefulWidget {
   State<MangaContinuousReader> createState() => _MangaContinuousReaderState();
 }
 
-class _MangaContinuousReaderState extends State<MangaContinuousReader> {
+class _MangaContinuousReaderState extends State<MangaContinuousReader>
+    with MangaReaderTrailingAdvance<MangaContinuousReader> {
   late final ScrollController _controller =
       widget.controller ?? ScrollController();
   late final bool _ownsController = widget.controller == null;
@@ -110,8 +111,16 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
   late int _lastReported;
   late bool _initialJumpPending;
   bool _scheduled = false;
-  bool _trailingAdvanceRequested = false;
   MangaReaderLoadBatchController? _loadBatches;
+
+  @override
+  ScrollController get trailingScrollController => _controller;
+
+  @override
+  bool get hasTrailingChapterPage => widget.trailingPage != null;
+
+  @override
+  VoidCallback? get trailingAdvanceCallback => widget.onTrailingAdvance;
 
   bool get _doublePageActive =>
       widget.doublePage && widget.scrollDirection == Axis.vertical;
@@ -173,7 +182,7 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
     _resetLoadBatches();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _jumpToInitialSpread();
-      _checkTrailingProximitySoon();
+      checkTrailingProximitySoon();
     });
   }
 
@@ -228,7 +237,7 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
     if (mounted) setState(() {});
     // Page extents settle as images arrive; the end may have come into
     // reach without any scrolling.
-    _checkTrailingProximitySoon();
+    checkTrailingProximitySoon();
   }
 
   @override
@@ -399,65 +408,6 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
     );
   }
 
-  void _requestTrailingAdvance() {
-    final callback = widget.onTrailingAdvance;
-    if (_trailingAdvanceRequested ||
-        widget.trailingPage == null ||
-        callback == null) {
-      return;
-    }
-    _trailingAdvanceRequested = true;
-    callback();
-  }
-
-  bool _handleOverscroll(OverscrollNotification notification) {
-    if (!mangaReaderShouldAdvancePastTransition(
-      extentAfter: notification.metrics.extentAfter,
-      overscroll: notification.overscroll,
-    )) {
-      return false;
-    }
-    _requestTrailingAdvance();
-    return true;
-  }
-
-  bool _handleScrollNotification(ScrollNotification notification) {
-    if (notification is OverscrollNotification) {
-      return _handleOverscroll(notification);
-    }
-    if (notification is ScrollUpdateNotification ||
-        notification is ScrollEndNotification) {
-      _checkTrailingProximity(notification.metrics);
-    }
-    return false;
-  }
-
-  /// The trailing divider is the end of the chapter: once less than a
-  /// quarter of the viewport is left below the fold, the reader moves on
-  /// by itself — no tap, no extra fling, and no dependence on a visibility
-  /// report for the divider. Scrolling clearly away from the end re-arms
-  /// the advance, so one that was dropped (a chapter navigation already
-  /// in flight, a chapter list not ready yet) is retried on the next
-  /// approach instead of never.
-  void _checkTrailingProximity(ScrollMetrics metrics) {
-    if (widget.trailingPage == null || widget.onTrailingAdvance == null) {
-      return;
-    }
-    final threshold = metrics.viewportDimension * 0.25;
-    if (metrics.extentAfter <= threshold) {
-      _requestTrailingAdvance();
-    } else if (metrics.extentAfter > threshold * 2) {
-      _trailingAdvanceRequested = false;
-    }
-  }
-
-  void _checkTrailingProximitySoon() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_controller.hasClients) return;
-      _checkTrailingProximity(_controller.position);
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     if (widget.pages.isEmpty) return const SizedBox.shrink();
@@ -498,7 +448,7 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
       settings: widget.settings,
       onDoubleTap: widget.onDoubleTap,
       child: NotificationListener<ScrollNotification>(
-        onNotification: _handleScrollNotification,
+        onNotification: handleTrailingScrollNotification,
         child: scrollable,
       ),
     );

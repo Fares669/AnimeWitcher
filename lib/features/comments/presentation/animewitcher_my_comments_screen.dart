@@ -114,7 +114,8 @@ class _AnimeWitcherMyCommentsScreenState
     }
   }
 
-  Future<void> _changeSort(AnimeWitcherCommentSort sort) async {
+  Future<void> _changeSort(String value) async {
+    final sort = AnimeWitcherCommentSort.fromNameOr(value, _sort);
     if (sort == _sort) return;
     setState(() => _sort = sort);
     if (_scrollController.hasClients) _scrollController.jumpTo(0);
@@ -260,13 +261,6 @@ class _AnimeWitcherMyCommentsScreenState
 
   String _screenTitle() => ((_isReviews ? 'مراجعاتي' : 'تعليقاتي'));
 
-  AnimeWitcherCommentSort _sortFromValue(String value) {
-    for (final option in AnimeWitcherCommentSort.values) {
-      if (option.name == value) return option;
-    }
-    return _sort;
-  }
-
   @override
   Widget build(BuildContext context) {
     ref.listen(
@@ -297,9 +291,7 @@ class _AnimeWitcherMyCommentsScreenState
                 tooltip: _sortTooltip(),
                 selectedValue: _sort.name,
                 items: AnimeWitcherCommentSortControl.menuItems(),
-                onSelected: (value) {
-                  _changeSort(_sortFromValue(value));
-                },
+                onSelected: _changeSort,
               ),
       ),
       body: Center(

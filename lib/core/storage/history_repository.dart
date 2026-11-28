@@ -1,13 +1,12 @@
-import 'dart:async';
 import 'dart:collection';
 
-import 'package:flutter/foundation.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../account/account_providers.dart';
 import '../account/animewitcher_account_service.dart';
 import '../domain/entity/multimedia_item.dart';
 import '../services/download_v2/download_v2_identity.dart';
+import 'background_sync.dart';
 import 'storage_service.dart';
 
 part 'history_repository.g.dart';
@@ -192,7 +191,7 @@ class HistoryRepository {
 
   Future<void> removeFromHistory(String url) async {
     await _storageService.removeFromHistory(url);
-    _syncInBackground(
+    reportBackgroundSyncFailure(
       _accountService.removeLastWatched(url),
       'remove recently-watched item',
     );
@@ -209,7 +208,7 @@ class HistoryRepository {
       timestamp,
       position,
     );
-    _syncInBackground(
+    reportBackgroundSyncFailure(
       _accountService.recordLastWatched(item: item.item),
       'update recently-watched timestamp',
     );
@@ -223,7 +222,7 @@ class HistoryRepository {
         .toList(growable: false);
     await _storageService.clearAllHistory();
     for (final url in urls) {
-      _syncInBackground(
+      reportBackgroundSyncFailure(
         _accountService.removeLastWatched(url),
         'clear recently-watched item',
       );
@@ -250,7 +249,7 @@ class HistoryRepository {
       episodeServerNumber: episodeServerNumber,
       episodePosterUrl: episodePosterUrl,
     );
-    _syncInBackground(
+    reportBackgroundSyncFailure(
       _accountService.recordLastWatched(item: item),
       'record recently-watched item',
     );
@@ -282,7 +281,7 @@ class HistoryRepository {
       episodeServerNumber: episodeServerNumber,
       episodePosterUrl: episodePosterUrl,
     );
-    _syncInBackground(
+    reportBackgroundSyncFailure(
       _accountService.saveContinueWatchingProgress(
         item: item,
         position: position,
@@ -300,7 +299,7 @@ class HistoryRepository {
 
   Future<void> removeContinueWatching(String url) async {
     await _storageService.removeFromContinueWatching(url);
-    _syncInBackground(
+    reportBackgroundSyncFailure(
       _accountService.removeContinueWatching(url),
       'remove continue-watching item',
     );
@@ -314,7 +313,7 @@ class HistoryRepository {
         .toList(growable: false);
     await _storageService.clearAllContinueWatching();
     for (final url in urls) {
-      _syncInBackground(
+      reportBackgroundSyncFailure(
         _accountService.removeContinueWatching(url),
         'clear continue-watching item',
       );
@@ -424,15 +423,5 @@ class HistoryRepository {
 
   String? getLastEpisodeUrl(String url) {
     return _storageService.getLastEpisodeUrl(url);
-  }
-
-  void _syncInBackground(Future<void> operation, String label) {
-    unawaited(
-      operation.catchError((Object error) {
-        if (kDebugMode) {
-          debugPrint('[AnimeWitcherAccount] Could not $label: $error');
-        }
-      }),
-    );
   }
 }

@@ -1,8 +1,7 @@
-import 'dart:collection';
-
 import 'package:dio/dio.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import 'skip_api_support.dart';
 import 'skip_service.dart';
 import '../../../../core/logger/app_logger.dart';
 import '../../../../core/network/dio_client_provider.dart';
@@ -28,12 +27,7 @@ class AniSkipService implements SkipService {
   /// different release, which would show a second, wrong "Skip intro".
   static const List<String> _types = <String>['op', 'ed', 'recap'];
 
-  // Same caching shape as IntroDB: an hour of results, LRU-capped, so
-  // seeking around an episode doesn't re-query per seek.
-  static const int _cacheMax = 500;
-  static const Duration _cacheTtl = Duration(hours: 1);
-  static final LinkedHashMap<String, _CachedSegments> _cache =
-      LinkedHashMap<String, _CachedSegments>();
+  static final _cache = SkipApiCache();
 
   // Global cool-off after a 429 so we don't amplify a rate limit.
   static DateTime? _rateLimitUntil;
@@ -43,26 +37,6 @@ class AniSkipService implements SkipService {
   // the better-matched one that follows.
   String _key(int malId, int episode, int episodeLength) =>
       '$malId:$episode:$episodeLength';
-
-  List<SkipSegment>? _lookupCached(String key) {
-    final entry = _cache[key];
-    if (entry == null) return null;
-    if (DateTime.now().isAfter(entry.expiresAt)) {
-      _cache.remove(key);
-      return null;
-    }
-    _cache.remove(key);
-    _cache[key] = entry;
-    return entry.segments;
-  }
-
-  void _store(String key, List<SkipSegment> segments) {
-    _cache.remove(key);
-    _cache[key] = _CachedSegments(segments, DateTime.now().add(_cacheTtl));
-    while (_cache.length > _cacheMax) {
-      _cache.remove(_cache.keys.first);
-    }
-  }
 
   static SkipType _typeFor(Object? raw) {
     switch (raw?.toString().toLowerCase()) {
@@ -103,7 +77,7 @@ class AniSkipService implements SkipService {
     const episodeLength = 0;
 
     final key = _key(malId, episode, duration ?? 0);
-    final cached = _lookupCached(key);
+    final cached = _cache.lookup(key);
     if (cached != null) return cached;
 
     final until = _rateLimitUntil;
@@ -158,12 +132,12 @@ class AniSkipService implements SkipService {
           best.values.map((c) => c.segment).toList(),
           durationSec: duration?.toDouble(),
         );
-        _store(key, cleaned);
+        _cache.store(key, cleaned);
         return cleaned;
       }
     } on DioException catch (e) {
       if (e.response?.statusCode == 429) {
-        final retryAfter = _parseRetryAfter(
+        final retryAfter = parseSkipRetryAfter(
           e.response?.headers.value('retry-after'),
         );
         _rateLimitUntil = DateTime.now().add(retryAfter);
@@ -185,23 +159,9 @@ class AniSkipService implements SkipService {
     // skip button for the rest of the hour over a moment without a
     // connection, and the viewer would have no way to ask again — which is
     // exactly what "AniSkip doesn't work" looks like from the outside.
-    if (answered) _store(key, const []);
+    if (answered) _cache.store(key, const []);
     return [];
   }
-
-  Duration _parseRetryAfter(String? header) {
-    if (header == null) return const Duration(seconds: 60);
-    final seconds = int.tryParse(header.trim());
-    if (seconds == null || seconds < 0) return const Duration(seconds: 60);
-    if (seconds > 300) return const Duration(minutes: 5);
-    return Duration(seconds: seconds);
-  }
-}
-
-class _CachedSegments {
-  _CachedSegments(this.segments, this.expiresAt);
-  final List<SkipSegment> segments;
-  final DateTime expiresAt;
 }
 
 /// A candidate segment plus how far its submitted episode length is from

@@ -13,7 +13,6 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:video_view/video_view.dart' as vv;
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/utils/immersive_mode.dart';
@@ -30,20 +29,7 @@ import 'player_shortcuts.dart';
 import 'player_teardown.dart';
 import 'player_platform_service.dart';
 import 'player_gesture_handler.dart';
-
-TextStyle _getSubtitleTextStyle(String? fontFamily, TextStyle baseStyle) {
-  if (fontFamily == null) return baseStyle;
-  switch (fontFamily.toLowerCase()) {
-    case 'open sans':
-      return GoogleFonts.openSans(textStyle: baseStyle);
-    case 'poppins':
-      return GoogleFonts.poppins(textStyle: baseStyle);
-    case 'ubuntu':
-      return GoogleFonts.ubuntu(textStyle: baseStyle);
-    default:
-      return baseStyle.copyWith(fontFamily: fontFamily);
-  }
-}
+import 'subtitle_typography.dart';
 
 class PlayerScreen extends ConsumerStatefulWidget {
   final MultimediaItem item;
@@ -967,7 +953,7 @@ class _AnimeWitcherEmbeddedSubtitleViewState
         final file = File(path);
         if (await file.exists()) {
           final bytes = await file.readAsBytes();
-          final fontLoader = FontLoader('CustomSubtitleFont');
+          final fontLoader = FontLoader(customSubtitleFontFamily);
           fontLoader.addFont(Future.value(ByteData.sublistView(bytes)));
           await fontLoader.load();
           if (mounted) {
@@ -994,48 +980,10 @@ class _AnimeWitcherEmbeddedSubtitleViewState
         final lines = snapshot.data ?? const [];
         if (lines.isEmpty) return const SizedBox.shrink();
 
-        // Map font family
-        String? fontFamily;
-        const List<String> builtInFonts = [
-          'Normal (system sans-serif)',
-          'Trebuchet MS',
-          'Netflix Sans',
-          'Google Sans',
-          'Open Sans',
-          'Futura',
-          'Consola',
-          'Gotham',
-          'Lucida Grande',
-          'STIX General',
-          'Times New Roman',
-          'Verdana',
-          'Ubuntu',
-          'Comic Sans',
-          'Poppins',
-        ];
-
-        if (settings.subTypefaceFilePath != null && _customFontLoaded) {
-          fontFamily = 'CustomSubtitleFont';
-        } else if (settings.subTypeface != null &&
-            settings.subTypeface! >= 0 &&
-            settings.subTypeface! < builtInFonts.length) {
-          if (settings.subTypeface == 0) {
-            fontFamily = null;
-          } else {
-            fontFamily = builtInFonts[settings.subTypeface!];
-          }
-        }
-
-        final fontSize = settings.subFixedTextSize ?? 22.0;
-
-        final baseStyle = TextStyle(
-          fontSize: fontSize,
-          fontWeight: settings.subBold ? FontWeight.bold : FontWeight.normal,
-          fontStyle: settings.subItalic ? FontStyle.italic : FontStyle.normal,
-          color: Color(settings.subForegroundColor),
+        final textStyle = subtitleTextStyle(
+          settings,
+          customFontLoaded: _customFontLoaded,
         );
-
-        final textStyle = _getSubtitleTextStyle(fontFamily, baseStyle);
 
         final edgeColor = Color(settings.subEdgeColor);
 

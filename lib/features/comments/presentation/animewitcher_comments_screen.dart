@@ -192,7 +192,8 @@ class _AnimeWitcherCommentsScreenState
   Future<void> _openReplies(AnimeWitcherComment comment) =>
       AnimeWitcherRepliesScreen.open(context, comment);
 
-  Future<void> _applyCommentSort(AnimeWitcherCommentSort selected) async {
+  Future<void> _applyCommentSort(String value) async {
+    final selected = AnimeWitcherCommentSort.fromNameOr(value, _sort);
     if (selected == _sort || !mounted) return;
     setState(() => _sort = selected);
     if (_scrollController.hasClients) {
@@ -318,13 +319,6 @@ class _AnimeWitcherCommentsScreenState
     });
   }
 
-  AnimeWitcherCommentSort _commentSortFromValue(String value) {
-    for (final option in AnimeWitcherCommentSort.values) {
-      if (option.name == value) return option;
-    }
-    return _sort;
-  }
-
   @override
   Widget build(BuildContext context) {
     final accountState = ref.watch(animeWitcherAccountControllerProvider);
@@ -350,9 +344,7 @@ class _AnimeWitcherCommentsScreenState
               context: context,
               tooltip: _sortTooltip(),
               sort: _sort,
-              onSelected: (value) {
-                _applyCommentSort(_commentSortFromValue(value));
-              },
+              onSelected: _applyCommentSort,
             ),
           ),
         );
@@ -370,9 +362,7 @@ class _AnimeWitcherCommentsScreenState
                 tooltip: _sortTooltip(),
                 selectedValue: _sort.name,
                 items: AnimeWitcherCommentSortControl.menuItems(),
-                onSelected: (value) {
-                  _applyCommentSort(_commentSortFromValue(value));
-                },
+                onSelected: _applyCommentSort,
               ),
       ),
       body: Column(

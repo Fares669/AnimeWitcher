@@ -209,20 +209,14 @@ class _AnimeWitcherRepliesScreenState
     }
   }
 
-  Future<void> _applyReplySort(AnimeWitcherCommentSort selected) async {
+  Future<void> _applyReplySort(String value) async {
+    final selected = AnimeWitcherCommentSort.fromNameOr(value, _sort);
     if (selected == _sort || !mounted) return;
     setState(() => _sort = selected);
     if (_scrollController.hasClients) {
       _scrollController.jumpTo(0);
     }
     await _loadInitial();
-  }
-
-  AnimeWitcherCommentSort _replySortFromValue(String value) {
-    for (final option in AnimeWitcherCommentSort.values) {
-      if (option.name == value) return option;
-    }
-    return _sort;
   }
 
   @override
@@ -247,9 +241,7 @@ class _AnimeWitcherRepliesScreenState
               context: context,
               tooltip: 'ترتيب الردود',
               sort: _sort,
-              onSelected: (value) {
-                _applyReplySort(_replySortFromValue(value));
-              },
+              onSelected: _applyReplySort,
             ),
           ),
         );
@@ -267,9 +259,7 @@ class _AnimeWitcherRepliesScreenState
                 tooltip: 'ترتيب الردود',
                 selectedValue: _sort.name,
                 items: AnimeWitcherCommentSortControl.menuItems(),
-                onSelected: (value) {
-                  _applyReplySort(_replySortFromValue(value));
-                },
+                onSelected: _applyReplySort,
               ),
       ),
       body: Column(

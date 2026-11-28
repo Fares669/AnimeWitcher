@@ -6,9 +6,20 @@ import 'firestore_rest_client.dart';
 const String animeWitcherNativeProviderId = 'com.fares669.animewitcher.native';
 
 enum AnimeWitcherCommentSort {
+  // Declaration order matches the order in the sort menu.
   newest,
   oldest,
   mostLiked;
+
+  static AnimeWitcherCommentSort fromNameOr(
+    String name,
+    AnimeWitcherCommentSort fallback,
+  ) {
+    for (final sort in values) {
+      if (sort.name == name) return sort;
+    }
+    return fallback;
+  }
 
   String get orderField =>
       this == AnimeWitcherCommentSort.mostLiked ? 'likes' : 'date';

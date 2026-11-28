@@ -1,11 +1,10 @@
-import 'dart:async';
-
 import 'package:flutter/foundation.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../account/account_providers.dart';
 import '../account/animewitcher_account_service.dart';
 import '../domain/entity/multimedia_item.dart';
+import 'background_sync.dart';
 import 'library_category.dart';
 import 'storage_service.dart';
 
@@ -236,7 +235,7 @@ class LibraryRepository {
             membership.category,
             favorite: membership.favorite,
           );
-    _syncInBackground(operation, 'save library item');
+    reportBackgroundSyncFailure(operation, 'save library item');
   }
 
   void _deleteNative(
@@ -244,7 +243,7 @@ class LibraryRepository {
     required bool manga,
     bool keepFavorite = false,
   }) {
-    _syncInBackground(
+    reportBackgroundSyncFailure(
       manga
           ? _accountService.removeMangaLibraryItem(
               url,
@@ -252,16 +251,6 @@ class LibraryRepository {
             )
           : _accountService.removeLibraryItem(url, keepFavorite: keepFavorite),
       'remove library item',
-    );
-  }
-
-  void _syncInBackground(Future<void> operation, String label) {
-    unawaited(
-      operation.catchError((Object error) {
-        if (kDebugMode) {
-          debugPrint('[AnimeWitcherAccount] Could not $label: $error');
-        }
-      }),
     );
   }
 }

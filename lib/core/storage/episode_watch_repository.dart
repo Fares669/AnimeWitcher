@@ -1,14 +1,13 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../account/account_providers.dart';
 import '../account/animewitcher_account_service.dart';
 import '../domain/entity/multimedia_item.dart';
 import '../utils/safe_uri.dart';
+import 'background_sync.dart';
 import 'history_repository.dart';
 import 'storage_service.dart';
 
@@ -81,6 +80,7 @@ class EpisodeWatchRepository {
   static const String _legacyStorageKey = 'episode_watch_overrides_v1';
   static const String _storageKey = 'episode_watch_states_v2';
   static const String _cloudMigrationPrefix = 'episode_watch_cloud_migrated_v1';
+  static const _syncLabel = 'sync watched episode';
 
   Map<String, _EpisodeWatchState>? _cachedStates;
 
@@ -269,12 +269,13 @@ class EpisodeWatchRepository {
       ownerUid: _accountService.accountUid,
     );
     await _persist(states);
-    _syncInBackground(
+    reportBackgroundSyncFailure(
       _accountService.setEpisodeWatched(
         mainUrl: mainUrl,
         episodeUrl: episode.url,
         watched: watched,
       ),
+      _syncLabel,
     );
   }
 
@@ -295,12 +296,13 @@ class EpisodeWatchRepository {
 
     await _persist(states);
     for (final episode in episodeList) {
-      _syncInBackground(
+      reportBackgroundSyncFailure(
         _accountService.setEpisodeWatched(
           mainUrl: mainUrl,
           episodeUrl: episode.url,
           watched: watched,
         ),
+        _syncLabel,
       );
     }
   }
@@ -422,18 +424,6 @@ class EpisodeWatchRepository {
     } catch (_) {
       return raw;
     }
-  }
-
-  void _syncInBackground(Future<void> operation) {
-    unawaited(
-      operation.catchError((Object error) {
-        if (kDebugMode) {
-          debugPrint(
-            '[AnimeWitcherAccount] Could not sync watched episode: $error',
-          );
-        }
-      }),
-    );
   }
 }
 
