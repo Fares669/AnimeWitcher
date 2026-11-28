@@ -1491,24 +1491,13 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     return child.copyWith(provider: parentProvider);
   }
 
-  List<MultimediaItem> _uniqueMediaItems(List<MultimediaItem>? items) {
-    if (items == null || items.isEmpty) {
-      return const <MultimediaItem>[];
-    }
-
-    final seen = <String>{};
+  List<MultimediaItem> _uniqueMediaItems(
+    List<MultimediaItem>? items,
+    Set<String> seen,
+  ) {
+    if (items == null || items.isEmpty) return const <MultimediaItem>[];
     return items
         .where((item) => seen.add(_mediaIdentity(item)))
-        .toList(growable: false);
-  }
-
-  List<MultimediaItem> _recommendationsWithoutRelatedLists(
-    List<MultimediaItem>? recommendations,
-    List<MultimediaItem>? related,
-  ) {
-    final relatedKeys = _uniqueMediaItems(related).map(_mediaIdentity).toSet();
-    return _uniqueMediaItems(recommendations)
-        .where((value) => !relatedKeys.contains(_mediaIdentity(value)))
         .toList(growable: false);
   }
 
@@ -1569,11 +1558,15 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       horizontal: MultimediaCardLayout.handsetPortraitGridHorizontalPadding,
     ),
   }) {
+    // Related wins on an identity present in both tabs. Seed the set while
+    // building that tab, then deduplicate Similar against it in one pass.
+    final seen = <String>{};
     final related = _uniqueMediaItems(
       relatedState.asData?.value ?? item.related,
+      seen,
     );
     final similarState = recommendationsState.whenData(
-      (value) => _recommendationsWithoutRelatedLists(value, related),
+      (value) => _uniqueMediaItems(value, seen),
     );
     final relatedHasMore = ref.watch(
       detailsControllerProvider(detailsControllerKey(widget.item))

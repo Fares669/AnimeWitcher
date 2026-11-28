@@ -81,6 +81,48 @@ class _NoScrollbarBehavior extends ScrollBehavior {
   }
 }
 
+// Section rules depend on ordered titles, not on the cards or late News
+// and manga payloads. Keep only title metadata; read row items from the
+// current catalogue even when a provider reuses the same keys.
+class _HomeCatalogueLayout {
+  _HomeCatalogueLayout(Iterable<String> keys) : keys = keys.toList() {
+    for (final title in this.keys) {
+      if (isHiddenHomeRailTitle(title)) continue;
+      final index = rails.length;
+      final isLatestAdded = isLatestAddedSectionTitle(title);
+      if (latestEpisodesIndex < 0 && isLatestEpisodesSectionTitle(title)) {
+        latestEpisodesIndex = index;
+      }
+      if (mostWatchedIndex < 0 && isMostWatchedAnimationSectionTitle(title)) {
+        mostWatchedIndex = index;
+      }
+      if (latestAddedIndex < 0 && isLatestAdded) latestAddedIndex = index;
+      rails.add((title, isLatestAdded));
+    }
+  }
+
+  final List<String> keys;
+  final rails = <(String, bool)>[];
+  int latestEpisodesIndex = -1;
+  int mostWatchedIndex = -1;
+  int latestAddedIndex = -1;
+
+  int get newsAfterIndex => mostWatchedIndex >= 0
+      ? mostWatchedIndex
+      : latestAddedIndex >= 0
+      ? latestAddedIndex
+      : rails.length - 1;
+
+  bool matches(Map<String, List<MultimediaItem>> data) {
+    if (data.length != keys.length) return false;
+    var index = 0;
+    for (final title in data.keys) {
+      if (title != keys[index++]) return false;
+    }
+    return true;
+  }
+}
+
 class _HomeScreenState extends ConsumerState<HomeScreen>
     with AutomaticKeepAliveClientMixin, SingleTickerProviderStateMixin {
   static const _rankingRails = <(MalRanking, String, String)>[
@@ -96,6 +138,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   Future<void>? _homeReselectionFuture;
   Future<void>? _refreshIndicatorDismissal;
   late final AnimationController _refreshDismissalController;
+  _HomeCatalogueLayout? _catalogueLayout;
 
   @override
   bool get wantKeepAlive => true;
@@ -319,23 +362,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     List<MangaLatestChapter> latestManga,
     AnimeWitcherProvider provider,
     List<Widget> secondaryEpisodeRails,
+    _HomeCatalogueLayout layout,
   ) {
-    final entries = visibleHomeRailEntries(data).toList(growable: false);
-    final latestEpisodesIndex = entries.indexWhere(
-      (entry) => isLatestEpisodesSectionTitle(entry.key),
-    );
+    final entries = layout.rails;
+    final latestEpisodesIndex = layout.latestEpisodesIndex;
+    final newsAfterIndex = layout.newsAfterIndex;
     final mangaHasOwnTab = ref.watch(mangaHasOwnTabProvider);
-    var newsAfterIndex = entries.indexWhere(
-      (entry) => isMostWatchedAnimationSectionTitle(entry.key),
-    );
-    if (newsAfterIndex < 0) {
-      newsAfterIndex = entries.indexWhere(
-        (entry) => isLatestAddedSectionTitle(entry.key),
-      );
-    }
-    if (newsAfterIndex < 0 && entries.isNotEmpty) {
-      newsAfterIndex = entries.length - 1;
-    }
 
     Widget buildNewsSection() {
       return NewsSection(
@@ -356,8 +388,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     }
 
     for (var index = 0; index < entries.length; index++) {
-      final entry = entries[index];
-      sections.add(_buildMediaSection(context, provider, entry));
+      final (title, forcePortrait) = entries[index];
+      sections.add(
+        _buildMediaSection(
+          context,
+          provider,
+          title,
+          data[title]!,
+          forcePortrait: forcePortrait,
+        ),
+      );
       if (index == latestEpisodesIndex) sections.addAll(secondaryEpisodeRails);
       // With manga on a tab of its own, its new chapters live there.
       if (latestManga.isNotEmpty &&
@@ -389,23 +429,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   Widget _buildMediaSection(
     BuildContext context,
     AnimeWitcherProvider provider,
-    MapEntry<String, List<MultimediaItem>> entry, {
+    String sectionTitle,
+    List<MultimediaItem> mediaList, {
     String? title,
+    required bool forcePortrait,
   }) {
     return MediaHorizontalList(
-      key: ValueKey((provider.packageName, entry.key)),
-      title: title ?? entry.key,
-      mediaList: entry.value,
+      key: ValueKey((provider.packageName, sectionTitle)),
+      title: title ?? sectionTitle,
+      mediaList: mediaList,
       warmProviderPosters: true,
       category: ViewAllCategory.providerContent,
       loadViewAllPage: (offset) => provider.getHomeSectionPage(
-        entry.key,
+        sectionTitle,
         offset: offset,
         limit: provider.viewAllPageSize,
       ),
       onTap: (item) => item.openDetails(context),
       heroTagPrefix: title == null ? 'home' : 'home_${provider.packageName}',
-      forcePortrait: isLatestAddedSectionTitle(entry.key),
+      forcePortrait: forcePortrait,
     );
   }
 
@@ -486,8 +528,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
             _buildMediaSection(
               context,
               source,
-              entry,
+              entry.key,
+              entry.value,
               title: 'أحدث الحلقات (${source.name})',
+              forcePortrait: isLatestAddedSectionTitle(entry.key),
             ),
     ];
 
@@ -510,62 +554,92 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       ),
       HomeOffline() => _buildErrorState(context, ref),
       HomeError() => _buildErrorState(context, ref),
-      HomeSuccess(:final data, news: final homeNews, :final latestManga) =>
-        _withGradientEdgeHint(
-          MouseDragRefreshIndicator(
-            indicatorKey: _refreshIndicatorKey,
-            onRefresh: _refresh,
-            child: CustomScrollView(
-              controller: _scrollController,
-              slivers: [
-                if (homeHeroMovies(data) != null)
-                  SliverToBoxAdapter(
-                    child: HomeHeroCarousel(
-                      movies: homeHeroMovies(data)!,
-                      scrollController: _scrollController,
-                      onTap: (item) {
-                        item.openDetails(context);
-                      },
-                    ),
-                  )
-                else if (!isWidescreen)
-                  // Keep content below the status area when no banner is present.
-                  SliverPadding(
-                    padding: EdgeInsets.only(
-                      top: MediaQuery.viewPaddingOf(context).top,
-                    ),
-                  ),
+      HomeSuccess() => _buildSuccessBody(
+        context,
+        l10n,
+        state,
+        activeProvider,
+        secondaryEpisodeRails,
+        hasContinueWatching: hasContinueWatching,
+        showNewsOnHome: showNewsOnHome,
+        isWidescreen: isWidescreen,
+      ),
+    };
+  }
 
-                if (hasContinueWatching)
-                  SliverToBoxAdapter(
-                    child: Consumer(
-                      builder: (context, ref, _) => ContinueWatchingSection(
-                        title: l10n.continueWatching,
-                        items: ref.watch(continueWatchingProvider),
-                        topPadding: isWidescreen ? 0 : null,
-                      ),
-                    ),
-                  ),
+  Widget _buildSuccessBody(
+    BuildContext context,
+    AppLocalizations l10n,
+    HomeSuccess state,
+    AnimeWitcherProvider activeProvider,
+    List<Widget> secondaryEpisodeRails, {
+    required bool hasContinueWatching,
+    required bool showNewsOnHome,
+    required bool isWidescreen,
+  }) {
+    final HomeSuccess(:data, news: homeNews, :latestManga) = state;
+    var layout = _catalogueLayout;
+    if (layout == null || !layout.matches(data)) {
+      _catalogueLayout = layout = _HomeCatalogueLayout(data.keys);
+    }
+    final heroMovies =
+        data['Trending'] ??
+        (layout.rails.isEmpty ? null : data[layout.rails.first.$1]);
+    return _withGradientEdgeHint(
+      MouseDragRefreshIndicator(
+        indicatorKey: _refreshIndicatorKey,
+        onRefresh: _refresh,
+        child: CustomScrollView(
+          controller: _scrollController,
+          slivers: [
+            if (heroMovies != null)
+              SliverToBoxAdapter(
+                child: HomeHeroCarousel(
+                  movies: heroMovies,
+                  scrollController: _scrollController,
+                  onTap: (item) {
+                    item.openDetails(context);
+                  },
+                ),
+              )
+            else if (!isWidescreen)
+              // Keep content below the status area when no banner is present.
+              SliverPadding(
+                padding: EdgeInsets.only(
+                  top: MediaQuery.viewPaddingOf(context).top,
+                ),
+              ),
 
-                SliverList(
-                  delegate: SliverChildListDelegate(
-                    _buildProviderSectionsWithNews(
-                      context,
-                      data,
-                      showNewsOnHome ? homeNews : const <NewsItem>[],
-                      latestManga,
-                      activeProvider,
-                      secondaryEpisodeRails,
-                    ),
+            if (hasContinueWatching)
+              SliverToBoxAdapter(
+                child: Consumer(
+                  builder: (context, ref, _) => ContinueWatchingSection(
+                    title: l10n.continueWatching,
+                    items: ref.watch(continueWatchingProvider),
+                    topPadding: isWidescreen ? 0 : null,
                   ),
                 ),
+              ),
 
-                const SliverPadding(padding: EdgeInsets.only(bottom: 100)),
-              ],
+            SliverList(
+              delegate: SliverChildListDelegate(
+                _buildProviderSectionsWithNews(
+                  context,
+                  data,
+                  showNewsOnHome ? homeNews : const <NewsItem>[],
+                  latestManga,
+                  activeProvider,
+                  secondaryEpisodeRails,
+                  layout,
+                ),
+              ),
             ),
-          ),
+
+            const SliverPadding(padding: EdgeInsets.only(bottom: 100)),
+          ],
         ),
-    };
+      ),
+    );
   }
 
   Widget _withGradientEdgeHint(Widget scrollView) {

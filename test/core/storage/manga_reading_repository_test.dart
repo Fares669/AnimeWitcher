@@ -44,6 +44,74 @@ void main() {
     expect(restored.isRead, isFalse);
   });
 
+  test('interleaved Arabic titles keep the existing keys and live reads', () async {
+    final storage = _MemoryStorage();
+    var cloudRead = false;
+    var changes = 0;
+    final repository = MangaReadingRepository(
+      storage,
+      isCloudRead: (mangaId, chapterId) =>
+          cloudRead && mangaId == 'مانغا أ' && chapterId == 'الفصل ١',
+      onChanged: () => changes++,
+    );
+    const first = MangaReadingProgress(
+      mangaId: '  مانغا أ\t',
+      chapterId: ' الفصل ١ ',
+      pageIndex: 1,
+      pageCount: 10,
+      updatedAt: 100,
+      isBookmarked: true,
+    );
+    const firstKey =
+        'manga_progress:43dab5526e801c6b38500854bb807650:8d1c614980bd37b6904f746d7354702e';
+    const secondKey =
+        'manga_progress:43dab5526e801c6b38500854bb807650:280e2a499543fd71a0d139f0abe90473';
+    const otherTitleKey =
+        'manga_progress:18b073b9d45fe4cff5b77d925d7d67ba:8d1c614980bd37b6904f746d7354702e';
+
+    await repository.save(first);
+    await repository.save(
+      const MangaReadingProgress(
+        mangaId: '  مانغا أ\t',
+        chapterId: 'الفصل ٢',
+        pageIndex: 3,
+        pageCount: 10,
+        updatedAt: 101,
+      ),
+    );
+    await repository.save(
+      const MangaReadingProgress(
+        mangaId: 'مانغا ب',
+        chapterId: 'الفصل ١',
+        pageIndex: 7,
+        pageCount: 10,
+        updatedAt: 102,
+      ),
+    );
+    expect(storage.values.keys, [firstKey, secondKey, otherTitleKey]);
+    expect(repository.get('مانغا ب', 'الفصل ١')?.pageIndex, 7);
+
+    final progress = repository.get('مانغا أ', 'الفصل ١')!;
+    expect(progress.mangaId, 'مانغا أ');
+    expect(progress.chapterId, 'الفصل ١');
+    expect(progress.pageIndex, 1);
+    expect(progress.isBookmarked, isTrue);
+    expect(repository.get('مانغا أ', 'الفصل ٢')?.pageIndex, 3);
+
+    final originalRow = storage.values[firstKey]!;
+    storage.values[firstKey] = originalRow.replaceFirst(
+      '"pageIndex":1',
+      '"pageIndex":5',
+    );
+    expect(repository.get('مانغا أ', 'الفصل ١')?.pageIndex, 5);
+    cloudRead = true;
+    expect(repository.get('مانغا أ', 'الفصل ١')?.pageIndex, 9);
+    expect(repository.get('مانغا أ', 'الفصل ١')?.isRead, isTrue);
+    cloudRead = false;
+    expect(repository.get('مانغا أ', 'الفصل ١')?.pageIndex, 5);
+    expect(changes, 3);
+  });
+
   test('toggleBookmark creates progress for an unseen chapter', () async {
     final repository = MangaReadingRepository(_MemoryStorage());
 

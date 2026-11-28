@@ -2,12 +2,14 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/features/player/presentation/player_controller.dart';
 import 'package:animewitcher/features/player/presentation/player_gesture_handler.dart';
 import 'package:animewitcher/features/player/presentation/player_platform_service.dart';
 import 'package:animewitcher/features/player/presentation/widgets/animewitcher_player_controls.dart';
 import 'package:animewitcher/features/player/presentation/widgets/player_control_components.dart';
 import 'package:animewitcher/features/player/presentation/widgets/player_ltr.dart';
+import 'package:animewitcher/features/player/presentation/widgets/player_metadata_scrim.dart';
 import 'package:animewitcher/features/player/presentation/widgets/player_settings_panel.dart';
 import 'package:animewitcher/features/player/presentation/widgets/player_stream_widgets.dart';
 import 'package:animewitcher/features/settings/presentation/player_settings_provider.dart';
@@ -49,7 +51,30 @@ class _Settings extends PlayerSettingsNotifier {
 }
 
 class _Controller extends PlayerController {
-  _Controller({this.segments = const [], this.performSeek});
+  _Controller({
+    this.segments = const [],
+    this.performSeek,
+    this.multimediaItem,
+    this.currentEpisode,
+  });
+
+  @override
+  MultimediaItem? multimediaItem;
+
+  @override
+  Episode? currentEpisode;
+
+  @override
+  String? get currentEpisodeUrl => currentEpisode?.url;
+
+  @override
+  bool get isSeries =>
+      multimediaItem?.contentType == MultimediaContentType.anime;
+
+  void changeEpisode(Episode episode) {
+    currentEpisode = episode;
+    state = state.copyWith(activeEpisodeUrl: episode.url);
+  }
 
   final List<SkipSegment> segments;
   final Future<void> Function(Duration)? performSeek;
@@ -159,6 +184,11 @@ class _FixtureMediaKit extends mk.PlatformPlayer {
     duration: durationEvents.deliveries,
     buffer: bufferEvents.deliveries,
   );
+
+  void setPlaying(bool playing) {
+    state = state.copyWith(playing: playing);
+    playingController.add(playing);
+  }
 
   void tick(int ms, {int? durationMs, int? bufferMs}) {
     final position = Duration(milliseconds: ms);
@@ -684,6 +714,164 @@ void main() {
       expect(tester.takeException(), isNull);
       debugPrint(
         'C23_PLAYER_PREFS replacements=${replaces.join('/')} rgba=${hashes.join(',')}',
+      );
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await player.dispose();
+    }
+  });
+
+  testWidgets('paused player metadata reuses rendered content', (tester) async {
+    final source = _FixtureMediaKit();
+    final player = mk.Player(platformPlayer: source);
+    final tags = [
+      'Drama',
+      'Adventure',
+      'Fantasy',
+      'Action',
+      'Comedy',
+      'Sci-fi',
+    ];
+    final controller = _Controller(
+      multimediaItem: MultimediaItem(
+        title: 'Offline painted metadata',
+        url: 'local:show',
+        posterUrl: '',
+        logoUrl: '',
+        description: '  A synopsis with surrounding whitespace.  ',
+        contentType: MultimediaContentType.anime,
+        tags: tags,
+        year: 2020,
+        score: 7.5,
+      ),
+      currentEpisode: Episode(
+        name: 'Numbered episode',
+        url: 'local:ep2',
+        season: 1,
+        episode: 2,
+      ),
+    );
+    final paintKey = GlobalKey();
+    final scrim = find.byType(PlayerMetadataScrim);
+    Finder textInScrim(String value) =>
+        find.descendant(of: scrim, matching: find.text(value));
+    final title = textInScrim('Offline painted metadata');
+    const metadataPrefix = 'Drama, Adventure, Fantasy, Action, Comedy, Sci-fi';
+    const plotText = 'A synopsis with surrounding whitespace.';
+    final initialMeta = textInScrim(
+      '$metadataPrefix  •  2020  •  S1:E2  •  ⭐ 7.5',
+    );
+    final plot = textInScrim(plotText);
+    var backs = 0;
+
+    Future<String> shot() async {
+      final boundary = tester.renderObject<RenderRepaintBoundary>(
+        find.byKey(paintKey),
+      );
+      final image = boundary.toImageSync();
+      try {
+        final rgba = await tester.runAsync(
+          () => image.toByteData(format: ui.ImageByteFormat.rawRgba),
+        );
+        return sha256.convert(rgba!.buffer.asUint8List()).toString();
+      } finally {
+        image.dispose();
+      }
+    }
+
+    try {
+      await _mount(
+        tester,
+        player,
+        controller,
+        paintBoundaryKey: paintKey,
+        onBack: () => backs++,
+      );
+      final controls = find.byType(AnimeWitcherPlayerControls);
+      expect(AppLocalizations.of(tester.element(controls))!.localeName, 'ar');
+      await tester.pump(const Duration(seconds: 9));
+      expect(title, findsNothing);
+      source.setPlaying(false);
+      await tester.idle();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 7999));
+      expect(title, findsNothing);
+      await tester.pump(const Duration(milliseconds: 1));
+      await tester.pumpAndSettle();
+      expect(title, findsOneWidget);
+      expect(initialMeta, findsOneWidget);
+      expect(plot, findsOneWidget);
+      expect(tester.widget<Text>(title).textDirection, TextDirection.ltr);
+      final probes = [title, initialMeta, plot];
+      final rects = [for (final probe in probes) tester.getRect(probe)];
+      final hashes = [await shot()];
+      final settings = ProviderScope.containerOf(
+        tester.element(controls),
+      ).read(playerSettingsProvider.notifier) as _Settings;
+      final replacements = [0, 0, 0];
+      for (var i = 1; i <= 8; i++) {
+        final before = [for (final probe in probes) tester.widget(probe)];
+        final oldScrim = tester.widget(scrim);
+        settings.change(seekDuration: 10 + i);
+        await controller.setPlaybackSpeed(1 + i / 10);
+        await tester.pump(const Duration(milliseconds: 16));
+        expect(identical(oldScrim, tester.widget(scrim)), isFalse);
+        for (var j = 0; j < probes.length; j++) {
+          if (!identical(before[j], tester.widget(probes[j]))) {
+            replacements[j]++;
+          }
+          expect(tester.getRect(probes[j]), rects[j]);
+        }
+      }
+      hashes.add(await shot());
+      expect(hashes.last, hashes.first);
+      expect(replacements, [0, 0, 0]);
+
+      // The item owns a mutable tag list: even an in-place edit must refresh.
+      tags[0] = 'Mystery';
+      await controller.setPlaybackSpeed(2);
+      await tester.pump();
+      const editedTags = 'Mystery, Adventure, Fantasy, Action, Comedy, Sci-fi';
+      final retagged = textInScrim('$editedTags  •  2020  •  S1:E2  •  ⭐ 7.5');
+      expect(initialMeta, findsNothing);
+      expect(retagged, findsOneWidget);
+      hashes.add(await shot());
+
+      controller.changeEpisode(
+        Episode(name: 'مترجم', url: 'local:special', serverName: 'مترجم'),
+      );
+      await tester.pump();
+      final newMeta = textInScrim('$editedTags  •  2020  •  مترجم  •  ⭐ 7.5');
+      expect(retagged, findsNothing);
+      expect(newMeta, findsOneWidget);
+      hashes.add(await shot());
+
+      source.setPlaying(true);
+      await tester.idle();
+      await tester.pump();
+      await tester.pumpAndSettle();
+      final retainedAfterResume = newMeta.evaluate().length;
+      if (retainedAfterResume > 0) {
+        final fade = find.descendant(of: scrim, matching: find.byType(Opacity));
+        expect(tester.widget<Opacity>(fade).opacity, 0);
+      }
+      expect(retainedAfterResume, 0);
+      hashes.add(await shot());
+
+      controller.phase(
+        const PlaybackUiPhase(
+          kind: PlaybackUiPhaseKind.openingSource,
+          fullscreenBlocking: true,
+        ),
+      );
+      await tester.pump();
+      expect(scrim, findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsWidgets);
+      tester.widget<PlayerTopBar>(find.byType(PlayerTopBar)).onBack!.call();
+      expect(backs, 1);
+      expect(tester.takeException(), isNull);
+      debugPrint(
+        'C24_PLAYER_INFO replacements=${replacements.join('/')} retained=$retainedAfterResume rgba=${hashes.join(',')}',
       );
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());

@@ -737,17 +737,64 @@ class _ActiveDownloadsList extends StatelessWidget {
         separatorBuilder: (context, index) => const SizedBox(height: 16),
         itemBuilder: (context, index) {
           final download = items[index];
-          return _DownloadItemTile(
+          return _ActiveDownloadRow(
             key: ValueKey(download.id),
             item: download,
             selecting: selectedIds.isNotEmpty,
             selected: selectedIds.contains(download.id),
-            onToggleSelection: () => onToggleSelection(download),
+            onToggleSelection: onToggleSelection,
           );
         },
       ),
     );
   }
+}
+
+// A transfer update replaces only the changed DownloadItem. Keep unaffected
+// mounted rows' tile configurations stable; each tile still watches its own
+// projected progress and inherited settings independently.
+class _ActiveDownloadRow extends StatefulWidget {
+  const _ActiveDownloadRow({
+    super.key,
+    required this.item,
+    required this.selecting,
+    required this.selected,
+    required this.onToggleSelection,
+  });
+
+  final DownloadItem item;
+  final bool selecting;
+  final bool selected;
+  final ValueChanged<DownloadItem> onToggleSelection;
+
+  @override
+  State<_ActiveDownloadRow> createState() => _ActiveDownloadRowState();
+}
+
+class _ActiveDownloadRowState extends State<_ActiveDownloadRow> {
+  late Widget _tile = _buildTile();
+
+  @override
+  void didUpdateWidget(covariant _ActiveDownloadRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.item, widget.item) ||
+        oldWidget.selecting != widget.selecting ||
+        oldWidget.selected != widget.selected) {
+      _tile = _buildTile();
+    }
+  }
+
+  Widget _buildTile() => _DownloadItemTile(
+    item: widget.item,
+    selecting: widget.selecting,
+    selected: widget.selected,
+    onToggleSelection: _toggleSelection,
+  );
+
+  void _toggleSelection() => widget.onToggleSelection(widget.item);
+
+  @override
+  Widget build(BuildContext context) => _tile;
 }
 
 class _CompletedDownloadsList extends StatefulWidget {
@@ -1343,7 +1390,6 @@ class _DownloadItemTile extends ConsumerStatefulWidget {
   final VoidCallback onToggleSelection;
 
   const _DownloadItemTile({
-    super.key,
     required this.item,
     required this.selecting,
     required this.selected,

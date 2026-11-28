@@ -330,6 +330,25 @@ class _MeasuredSeries extends MultimediaItem {
   }
 }
 
+class _ActiveTileSeries extends MultimediaItem {
+  _ActiveTileSeries(String id, this.onTileBuild)
+    : super(
+        title: 'Fixture $id',
+        url: 'https://animewitcher.test/active/$id',
+        posterUrl: '',
+        contentType: MultimediaContentType.anime,
+      );
+
+  final VoidCallback onTileBuild;
+
+  // The active tile reads its artwork input once on each build.
+  @override
+  String get posterUrl {
+    onTileBuild();
+    return super.posterUrl;
+  }
+}
+
 class _OrderProbeEpisode extends Episode {
   _OrderProbeEpisode(int ordinal, this.onOrderRead)
     : super(
@@ -1131,6 +1150,175 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       expect(active, (256, 384, 393216));
       expect(grouped, active);
+    },
+  );
+
+  testWidgets(
+    'Downloads route keeps unchanged active tiles out of transfer ticks',
+    (tester) async {
+      tester.view.physicalSize = const Size(430, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await _prepareArtworkStorage(tester);
+      final manager = DownloadManagerV2(
+        store: InMemoryLogicalDownloadStoreV2(),
+        gateway: _UnusedDownloader(),
+        sourceResolver: StaticSourceResolverV2(),
+      );
+      addTearDown(manager.dispose);
+      const ids = ['c24-hot', 'c24-peer1', 'c24-peer2', 'c24-peer3'];
+      final reads = List<int>.filled(ids.length, 0);
+      final series = [
+        for (var i = 0; i < ids.length; i++)
+          _ActiveTileSeries(ids[i], () => reads[i]++),
+      ];
+      DownloadItem row(
+        int index,
+        double progress, {
+        TaskStatus status = TaskStatus.running,
+        MultimediaItem? media,
+      }) {
+        final id = ids[index];
+        return DownloadItem(
+          task: _task(
+            taskId: id,
+            filename: '$id.mp4',
+            metaData: 'https://animewitcher.test/active/$id',
+          ),
+          status: status,
+          progress: progress,
+          item: media ?? series[index],
+          episode: _episode9(),
+          timestamp: 24 - index,
+          logicalId: 'logical-$id',
+          activeConnections: 2,
+        );
+      }
+
+      final peers = [for (var i = 1; i < ids.length; i++) row(i, .25)];
+      final notifier = _StubDownloadsNotifier([row(0, .20), ...peers]);
+      const rootKey = ValueKey('active-route-raster');
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: rootKey,
+          child: _downloadsApp(
+            [],
+            notifier: notifier,
+            manager: manager,
+            openDownloadsScreen: true,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        Directionality.of(tester.element(find.byType(DownloadsScreen))),
+        TextDirection.rtl,
+      );
+      Finder tile(int index) => find.byKey(ValueKey(ids[index]));
+      Finder within(int index, Finder child) =>
+          find.descendant(of: tile(index), matching: child);
+      Finder button(int index, IconData icon) =>
+          within(index, find.widgetWithIcon(IconButton, icon));
+      for (var i = 0; i < ids.length; i++) {
+        expect(tile(i), findsOneWidget);
+        expect(Directionality.of(tester.element(tile(i))), TextDirection.ltr);
+        expect(tester.getRect(tile(i)).bottom, lessThan(1000));
+      }
+      final focus = Focus.of(
+        tester.element(within(1, find.byIcon(Icons.pause_rounded))),
+      );
+      focus.requestFocus();
+      await tester.pumpAndSettle();
+      expect(focus.hasPrimaryFocus, isTrue);
+
+      final frames = <String>[];
+      Future<void> capture() async {
+        final boundary = tester.renderObject<RenderRepaintBoundary>(
+          find.byKey(rootKey),
+        );
+        frames.add(
+          (await tester.runAsync(() async {
+            final image = await boundary.toImage();
+            final data = (await image.toByteData())!;
+            image.dispose();
+            return sha256
+                .convert(
+                  data.buffer.asUint8List(
+                    data.offsetInBytes,
+                    data.lengthInBytes,
+                  ),
+                )
+                .toString();
+          }))!,
+        );
+      }
+
+      await capture();
+      final geometry = [
+        for (var i = 0; i < ids.length; i++) tester.getRect(tile(i)),
+      ];
+      reads.fillRange(0, reads.length, 0);
+      for (var tick = 0; tick < 8; tick++) {
+        notifier.publish([row(0, (25 + (tick + 1) * 5) / 100), ...peers]);
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      debugPrint(
+        'C24_ACTIVE_TILE_BUILDS hot=${reads[0]} peers=${reads.sublist(1).join(",")}',
+      );
+      expect(reads, [8, 0, 0, 0]);
+      expect(within(0, find.text('2×  65%')), findsOneWidget);
+      for (var i = 1; i < ids.length; i++) {
+        expect(within(i, find.text('2×  25%')), findsOneWidget);
+      }
+      expect([
+        for (var i = 0; i < ids.length; i++) tester.getRect(tile(i)),
+      ], geometry);
+      expect(FocusManager.instance.primaryFocus, same(focus));
+      await capture();
+
+      await tester.tap(button(1, Icons.pause_rounded));
+      await tester.pumpAndSettle();
+      expect(notifier.pausedIds, [ids[1]]);
+      notifier.publish([
+        row(0, .65),
+        row(1, .75, status: TaskStatus.paused, media: _blackTorch()),
+        ...peers.skip(1),
+      ]);
+      await tester.pumpAndSettle();
+      expect(within(1, find.text('Black Torch')), findsOneWidget);
+      expect(within(1, find.text('2×  75%')), findsOneWidget);
+      await tester.tap(button(1, Icons.play_arrow_rounded));
+      await tester.pumpAndSettle();
+      expect(notifier.resumedIds, [ids[1]]);
+      await capture();
+
+      await tester.longPressAt(
+        tester.getTopLeft(tile(1)) + const Offset(36, 36),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        within(1, find.byIcon(Icons.check_circle_rounded)),
+        findsOneWidget,
+      );
+      expect(
+        within(2, find.byIcon(Icons.radio_button_unchecked_rounded)),
+        findsOneWidget,
+      );
+      expect(button(2, Icons.pause_rounded), findsNothing);
+      await capture();
+      tester.view.physicalSize = const Size(360, 1000);
+      await tester.pumpAndSettle();
+      expect(tester.getSize(tile(1)).width, lessThan(geometry[1].width));
+      expect(
+        within(1, find.byIcon(Icons.check_circle_rounded)),
+        findsOneWidget,
+      );
+      await tester.tapAt(tester.getTopLeft(tile(1)) + const Offset(36, 36));
+      await tester.pumpAndSettle();
+      expect(button(2, Icons.pause_rounded), findsOneWidget);
+      await capture();
+      expect(tester.takeException(), isNull);
+      debugPrint('C24_ACTIVE_TILE_FRAMES=${frames.join(",")}');
     },
   );
 

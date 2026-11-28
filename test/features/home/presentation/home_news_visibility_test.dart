@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_account_models.dart';
@@ -9,7 +10,9 @@ import 'package:animewitcher/core/navigation/app_layout_style.dart';
 import 'package:animewitcher/core/providers/device_info_provider.dart';
 import 'package:animewitcher/core/router/app_router.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
+import 'package:animewitcher/features/home/presentation/home_provider.dart';
 import 'package:animewitcher/features/home/presentation/home_screen.dart';
+import 'package:animewitcher/features/home/presentation/widgets/home_hero_carousel.dart';
 import 'package:animewitcher/features/home/presentation/widgets/media_horizontal_list.dart';
 import 'package:animewitcher/features/home/presentation/widgets/news_section.dart';
 import 'package:animewitcher/features/library/presentation/history_provider.dart';
@@ -127,12 +130,12 @@ Future<void> _frames(WidgetTester tester) async {
   }
 }
 
-Future<_HomeSource> _pumpHome(WidgetTester tester) async {
+Future<_HomeSource> _pumpHome(WidgetTester tester, {Size size = _wide}) async {
   final oldPlatform = debugDefaultTargetPlatformOverride;
   final oldVisibility = VisibilityDetectorController.instance.updateInterval;
   debugDefaultTargetPlatformOverride = TargetPlatform.android;
   VisibilityDetectorController.instance.updateInterval = Duration.zero;
-  tester.view.physicalSize = _wide;
+  tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
   addTearDown(() {
     debugDefaultTargetPlatformOverride = oldPlatform;
@@ -171,12 +174,203 @@ Future<_HomeSource> _pumpHome(WidgetTester tester) async {
     ),
   );
   await _frames(tester);
-  expect(find.byType(AppSideRail), findsOneWidget);
+  if (size == _wide) expect(find.byType(AppSideRail), findsOneWidget);
   expect(_insideHome(find.byType(ShimmerPlaceholder)), findsWidgets);
   return source;
 }
 
+// Counts full entry passes by the actual Home screen. Snapshot serialization
+// also uses entries; take the measurement after the initial load has settled.
+final class _CountedCatalogue extends MapBase<String, List<MultimediaItem>> {
+  _CountedCatalogue(this._rows);
+
+  final Map<String, List<MultimediaItem>> _rows;
+  int entryVisits = 0;
+
+  @override
+  Iterable<MapEntry<String, List<MultimediaItem>>> get entries sync* {
+    for (final entry in _rows.entries) {
+      entryVisits++;
+      yield entry;
+    }
+  }
+
+  @override
+  List<MultimediaItem>? operator [](Object? key) => _rows[key];
+
+  @override
+  Iterable<String> get keys => _rows.keys;
+
+  @override
+  void operator []=(String key, List<MultimediaItem> value) =>
+      _rows[key] = value;
+
+  @override
+  List<MultimediaItem>? remove(Object? key) => _rows.remove(key);
+
+  @override
+  void clear() => _rows.clear();
+}
+
+List<Widget> _catalogueChildren(WidgetTester tester) {
+  final scroll = tester.widget<CustomScrollView>(_scroll);
+  final sliver = scroll.slivers.whereType<SliverList>().single;
+  return (sliver.delegate as SliverChildListDelegate).children;
+}
+
 void main() {
+  testWidgets(
+    'Arabic phone lays out current rows after late news and refresh',
+    (tester) async {
+      final source = await _pumpHome(tester, size: _phone);
+      final container = ProviderScope.containerOf(tester.element(_home));
+      const hidden = 'فُصول جَديدة';
+      const episodes = 'أَحدث الحلقات';
+      const added = 'الأَعمال المُضافة حديثاً';
+      const popular = 'الأنيميشن الأكثر مشاهدة';
+      const anime = 'أنمي مختار';
+      const films = 'أفلام';
+      // No explicit Trending: the fallback must skip the hidden first row.
+      const titles = [hidden, episodes, added, popular, anime, films];
+      Map<String, List<MultimediaItem>> rows(
+        List<String> keys,
+        String edition,
+      ) => {
+        for (final key in keys)
+          key: [
+            MultimediaItem(
+              title: '$key $edition',
+              url: '${source.mainUrl}/$edition/${titles.indexOf(key)}',
+              posterUrl: '',
+              provider: source.packageName,
+            ),
+          ],
+      };
+      final original = _CountedCatalogue(rows(titles, 'الأصلي'));
+      source.catalogs.single.complete(original);
+      await _frames(tester);
+
+      final hero = _insideHome(find.byType(HomeHeroCarousel));
+      final heroFocus = find
+          .descendant(of: hero, matching: find.byType(FocusableActionDetector))
+          .first;
+      final focus = tester
+          .widget<FocusableActionDetector>(heroFocus)
+          .focusNode!;
+      focus.requestFocus();
+      await tester.pump();
+      expect(FocusManager.instance.primaryFocus, same(focus));
+      final scroll = tester.widget<CustomScrollView>(_scroll).controller!;
+      expect(tester.state(hero).mounted, isTrue);
+      expect(Directionality.of(tester.element(hero)), TextDirection.rtl);
+      expect(
+        tester.widget<HomeHeroCarousel>(hero).movies,
+        same(original[episodes]),
+      );
+      final initialChildren = _catalogueChildren(tester);
+      List<String> titlesOf(List<Widget> children) => [
+        for (final child in children)
+          if (child is MediaHorizontalList)
+            child.title
+          else if (child is NewsSection)
+            child.title,
+      ];
+      expect(titlesOf(initialChildren), [
+        episodes,
+        added,
+        popular,
+        anime,
+        films,
+      ]);
+      expect(
+        initialChildren
+            .whereType<MediaHorizontalList>()
+            .where((rail) => rail.forcePortrait)
+            .map((rail) => rail.title),
+        [added],
+      );
+      final beforeNews = original.entryVisits;
+      const latest = NewsItem(id: 'latest', title: 'خبر جديد', imageUrl: '');
+      source.news.single.complete(
+        const ProviderNewsPage(items: [latest], nextOffset: 1, hasMore: false),
+      );
+      await _frames(tester);
+
+      final visits = original.entryVisits - beforeNews;
+      const stock = bool.fromEnvironment('HOME_CATALOGUE_STOCK');
+      debugPrint('HOME_CATALOGUE late_news_entry_visits=$visits');
+      expect(visits, stock ? greaterThan(0) : 0);
+      final withNews = _catalogueChildren(tester);
+      expect(titlesOf(withNews), [
+        episodes,
+        added,
+        popular,
+        'الأخبار',
+        anime,
+        films,
+      ]);
+      expect(withNews.whereType<NewsSection>().single.items, [latest]);
+      expect(
+        tester.widget<HomeHeroCarousel>(hero).movies,
+        same(original[episodes]),
+      );
+      expect(FocusManager.instance.primaryFocus, same(focus));
+      expect(tester.widget<CustomScrollView>(_scroll).controller, same(scroll));
+
+      // A refresh with identical titles must use current row items, not the
+      // cached layout's earlier cards. The same controller and scroll position
+      // should stay intact.
+      scroll.jumpTo(24);
+      await tester.pump();
+      final refresh = container
+          .read(homeDataProvider.notifier)
+          .fetch(keepCurrent: true);
+      final replacement = rows(titles, 'بعد التحديث');
+      source.catalogs.last.complete(replacement);
+      await refresh;
+      await _frames(tester);
+      expect(_insideHome(find.byType(ShimmerPlaceholder)), findsNothing);
+      expect(
+        tester.widget<HomeHeroCarousel>(hero).movies,
+        same(replacement[episodes]),
+      );
+      expect(tester.widget<CustomScrollView>(_scroll).controller, same(scroll));
+      expect(scroll.offset, 24);
+      for (final rail in _catalogueChildren(
+        tester,
+      ).whereType<MediaHorizontalList>()) {
+        expect(rail.mediaList, same(replacement[rail.title]));
+        expect(rail.warmProviderPosters, isTrue);
+      }
+
+      // An equal number of catalogue keys in a new order must invalidate the
+      // plan. With no animation-match title, news follows recent additions.
+      final reorder = container
+          .read(homeDataProvider.notifier)
+          .fetch(keepCurrent: true);
+      const reordered = [hidden, films, added, anime, episodes, 'رسوم مميزة'];
+      final different = rows(reordered, 'ترتيب جديد');
+      source.catalogs.last.complete(different);
+      await reorder;
+      await _frames(tester);
+      final reorderedChildren = _catalogueChildren(tester);
+      expect(titlesOf(reorderedChildren), [
+        films,
+        added,
+        'الأخبار',
+        anime,
+        episodes,
+        'رسوم مميزة',
+      ]);
+      expect(reorderedChildren.whereType<NewsSection>().single.items, [latest]);
+      expect(
+        tester.widget<HomeHeroCarousel>(hero).movies,
+        same(different[films]),
+      );
+      expect(scroll.offset, 24);
+      expect(tester.takeException(), isNull);
+    },
+  );
   testWidgets(
     'wide Home keeps its rail and the News button sees late articles',
     (tester) async {

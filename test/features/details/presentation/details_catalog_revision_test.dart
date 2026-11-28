@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_account_service.dart';
@@ -18,18 +19,23 @@ import 'package:animewitcher/core/storage/settings_repository.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/details/presentation/details_controller.dart';
 import 'package:animewitcher/features/details/presentation/details_screen.dart';
+import 'package:animewitcher/features/details/presentation/extra_anime_list_screen.dart';
 import 'package:animewitcher/features/details/presentation/widgets/details_desktop_hero.dart';
 import 'package:animewitcher/features/details/presentation/widgets/details_extra_tabs.dart';
+import 'package:animewitcher/features/details/presentation/widgets/details_poster_grid.dart';
 import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
 import 'package:animewitcher/features/library/presentation/history_provider.dart';
 import 'package:animewitcher/features/library/presentation/library_media_kind.dart';
 import 'package:animewitcher/features/library/presentation/library_provider.dart';
 import 'package:animewitcher/features/library/presentation/library_state.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 // Keep the same Material compatibility API as DetailsScreen.
 // ignore: deprecated_member_use
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -239,8 +245,9 @@ Future<void> _completeWithinFrames(
 Future<void> _openDetails(
   WidgetTester tester,
   ProviderContainer container,
-  MultimediaItem item,
-) async {
+  MultimediaItem item, {
+  Key? witness,
+}) async {
   await tester.pumpWidget(
     UncontrolledProviderScope(
       container: container,
@@ -248,7 +255,12 @@ Future<void> _openDetails(
         locale: const Locale('ar'),
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
-        theme: ThemeData.dark(),
+        theme: witness == null
+            ? ThemeData.dark()
+            : ThemeData(brightness: Brightness.dark, fontFamily: _font),
+        builder: witness == null
+            ? null
+            : (context, child) => RepaintBoundary(key: witness, child: child),
         home: Builder(
           builder: (context) => Scaffold(
             body: TextButton(
@@ -288,7 +300,271 @@ Future<void> _showTab(WidgetTester tester, String label) async {
   await _settle(tester);
 }
 
+const _font = 'C24DetailsReadex';
+const _shot = ValueKey('c24-details-extra-projection');
+const _projectedWorkTest =
+    'Arabic Details projects Related and Similar without repeat identities';
+
+final class _IdentityReads {
+  int count = 0;
+}
+
+final class _CountedAnime extends MultimediaItem {
+  _CountedAnime(int index, String tab, this.probe)
+    : super(
+        title: 'عمل $tab $index',
+        url: 'https://example.test/$tab/$index',
+        posterUrl: '',
+        contentType: MultimediaContentType.anime,
+      );
+
+  final _IdentityReads probe;
+
+  @override
+  String get url {
+    probe.count++;
+    return super.url;
+  }
+}
+
+final class _ExtraProjectionDetails extends DetailsController {
+  _ExtraProjectionDetails(this.item, this.related, this.similar);
+
+  final MultimediaItem item;
+  final List<MultimediaItem> related;
+  final List<MultimediaItem> similar;
+
+  @override
+  DetailsState build(String itemUrl) => DetailsState(
+    details: AsyncData(item),
+    item: item,
+    episodes: const AsyncData(<Episode>[]),
+    cast: const AsyncData(<Actor>[]),
+    trailers: const AsyncData(<Trailer>[]),
+    related: AsyncData(related),
+    recommendations: AsyncData(similar),
+    relatedHasMore: true,
+    similarHasMore: true,
+    basicDetailsResolved: true,
+    nextAiringResolved: true,
+  );
+
+  @override
+  Future<void> loadDetails(
+    MultimediaItem item, {
+    bool autoPlay = false,
+  }) async {}
+
+  @override
+  Future<void> loadRelatedIfNeeded() async {}
+
+  @override
+  Future<void> loadRecommendationsIfNeeded() async {}
+
+  void publishTrailerMetadata(int revision) {
+    // Details watches continuing trailer metadata independently of the already
+    // resolved Related/Similar snapshots.
+    state = state.copyWith(
+      trailers: AsyncData([Trailer(url: 'https://fixture.invalid/$revision')]),
+    );
+  }
+
+  void publishRelated(List<MultimediaItem> replacement) {
+    state = state.copyWith(related: AsyncData(replacement));
+  }
+}
+
+MultimediaItem _extraItem(String title, String url) => MultimediaItem(
+  title: title,
+  url: url,
+  posterUrl: '',
+  year: 2024,
+  provider: 'animewitcher',
+  contentType: MultimediaContentType.anime,
+);
+
+Future<String> _extraRaster(
+  WidgetTester tester,
+) async => (await tester.runAsync(() async {
+  final boundary = tester.renderObject<RenderRepaintBoundary>(
+    find.byKey(_shot),
+  );
+  final image = await boundary.toImage();
+  try {
+    final bytes = (await image.toByteData(format: ui.ImageByteFormat.rawRgba))!;
+    return sha256
+        .convert(
+          bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes),
+        )
+        .toString();
+  } finally {
+    image.dispose();
+  }
+}))!;
+
 void main() {
+  testWidgets(_projectedWorkTest, (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.runAsync(() async {
+      final font = FontLoader(_font)
+        ..addFont(
+          rootBundle.load('assets/fonts/readex_pro/ReadexPro-Regular.ttf'),
+        )
+        ..addFont(
+          rootBundle.load('assets/fonts/readex_pro/ReadexPro-Bold.ttf'),
+        );
+      await font.load();
+    });
+    final storage = _Storage();
+    final catalog = _Catalog();
+    final dio = catalog.createDio();
+    final provider = _Native(dio, storage, catalog);
+    final item = MultimediaItem(
+      title: _sourceTitle,
+      url: _url,
+      posterUrl: '',
+      provider: provider.packageName,
+      contentType: MultimediaContentType.anime,
+    );
+    final relatedProbe = _IdentityReads();
+    final similarProbe = _IdentityReads();
+    final original = _extraItem(
+      'العمل السابق',
+      'https://fixture.invalid/shared',
+    );
+    final legacy = _extraItem(' Legacy Title ', '');
+    final related = [
+      original,
+      _extraItem('نسخة لا تظهر', ' https://fixture.invalid/shared '),
+      legacy,
+      _extraItem('legacy title', ''),
+      for (var i = 0; i < 3; i++)
+        _extraItem('صلة $i', 'https://fixture.invalid/related/$i'),
+      for (var i = 0; i < 72; i++) _CountedAnime(i, 'related', relatedProbe),
+    ];
+    final similar = [
+      _extraItem('المتداخل لا يظهر', 'https://fixture.invalid/shared'),
+      _extraItem('  LEGACY TITLE', ''),
+      for (var i = 0; i < 5; i++)
+        _extraItem('شبيه $i', 'https://fixture.invalid/similar/$i'),
+      _extraItem('شبيه مكرر', ' https://fixture.invalid/similar/0 '),
+      for (var i = 0; i < 96; i++) _CountedAnime(i, 'similar', similarProbe),
+    ];
+    final detail = _ExtraProjectionDetails(item, related, similar);
+    final container = ProviderContainer(
+      overrides: [
+        storageServiceProvider.overrideWithValue(storage),
+        dioClientProvider.overrideWithValue(dio),
+        animeWitcherAccountServiceProvider.overrideWithValue(
+          _GuestAccount(storage),
+        ),
+        extensionManagerProvider.overrideWith(() => _Manager(provider)),
+        activeProviderProvider.overrideWithValue(provider),
+        downloadsProvider.overrideWith(_EmptyDownloads.new),
+        watchHistoryProvider.overrideWith(_EmptyHistory.new),
+        libraryProvider.overrideWith(_EmptyLibrary.new),
+        logicalDownloadStoreV2Provider.overrideWithValue(
+          InMemoryLogicalDownloadStoreV2(),
+        ),
+        detailsControllerProvider(_url).overrideWith(() => detail),
+      ],
+    );
+    addTearDown(() {
+      container.dispose();
+      dio.close(force: true);
+    });
+
+    final extras = find.byType(DetailsExtraTabs);
+    DetailsExtraTabs projected() => tester.widget<DetailsExtraTabs>(extras);
+    DetailsPosterGrid grid(String name) => tester.widget<DetailsPosterGrid>(
+      find.byWidgetPredicate(
+        (widget) => widget is DetailsPosterGrid && widget.keyPrefix == name,
+      ),
+    );
+    await _openDetails(tester, container, item, witness: _shot);
+    await _showExtras(tester);
+    expect(
+      Directionality.of(tester.element(find.text(animeWitcherSimilarTabLabel))),
+      TextDirection.rtl,
+    );
+    expect(grid('similar').items, orderedEquals(similar.sublist(2, 7)));
+    expect(projected().similar.requireValue.length, 101);
+    expect(projected().related.requireValue.length, 77);
+    final similarFrame = await _extraRaster(tester);
+    await _showTab(tester, animeWitcherRelatedTabLabel);
+    expect(
+      grid('related').items,
+      orderedEquals([original, legacy, ...related.sublist(4, 7)]),
+    );
+    // Track the actual selected Material tab's Focus (rather than forcing
+    // primary focus into the poster grid's nested handset viewport).
+    final relatedTab = find.text(animeWitcherRelatedTabLabel);
+    expect(relatedTab.hitTestable(), findsOneWidget);
+    final tabContext = tester.element(relatedTab);
+    final focus = Focus.of(tabContext);
+    expect(focus, isNot(same(FocusScope.of(tabContext))));
+    expect(focus.canRequestFocus, isTrue);
+    focus.requestFocus();
+    FocusManager.instance.applyFocusChangesIfNeeded();
+    await _settle(tester);
+    expect(FocusManager.instance.primaryFocus, same(focus));
+    final before = await _extraRaster(tester);
+
+    relatedProbe.count = 0;
+    similarProbe.count = 0;
+    const updates = 6;
+    for (var i = 0; i < updates; i++) {
+      final previous = projected();
+      detail.publishTrailerMetadata(i);
+      await _settle(tester);
+      expect(projected(), isNot(same(previous)));
+      expect(Focus.of(tester.element(relatedTab)), same(focus));
+      expect(FocusManager.instance.primaryFocus, same(focus));
+      expect(grid('related').items.first, same(original));
+      expect(projected().similar.requireValue.length, 101);
+    }
+    // Trailer data resolves during these publications, so the full frame can
+    // legitimately change between checkpoints. Compare each checkpoint with
+    // the same checkpoint on the other production build, not a stale frame.
+    final after = await _extraRaster(tester);
+    debugPrint(
+      'C24_DETAILS_EXTRA related=${relatedProbe.count} '
+      'similar=${similarProbe.count} frames=$similarFrame,$before,$after',
+    );
+    expect(relatedProbe.count, updates * 72);
+    expect(similarProbe.count, updates * 96);
+
+    // A Related replacement must still immediately affect Similar exclusion.
+    detail.publishRelated([original, ...related.sublist(4)]);
+    await _settle(tester);
+    await _showTab(tester, animeWitcherSimilarTabLabel);
+    expect(grid('similar').items.first, same(similar[1]));
+    expect(projected().similar.requireValue.length, 102);
+
+    // Use the rendered Related More affordance and return to the same tab.
+    await _showTab(tester, animeWitcherRelatedTabLabel);
+    final more = find.byKey(const ValueKey('related-more'));
+    await tester.ensureVisible(more);
+    await _settle(tester);
+    expect(more.hitTestable(), findsOneWidget);
+    await tester.tap(more);
+    await _settle(tester);
+    expect(find.byType(RelatedAnimeScreen), findsOneWidget);
+    expect(find.text('Related safe'), findsWidgets);
+    await tester.binding.handlePopRoute();
+    await _settle(tester);
+    expect(find.byType(RelatedAnimeScreen), findsNothing);
+    expect(find.byKey(const ValueKey('related-grid')), findsOneWidget);
+    expect(grid('related').items.first, same(original));
+    await tester.binding.handlePopRoute();
+    await _settle(tester);
+    expect(find.text(_open), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('Details catalog ignores unrelated account revisions', (
     tester,
   ) async {
