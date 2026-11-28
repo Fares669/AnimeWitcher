@@ -16,6 +16,7 @@ import 'package:animewitcher/features/details/presentation/widgets/episode_actio
 import 'package:animewitcher/features/library/presentation/history_provider.dart'
     show watchHistoryProvider;
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+import 'package:animewitcher/shared/widgets/episode_filler_badge.dart';
 import 'package:animewitcher/shared/widgets/thumbnail_error_placeholder.dart';
 
 import '../download_episode_artwork.dart';
@@ -304,7 +305,7 @@ class _CompletedDownloadEpisodeCardState
                               ),
                             if (episode?.isFiller == true) ...[
                               const SizedBox(width: 8),
-                              _buildFillerBadge(),
+                              buildEpisodeFillerBadge(),
                             ],
                           ],
                         ),
@@ -373,24 +374,6 @@ class _CompletedDownloadEpisodeCardState
               ],
             ],
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFillerBadge() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(
-        color: const Color(0xFFD32F2F),
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Text(
-        'فلر',
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 10,
-          fontWeight: FontWeight.w800,
         ),
       ),
     );

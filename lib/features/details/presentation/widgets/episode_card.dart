@@ -23,6 +23,7 @@ import 'package:animewitcher/core/utils/image_fallbacks.dart';
 import 'package:animewitcher/core/utils/layout_constants.dart';
 import 'package:animewitcher/core/utils/responsive_breakpoints.dart';
 
+import 'package:animewitcher/shared/widgets/episode_filler_badge.dart';
 import '../../../../shared/widgets/thumbnail_error_placeholder.dart';
 import '../../../library/presentation/download_delete_confirmation.dart';
 import '../../../library/presentation/download_progress_v2_provider.dart';
@@ -506,7 +507,7 @@ class EpisodeCard extends HookConsumerWidget {
                                 ),
                               if (episode.isFiller) ...[
                                 const SizedBox(width: 8),
-                                _buildFillerBadge(),
+                                buildEpisodeFillerBadge(),
                               ],
                             ],
                           ),
@@ -813,24 +814,6 @@ class EpisodeCard extends HookConsumerWidget {
         },
       );
     }
-  }
-
-  Widget _buildFillerBadge() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(
-        color: const Color(0xFFD32F2F),
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Text(
-        'فلر',
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 10,
-          fontWeight: FontWeight.w800,
-        ),
-      ),
-    );
   }
 
   Widget _buildThumbnail(
