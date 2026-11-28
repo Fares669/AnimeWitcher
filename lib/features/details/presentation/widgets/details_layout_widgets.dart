@@ -683,6 +683,43 @@ class DetailsEpisodeFilterBar extends ConsumerWidget {
   }
 }
 
+/// Shared glass toggle for the episode and chapter sort controls.
+Widget buildDetailsSortToggle(
+  BuildContext context, {
+  required bool ascending,
+  required Key inkWellKey,
+  required VoidCallback onTap,
+}) => SizedBox(
+  height: 40,
+  child: AppleLiquidGlassSurface(
+    borderRadius: BorderRadius.circular(20),
+    interactive: true,
+    fallbackColor: kDetailsHeroGlassFallback,
+    fallbackBorder: BorderSide(
+      color: Theme.of(context).colorScheme.onSurfaceVariant
+          .withValues(alpha: 0.12),
+    ),
+    child: Material(
+      color: Colors.transparent,
+      child: InkWell(
+        key: inkWellKey,
+        borderRadius: BorderRadius.circular(20),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Icon(
+            ascending
+                ? Icons.arrow_downward_rounded
+                : Icons.arrow_upward_rounded,
+            size: 22,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ),
+    ),
+  ),
+);
+
 class DetailsEpisodeSortButton extends ConsumerWidget {
   const DetailsEpisodeSortButton({super.key, required this.itemUrl});
 
@@ -693,37 +730,12 @@ class DetailsEpisodeSortButton extends ConsumerWidget {
     final ascending = ref.watch(
       detailsControllerProvider(itemUrl).select((state) => state.isAscending),
     );
-    return SizedBox(
-      height: 40,
-      child: AppleLiquidGlassSurface(
-        borderRadius: BorderRadius.circular(20),
-        interactive: true,
-        fallbackColor: kDetailsHeroGlassFallback,
-        fallbackBorder: BorderSide(
-          color: Theme.of(context).colorScheme.onSurfaceVariant
-              .withValues(alpha: 0.12),
-        ),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            key: const ValueKey<String>('episode-sort-toggle'),
-            borderRadius: BorderRadius.circular(20),
-            onTap: () => ref
-                .read(detailsControllerProvider(itemUrl).notifier)
-                .toggleSort(),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Icon(
-                ascending
-                    ? Icons.arrow_downward_rounded
-                    : Icons.arrow_upward_rounded,
-                size: 22,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-        ),
-      ),
+    return buildDetailsSortToggle(
+      context,
+      ascending: ascending,
+      inkWellKey: const ValueKey<String>('episode-sort-toggle'),
+      onTap: () =>
+          ref.read(detailsControllerProvider(itemUrl).notifier).toggleSort(),
     );
   }
 }

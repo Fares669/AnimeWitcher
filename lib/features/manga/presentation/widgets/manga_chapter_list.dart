@@ -10,9 +10,10 @@ import '../../../../core/services/notification_service.dart';
 import '../../../../core/storage/manga_reading_repository.dart';
 import '../../../../core/utils/download_progress_data.dart';
 import '../../../../l10n/generated/app_localizations.dart';
-import '../../../../shared/widgets/apple_liquid_glass.dart';
 import '../../../../shared/widgets/custom_widgets.dart';
 import '../../../details/presentation/widgets/details_hero_actions.dart';
+import '../../../details/presentation/widgets/details_layout_widgets.dart'
+    show buildDetailsSortToggle;
 import '../../../details/presentation/widgets/download_progress_dialog.dart';
 import '../../../details/presentation/widgets/episode_action_chip.dart';
 import '../../../library/presentation/download_progress_v2_provider.dart';
@@ -27,37 +28,13 @@ class MangaChapterSortButton extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final ascending = ref.watch(episodeSortAscendingProvider);
-    return SizedBox(
-      height: 40,
-      child: AppleLiquidGlassSurface(
-        borderRadius: BorderRadius.circular(20),
-        interactive: true,
-        fallbackColor: kDetailsHeroGlassFallback,
-        fallbackBorder: BorderSide(
-          color: Theme.of(context).colorScheme.onSurfaceVariant
-              .withValues(alpha: 0.12),
-        ),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            key: const ValueKey<String>('manga-chapter-sort-toggle'),
-            borderRadius: BorderRadius.circular(20),
-            onTap: () => ref
-                .read(episodeSortAscendingProvider.notifier)
-                .setAscending(!ascending),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Icon(
-                ascending
-                    ? Icons.arrow_downward_rounded
-                    : Icons.arrow_upward_rounded,
-                size: 22,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-        ),
-      ),
+    return buildDetailsSortToggle(
+      context,
+      ascending: ascending,
+      inkWellKey: const ValueKey<String>('manga-chapter-sort-toggle'),
+      onTap: () => ref
+          .read(episodeSortAscendingProvider.notifier)
+          .setAscending(!ascending),
     );
   }
 }

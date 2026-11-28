@@ -830,6 +830,20 @@ bool isCompleteDownloadCredible({
   return true;
 }
 
+/// Ordered native waiter task fields, with the legacy-only method and metadata.
+Map<String, Object> nativeWaiterFields(DownloadTask task, bool legacy) => {
+  'taskId': task.taskId,
+  'taskJson': jsonEncode(task.toJson()),
+  'displayName': task.displayName,
+  'url': task.url,
+  'headers': Map<String, String>.from(task.headers),
+  'filename': task.filename,
+  'directory': task.directory,
+  if (legacy) 'httpRequestMethod': task.httpRequestMethod,
+  'group': task.group,
+  if (legacy) 'metaData': task.metaData,
+};
+
 /// Full payload Swift needs to create the next `URLSessionDownloadTask`
 /// without Dart reconstructing the `DownloadTask`.
 Map<String, Object> nativeWaitingPayload(
@@ -839,25 +853,18 @@ Map<String, Object> nativeWaitingPayload(
   double? progress,
   int? expectedBytes,
 }) {
-  return <String, Object>{
-    'taskId': task.taskId,
-    'taskJson': jsonEncode(task.toJson()),
-    'displayName': task.displayName,
-    'url': task.url,
-    'headers': Map<String, String>.from(task.headers),
-    'filename': task.filename,
-    'directory': task.directory,
-    'httpRequestMethod': task.httpRequestMethod,
-    'group': task.group,
-    'metaData': task.metaData,
-    if (notificationConfigJson != null && notificationConfigJson.isNotEmpty)
-      'notificationConfigJson': notificationConfigJson,
-    if (resumeDataBase64 != null && resumeDataBase64.isNotEmpty)
-      'resumeDataBase64': resumeDataBase64,
-    if (progress != null && progress > 0) 'progress': progress,
-    if (expectedBytes != null && expectedBytes > 0)
-      'expectedBytes': expectedBytes,
-  };
+  final payload = nativeWaiterFields(task, true);
+  if (notificationConfigJson != null && notificationConfigJson.isNotEmpty) {
+    payload['notificationConfigJson'] = notificationConfigJson;
+  }
+  if (resumeDataBase64 != null && resumeDataBase64.isNotEmpty) {
+    payload['resumeDataBase64'] = resumeDataBase64;
+  }
+  if (progress != null && progress > 0) payload['progress'] = progress;
+  if (expectedBytes != null && expectedBytes > 0) {
+    payload['expectedBytes'] = expectedBytes;
+  }
+  return payload;
 }
 
 bool nativeWaiterPayloadIsComplete(Map<String, Object?> payload) {

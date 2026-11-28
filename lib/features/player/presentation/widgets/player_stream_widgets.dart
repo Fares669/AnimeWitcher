@@ -1045,36 +1045,15 @@ class _SeekBar extends StatefulWidget {
   State<_SeekBar> createState() => _SeekBarState();
 }
 
-class _SeekBarState extends State<_SeekBar> {
-  late final FocusNode _focusNode;
-  bool _isFocused = false;
+class _SeekBarState extends State<_SeekBar> with DpadSliderLifecycle<_SeekBar> {
   bool _isDragging = false;
-  Timer? _seekCommitTimer;
-  late final VoidCallback _focusListener;
 
   bool _isTrackHovered = false;
   double _hoverX = 0.0;
   double? _lastDragValue;
 
   @override
-  void initState() {
-    super.initState();
-    _focusNode = widget.focusNode ?? FocusNode();
-    _focusListener = () {
-      if (mounted) setState(() => _isFocused = _focusNode.hasFocus);
-    };
-    _focusNode.addListener(_focusListener);
-  }
-
-  @override
-  void dispose() {
-    _seekCommitTimer?.cancel();
-    _focusNode.removeListener(_focusListener);
-    if (widget.focusNode == null) {
-      _focusNode.dispose();
-    }
-    super.dispose();
-  }
+  FocusNode? get suppliedSliderFocusNode => widget.focusNode;
 
   void _handleDpadSeek(double newValue) {
     if (!_isDragging) {
@@ -1085,8 +1064,8 @@ class _SeekBarState extends State<_SeekBar> {
     }
     widget.onChanged?.call(newValue);
 
-    _seekCommitTimer?.cancel();
-    _seekCommitTimer = Timer(const Duration(milliseconds: 500), () {
+    commitTimer?.cancel();
+    commitTimer = Timer(const Duration(milliseconds: 500), () {
       widget.onChangeEnd?.call(newValue);
       setState(() {
         _isDragging = false;
@@ -1108,7 +1087,7 @@ class _SeekBarState extends State<_SeekBar> {
   @override
   Widget build(BuildContext context) {
     return Focus(
-      focusNode: _focusNode,
+      focusNode: sliderNode,
       canRequestFocus: widget.canSeek,
       skipTraversal: !widget.canSeek,
       onKeyEvent: (node, event) {
@@ -1149,9 +1128,9 @@ class _SeekBarState extends State<_SeekBar> {
             widget.onArrowUp!();
             return KeyEventResult.handled;
           }
-          final success = _focusNode.focusInDirection(TraversalDirection.up);
+          final success = sliderNode.focusInDirection(TraversalDirection.up);
           if (!success) {
-            _focusNode.previousFocus();
+            sliderNode.previousFocus();
           }
           return KeyEventResult.handled;
         }
@@ -1162,9 +1141,9 @@ class _SeekBarState extends State<_SeekBar> {
             widget.onArrowDown!();
             return KeyEventResult.handled;
           }
-          final success = _focusNode.focusInDirection(TraversalDirection.down);
+          final success = sliderNode.focusInDirection(TraversalDirection.down);
           if (!success) {
-            _focusNode.nextFocus();
+            sliderNode.nextFocus();
           }
           return KeyEventResult.handled;
         }
@@ -1174,7 +1153,7 @@ class _SeekBarState extends State<_SeekBar> {
       child: Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(24),
-          border: _isFocused
+          border: sliderFocused
               ? Border.all(
                   color: Theme.of(context).colorScheme.primary,
                   width: 2,
@@ -1182,8 +1161,8 @@ class _SeekBarState extends State<_SeekBar> {
               : Border.all(color: Colors.transparent, width: 2),
         ),
         padding: EdgeInsets.symmetric(
-          horizontal: _isFocused ? 6.0 : 8.0,
-          vertical: _isFocused ? 2.0 : 4.0,
+          horizontal: sliderFocused ? 6.0 : 8.0,
+          vertical: sliderFocused ? 2.0 : 4.0,
         ),
         child: LayoutBuilder(
           builder: (context, constraints) {
@@ -1306,7 +1285,7 @@ class _SeekBarState extends State<_SeekBar> {
               thumbHeight = 18.0;
               thumbRadius = 9.0;
               thumbOpacity = 1.0;
-            } else if (_isFocused) {
+            } else if (sliderFocused) {
               thumbWidth = 16.0;
               thumbHeight = 16.0;
               thumbRadius = 8.0;

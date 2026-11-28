@@ -12,6 +12,7 @@ import '../domain/entity/multimedia_item.dart';
 import '../extensions/providers/anime3rb_provider.dart';
 import '../extensions/providers/anime3rb_transport.dart';
 import 'library_category.dart';
+import 'library_mutation_epochs.dart';
 import 'storage_service.dart';
 
 bool isAnime3rbSyncedCategory(LibraryCategory category) => switch (category) {
@@ -518,7 +519,7 @@ class Anime3rbLibraryService extends ChangeNotifier {
   final Anime3rbLibraryBackend _backend;
   final DateTime Function() _now;
 
-  final Map<String, int> _mutationEpochs = <String, int>{};
+  final _epochs = LibraryMutationEpochs(canonicalWorkUrl);
   bool _isSyncing = false;
   String? _lastError;
 
@@ -532,19 +533,6 @@ class Anime3rbLibraryService extends ChangeNotifier {
 
   static String canonicalWorkUrl(String url) =>
       Anime3rbProvider.canonicalWorkUrl(url);
-
-  String _mutationKey(String accountId, String workUrl) =>
-      '$accountId|${canonicalWorkUrl(workUrl)}';
-
-  int _bumpEpoch(String accountId, String workUrl) {
-    final key = _mutationKey(accountId, workUrl);
-    final next = (_mutationEpochs[key] ?? 0) + 1;
-    _mutationEpochs[key] = next;
-    return next;
-  }
-
-  int _epochFor(String accountId, String workUrl) =>
-      _mutationEpochs[_mutationKey(accountId, workUrl)] ?? 0;
 
   Map<String, Anime3rbStoredLibraryEntry> _readEntries(String accountId) =>
       _decodeEntries(_storage.getString(_entriesKey(accountId)));
@@ -756,7 +744,7 @@ class Anime3rbLibraryService extends ChangeNotifier {
     }
     final accountId = session.accountId;
     final key = canonicalWorkUrl(item.url);
-    _bumpEpoch(accountId, key);
+    _epochs.bump(accountId, key);
     final entries = _readEntries(accountId);
     final existing = entries[key];
     final previousConfirmed =
@@ -932,7 +920,7 @@ class Anime3rbLibraryService extends ChangeNotifier {
     }
     final accountId = session.accountId;
     final key = canonicalWorkUrl(item.url);
-    _bumpEpoch(accountId, key);
+    _epochs.bump(accountId, key);
     final bounded = (rating != null && rating >= 1 && rating <= 10)
         ? rating
         : null;
@@ -1193,14 +1181,14 @@ class Anime3rbLibraryService extends ChangeNotifier {
 
       final epochSnapshot = <String, int>{
         for (final key in {...existing.keys, ...remoteByKey.keys})
-          key: _epochFor(accountId, key),
+          key: _epochs.current(accountId, key),
       };
 
       final merged = <String, Anime3rbStoredLibraryEntry>{};
       for (final key in {...existing.keys, ...remoteByKey.keys}) {
         final local = existing[key];
         final remote = remoteByKey[key];
-        if ((epochSnapshot[key] ?? 0) != _epochFor(accountId, key) &&
+        if ((epochSnapshot[key] ?? 0) != _epochs.current(accountId, key) &&
             local != null) {
           merged[key] = local;
           continue;

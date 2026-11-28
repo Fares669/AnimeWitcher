@@ -68,27 +68,34 @@ class _SearchResultSectionState extends ConsumerState<SearchResultSection> {
 
     final isLarge =
         ResponsiveBreakpoints.isDesktopPlatform() || context.isTabletOrLarger;
-    if (!isLarge) {
-      final mobileColumns = context.isHandsetLandscape
+    if (!isLarge ||
+        MediaQuery.sizeOf(context).width > MediaQuery.sizeOf(context).height) {
+      // Wide windows choose adaptive columns; handsets keep their own
+      // portrait and landscape grid metrics.
+      final columns = isLarge
+          ? ResponsiveBreakpoints.desktopLandscapeColumnsForViewport(context)
+          : context.isHandsetLandscape
           ? ResponsiveBreakpoints.handsetLandscapeAnimeColumns
           : MultimediaCardLayout.handsetPortraitGridColumns;
-      final gridPadding = MultimediaCardLayout.catalogGridHorizontalPadding(
-        context,
-      );
-      final crossSpacing = MultimediaCardLayout.catalogGridCrossAxisSpacing(
-        context,
-      );
-      final mainSpacing = MultimediaCardLayout.catalogGridMainAxisSpacing(
-        context,
-      );
-      // Lazy sliver grid, same pattern as View All: only on-screen posters
-      // exist, so returning from details remounts a handful of cache hits
-      // instead of rebuilding the whole catalog at once.
+      final EdgeInsets padding;
+      if (isLarge) {
+        padding = const EdgeInsets.fromLTRB(16, 10, 16, 24);
+      } else {
+        final side = MultimediaCardLayout.catalogGridHorizontalPadding(context);
+        padding = EdgeInsets.fromLTRB(side, 10, side, 24);
+      }
+      final crossSpacing = isLarge
+          ? 12.0
+          : MultimediaCardLayout.catalogGridCrossAxisSpacing(context);
+      final mainSpacing = isLarge
+          ? 14.0
+          : MultimediaCardLayout.catalogGridMainAxisSpacing(context);
+      // Lazy grid: only the visible posters need to rebuild on route return.
       return SliverPadding(
-        padding: EdgeInsets.fromLTRB(gridPadding, 10, gridPadding, 24),
+        padding: padding,
         sliver: SliverGrid(
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: mobileColumns,
+            crossAxisCount: columns,
             crossAxisSpacing: crossSpacing,
             mainAxisSpacing: mainSpacing,
             childAspectRatio: MultimediaCardLayout.portraitGridAspectRatio,
@@ -98,49 +105,17 @@ class _SearchResultSectionState extends ConsumerState<SearchResultSection> {
               if (rIndex >= widget.results.length) {
                 return const RepaintBoundary(child: AnimePosterShimmer());
               }
-              return _resultCard(widget.results[rIndex], rIndex);
+              return _resultCard(
+                widget.results[rIndex],
+                rIndex,
+                compact: isLarge,
+              );
             },
             // MultimediaCard already owns a boundary; keep one for shimmers
             // above without adding a second boundary to every real card.
             addRepaintBoundaries: false,
             childCount:
-                widget.results.length +
-                (widget.isLoadingMore ? mobileColumns : 0),
-          ),
-        ),
-      );
-    }
-
-    final isLandscape =
-        MediaQuery.sizeOf(context).width > MediaQuery.sizeOf(context).height;
-    if (isLandscape) {
-      // Adaptive: a 900pt window gets fewer, readable posters while an
-      // ultrawide monitor gets more of them at the same physical size,
-      // instead of a fixed 8 columns that shrank or ballooned the cards.
-      final desktopColumns =
-          ResponsiveBreakpoints.desktopLandscapeColumnsForViewport(context);
-      return SliverPadding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
-        sliver: SliverGrid(
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: desktopColumns,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 14,
-            childAspectRatio: MultimediaCardLayout.portraitGridAspectRatio,
-          ),
-          delegate: SliverChildBuilderDelegate(
-            (context, rIndex) {
-              if (rIndex >= widget.results.length) {
-                return const RepaintBoundary(child: AnimePosterShimmer());
-              }
-              return _resultCard(widget.results[rIndex], rIndex, compact: true);
-            },
-            // MultimediaCard already owns a boundary; keep one for shimmers
-            // above without adding a second boundary to every real card.
-            addRepaintBoundaries: false,
-            childCount:
-                widget.results.length +
-                (widget.isLoadingMore ? desktopColumns : 0),
+                widget.results.length + (widget.isLoadingMore ? columns : 0),
           ),
         ),
       );

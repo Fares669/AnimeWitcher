@@ -2207,21 +2207,12 @@ Map<String, Object> _nativeBackgroundWaiterPayloadV2(
 ) {
   final task = candidate.task;
   final range = _diagnosticRangeBoundsV2(task);
-  return <String, Object>{
-    'taskId': task.taskId,
-    'taskJson': jsonEncode(task.toJson()),
-    'displayName': task.displayName,
-    'url': task.url,
-    'headers': Map<String, String>.from(task.headers),
-    'filename': task.filename,
-    'directory': task.directory,
-    'group': task.group,
-    'progress': 0.0,
-    if (range != null) 'expectedBytes': range.$2 - range.$1 + 1,
-    'generation': candidate.generation,
-    'claimId': candidate.claimId,
-    'claimLeaseMillis': candidate.claimLease.inMilliseconds,
-  };
+  final payload = nativeWaiterFields(task, false)..['progress'] = 0.0;
+  if (range != null) payload['expectedBytes'] = range.$2 - range.$1 + 1;
+  return payload
+    ..['generation'] = candidate.generation
+    ..['claimId'] = candidate.claimId
+    ..['claimLeaseMillis'] = candidate.claimLease.inMilliseconds;
 }
 
 (int, int)? _diagnosticRangeBoundsV2(DownloadTask task) {

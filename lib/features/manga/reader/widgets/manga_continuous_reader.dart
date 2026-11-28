@@ -9,6 +9,7 @@ import 'manga_page_image.dart';
 import 'manga_reader_load_scheduler.dart';
 import 'manga_reader_page_loading.dart';
 import 'manga_reader_trailing_advance.dart';
+import 'manga_reader_visible_pages.dart';
 import 'manga_continuous_zoom_surface.dart';
 
 class _ContinuousPagePart {
@@ -102,9 +103,7 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader>
       widget.controller ?? ScrollController();
   late final bool _ownsController = widget.controller == null;
   final ListController _listController = ListController();
-  final Map<int, double> _visibility = <int, double>{};
-  final Map<int, int> _visibilityRounds = <int, int>{};
-  int _visibilityRound = 0;
+  final _visiblePages = MangaReaderVisiblePages();
   final Map<int, Size> _imageSizes = <int, Size>{};
   final Set<int> _settledPages = <int>{};
   late final int _sessionInitialPage;
@@ -259,23 +258,13 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader>
   }
 
   void _changed(int pageIndex, VisibilityInfo info) {
-    _visibility[pageIndex] = info.visibleFraction;
-    _visibilityRounds[pageIndex] = _visibilityRound + 1;
+    _visiblePages.record(pageIndex, info.visibleFraction);
     if (_scheduled) return;
     _scheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scheduled = false;
-      if (!mounted || _visibility.isEmpty) return;
-      _visibilityRound++;
-      // A page whose detector stopped reporting — scrolled away under
-      // keep-alive, recycled by the list — keeps its last fraction in
-      // the map. Trusted forever, that stale fraction outvotes every
-      // tall page that follows (none can ever be fully visible) and
-      // the reported page sticks on a chapter already finished.
-      // Entries not heard from in the last two rounds are dead.
-      _visibility.removeWhere(
-        (index, _) => (_visibilityRounds[index] ?? -1) < _visibilityRound - 1,
-      );
+      if (!mounted || _visiblePages.isEmpty) return;
+      _visiblePages.advanceRound();
       if (_initialJumpPending) {
         final targetPage = _sessionInitialPage
             .clamp(0, widget.pages.length - 1)
@@ -285,21 +274,14 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader>
         final targetAnchor = targetSpread < entries.length
             ? entries[targetSpread].primaryIndex
             : targetPage;
-        if ((_visibility[targetAnchor] ?? 0) <= 0) return;
+        if (_visiblePages.fractionOf(targetAnchor) <= 0) return;
         _initialJumpPending = false;
         // Keep the persisted index as the progress anchor for this frame.
         // A later user/visibility update may advance it normally.
         return;
       }
-      var best = _lastReported;
-      var fraction = -1.0;
-      for (final entry in _visibility.entries) {
-        if (entry.value > fraction) {
-          best = entry.key;
-          fraction = entry.value;
-        }
-      }
-      if (fraction > 0 && best != _lastReported) {
+      final best = _visiblePages.mostVisiblePage;
+      if (best != null && best != _lastReported) {
         _lastReported = best;
         widget.onPageChanged(best);
       }

@@ -9,6 +9,7 @@ import 'manga_page_image.dart';
 import 'manga_reader_load_scheduler.dart';
 import 'manga_reader_page_loading.dart';
 import 'manga_reader_trailing_advance.dart';
+import 'manga_reader_visible_pages.dart';
 import 'manga_continuous_zoom_surface.dart';
 
 /// One row of the webtoon stream: a page spread, or a between-chapters
@@ -61,9 +62,7 @@ class MangaWebtoonReader extends StatefulWidget {
 class _MangaWebtoonReaderState extends State<MangaWebtoonReader>
     with MangaReaderTrailingAdvance<MangaWebtoonReader> {
   final GlobalKey _centerKey = GlobalKey();
-  final Map<int, double> _visibleFractions = <int, double>{};
-  final Map<int, int> _visibleRounds = <int, int>{};
-  int _visibilityRound = 0;
+  final _visiblePages = MangaReaderVisiblePages();
   bool _visibilityUpdateScheduled = false;
   late int _lastReported;
   late final int _sessionInitialPage;
@@ -241,32 +240,15 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader>
   }
 
   void _visibilityChanged(int pageIndex, VisibilityInfo info) {
-    _visibleFractions[pageIndex] = info.visibleFraction;
-    _visibleRounds[pageIndex] = _visibilityRound + 1;
+    _visiblePages.record(pageIndex, info.visibleFraction);
     if (_visibilityUpdateScheduled) return;
     _visibilityUpdateScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _visibilityUpdateScheduled = false;
-      if (!mounted || _visibleFractions.isEmpty) return;
-      _visibilityRound++;
-      // A page whose detector stopped reporting — scrolled away under
-      // keep-alive, recycled by the list — keeps its last fraction in
-      // the map. Trusted forever, that stale fraction outvotes every
-      // tall page that follows (none can ever be fully visible) and
-      // the reported page sticks on a chapter already finished.
-      // Entries not heard from in the last two rounds are dead.
-      _visibleFractions.removeWhere(
-        (index, _) => (_visibleRounds[index] ?? -1) < _visibilityRound - 1,
-      );
-      var bestIndex = _lastReported;
-      var bestFraction = -1.0;
-      for (final entry in _visibleFractions.entries) {
-        if (entry.value > bestFraction) {
-          bestFraction = entry.value;
-          bestIndex = entry.key;
-        }
-      }
-      if (bestFraction <= 0 || bestIndex == _lastReported) return;
+      if (!mounted || _visiblePages.isEmpty) return;
+      _visiblePages.advanceRound();
+      final bestIndex = _visiblePages.mostVisiblePage;
+      if (bestIndex == null || bestIndex == _lastReported) return;
       _lastReported = bestIndex;
       widget.onPageChanged(bestIndex);
     });
