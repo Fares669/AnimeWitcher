@@ -144,6 +144,26 @@ class MangaReaderSettingsOptions extends ConsumerWidget {
     ),
   );
 
+  Widget _sliderTile(
+    String title, {
+    double min = 0,
+    required double max,
+    required int divisions,
+    required double value,
+    String? label,
+    required ValueChanged<double> onChanged,
+  }) => ListTile(
+    title: Text(title),
+    subtitle: Slider(
+      min: min,
+      max: max,
+      divisions: divisions,
+      value: value,
+      label: label,
+      onChanged: onChanged,
+    ),
+  );
+
   Widget _section(BuildContext context, String title) => Padding(
     padding: const EdgeInsets.fromLTRB(16, 24, 16, 8),
     child: Text(
@@ -202,17 +222,14 @@ class MangaReaderSettingsOptions extends ConsumerWidget {
           value: settings.cropBorders,
           onChanged: (value) => update((s) => s.copyWith(cropBorders: value)),
         ),
-        ListTile(
-          title: Text(_t(context, 'Preload pages', 'تحميل الصفحات مسبقًا')),
-          subtitle: Slider(
-            min: 0,
-            max: 20,
-            divisions: 20,
-            value: settings.pagePreloadAmount.toDouble(),
-            label: settings.pagePreloadAmount.toString(),
-            onChanged: (value) =>
-                update((s) => s.copyWith(pagePreloadAmount: value.toInt())),
-          ),
+        _sliderTile(
+          _t(context, 'Preload pages', 'تحميل الصفحات مسبقًا'),
+          max: 20,
+          divisions: 20,
+          value: settings.pagePreloadAmount.toDouble(),
+          label: settings.pagePreloadAmount.toString(),
+          onChanged: (value) =>
+              update((s) => s.copyWith(pagePreloadAmount: value.toInt())),
         ),
         SwitchListTile(
           title: Text(
@@ -346,19 +363,14 @@ class MangaReaderSettingsOptions extends ConsumerWidget {
           onChanged: (value) =>
               update((s) => s.copyWith(autoReadDuplicateChapters: value)),
         ),
-        ListTile(
-          title: Text(
-            '${_t(context, 'Webtoon side padding', 'هوامش الويب تون')}: '
-            '${settings.webtoonSidePadding}%',
-          ),
-          subtitle: Slider(
-            min: 0,
-            max: 50,
-            divisions: 50,
-            value: settings.webtoonSidePadding.toDouble(),
-            onChanged: (value) =>
-                update((s) => s.copyWith(webtoonSidePadding: value.toInt())),
-          ),
+        _sliderTile(
+          '${_t(context, 'Webtoon side padding', 'هوامش الويب تون')}: '
+          '${settings.webtoonSidePadding}%',
+          max: 50,
+          divisions: 50,
+          value: settings.webtoonSidePadding.toDouble(),
+          onChanged: (value) =>
+              update((s) => s.copyWith(webtoonSidePadding: value.toInt())),
         ),
 
         _section(context, _t(context, 'Navigation & zoom', 'التنقل والتكبير')),
@@ -368,29 +380,23 @@ class MangaReaderSettingsOptions extends ConsumerWidget {
           onChanged: (value) =>
               update((s) => s.copyWith(usePageTapZones: value)),
         ),
-        ListTile(
-          title: Text(_t(context, 'Navigation layout', 'تخطيط مناطق التنقل')),
-          subtitle: Slider(
-            min: 0,
-            max: 5,
-            divisions: 5,
-            value: settings.navigationLayout.toDouble(),
-            label: settings.navigationLayout.toString(),
-            onChanged: (value) =>
-                update((s) => s.copyWith(navigationLayout: value.toInt())),
-          ),
+        _sliderTile(
+          _t(context, 'Navigation layout', 'تخطيط مناطق التنقل'),
+          max: 5,
+          divisions: 5,
+          value: settings.navigationLayout.toDouble(),
+          label: settings.navigationLayout.toString(),
+          onChanged: (value) =>
+              update((s) => s.copyWith(navigationLayout: value.toInt())),
         ),
-        ListTile(
-          title: Text(_t(context, 'Tap inversion', 'عكس النقر')),
-          subtitle: Slider(
-            min: 0,
-            max: 3,
-            divisions: 3,
-            value: settings.tappingInversion.toDouble(),
-            label: settings.tappingInversion.toString(),
-            onChanged: (value) =>
-                update((s) => s.copyWith(tappingInversion: value.toInt())),
-          ),
+        _sliderTile(
+          _t(context, 'Tap inversion', 'عكس النقر'),
+          max: 3,
+          divisions: 3,
+          value: settings.tappingInversion.toDouble(),
+          label: settings.tappingInversion.toString(),
+          onChanged: (value) =>
+              update((s) => s.copyWith(tappingInversion: value.toInt())),
         ),
         SwitchListTile(
           title: Text(
@@ -399,19 +405,14 @@ class MangaReaderSettingsOptions extends ConsumerWidget {
           value: settings.navigateToPan,
           onChanged: (value) => update((s) => s.copyWith(navigateToPan: value)),
         ),
-        ListTile(
-          title: Text(
-            _t(context, 'Reader hide threshold', 'عتبة إخفاء أدوات القارئ'),
-          ),
-          subtitle: Slider(
-            min: 0,
-            max: 3,
-            divisions: 3,
-            value: settings.readerHideThreshold.toDouble(),
-            label: settings.readerHideThreshold.toString(),
-            onChanged: (value) =>
-                update((s) => s.copyWith(readerHideThreshold: value.toInt())),
-          ),
+        _sliderTile(
+          _t(context, 'Reader hide threshold', 'عتبة إخفاء أدوات القارئ'),
+          max: 3,
+          divisions: 3,
+          value: settings.readerHideThreshold.toDouble(),
+          label: settings.readerHideThreshold.toString(),
+          onChanged: (value) =>
+              update((s) => s.copyWith(readerHideThreshold: value.toInt())),
         ),
         SwitchListTile(
           title: Text(_t(context, 'Landscape zoom', 'تكبير الوضع الأفقي')),
@@ -419,18 +420,13 @@ class MangaReaderSettingsOptions extends ConsumerWidget {
           onChanged: (value) => update((s) => s.copyWith(landscapeZoom: value)),
         ),
         if (settings.landscapeZoom)
-          ListTile(
-            title: Text(
-              _t(context, 'Zoom start position', 'بداية موضع التكبير'),
-            ),
-            subtitle: Slider(
-              min: 0,
-              max: 2,
-              divisions: 2,
-              value: settings.zoomStartPosition.toDouble(),
-              onChanged: (value) =>
-                  update((s) => s.copyWith(zoomStartPosition: value.toInt())),
-            ),
+          _sliderTile(
+            _t(context, 'Zoom start position', 'بداية موضع التكبير'),
+            max: 2,
+            divisions: 2,
+            value: settings.zoomStartPosition.toDouble(),
+            onChanged: (value) =>
+                update((s) => s.copyWith(zoomStartPosition: value.toInt())),
           ),
         SwitchListTile(
           title: Text(
@@ -465,19 +461,15 @@ class MangaReaderSettingsOptions extends ConsumerWidget {
               update((s) => s.copyWith(autoScrollEnabled: value)),
         ),
         if (settings.autoScrollEnabled)
-          ListTile(
-            title: Text(
-              '${_t(context, 'Auto-scroll speed', 'سرعة التمرير')}: '
-              '${settings.autoScrollSpeed.toStringAsFixed(0)}',
-            ),
-            subtitle: Slider(
-              min: 2,
-              max: 30,
-              divisions: 28,
-              value: settings.autoScrollSpeed.clamp(2, 30).toDouble(),
-              onChanged: (value) =>
-                  update((s) => s.copyWith(autoScrollSpeed: value)),
-            ),
+          _sliderTile(
+            '${_t(context, 'Auto-scroll speed', 'سرعة التمرير')}: '
+            '${settings.autoScrollSpeed.toStringAsFixed(0)}',
+            min: 2,
+            max: 30,
+            divisions: 28,
+            value: settings.autoScrollSpeed.clamp(2, 30).toDouble(),
+            onChanged: (value) =>
+                update((s) => s.copyWith(autoScrollSpeed: value)),
           ),
 
         _section(
@@ -510,33 +502,25 @@ class MangaReaderSettingsOptions extends ConsumerWidget {
             },
           ),
         if (settings.flashOnPageChange) ...<Widget>[
-          ListTile(
-            title: Text(
-              '${_t(context, 'Flash duration', 'مدة الوميض')}: '
-              '${settings.flashDurationMs} ms',
-            ),
-            subtitle: Slider(
-              min: 50,
-              max: 500,
-              divisions: 9,
-              value: settings.flashDurationMs.toDouble(),
-              onChanged: (value) =>
-                  update((s) => s.copyWith(flashDurationMs: value.toInt())),
-            ),
+          _sliderTile(
+            '${_t(context, 'Flash duration', 'مدة الوميض')}: '
+            '${settings.flashDurationMs} ms',
+            min: 50,
+            max: 500,
+            divisions: 9,
+            value: settings.flashDurationMs.toDouble(),
+            onChanged: (value) =>
+                update((s) => s.copyWith(flashDurationMs: value.toInt())),
           ),
-          ListTile(
-            title: Text(
-              '${_t(context, 'Flash interval', 'فاصل الوميض')}: '
-              '${settings.flashInterval}',
-            ),
-            subtitle: Slider(
-              min: 1,
-              max: 10,
-              divisions: 9,
-              value: settings.flashInterval.toDouble(),
-              onChanged: (value) =>
-                  update((s) => s.copyWith(flashInterval: value.toInt())),
-            ),
+          _sliderTile(
+            '${_t(context, 'Flash interval', 'فاصل الوميض')}: '
+            '${settings.flashInterval}',
+            min: 1,
+            max: 10,
+            divisions: 9,
+            value: settings.flashInterval.toDouble(),
+            onChanged: (value) =>
+                update((s) => s.copyWith(flashInterval: value.toInt())),
           ),
         ],
         if (showReset)

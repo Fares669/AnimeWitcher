@@ -1,6 +1,23 @@
 import 'dart:async';
-import 'package:flutter/widgets.dart';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
+
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart' show SynchronousFuture, kIsWeb;
+import 'package:flutter/widgets.dart';
+
+import '../network/poster_cache.dart';
+
+/// Width-only cover decode, bounded by its source and optional memory cap.
+ui.TargetImageSizeCallback coverDecodeTarget(int width, int height, int? cap) =>
+    (sourceWidth, sourceHeight) {
+      final widthFromHeight =
+          (height * sourceWidth + sourceHeight - 1) ~/ sourceHeight;
+      final bound = math.min(sourceWidth, cap ?? sourceWidth);
+      return ui.TargetImageSize(
+        width: math.min(math.max(width, widthFromHeight), bound),
+      );
+    };
 
 class ImageUtils {
   /// Resolves the image from the given URL and determines if it is portrait (height >= width).
@@ -9,18 +26,30 @@ class ImageUtils {
     if (url.isEmpty) return Future.value(true);
 
     final completer = Completer<bool>();
-    final stream = CachedNetworkImageProvider(
+    final source = CachedNetworkImageProvider(
       url,
-    ).resolve(const ImageConfiguration());
+      cacheManager: posterCacheManager,
+    );
+    // Use a full frame only if another observer already requested it or on
+    // the web, where the HTML image loader ignores the native codec callback.
+    final ImageProvider<Object> provider =
+        kIsWeb || imageCache.statusForKey(source).tracked
+        ? source
+        : _PosterOrientationProbe(source);
+    final stream = provider.resolve(const ImageConfiguration());
 
     late final ImageStreamListener listener;
     listener = ImageStreamListener(
       (ImageInfo info, bool _) {
-        if (!completer.isCompleted) {
-          // It's portrait if height is greater than or equal to width
-          completer.complete(info.image.height >= info.image.width);
+        try {
+          if (!completer.isCompleted) {
+            completer.complete(info.image.height >= info.image.width);
+          }
+        } finally {
+          // The stream delivers a separately owned handle to every listener.
+          info.dispose();
+          stream.removeListener(listener);
         }
-        stream.removeListener(listener);
       },
       onError: (dynamic exception, StackTrace? stackTrace) {
         if (!completer.isCompleted) {
@@ -33,4 +62,45 @@ class ImageUtils {
     stream.addListener(listener);
     return completer.future;
   }
+}
+
+/// A private cache key for an orientation-only frame, never used for display.
+/// The same file-cache loader still owns encoded-byte sharing and refresh.
+@immutable
+class _PosterOrientationProbe extends ImageProvider<_PosterOrientationProbe> {
+  const _PosterOrientationProbe(this.source);
+
+  final CachedNetworkImageProvider source;
+
+  @override
+  Future<_PosterOrientationProbe> obtainKey(ImageConfiguration configuration) =>
+      SynchronousFuture(this);
+
+  @override
+  ImageStreamCompleter loadImage(
+    _PosterOrientationProbe key,
+    ImageDecoderCallback decode,
+  ) {
+    final stream = key.source.loadImage(
+      key.source,
+      (buffer, {getTargetSize}) => decode(
+        buffer,
+        // Even a one-pixel difference between natural dimensions is retained
+        // in this marker. Decode the frame to keep the existing error path.
+        getTargetSize: (width, height) =>
+            ui.TargetImageSize(width: width > height ? 2 : 1, height: 1),
+      ),
+    );
+    stream.addEphemeralErrorListener(
+      (_, _) => scheduleMicrotask(() => imageCache.evict(key)),
+    );
+    return stream;
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is _PosterOrientationProbe && other.source == source;
+
+  @override
+  int get hashCode => Object.hash(_PosterOrientationProbe, source);
 }

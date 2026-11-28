@@ -8,6 +8,39 @@ import '../../core/utils/window_controls_inset.dart';
 import 'app_back_button.dart';
 import 'apple_liquid_glass.dart';
 
+/// A back button over the artwork on wide detail pages. Page actions
+/// remain beside the title, and Apple can provide its own native header.
+PreferredSizeWidget buildDesktopArtworkBackBar(BuildContext context) {
+  final theme = Theme.of(context);
+  final isDark = theme.brightness == Brightness.dark;
+
+  return PreferredSize(
+    preferredSize: const Size.fromHeight(kToolbarHeight),
+    child: Directionality(
+      textDirection: TextDirection.ltr,
+      child: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        automaticallyImplyLeading: false,
+        leadingWidth: appleUsesPersistentLiquidGlassHeader ? 0 : 64,
+        leading: appleUsesPersistentLiquidGlassHeader
+            ? null
+            : Padding(
+                padding: EdgeInsets.only(left: 8 + windowControlsLeadingInset),
+                child: AppleLiquidGlassBackButton(
+                  size: 46,
+                  foregroundColor: theme.colorScheme.onSurface,
+                  fallbackColor: isDark ? Colors.black45 : Colors.white54,
+                  onPressed: () => Navigator.of(context).maybePop(),
+                ),
+              ),
+        actions: const <Widget>[],
+      ),
+    ),
+  );
+}
+
 /// A compact translucent header backdrop.
 ///
 /// On Impeller this uses one captured backdrop with a two-pass separable
@@ -251,21 +284,16 @@ class _RenderProgressiveHeaderBlur extends RenderProxyBox {
     required Offset origin,
   }) {
     final dpr = _devicePixelRatio;
-    final values = <double>[
-      _maxSigma * dpr,
-      _falloff,
-      axis,
-      origin.dx * dpr,
-      origin.dy * dpr,
-      size.width * dpr,
-      size.height * dpr,
-    ];
-
-    // Float slots 0 and 1 are uSize; Flutter supplies those for image-filter
-    // shaders. Our uniforms start at slot 2.
-    for (var i = 0; i < values.length; i++) {
-      shader.setFloat(i + 2, values[i]);
-    }
+    // Flutter supplies uSize in slots 0–1. Write our uniforms directly so
+    // neither shader pass allocates a temporary list during paint.
+    shader
+      ..setFloat(2, _maxSigma * dpr)
+      ..setFloat(3, _falloff)
+      ..setFloat(4, axis)
+      ..setFloat(5, origin.dx * dpr)
+      ..setFloat(6, origin.dy * dpr)
+      ..setFloat(7, size.width * dpr)
+      ..setFloat(8, size.height * dpr);
   }
 }
 

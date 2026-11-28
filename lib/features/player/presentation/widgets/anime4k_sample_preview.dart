@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -99,10 +100,11 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
   Uint8List? _processedPreviewBytes;
   String? _error;
   bool _ready = false;
+  bool _useOriginalSampleBacking = false;
   int _previewRequest = 0;
 
   /// Where the divider sits, as a fraction of the width.
-  double _split = 0.5;
+  final _split = ValueNotifier<double>(0.5);
 
   @override
   void initState() {
@@ -123,6 +125,7 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
   @override
   void dispose() {
     _previewRequest++;
+    _split.dispose();
     final player = _player;
     _player = null;
     unawaited(player?.dispose());
@@ -151,10 +154,28 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
     setState(() {
       _ready = false;
       _processedPreviewBytes = null;
+      _useOriginalSampleBacking = false;
       _error = null;
     });
 
     try {
+      if (widget.mode == Anime4kMode.off ||
+          widget.shaderDirectory.trim().isEmpty) {
+        final bytes = await rootBundle.load(Anime4kSamplePreview.assetPath);
+        if (!_isCurrentRequest(request)) return;
+        final canShare = await _hasExactRootSampleVariant();
+        if (!_isCurrentRequest(request)) return;
+        setState(() {
+          _processedPreviewBytes = bytes.buffer.asUint8List(
+            bytes.offsetInBytes,
+            bytes.lengthInBytes,
+          );
+          _useOriginalSampleBacking = canShare;
+          _ready = true;
+        });
+        return;
+      }
+
       final file = await _writeSample();
       final pipeline = await const Anime4kShaderLibrary().pipeline(
         mode: widget.mode,
@@ -411,9 +432,27 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
     return file;
   }
 
+  Future<bool> _hasExactRootSampleVariant() async {
+    try {
+      // AssetImage also obtains its variants from this cached manifest. Only
+      // the exact root sample may stand in for the byte-decoded output.
+      final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
+      final variants = manifest.getAssetVariants(Anime4kSamplePreview.assetPath);
+      if (variants == null || variants.length != 1) return false;
+      final variant = variants.single;
+      return variant.main &&
+          variant.key == Anime4kSamplePreview.assetPath &&
+          (variant.targetDevicePixelRatio ?? 1) == 1;
+    } catch (_) {
+      return false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final processedBytes = _processedPreviewBytes;
+    final shareSample = _useOriginalSampleBacking &&
+        identical(DefaultAssetBundle.of(context), rootBundle);
     final fill = widget.fillColor ?? Colors.white.withValues(alpha: 0.04);
 
     return Column(
@@ -444,11 +483,13 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
                   : LayoutBuilder(
                       builder: (context, constraints) {
                         final width = constraints.maxWidth;
-                        void setFromDx(double dx) => setState(
-                          () => _split = (dx / width)
+                        // A divider move only changes the clip and paint.
+                        // Keep the image and gesture subtrees mounted as-is.
+                        void setFromDx(double dx) {
+                          _split.value = (dx / width)
                               .clamp(0.02, 0.98)
-                              .toDouble(),
-                        );
+                              .toDouble();
+                        }
 
                         return GestureDetector(
                           behavior: HitTestBehavior.opaque,
@@ -468,11 +509,17 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
                               if (processedBytes != null && _ready)
                                 ClipRect(
                                   clipper: _LeftOf(_split),
-                                  child: Image.memory(
-                                    processedBytes,
-                                    fit: BoxFit.cover,
-                                    gaplessPlayback: true,
-                                  ),
+                                  child: shareSample
+                                      ? Image.asset(
+                                          Anime4kSamplePreview.assetPath,
+                                          fit: BoxFit.cover,
+                                          gaplessPlayback: true,
+                                        )
+                                      : Image.memory(
+                                          processedBytes,
+                                          fit: BoxFit.cover,
+                                          gaplessPlayback: true,
+                                        ),
                                 ),
                               if (!_ready)
                                 const Center(
@@ -552,24 +599,24 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
 }
 
 class _LeftOf extends CustomClipper<Rect> {
-  const _LeftOf(this.split);
-  final double split;
+  _LeftOf(this.split) : super(reclip: split);
+  final ValueListenable<double> split;
 
   @override
   Rect getClip(Size size) =>
-      Rect.fromLTWH(0, 0, size.width * split, size.height);
+      Rect.fromLTWH(0, 0, size.width * split.value, size.height);
 
   @override
   bool shouldReclip(_LeftOf oldClipper) => oldClipper.split != split;
 }
 
 class _DividerPainter extends CustomPainter {
-  const _DividerPainter(this.split);
-  final double split;
+  _DividerPainter(this.split) : super(repaint: split);
+  final ValueListenable<double> split;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final x = size.width * split;
+    final x = size.width * split.value;
     canvas.drawRect(
       Rect.fromLTWH(x - 1, 0, 2, size.height),
       Paint()..color = Colors.white.withValues(alpha: 0.9),

@@ -1,3 +1,8 @@
+import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_account_models.dart';
 import 'package:animewitcher/core/account/animewitcher_account_service.dart';
@@ -9,6 +14,7 @@ import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/shared/widgets/app_side_menu.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -48,17 +54,24 @@ final class _SignedOutAccount extends AnimeWitcherAccountController {
 }
 
 final class _SignedInAccount extends AnimeWitcherAccountController {
+  _SignedInAccount({
+    this.coverUrl = 'https://example.test/banner.jpg',
+    this.photoUrl = 'https://example.test/avatar.jpg',
+  });
+
+  final String? coverUrl;
+  final String? photoUrl;
   @override
   Future<AnimeWitcherAccountSnapshot> build() async {
-    return const AnimeWitcherAccountSnapshot(
+    return AnimeWitcherAccountSnapshot(
       profile: AnimeWitcherProfile(
         documentId: 'profile-1',
         uid: 'user-1',
         signInMethod: AnimeWitcherSignInMethod.email,
         email: 'viewer@example.test',
         userName: 'Viewer',
-        photoUrl: 'https://example.test/avatar.jpg',
-        coverUrl: 'https://example.test/banner.jpg',
+        photoUrl: photoUrl,
+        coverUrl: coverUrl,
       ),
     );
   }
@@ -84,65 +97,77 @@ Future<_Harness> _pump(
   bool signedIn = false,
   Size size = const Size(400, 860),
   int fillerEntries = 0,
+  double devicePixelRatio = 1,
+  String? fixtureCover,
 }) async {
   final harness = _Harness();
-  tester.view.physicalSize = size;
-  tester.view.devicePixelRatio = 1;
+  tester.view.physicalSize = size * devicePixelRatio;
+  tester.view.devicePixelRatio = devicePixelRatio;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
-  await tester.pumpWidget(
-    ProviderScope(
-      overrides: [
-        animeWitcherAccountServiceProvider.overrideWithValue(
-          _MenuAccountService(),
-        ),
-        animeWitcherAccountControllerProvider.overrideWith(
-          signedIn ? _SignedInAccount.new : _SignedOutAccount.new,
-        ),
-      ],
-      child: MaterialApp(
-        locale: const Locale('ar'),
-        localizationsDelegates: AppLocalizations.localizationsDelegates,
-        supportedLocales: AppLocalizations.supportedLocales,
-        home: AppSideMenuShell(
-          destinations: _destinations,
-          currentBranchIndex: TaskbarDestination.home.branchIndex,
-          onDestination: harness.picked.add,
-          onAccount: () => harness.accountOpened++,
-          canOpen: () => harness.canOpen,
-          canPopWhenClosed: false,
-          onBackWhenClosed: () => harness.backWhenClosed++,
-          entries: [
+  final app = ProviderScope(
+    overrides: [
+      animeWitcherAccountServiceProvider.overrideWithValue(
+        _MenuAccountService(),
+      ),
+      animeWitcherAccountControllerProvider.overrideWith(
+        signedIn
+            ? () => fixtureCover == null
+                  ? _SignedInAccount()
+                  : _SignedInAccount(coverUrl: fixtureCover, photoUrl: null)
+            : _SignedOutAccount.new,
+      ),
+    ],
+    child: MaterialApp(
+      locale: const Locale('ar'),
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: AppSideMenuShell(
+        destinations: _destinations,
+        currentBranchIndex: TaskbarDestination.home.branchIndex,
+        onDestination: harness.picked.add,
+        onAccount: () => harness.accountOpened++,
+        canOpen: () => harness.canOpen,
+        canPopWhenClosed: false,
+        onBackWhenClosed: () => harness.backWhenClosed++,
+        entries: [
+          AppSideMenuEntry(
+            id: 'settings',
+            icon: Icons.settings_rounded,
+            label: 'الإعدادات',
+            onTap: () => harness.settingsOpened++,
+          ),
+          for (var index = 0; index < fillerEntries; index++)
             AppSideMenuEntry(
-              id: 'settings',
-              icon: Icons.settings_rounded,
-              label: 'الإعدادات',
-              onTap: () => harness.settingsOpened++,
+              id: 'filler-$index',
+              icon: Icons.circle_outlined,
+              label: 'عنصر $index',
+              onTap: () {},
             ),
-            for (var index = 0; index < fillerEntries; index++)
-              AppSideMenuEntry(
-                id: 'filler-$index',
-                icon: Icons.circle_outlined,
-                label: 'عنصر $index',
-                onTap: () {},
-              ),
-          ],
-          child: Scaffold(
-            body: Stack(
-              children: [
-                const Positioned.fill(
-                  child: ColoredBox(
-                    key: ValueKey<String>('page'),
-                    color: Colors.black,
-                  ),
+        ],
+        child: const Scaffold(
+          body: Stack(
+            children: [
+              Positioned.fill(
+                child: ColoredBox(
+                  key: ValueKey<String>('page'),
+                  color: Colors.black,
                 ),
-                Positioned(top: 20, left: 12, child: const AppSideMenuButton()),
-              ],
-            ),
+              ),
+              Positioned(top: 20, left: 12, child: AppSideMenuButton()),
+            ],
           ),
         ),
       ),
     ),
+  );
+  await tester.pumpWidget(
+    fixtureCover == null
+        ? app
+        : RepaintBoundary(
+            key: const ValueKey<String>('side-menu-test-frame'),
+            child: app,
+          ),
   );
   await tester.pump();
   return harness;
@@ -162,7 +187,282 @@ bool _menuShowing(WidgetTester tester) => !tester
     .first
     .offstage;
 
+class _FixtureImages extends Fake implements HttpClient {
+  _FixtureImages(this.bytes);
+
+  final Uint8List bytes;
+  final requests = <Uri>[];
+
+  @override
+  Future<HttpClientRequest> getUrl(Uri url) async {
+    requests.add(url);
+    return _FixtureRequest(bytes);
+  }
+}
+
+class _FixtureRequest extends Fake implements HttpClientRequest {
+  _FixtureRequest(this.bytes);
+  final Uint8List bytes;
+
+  @override
+  Future<HttpClientResponse> close() async => _FixtureResponse(bytes);
+}
+
+class _FixtureResponse extends Stream<List<int>> implements HttpClientResponse {
+  _FixtureResponse(this.bytes);
+  final Uint8List bytes;
+
+  @override
+  int get statusCode => HttpStatus.ok;
+
+  @override
+  int get contentLength => bytes.length;
+
+  @override
+  HttpClientResponseCompressionState get compressionState =>
+      HttpClientResponseCompressionState.notCompressed;
+
+  @override
+  StreamSubscription<List<int>> listen(
+    void Function(List<int>)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) => Stream<List<int>>.value(bytes).listen(
+    onData,
+    onError: onError,
+    onDone: onDone,
+    cancelOnError: cancelOnError,
+  );
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+Future<Uint8List> _coverBytes(int width, int height) async {
+  final recorder = ui.PictureRecorder();
+  ui.Canvas(recorder)
+    ..drawColor(const Color(0xff3060b0), ui.BlendMode.src)
+    ..drawRect(
+      Rect.fromLTRB(width / 2, 0, width.toDouble(), height.toDouble()),
+      Paint()..color = const Color(0xffe8ab30),
+    );
+  final picture = recorder.endRecording();
+  final image = await picture.toImage(width, height);
+  try {
+    final bytes = (await image.toByteData(format: ui.ImageByteFormat.png))!;
+    return bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes);
+  } finally {
+    image.dispose();
+    picture.dispose();
+  }
+}
+
+const _coverKey = ValueKey<String>('app-side-menu-account-cover');
+
+Finder _decodedCover({bool skipOffstage = true}) => find.descendant(
+  of: find.byKey(_coverKey, skipOffstage: skipOffstage),
+  matching: find.byWidgetPredicate(
+    (widget) => widget is RawImage && widget.image != null,
+    skipOffstage: skipOffstage,
+  ),
+  skipOffstage: skipOffstage,
+);
+
+Future<void> _waitForDecode(WidgetTester tester) async {
+  for (var frame = 0; frame < 100; frame++) {
+    if (_decodedCover(skipOffstage: false).evaluate().isNotEmpty) return;
+    await tester.pump(const Duration(milliseconds: 16));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 10)),
+    );
+  }
+  fail('Account banner never decoded');
+}
+
+Future<List<int>> _paintedCoverSamples(WidgetTester tester, Rect art) async {
+  final frame = tester.renderObject<RenderRepaintBoundary>(
+    find.byKey(const ValueKey<String>('side-menu-test-frame')),
+  );
+  return (await tester.runAsync(() async {
+    final image = await frame.toImage();
+    try {
+      final bytes = (await image.toByteData())!;
+      return [
+        for (final x in [art.left + art.width * .28, art.left + art.width * .7])
+          bytes.getUint32(
+            ((art.top + 23).floor() * image.width + x.floor()) * 4,
+          ),
+      ];
+    } finally {
+      image.dispose();
+    }
+  }))!;
+}
+
 void main() {
+  for (final (layout, size, dpr, width, height, decoded) in [
+    ('phone', const Size(390, 844), 1.0, 1400, 800, (375, 214)),
+    ('desktop', const Size(1280, 900), 2.0, 1400, 800, (750, 429)),
+    ('wide cover', const Size(400, 860), 1.0, 2000, 500, (780, 195)),
+    ('small cover', const Size(400, 860), 1.0, 175, 100, (175, 100)),
+  ]) {
+    testWidgets('account cover keeps its crop and activity on $layout', (
+      tester,
+    ) async {
+      final url = Uri.https('cover.fixture.invalid', '/$layout.png');
+      final bytes = (await tester.runAsync(() => _coverBytes(width, height)))!;
+      final client = _FixtureImages(bytes);
+      final savedHttp = debugNetworkImageHttpClientProvider;
+      final cache = PaintingBinding.instance.imageCache;
+      cache
+        ..clear()
+        ..clearLiveImages();
+      debugNetworkImageHttpClientProvider = () => client;
+      try {
+        final harness = await _pump(
+          tester,
+          signedIn: true,
+          size: size,
+          devicePixelRatio: dpr,
+          fixtureCover: url.toString(),
+        );
+        expect(_menuShowing(tester), isFalse);
+        await _waitForDecode(tester);
+        final closed = _decodedCover(skipOffstage: false);
+        expect(closed, findsOneWidget);
+        final original = tester.widget<RawImage>(closed).image!;
+        expect(client.requests, [url]);
+        expect(cache.currentSize, 1);
+        final cacheBytes = cache.currentSizeBytes;
+
+        Future<void> open() async {
+          await tester.tap(find.byKey(const ValueKey('app-side-menu-button')));
+          await tester.pumpAndSettle();
+        }
+
+        await open();
+        final cover = _decodedCover();
+        final box = tester.getRect(cover);
+        expect(box.height, 156);
+        expect(box.width, AppSideMenuShell.menuWidthFor(size.width) - 20);
+        expect(tester.widget<RawImage>(cover).fit, BoxFit.cover);
+        expect(
+          tester.widget<RawImage>(cover).image!.isCloneOf(original),
+          isTrue,
+        );
+        final samples = await _paintedCoverSamples(tester, box);
+
+        // The physical box gets one limiting dimension. The codec rounds the
+        // other by a pixel or less while preserving the original aspect ratio.
+        expect(original.width, decoded.$1);
+        expect(original.height, closeTo(decoded.$2, 1));
+        expect(cacheBytes, original.width * original.height * 4);
+        final expectedColors = [0x1e3c6dff, 0x906a1eff];
+        for (var i = 0; i < expectedColors.length; i++) {
+          for (final shift in [0, 8, 16, 24]) {
+            expect(
+              (samples[i] >> shift) & 255,
+              closeTo((expectedColors[i] >> shift) & 255, 2),
+            );
+          }
+        }
+
+        await tester.tap(find.byKey(const ValueKey('app-side-menu-account')));
+        await tester.pumpAndSettle();
+        expect(harness.accountOpened, 1);
+        expect(_menuShowing(tester), isFalse);
+        await open();
+        expect(_menuShowing(tester), isTrue);
+        expect(
+          await _paintedCoverSamples(tester, tester.getRect(cover)),
+          samples,
+        );
+        expect(
+          tester.widget<RawImage>(cover).image!.isCloneOf(original),
+          isTrue,
+        );
+        expect(client.requests, [url]);
+        if (layout == 'phone') {
+          tester.view.physicalSize = const Size(320, 844);
+          await tester.pumpAndSettle();
+          expect(tester.getSize(cover), const Size(236, 156));
+          expect(
+            await _paintedCoverSamples(tester, tester.getRect(cover)),
+            samples,
+          );
+          expect(
+            tester.widget<RawImage>(cover).image!.isCloneOf(original),
+            isTrue,
+          );
+          expect(client.requests, [url]);
+          expect(cache.currentSizeBytes, cacheBytes);
+        }
+
+        // Check actual Flutter focus and navigation after the cover warms.
+        final library = find.byKey(const ValueKey('app-side-menu-library'));
+        final libraryLabel = find.descendant(
+          of: library,
+          matching: find.text('المكتبة'),
+        );
+        final focus = Focus.of(tester.element(libraryLabel));
+        focus.requestFocus();
+        await tester.pump();
+        expect(focus.hasFocus, isTrue);
+        await tester.tap(library);
+        await tester.pumpAndSettle();
+        expect(harness.picked, [TaskbarDestination.library]);
+        expect(_menuShowing(tester), isFalse);
+      } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
+        debugNetworkImageHttpClientProvider = savedHttp;
+        cache
+          ..clear()
+          ..clearLiveImages();
+      }
+    });
+  }
+
+  testWidgets('a broken cover keeps the account and menu usable', (
+    tester,
+  ) async {
+    final url = Uri.https('cover.fixture.invalid', '/broken.png');
+    final client = _FixtureImages(Uint8List.fromList([0xff, 0x13, 0x45]));
+    final savedHttp = debugNetworkImageHttpClientProvider;
+    debugNetworkImageHttpClientProvider = () => client;
+    try {
+      final harness = await _pump(
+        tester,
+        signedIn: true,
+        fixtureCover: url.toString(),
+      );
+      await tester.tap(find.byKey(const ValueKey('app-side-menu-button')));
+      await tester.pumpAndSettle();
+      final fallback = find.descendant(
+        of: find.byKey(_coverKey),
+        matching: find.byType(SizedBox),
+      );
+      for (var frame = 0; frame < 100 && fallback.evaluate().isEmpty; frame++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(fallback, findsOneWidget);
+      expect(_decodedCover(), findsNothing);
+      expect(client.requests, [url]);
+      expect(find.text('Viewer'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('app-side-menu-account')));
+      await tester.pumpAndSettle();
+      expect(harness.accountOpened, 1);
+      expect(_menuShowing(tester), isFalse);
+      expect(tester.takeException(), isNull);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      debugNetworkImageHttpClientProvider = savedHttp;
+    }
+  });
+
   testWidgets('the menu button opens the menu: account on top, ✕ top left', (
     tester,
   ) async {
@@ -255,10 +555,7 @@ void main() {
     final cover = tester.widget<Image>(
       find.byKey(const ValueKey<String>('app-side-menu-account-cover')),
     );
-    expect(
-      (cover.image as NetworkImage).url,
-      'https://example.test/banner.jpg',
-    );
+    expect(cover.fit, BoxFit.cover);
   });
 
   testWidgets('account banner scrolls with pages while close stays pinned', (
@@ -461,5 +758,25 @@ void main() {
     await tester.pumpAndSettle();
     expect(harness.settingsOpened, 1);
     expect(_menuShowing(tester), isFalse);
+  });
+
+  testWidgets('the menu retains its panel while the page slides', (
+    tester,
+  ) async {
+    await _pump(tester);
+    final panel = find.byType(AppSideMenuPanel, skipOffstage: false);
+    await tester.tap(find.byKey(const ValueKey('app-side-menu-button')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 64));
+    await tester.pump(const Duration(milliseconds: 16));
+    final before = tester.widget<AppSideMenuPanel>(panel);
+    final offset = tester.getTopLeft(_page).dx;
+
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(tester.getTopLeft(_page).dx, greaterThan(offset));
+    expect(tester.widget<AppSideMenuPanel>(panel), same(before));
+
+    await tester.pumpAndSettle();
+    expect(_menuShowing(tester), isTrue);
   });
 }

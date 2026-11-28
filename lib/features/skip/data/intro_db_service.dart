@@ -1,8 +1,7 @@
-import 'dart:collection';
-
 import 'package:dio/dio.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import 'skip_api_support.dart';
 import 'skip_service.dart';
 import '../../../../core/logger/app_logger.dart';
 import '../../../../core/network/dio_client_provider.dart';
@@ -17,13 +16,7 @@ class IntroDbService implements SkipService {
   @override
   String get name => 'IntroDB';
 
-  // Cache results for an hour. Power-users fast-skipping through episodes
-  // would otherwise hammer the public API on every seek. LRU-capped so an
-  // all-day binge doesn't accumulate unbounded entries.
-  static const int _cacheMax = 500;
-  static const Duration _cacheTtl = Duration(hours: 1);
-  static final LinkedHashMap<String, _CachedSegments> _cache =
-      LinkedHashMap<String, _CachedSegments>();
+  static final _cache = SkipApiCache();
 
   // When the server returns 429, hold off for the Retry-After period
   // (capped at 5 min) before issuing any further requests across all
@@ -68,27 +61,6 @@ class IntroDbService implements SkipService {
     return out;
   }
 
-  List<SkipSegment>? _lookupCached(String key) {
-    final entry = _cache[key];
-    if (entry == null) return null;
-    if (DateTime.now().isAfter(entry.expiresAt)) {
-      _cache.remove(key);
-      return null;
-    }
-    // LRU touch.
-    _cache.remove(key);
-    _cache[key] = entry;
-    return entry.segments;
-  }
-
-  void _store(String key, List<SkipSegment> segments) {
-    _cache.remove(key);
-    _cache[key] = _CachedSegments(segments, DateTime.now().add(_cacheTtl));
-    while (_cache.length > _cacheMax) {
-      _cache.remove(_cache.keys.first);
-    }
-  }
-
   @override
   Future<List<SkipSegment>> getSkipSegments({
     int? tmdbId,
@@ -107,7 +79,7 @@ class IntroDbService implements SkipService {
     }
 
     final key = _key(imdbId ?? 'tmdb:$tmdbId', season, episode);
-    final cached = _lookupCached(key);
+    final cached = _cache.lookup(key);
     if (cached != null) return cached;
 
     final now = DateTime.now();
@@ -135,12 +107,12 @@ class IntroDbService implements SkipService {
           parseSegments(response.data, durationSec: duration?.toDouble()),
           durationSec: duration?.toDouble(),
         );
-        _store(key, cleaned);
+        _cache.store(key, cleaned);
         return cleaned;
       }
     } on DioException catch (e) {
       if (e.response?.statusCode == 429) {
-        final retryAfter = _parseRetryAfter(
+        final retryAfter = parseSkipRetryAfter(
           e.response?.headers.value('retry-after'),
         );
         _rateLimitUntil = DateTime.now().add(retryAfter);
@@ -159,23 +131,9 @@ class IntroDbService implements SkipService {
     // Cache an empty result too, so we don't re-query a missing episode on
     // every seek — but only when the emptiness was IntroDB's answer rather
     // than a request that never arrived.
-    if (answered) _store(key, const []);
+    if (answered) _cache.store(key, const []);
     return [];
   }
-
-  Duration _parseRetryAfter(String? header) {
-    if (header == null) return const Duration(seconds: 60);
-    final seconds = int.tryParse(header.trim());
-    if (seconds == null || seconds < 0) return const Duration(seconds: 60);
-    if (seconds > 300) return const Duration(minutes: 5);
-    return Duration(seconds: seconds);
-  }
-}
-
-class _CachedSegments {
-  _CachedSegments(this.segments, this.expiresAt);
-  final List<SkipSegment> segments;
-  final DateTime expiresAt;
 }
 
 @riverpod

@@ -1,6 +1,9 @@
+import 'dart:io';
+
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
+import 'package:animewitcher/core/storage/download_persistence_worker.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -147,4 +150,99 @@ void main() {
       second.logicalId.value,
     });
   });
+
+  test(
+    'durable bulk read preserves order, schema and snapshot isolation',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'aw-logical-v2-store-',
+      );
+      var worker = DownloadPersistenceWorker.forDirectory(root.path);
+      addTearDown(() async {
+        await worker.close();
+        await root.delete(recursive: true);
+      });
+      var store = HiveLogicalDownloadStoreV2(worker: worker);
+      final first = fixtureRecord(intent: DownloadUserIntent.paused).copyWith(
+        sourceDescriptor: <String, Object?>{
+          'providerId': 'fixture',
+          'meta': <String, Object?>{'title': 'Episode'},
+        },
+      );
+      await store.put(first);
+      final legacy = first.toJson()
+        ..['schemaVersion'] = 1
+        ..['logicalId'] = 'legacy-id'
+        ..['animeId'] = 'legacy-anime'
+        ..remove('mediaId')
+        ..['episodeKey'] = '7'
+        ..remove('unitKey')
+        ..['intent'] = 'canceled'
+        ..remove('allowPause');
+      await worker.run('hive.put', [
+        kLogicalDownloadStoreV2Box,
+        'legacy',
+        legacy,
+      ]);
+      await worker.run('hive.put', [
+        kLogicalDownloadStoreV2Box,
+        'invalid',
+        {'schemaVersion': 0},
+      ]);
+      await worker.close();
+
+      worker = DownloadPersistenceWorker.forDirectory(root.path);
+      store = HiveLogicalDownloadStoreV2(worker: worker);
+      final rawSnapshot =
+          await worker.run('hive.all', [kLogicalDownloadStoreV2Box]) as Map;
+      final oldShape = rawSnapshot.values
+          .map(LogicalDownloadRecordV2.fromJson)
+          .nonNulls
+          .map((record) => record.toJson())
+          .toList();
+      final firstSnapshot = await store.all();
+      expect(firstSnapshot.map((record) => record.toJson()), oldShape);
+      final loaded = firstSnapshot.singleWhere(
+        (row) => row.logicalId == first.logicalId,
+      );
+      loaded.sourceDescriptor['providerId'] = 'caller-only';
+      (loaded.sourceDescriptor['meta'] as Map)['title'] = 'caller-only';
+      // The sort/delete in the caller never reaches the box or a future read.
+      firstSnapshot.removeLast();
+      expect((await store.all()).map((row) => row.toJson()), oldShape);
+      final next = first.copyWith(
+        intent: DownloadUserIntent.failed,
+        updatedAtMillis: 2000,
+      );
+      await store.put(next);
+      await worker.run('hive.delete', [kLogicalDownloadStoreV2Box, 'legacy']);
+      final fresh = await store.all();
+      expect(fresh.single.toJson(), next.toJson());
+    },
+  );
+
+  test(
+    'malformed bulk row still fails and does not poison later reads',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'aw-malformed-v2-store-',
+      );
+      final worker = DownloadPersistenceWorker.forDirectory(root.path);
+      addTearDown(() async {
+        await worker.close();
+        await root.delete(recursive: true);
+      });
+      final store = HiveLogicalDownloadStoreV2(worker: worker);
+      final record = fixtureRecord();
+      await store.put(record);
+      await worker.run('hive.put', [
+        kLogicalDownloadStoreV2Box,
+        'bad-key',
+        {0: 'not a string key'},
+      ]);
+      await expectLater(store.all(), throwsA(isA<TypeError>()));
+      await worker.run('hive.delete', [kLogicalDownloadStoreV2Box, 'bad-key']);
+      expect((await store.all()).single.toJson(), record.toJson());
+    },
+  );
 }

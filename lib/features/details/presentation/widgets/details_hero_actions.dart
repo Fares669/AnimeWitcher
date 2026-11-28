@@ -25,6 +25,34 @@ const double kDetailsHeroActionHeight = 46;
 /// behind carries the colour.
 const Color kDetailsHeroGlassFallback = Color(0x73000000);
 
+/// The filled frame shared by the play and read actions.
+Widget buildDetailsHeroPrimaryPill({
+  required String label,
+  required Color background,
+  required VoidCallback? onTap,
+  required Widget child,
+  Key? materialKey,
+}) => Semantics(
+  button: true,
+  label: label,
+  child: Material(
+    key: materialKey,
+    color: onTap != null ? background : background.withValues(alpha: 0.38),
+    borderRadius: BorderRadius.circular(kDetailsHeroActionHeight / 2),
+    clipBehavior: Clip.antiAlias,
+    child: InkWell(
+      onTap: onTap,
+      child: SizedBox(
+        height: kDetailsHeroActionHeight,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 22),
+          child: child,
+        ),
+      ),
+    ),
+  ),
+);
+
 /// The filled pill that starts playback.
 class DetailsHeroPlayPill extends ConsumerWidget {
   const DetailsHeroPlayPill({
@@ -56,61 +84,43 @@ class DetailsHeroPlayPill extends ConsumerWidget {
     );
 
     final colors = Theme.of(context).colorScheme;
-    final background = colors.primary;
     final foreground = colors.onPrimary;
 
-    return Semantics(
-      button: true,
+    return buildDetailsHeroPrimaryPill(
       label: label,
-      child: Material(
-        color: ready ? background : background.withValues(alpha: 0.38),
-        borderRadius: BorderRadius.circular(kDetailsHeroActionHeight / 2),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: ready
-              ? () => ref
-                    .read(detailsControllerProvider(itemUrl).notifier)
-                    .handlePlayPress(context, details!)
-              : null,
-          child: SizedBox(
-            height: kDetailsHeroActionHeight,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 22),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (isLaunching)
-                    SizedBox.square(
-                      dimension: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: foreground,
-                      ),
-                    )
-                  else
-                    Icon(
-                      Icons.play_arrow_rounded,
-                      size: 24,
-                      color: foreground,
-                    ),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: Text(
-                      label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: foreground,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
+      background: colors.primary,
+      onTap: ready
+          ? () => ref
+                .read(detailsControllerProvider(itemUrl).notifier)
+                .handlePlayPress(context, details!)
+          : null,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (isLaunching)
+            SizedBox.square(
+              dimension: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: foreground,
+              ),
+            )
+          else
+            Icon(Icons.play_arrow_rounded, size: 24, color: foreground),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: foreground,
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }

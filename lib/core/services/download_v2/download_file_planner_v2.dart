@@ -331,6 +331,65 @@ Future<String> downloadDestinationPathV2(
   ]);
 }
 
+/// Gives background_downloader's Linux stitch writer its already-selected
+/// parent. The package's single-file writer creates directories itself;
+/// its parallel writer does not. Do not broaden this to stored custom paths.
+Future<void> prepareLinuxPackageVideoParentDirectoryV2({
+  required String destinationPath,
+  required DownloadLogicalId logicalId,
+  required Future<String> Function() packageFilePath,
+}) async {
+  if (!Platform.isLinux ||
+      !p.isAbsolute(destinationPath) ||
+      p.normalize(destinationPath) != destinationPath ||
+      !RegExp(r'^dl_[0-9a-f]{32}$').hasMatch(logicalId.value)) {
+    return;
+  }
+
+  final filename = p.basename(destinationPath);
+  final suffix = logicalId.value.substring(3, 15);
+  if (_safeServerFilenameV2(filename) == null ||
+      !p.basenameWithoutExtension(filename).endsWith('-$suffix')) {
+    return;
+  }
+  final plannedRoot = p.normalize((await _downloadMediaRootsV2('anime')).single);
+  if (!p.isAbsolute(plannedRoot) ||
+      !p.isWithin(plannedRoot, destinationPath)) {
+    return;
+  }
+  final relative = p.split(p.relative(destinationPath, from: plannedRoot));
+  // Native: anime/<title>/<file>. Scoped: anime/.providers/<hash>/<title>/<file>.
+  final scoped = relative.length == 4 &&
+      relative[0] == '.providers' &&
+      RegExp(r'^[0-9a-f]{64}$').hasMatch(relative[1]);
+  if ((!scoped && relative.length != 2) ||
+      _safeServerFilenameV2(relative[relative.length - 2]) == null) {
+    return;
+  }
+  if (await File(destinationPath).parent.exists() ||
+      await packageFilePath() != destinationPath) {
+    return;
+  }
+
+  // Downloads is an OS-selected location. Only create the validated suffix
+  // below its existing directory, refusing observable links or files there.
+  var parent = Directory(p.dirname(plannedRoot));
+  if (!await parent.exists()) return;
+  final directories = [
+    p.basename(plannedRoot),
+    ...relative.take(relative.length - 1),
+  ];
+  for (final name in directories) {
+    parent = Directory(p.join(parent.path, name));
+    final type = await FileSystemEntity.type(parent.path, followLinks: false);
+    if (type == FileSystemEntityType.notFound) {
+      await parent.create();
+    } else if (type != FileSystemEntityType.directory) {
+      return;
+    }
+  }
+}
+
 String _filenameForLogicalDownloadV2(
   String filename,
   DownloadLogicalId logicalId,

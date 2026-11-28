@@ -98,6 +98,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
   /// the opened chapter, with next chapters appended below as reading
   /// reaches them — no chapter jumps, and nothing connected above.
   List<_StreamSegment> _streamSegments = const <_StreamSegment>[];
+  List<MangaPage>? _streamPageProjection;
   bool _streamReady = false;
   String? _streamAnchorChapterId;
   bool _streamAppending = false;
@@ -188,6 +189,12 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
 
   void _handleControllerChanged() {
     if (!mounted) return;
+    // An inactive reader does not need a second list of its streamed pages.
+    if (!_streamModeActive ||
+        _controller.isLoading ||
+        _controller.error != null) {
+      _streamPageProjection = null;
+    }
     setState(() {});
     _maybeAssembleStream();
   }
@@ -225,7 +232,11 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     // The stream starts at the opened chapter and grows forward only:
     // the previous chapter is never connected above it.
     setState(() {
-      _streamSegments = <_StreamSegment>[_StreamSegment(anchor, anchorPages)];
+      // Loading may have adopted a provider-owned list. Freeze membership
+      // once so the stream and its projection cannot diverge later.
+      _replaceStreamSegments([
+        _StreamSegment(anchor, List<MangaPage>.unmodifiable(anchorPages)),
+      ]);
       _streamAnchorChapterId = anchor.id;
       _streamReady = true;
     });
@@ -239,9 +250,19 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     return start;
   }
 
-  List<MangaPage> get _streamFlatPages => <MangaPage>[
-    for (final segment in _streamSegments) ...segment.pages,
-  ];
+  // New segment membership is committed only here. Segment page lists
+  // have already been snapshotted by the anchor or fetchChapterPages.
+  void _replaceStreamSegments(List<_StreamSegment> segments) {
+    _streamSegments = segments;
+    _streamPageProjection = null;
+  }
+
+  List<MangaPage> get _streamFlatPages =>
+      _streamPageProjection ??= _streamSegments.length == 1
+      ? _streamSegments.single.pages
+      : List<MangaPage>.unmodifiable(
+          _streamSegments.expand((segment) => segment.pages),
+        );
 
   /// The flattened page index reading should start from: the controller's
   /// page inside its own segment of the stream.
@@ -307,10 +328,10 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         return;
       }
       setState(() {
-        _streamSegments = <_StreamSegment>[
+        _replaceStreamSegments([
           ..._streamSegments,
           _StreamSegment(next, pages),
-        ];
+        ]);
       });
     } finally {
       _streamAppending = false;

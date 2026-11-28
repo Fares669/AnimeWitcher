@@ -112,6 +112,9 @@ class _InMemoryLibraryStorage extends MemoryStorageService {
   String? getLibraryItemCategory(String url) => entries[url]?.category;
 
   @override
+  MultimediaItem? getLibraryItemByExactUrl(String url) => entries[url]?.item;
+
+  @override
   List<MultimediaItem> getLibraryItems({String? category}) {
     final filtered = entries.values
         .where((entry) {

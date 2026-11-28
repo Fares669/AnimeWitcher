@@ -54,26 +54,22 @@ String _providerRatingLabel(AnimeDetailsRatings ratings) {
   return 'تقييم انمي ويتشر';
 }
 
-bool hasDetailsRatingsSummary(MultimediaItem item) {
-  final ratings = AnimeDetailsRatings.fromItem(item);
-  return ratings.witcherScore != null ||
-      (ratings.externalSource != null && ratings.externalScore != null);
-}
+bool hasDetailsRatingsSummary(MultimediaItem item) =>
+    AnimeDetailsRatings.fromItem(item).hasSummary;
 
 class DetailsRatingsSummary extends StatelessWidget {
-  const DetailsRatingsSummary({super.key, required this.item});
+  const DetailsRatingsSummary({super.key, required this.ratings});
 
-  final MultimediaItem item;
+  final AnimeDetailsRatings ratings;
 
   @override
   Widget build(BuildContext context) {
-    final ratings = AnimeDetailsRatings.fromItem(item);
     final witcherScore = ratings.witcherScore;
     final externalScore = ratings.externalScore;
     final source = ratings.externalSource;
     final showWitcher = witcherScore != null;
     final showExternal = source != null && externalScore != null;
-    if (!hasDetailsRatingsSummary(item)) return const SizedBox.shrink();
+    if (!showWitcher && !showExternal) return const SizedBox.shrink();
 
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
@@ -696,49 +692,24 @@ Future<int?> showAnimeRatingDialog(
     builder: (dialogContext) {
       return StatefulBuilder(
         builder: (context, setDialogState) {
+          final parts = buildAnimeRatingDialogParts(
+            context,
+            dialogContext: dialogContext,
+            initialRating: initialRating,
+            rating: rating,
+            onConfirm: () => Navigator.pop(dialogContext, rating),
+            onChanged: (value) => setDialogState(() => rating = value),
+          );
           return AlertDialog(
             title: const Text('قيّم'),
             content: SizedBox(
               width: 420,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    '$rating /10',
-                    style: Theme.of(context).textTheme.headlineSmall
-                        ?.copyWith(fontWeight: FontWeight.w800),
-                  ),
-                  const SizedBox(height: 12),
-                  FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: ScaleRatingBar(
-                      rating: rating,
-                      starSize: 30,
-                      onChanged: (value) {
-                        setDialogState(() => rating = value);
-                      },
-                    ),
-                  ),
-                ],
+                children: parts.inputs,
               ),
             ),
-            actions: [
-              if (initialRating > 0)
-                TextButton(
-                  onPressed: () => Navigator.pop(dialogContext, 0),
-                  child: const Text('مسح التقييم'),
-                ),
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext),
-                child: const Text('إلغاء'),
-              ),
-              FilledButton(
-                onPressed: rating <= 0
-                    ? null
-                    : () => Navigator.pop(dialogContext, rating),
-                child: const Text('تأكيد'),
-              ),
-            ],
+            actions: parts.buttons,
           );
         },
       );

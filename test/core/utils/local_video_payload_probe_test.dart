@@ -95,6 +95,39 @@ void main() {
     });
   }
 
+  test('preserves the document-leading ASCII character rules', () {
+    final file = File('${temp.path}/ascii-prefix.mp4');
+    final marker = utf8.encode('#EXTM3U\nlocal.ts\n');
+    for (var first = 0; first < 0x80; first++) {
+      file.writeAsBytesSync([first, ...marker]);
+      final isWhitespace = String.fromCharCode(first).trimLeft().isEmpty;
+      expect(
+        probeLocalVideoPayloadSync(file),
+        isWhitespace ? LocalVideoPayloadProblem.hlsPlaylist : isNull,
+        reason: 'first ASCII byte 0x${first.toRadixString(16)}',
+      );
+    }
+  });
+
+  test('preserves non-ASCII whitespace, BOM, and malformed UTF-8', () {
+    final file = File('${temp.path}/utf8-prefix.mp4');
+    file.writeAsStringSync(
+      '\u00a0\u2003\uFEFF\n\u2028<?xml version="1.0"?><MPD/>',
+    );
+    expect(
+      probeLocalVideoPayloadSync(file),
+      LocalVideoPayloadProblem.dashManifest,
+    );
+
+    file.writeAsBytesSync([0xff, ...utf8.encode('<html>')]);
+    expect(probeLocalVideoPayloadSync(file), isNull);
+    file.writeAsBytesSync([...utf8.encode('#EXTM3U\n'), 0xff]);
+    expect(
+      probeLocalVideoPayloadSync(file),
+      LocalVideoPayloadProblem.hlsPlaylist,
+    );
+  });
+
   test('does not scan beyond its bounded prefix', () async {
     final file = File('${temp.path}/large.mp4');
     await file.writeAsString('${' ' * 4096}#EXTM3U\nremote.ts\n');

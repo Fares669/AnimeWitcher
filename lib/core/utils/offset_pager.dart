@@ -61,11 +61,14 @@ class OffsetPager<T> {
     }
   }
 
-  /// Whether this scroll position is close enough to the end to ask
-  /// for the next page.
+  /// Whether scrolling should automatically ask for the next page.
+  ///
+  /// After failure, keep the retry affordance stable until an explicit retry
+  /// (via [loadNext]) or reset. Every pixel of a drag is not a new attempt.
   bool shouldLoadMore(ScrollController controller, {double threshold = 500}) {
     return controller.hasClients &&
         !loading &&
+        error == null &&
         hasMore &&
         controller.position.pixels >=
             controller.position.maxScrollExtent - threshold;

@@ -72,4 +72,20 @@ class HotstarPlayerStyle {
     colors: [Color(0xE6000000), Color(0x99000000), Color(0x00000000)],
     stops: [0.0, 0.5, 1.0],
   );
+
+  /// Shared surface, insets and bounds for the speed and Anime4K pickers.
+  static Widget dialogFrame({
+    required bool compact,
+    required double radius,
+    required Size size,
+    required Widget body,
+  }) => Dialog(
+    backgroundColor: background,
+    insetPadding: EdgeInsets.symmetric(
+      horizontal: compact ? 14 : 16,
+      vertical: compact ? 16 : 24,
+    ),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
+    child: ConstrainedBox(constraints: BoxConstraints.loose(size), child: body),
+  );
 }

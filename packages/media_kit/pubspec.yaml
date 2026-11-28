@@ -58,4 +58,7 @@ ffigen:
 
 flutter:
   assets:
-    - assets/web/
+    - path: assets/web/hls1.7.4.js
+      platforms:
+        - web
+    - assets/web/HLS-LICENSE

@@ -40,24 +40,34 @@ MangaResumeTarget? mangaResumeTarget(
     ordered.sort((a, b) => a.number!.compareTo(b.number!));
   }
 
-  final progresses = <MangaChapter, MangaReadingProgress?>{
-    for (final chapter in ordered) chapter: progressOf(chapter),
-  };
-  final anyFinished = progresses.values.any(
-    (progress) => progress != null && progress.isRead,
-  );
+  var someFinished = false;
+  MangaChapter? firstUnfinished;
   for (final chapter in ordered) {
-    final progress = progresses[chapter];
-    if (progress != null && progress.isRead) continue;
+    final progress = progressOf(chapter);
+    if (progress?.isRead == true) {
+      if (firstUnfinished != null) {
+        return MangaResumeTarget(firstUnfinished, MangaResumeKind.next);
+      }
+      someFinished = true;
+      continue;
+    }
+    if (firstUnfinished != null) {
+      // An earlier untouched chapter is still the target. Keep looking only
+      // to distinguish Start from Next, not for a different chapter.
+      continue;
+    }
     if (progress != null &&
         progress.pagesRead > 0 &&
         progress.pagesRead < progress.pageCount) {
       return MangaResumeTarget(chapter, MangaResumeKind.resume);
     }
-    return MangaResumeTarget(
-      chapter,
-      anyFinished ? MangaResumeKind.next : MangaResumeKind.start,
-    );
+    if (someFinished) {
+      return MangaResumeTarget(chapter, MangaResumeKind.next);
+    }
+    firstUnfinished = chapter;
   }
-  return MangaResumeTarget(ordered.first, MangaResumeKind.start);
+  return MangaResumeTarget(
+    firstUnfinished ?? ordered.first,
+    MangaResumeKind.start,
+  );
 }

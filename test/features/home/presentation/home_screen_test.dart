@@ -326,22 +326,31 @@ void main() {
     },
   );
 
-  testWidgets('Home refresh replaces the ranking seed in memory', (
+  testWidgets('Home starts and refreshes only the three rendered rankings', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 3000));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     var version = 1;
+    final calls = <MalRanking, int>{};
     await tester.pumpWidget(
       _app(
-        loadRanking: (ranking) => ProviderMediaPage(
-          items: [_item('${ranking.name} version $version')],
-          nextOffset: 10,
-          hasMore: true,
-        ),
+        loadRanking: (ranking) {
+          calls.update(ranking, (count) => count + 1, ifAbsent: () => 1);
+          return ProviderMediaPage(
+            items: [_item('${ranking.name} version $version')],
+            nextOffset: 10,
+            hasMore: true,
+          );
+        },
       ),
     );
     await tester.pumpAndSettle();
+    expect(calls, {
+      MalRanking.airing: 1,
+      MalRanking.top: 1,
+      MalRanking.popular: 1,
+    });
     final railFinder = find.byKey(const ValueKey('home-mal-top'));
     expect(
       tester.widget<MediaHorizontalList>(railFinder).mediaList.single.title,
@@ -352,6 +361,11 @@ void main() {
         .widget<RefreshIndicator>(find.byType(RefreshIndicator))
         .onRefresh();
     await tester.pumpAndSettle();
+    expect(calls, {
+      MalRanking.airing: 2,
+      MalRanking.top: 2,
+      MalRanking.popular: 2,
+    });
     expect(
       tester.widget<MediaHorizontalList>(railFinder).mediaList.single.title,
       'top version 2',

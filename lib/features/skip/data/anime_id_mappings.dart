@@ -8,13 +8,13 @@
 library;
 
 import 'dart:collection';
-import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../../core/network/dio_client_provider.dart';
 import '../../../../core/storage/storage_service.dart';
+import 'skip_id_persistence.dart';
 
 part 'anime_id_mappings.g.dart';
 
@@ -127,39 +127,11 @@ class AnimeIdMappings {
     }
   }
 
-  AnimeIds? _readStored(int malId) {
-    final storage = _storage;
-    if (storage == null) return null;
-    try {
-      final raw = storage.getString(_storageKey);
-      if (raw == null || raw.trim().isEmpty) return null;
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map) return null;
-      return AnimeIds.fromJson(decoded['$malId']);
-    } catch (_) {
-      return null;
-    }
-  }
+  AnimeIds? _readStored(int malId) =>
+      readSkipId(_storage, _storageKey, '$malId', AnimeIds.fromJson);
 
-  Future<void> _store(int malId, AnimeIds ids) async {
-    final storage = _storage;
-    if (storage == null) return;
-    try {
-      final raw = storage.getString(_storageKey);
-      final decoded = raw == null || raw.trim().isEmpty
-          ? <String, dynamic>{}
-          : jsonDecode(raw);
-      final all = decoded is Map
-          ? decoded.map((k, v) => MapEntry(k.toString(), v))
-          : <String, dynamic>{};
-      all.remove('$malId');
-      all['$malId'] = ids.toJson();
-      while (all.length > _diskMax) {
-        all.remove(all.keys.first);
-      }
-      await storage.setString(_storageKey, jsonEncode(all));
-    } catch (_) {}
-  }
+  Future<void> _store(int malId, AnimeIds ids) =>
+      saveSkipId(_storage, _storageKey, '$malId', _diskMax, ids.toJson);
 }
 
 @riverpod

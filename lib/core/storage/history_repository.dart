@@ -1,11 +1,12 @@
-import 'dart:async';
+import 'dart:collection';
 
-import 'package:flutter/foundation.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../account/account_providers.dart';
 import '../account/animewitcher_account_service.dart';
 import '../domain/entity/multimedia_item.dart';
+import '../services/download_v2/download_v2_identity.dart';
+import 'background_sync.dart';
 import 'storage_service.dart';
 
 part 'history_repository.g.dart';
@@ -84,11 +85,6 @@ class HistoryItem {
   }
 }
 
-List<HistoryItem> historyForItem(
-  HistoryRepository repository,
-  MultimediaItem item,
-) => repository.getWatchHistory();
-
 int historyPositionForItem(
   HistoryRepository repository,
   MultimediaItem item, {
@@ -131,9 +127,20 @@ HistoryRepository historyRepository(Ref ref) {
   );
 }
 
+/// A published, detached watch-history list. Its contents cannot change while
+/// presentation code holds this snapshot.
+final class WatchHistorySnapshot extends UnmodifiableListView<HistoryItem> {
+  WatchHistorySnapshot._(List<HistoryItem> rows) : super(rows);
+}
+
 class HistoryRepository {
   final StorageService _storageService;
   final AnimeWitcherAccountService _accountService;
+  List<Map<String, dynamic>>? _historySnapshot;
+  List<HistoryItem> _projectedHistory = const [];
+  Map<(String, String?), HistoryItem>? _historyByItem;
+  Object? _continueWatchingProjectionIdentity;
+  List<HistoryItem> _projectedContinueWatching = const [];
 
   HistoryRepository(this._storageService, this._accountService);
 
@@ -184,7 +191,7 @@ class HistoryRepository {
 
   Future<void> removeFromHistory(String url) async {
     await _storageService.removeFromHistory(url);
-    _syncInBackground(
+    reportBackgroundSyncFailure(
       _accountService.removeLastWatched(url),
       'remove recently-watched item',
     );
@@ -201,7 +208,7 @@ class HistoryRepository {
       timestamp,
       position,
     );
-    _syncInBackground(
+    reportBackgroundSyncFailure(
       _accountService.recordLastWatched(item: item.item),
       'update recently-watched timestamp',
     );
@@ -215,7 +222,7 @@ class HistoryRepository {
         .toList(growable: false);
     await _storageService.clearAllHistory();
     for (final url in urls) {
-      _syncInBackground(
+      reportBackgroundSyncFailure(
         _accountService.removeLastWatched(url),
         'clear recently-watched item',
       );
@@ -242,7 +249,7 @@ class HistoryRepository {
       episodeServerNumber: episodeServerNumber,
       episodePosterUrl: episodePosterUrl,
     );
-    _syncInBackground(
+    reportBackgroundSyncFailure(
       _accountService.recordLastWatched(item: item),
       'record recently-watched item',
     );
@@ -274,7 +281,7 @@ class HistoryRepository {
       episodeServerNumber: episodeServerNumber,
       episodePosterUrl: episodePosterUrl,
     );
-    _syncInBackground(
+    reportBackgroundSyncFailure(
       _accountService.saveContinueWatchingProgress(
         item: item,
         position: position,
@@ -292,7 +299,7 @@ class HistoryRepository {
 
   Future<void> removeContinueWatching(String url) async {
     await _storageService.removeFromContinueWatching(url);
-    _syncInBackground(
+    reportBackgroundSyncFailure(
       _accountService.removeContinueWatching(url),
       'remove continue-watching item',
     );
@@ -306,7 +313,7 @@ class HistoryRepository {
         .toList(growable: false);
     await _storageService.clearAllContinueWatching();
     for (final url in urls) {
-      _syncInBackground(
+      reportBackgroundSyncFailure(
         _accountService.removeContinueWatching(url),
         'clear continue-watching item',
       );
@@ -318,19 +325,60 @@ class HistoryRepository {
   }
 
   List<HistoryItem> getContinueWatching() {
-    return _storageService
-        .getContinueWatching()
-        .map(HistoryItem.fromMap)
-        .toList(growable: false);
+    final rows = _storageService.getContinueWatching();
+    // An account revision can concern something other than playback. Reuse
+    // the projection only when storage still owns the same immutable rows.
+    if (rows is! ContinueWatchingStorageSnapshot) {
+      _continueWatchingProjectionIdentity = null;
+      _projectedContinueWatching = const [];
+      return rows.map(HistoryItem.fromMap).toList(growable: false);
+    }
+
+    final identity = rows.projectionIdentity;
+    if (!identical(identity, _continueWatchingProjectionIdentity)) {
+      _projectedContinueWatching = UnmodifiableListView(
+        rows.map(HistoryItem.fromMap).toList(growable: false),
+      );
+      _continueWatchingProjectionIdentity = identity;
+    }
+    return _projectedContinueWatching;
   }
 
   Future<void> syncRecentWatched() async {
     await _accountService.syncRecentWatched();
   }
 
+  // StorageService replaces the sorted snapshot after committing history
+  // mutations, including direct cloud writes that bypass this repository. An
+  // unrelated account revision or another view can reuse the same projection.
   List<HistoryItem> getWatchHistory() {
-    final rawItems = _storageService.getWatchHistory();
-    return rawItems.map((map) => HistoryItem.fromMap(map)).toList();
+    final rows = _storageService.getWatchHistory();
+    if (!identical(rows, _historySnapshot)) {
+      _projectedHistory = WatchHistorySnapshot._(
+        rows.map(HistoryItem.fromMap).toList(growable: false),
+      );
+      _historySnapshot = rows;
+      _historyByItem = null;
+    }
+    return _projectedHistory;
+  }
+
+  HistoryItem? getWatchHistoryItem(MultimediaItem item) {
+    final rows = getWatchHistory();
+    final index = _historyByItem ??= () {
+      final byItem = <(String, String?), HistoryItem>{};
+      final scopes = <String?, String?>{};
+      for (final entry in rows) {
+        final provider = entry.item.provider;
+        final scope = scopes.putIfAbsent(
+          provider,
+          () => downloadProviderScopeV2(provider),
+        );
+        byItem.putIfAbsent((entry.item.url, scope), () => entry);
+      }
+      return byItem;
+    }();
+    return index[(item.url, downloadProviderScopeV2(item.provider))];
   }
 
   int getPosition(String url) {
@@ -375,15 +423,5 @@ class HistoryRepository {
 
   String? getLastEpisodeUrl(String url) {
     return _storageService.getLastEpisodeUrl(url);
-  }
-
-  void _syncInBackground(Future<void> operation, String label) {
-    unawaited(
-      operation.catchError((Object error) {
-        if (kDebugMode) {
-          debugPrint('[AnimeWitcherAccount] Could not $label: $error');
-        }
-      }),
-    );
   }
 }

@@ -1,18 +1,24 @@
 import 'home_hero_layout.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
+
 import '../../../../core/router/app_router.dart';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:visibility_detector/visibility_detector.dart';
+
 import '../../../../core/utils/artwork_quality.dart';
 import '../../../../core/utils/storyblok_image.dart';
 import '../../../../core/utils/layout_constants.dart';
 import '../../../../shared/widgets/fallback_poster_image.dart';
 import '../../../../shared/widgets/cards_wrapper.dart';
 import '../../../../core/utils/responsive_breakpoints.dart';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../../../core/providers/device_info_provider.dart';
 
 import '../../../../shared/widgets/thumbnail_error_placeholder.dart';
@@ -91,6 +97,11 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
   int? _previousSlide;
   bool _isTransitioning = false;
 
+  // A slide's animation wrappers change when it enters or exits. Reparent
+  // only its still-visible artwork, not the slide's gesture/focus controls.
+  // The exiting key is released when that slide leaves the stack.
+  final _slideArtworkKeys = <int, GlobalKey<State<StatefulWidget>>>{};
+
   // Progress bar fill — also serves as the auto-advance timer (5s).
   late final AnimationController _fillController;
 
@@ -110,6 +121,7 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
       if (status == AnimationStatus.completed && mounted) {
         setState(() {
           _isTransitioning = false;
+          _slideArtworkKeys.remove(_previousSlide);
           _previousSlide = null;
         });
       }
@@ -179,10 +191,8 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
     // _scrollOffset frozen at a stale value; when the user scrolled back
     // up, syncing the offset on visibility-change caused a visible snap
     // (VisibilityDetector throttles, so the catch-up frame lands after
-    // the user has already scrolled past it). The rebuild cost here is
-    // negligible — Transform/RenderTransform reuses its RenderObject, the
-    // CachedNetworkImage is cache-hit, and the whole carousel page is
-    // wrapped in a RepaintBoundary so off-screen rebuilds don't ripple.
+    // the user has already scrolled past it). The scroll listener moves
+    // stable slide layers rather than rebuilding artwork and text.
     if (widget.scrollController!.hasClients) {
       _scrollOffset.value = widget.scrollController!.offset;
     }
@@ -394,18 +404,16 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
         if (_isTransitioning && _previousSlide != null)
           AnimatedBuilder(
             animation: _transitionAnimation,
-            builder: (context, _) {
+            child: _buildSlideForIndex(
+              height,
+              _previousSlide!,
+              isDesktop: isDesktop,
+            ),
+            builder: (context, slide) {
               final t = _transitionAnimation.value;
               return Opacity(
                 opacity: 1.0 - t,
-                child: Transform.scale(
-                  scale: 1.0 + 0.2 * t,
-                  child: _buildSlideForIndex(
-                    height,
-                    _previousSlide!,
-                    isDesktop: isDesktop,
-                  ),
-                ),
+                child: Transform.scale(scale: 1.0 + 0.2 * t, child: slide),
               );
             },
           ),
@@ -414,18 +422,16 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
         _isTransitioning
             ? AnimatedBuilder(
                 animation: _transitionAnimation,
-                builder: (context, _) {
+                child: _buildSlideForIndex(
+                  height,
+                  _currentSlide,
+                  isDesktop: isDesktop,
+                ),
+                builder: (context, slide) {
                   final t = _transitionAnimation.value;
                   return Opacity(
                     opacity: t,
-                    child: Transform.scale(
-                      scale: 0.8 + 0.2 * t,
-                      child: _buildSlideForIndex(
-                        height,
-                        _currentSlide,
-                        isDesktop: isDesktop,
-                      ),
-                    ),
+                    child: Transform.scale(scale: 0.8 + 0.2 * t, child: slide),
                   );
                 },
               )
@@ -471,10 +477,23 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
     required bool isDesktop,
   }) {
     final movie = widget.movies[index];
+    final artworkKey = _slideArtworkKeys.putIfAbsent(index, GlobalKey.new);
     if (widget.scrollController == null) {
-      return _buildStaticItem(context, movie, height, isDesktop: isDesktop);
+      return _buildStaticItem(
+        context,
+        movie,
+        height,
+        artworkKey: artworkKey,
+        isDesktop: isDesktop,
+      );
     }
-    return _buildCarouselItem(context, movie, height, isDesktop: isDesktop);
+    return _buildCarouselItem(
+      context,
+      movie,
+      height,
+      artworkKey: artworkKey,
+      isDesktop: isDesktop,
+    );
   }
 
   void _navigateToDetails(BuildContext context, MultimediaItem item) {
@@ -485,6 +504,7 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
     BuildContext context,
     MultimediaItem movie,
     double height, {
+    required Key artworkKey,
     bool isDesktop = false,
   }) {
     final theme = Theme.of(context);
@@ -501,28 +521,17 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
       },
       borderRadius: BorderRadius.zero,
       child: RepaintBoundary(
-        child: ValueListenableBuilder<double>(
-          valueListenable: _scrollOffset,
-          builder: (context, scrollOffset, child) {
-            final parallaxOffset = scrollOffset * 0.1;
-            final contentOffset = -scrollOffset * 0.2;
-            final opacity = (1.0 - (scrollOffset / (height * 0.5))).clamp(
-              0.0,
-              1.0,
-            );
-
-            return _buildSlideBase(
-              context: context,
-              movie: movie,
-              height: height,
-              isDesktop: isDesktop,
-              parallaxOffset: parallaxOffset,
-              contentOffset: contentOffset,
-              opacity: opacity,
-              scaffoldColor: scaffoldColor,
-              theme: theme,
-            );
-          },
+        child: Builder(
+          builder: (context) => _buildSlideBase(
+            context: context,
+            movie: movie,
+            artworkKey: artworkKey,
+            height: height,
+            isDesktop: isDesktop,
+            parallax: true,
+            scaffoldColor: scaffoldColor,
+            theme: theme,
+          ),
         ),
       ),
     );
@@ -532,6 +541,7 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
     BuildContext context,
     MultimediaItem movie,
     double height, {
+    required Key artworkKey,
     bool isDesktop = false,
   }) {
     final theme = Theme.of(context);
@@ -548,11 +558,10 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
       child: _buildSlideBase(
         context: context,
         movie: movie,
+        artworkKey: artworkKey,
         height: height,
         isDesktop: isDesktop,
-        parallaxOffset: 0,
-        contentOffset: 0,
-        opacity: 1.0,
+        parallax: false,
         scaffoldColor: theme.scaffoldBackgroundColor,
         theme: theme,
       ),
@@ -562,11 +571,10 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
   Widget _buildSlideBase({
     required BuildContext context,
     required MultimediaItem movie,
+    required Key artworkKey,
     required double height,
     required bool isDesktop,
-    required double parallaxOffset,
-    required double contentOffset,
-    required double opacity,
+    required bool parallax,
     required Color scaffoldColor,
     required ThemeData theme,
   }) {
@@ -592,125 +600,129 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
         size.height > size.width;
     final bleed = isPortraitPhone ? 0.0 : 60.0;
 
-    return ClipRect(
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // 1. Background Image
-          Positioned(
-            top: -bleed + parallaxOffset,
-            bottom: -bleed - parallaxOffset,
-            left: 0,
-            right: 0,
-            child: ArtworkDecode(
-              paintedWidth: MediaQuery.sizeOf(context).width,
-              builder: (BuildContext context, int? decodeWidth) =>
-                  FallbackPosterImage(
-                    imageUrl: imageUrl,
-                    // This frame is a banner; a poster looked up for it would
-                    // be the wrong shape.
-                    preferBanner: true,
-                    malId: movie.artworkLookupMalId,
-                    title: movie.artworkLookupTitle,
-                    fit: BoxFit.cover,
-                    memCacheWidth: decodeWidth,
-                    filterQuality: FilterQuality.medium,
-                    placeholder: (context) => Container(
-                      color: theme.colorScheme.surfaceContainerHighest,
-                    ),
-                    errorWidget: (context) => ThumbnailErrorPlaceholder(
-                      label: title,
-                      isBackdrop: true,
-                    ),
-                  ),
-            ),
-          ),
-
-          // 2. Parallax Gradients
-          Positioned(
-            top: -bleed + parallaxOffset,
-            bottom: -bleed - parallaxOffset,
-            left: 0,
-            right: 0,
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: isDesktop
-                      ? [
-                          Colors.black.withValues(alpha: 0.2),
-                          Colors.transparent,
-                          Colors.black.withValues(alpha: 0.45),
-                          Colors.black.withValues(alpha: 0.75),
-                        ]
-                      : [
-                          Colors.black.withValues(alpha: 0.3),
-                          Colors.transparent,
-                          Colors.black.withValues(alpha: 0.4),
-                          Colors.black.withValues(alpha: 0.8),
-                        ],
-                  stops: isDesktop
-                      ? const [0.0, 0.35, 0.75, 1.0]
-                      : const [0.0, 0.4, 0.6, 1.0],
-                ),
-              ),
-            ),
-          ),
-
-          // 2.5. Fixed Bottom Feather (eased page transition scrim)
-          Positioned(
-            bottom: -1,
-            left: 0,
-            right: 0,
-            height: 120,
-            child: IgnorePointer(
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      scaffoldColor.withValues(alpha: 0.0),
-                      scaffoldColor.withValues(alpha: 0.15),
-                      scaffoldColor.withValues(alpha: 0.45),
-                      scaffoldColor.withValues(alpha: 0.8),
-                      scaffoldColor,
-                    ],
-                    stops: const [0.0, 0.5, 0.75, 0.9, 1.0],
-                  ),
-                ),
-              ),
-            ),
-          ),
-
-          // 3. Content
-          Positioned(
-            left: 24,
-            right: 24,
-            bottom: 48,
-            child: Transform.translate(
-              offset: Offset(0, contentOffset),
-              child: opacity >= 0.999
-                  ? _buildCarouselContent(
-                      isDesktop: isDesktop,
-                      movie: movie,
-                      theme: theme,
-                      context: context,
-                    )
-                  : Opacity(
-                      opacity: opacity,
-                      child: _buildCarouselContent(
-                        isDesktop: isDesktop,
-                        movie: movie,
-                        theme: theme,
-                        context: context,
-                      ),
-                    ),
-            ),
-          ),
-        ],
+    // The layers themselves do not change when the parent scrolls. Keeping
+    // these widget instances avoids rebuilding providers and rich text on
+    // every offset; inherited changes still run the outer build normally.
+    final artwork = ArtworkDecode(
+      key: artworkKey,
+      paintedWidth: size.width,
+      sizeHighQualityToDisplay: true,
+      builder: (BuildContext context, int? decodeWidth) => FallbackPosterImage(
+        imageUrl: imageUrl,
+        // This frame is a banner; a poster looked up for it would
+        // be the wrong shape.
+        preferBanner: true,
+        malId: movie.artworkLookupMalId,
+        title: movie.artworkLookupTitle,
+        fit: BoxFit.cover,
+        memCacheWidth: decodeWidth,
+        filterQuality: FilterQuality.medium,
+        placeholder: (context) =>
+            Container(color: theme.colorScheme.surfaceContainerHighest),
+        errorWidget: (context) =>
+            ThumbnailErrorPlaceholder(label: title, isBackdrop: true),
       ),
+    );
+    final gradient = Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: isDesktop
+              ? [
+                  Colors.black.withValues(alpha: 0.2),
+                  Colors.transparent,
+                  Colors.black.withValues(alpha: 0.45),
+                  Colors.black.withValues(alpha: 0.75),
+                ]
+              : [
+                  Colors.black.withValues(alpha: 0.3),
+                  Colors.transparent,
+                  Colors.black.withValues(alpha: 0.4),
+                  Colors.black.withValues(alpha: 0.8),
+                ],
+          stops: isDesktop
+              ? const [0.0, 0.35, 0.75, 1.0]
+              : const [0.0, 0.4, 0.6, 1.0],
+        ),
+      ),
+    );
+    final feather = Positioned(
+      bottom: -1,
+      left: 0,
+      right: 0,
+      height: 120,
+      child: IgnorePointer(
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                scaffoldColor.withValues(alpha: 0.0),
+                scaffoldColor.withValues(alpha: 0.15),
+                scaffoldColor.withValues(alpha: 0.45),
+                scaffoldColor.withValues(alpha: 0.8),
+                scaffoldColor,
+              ],
+              stops: const [0.0, 0.5, 0.75, 0.9, 1.0],
+            ),
+          ),
+        ),
+      ),
+    );
+    final content = _buildCarouselContent(
+      isDesktop: isDesktop,
+      movie: movie,
+      theme: theme,
+      context: context,
+    );
+
+    Widget placeLayers(double scrollOffset) {
+      final parallaxOffset = scrollOffset * 0.1;
+      final contentOffset = -scrollOffset * 0.2;
+      final opacity = parallax
+          ? (1.0 - (scrollOffset / (height * 0.5))).clamp(0.0, 1.0)
+          : 1.0;
+      return ClipRect(
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Positioned(
+              top: -bleed + parallaxOffset,
+              bottom: -bleed - parallaxOffset,
+              left: 0,
+              right: 0,
+              child: artwork,
+            ),
+            Positioned(
+              top: -bleed + parallaxOffset,
+              bottom: -bleed - parallaxOffset,
+              left: 0,
+              right: 0,
+              child: gradient,
+            ),
+            feather,
+            Positioned(
+              left: 24,
+              right: 24,
+              bottom: 48,
+              child: Transform.translate(
+                offset: Offset(0, contentOffset),
+                child: opacity >= 0.999
+                    ? content
+                    : Opacity(opacity: opacity, child: content),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (!parallax) return placeLayers(0);
+    return ValueListenableBuilder<double>(
+      valueListenable: _scrollOffset,
+      builder: (context, scrollOffset, _) => placeLayers(scrollOffset),
     );
   }
 
@@ -874,9 +886,8 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
     }
     // Straight into the episode, rather than the page about it: the button
     // says watching, so it should not stop at a description.
-    DetailsRoute(
-      $extra: DetailsRouteExtra(item: movie, autoPlay: true),
-    ).push<void>(context);
+    DetailsRoute($extra: DetailsRouteExtra(item: movie, autoPlay: true))
+        .push<void>(context);
   }
 
   Widget _buildLogo(
@@ -947,7 +958,6 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
       ),
     );
   }
-
 }
 
 /// A single progress dot whose width animates with spring physics.

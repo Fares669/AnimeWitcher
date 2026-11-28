@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 
@@ -5,17 +6,23 @@ import '../../utils/local_video_payload_probe.dart';
 
 /// Result of validating the final artifact produced by the transport package.
 final class DownloadIntegrityResult {
-  const DownloadIntegrityResult.valid(int bytes, {this.completedPages, this.totalPages})
-    : assert(bytes > 0),
-      isValid = true,
-      bytes = bytes,
-      reason = null;
+  const DownloadIntegrityResult.valid(
+    int bytes, {
+    this.completedPages,
+    this.totalPages,
+  }) : assert(bytes > 0),
+       isValid = true,
+       bytes = bytes,
+       reason = null;
 
-  const DownloadIntegrityResult.invalid(String reason, {this.completedPages, this.totalPages})
-    : assert(reason != ''),
-      isValid = false,
-      bytes = null,
-      reason = reason;
+  const DownloadIntegrityResult.invalid(
+    String reason, {
+    this.completedPages,
+    this.totalPages,
+  }) : assert(reason != ''),
+       isValid = false,
+       bytes = null,
+       reason = reason;
 
   final bool isValid;
   final int? bytes;
@@ -30,6 +37,9 @@ final class DownloadIntegrityResult {
 /// the final artifact. Resume/chunk state remains owned by background_downloader.
 final class DownloadIntegrityVerifierV2 {
   const DownloadIntegrityVerifierV2();
+
+  DownloadStartupIntegritySessionV2 startupSession() =>
+      DownloadStartupIntegritySessionV2._(this);
 
   Future<DownloadIntegrityResult> verify(
     File file, {
@@ -74,4 +84,129 @@ final class DownloadIntegrityVerifierV2 {
 
     return DownloadIntegrityResult.valid(bytes);
   }
+}
+
+// These records contain only the inputs for a single filesystem read, not
+// startup destination ownership or the recovered transport.
+typedef _StartupIntegrityRequest = ({String path, int? expectedBytes});
+typedef _StartupIntegrityFailure = ({Object error, StackTrace stack});
+
+/// A serial, short-lived worker for already completed video files on startup.
+///
+/// Each request reads the live path when the manager reaches that record. A
+/// successful read is not cached or used to authorize later playback/deletion.
+final class DownloadStartupIntegritySessionV2 {
+  DownloadStartupIntegritySessionV2._(this._verifier);
+
+  final DownloadIntegrityVerifierV2 _verifier;
+  Isolate? _isolate;
+  ReceivePort? _responses;
+  StreamIterator<Object?>? _messages;
+  SendPort? _requests;
+  bool _busy = false;
+  bool _closed = false;
+  bool _workerUnavailable = false;
+
+  Future<DownloadIntegrityResult> verify(
+    File file, {
+    int? expectedBytes,
+  }) async {
+    if (_closed || _busy) {
+      throw StateError('Startup verification is closed or already running');
+    }
+    _busy = true;
+    try {
+      if (!_workerUnavailable) {
+        Object? response;
+        try {
+          final requests = _requests ??= await _start();
+          requests.send((path: file.path, expectedBytes: expectedBytes));
+          response = await _nextMessage();
+          if (response is! DownloadIntegrityResult &&
+              response is! _StartupIntegrityFailure) {
+            throw StateError('Startup verification worker stopped');
+          }
+        } catch (_) {
+          // A failed spawn/worker is a transport failure, not evidence that a
+          // file is invalid. Retry this read via the usual one-off verifier.
+          _workerUnavailable = true;
+          _releaseWorker();
+        }
+        if (response is DownloadIntegrityResult) return response;
+        if (response case _StartupIntegrityFailure(
+          :final error,
+          :final stack,
+        )) {
+          Error.throwWithStackTrace(error, stack);
+        }
+      }
+      if (_closed) throw StateError('Startup verification is closed');
+      return await _verifier.verify(file, expectedBytes: expectedBytes);
+    } finally {
+      _busy = false;
+    }
+  }
+
+  Future<SendPort> _start() async {
+    final responses = ReceivePort();
+    _responses = responses;
+    _messages = StreamIterator<Object?>(responses);
+    final isolate = await Isolate.spawn(
+      _runStartupIntegrityWorker,
+      responses.sendPort,
+      onError: responses.sendPort,
+      onExit: responses.sendPort,
+    );
+    if (_closed) {
+      isolate.kill(priority: Isolate.immediate);
+      throw StateError('Startup verification is closed');
+    }
+    _isolate = isolate;
+    final requests = await _nextMessage();
+    if (requests is! SendPort) {
+      throw StateError('Startup verification worker failed to start');
+    }
+    return requests;
+  }
+
+  Future<Object?> _nextMessage() async {
+    final messages = _messages;
+    if (messages == null || !await messages.moveNext()) return null;
+    return messages.current;
+  }
+
+  void _releaseWorker() {
+    _isolate?.kill(priority: Isolate.immediate);
+    _isolate = null;
+    unawaited(_messages?.cancel());
+    _messages = null;
+    _responses?.close();
+    _responses = null;
+    _requests = null;
+  }
+
+  void close() {
+    if (_closed) return;
+    _closed = true;
+    _releaseWorker();
+  }
+}
+
+void _runStartupIntegrityWorker(SendPort responses) {
+  final requests = ReceivePort();
+  requests.listen((Object? message) {
+    final request = message as _StartupIntegrityRequest;
+    try {
+      responses.send(
+        DownloadIntegrityVerifierV2._verifyPath(
+          request.path,
+          request.expectedBytes,
+          false,
+        ),
+      );
+    } catch (error, stack) {
+      responses.send((error: error, stack: stack));
+    }
+  });
+  responses.send(requests.sendPort);
 }

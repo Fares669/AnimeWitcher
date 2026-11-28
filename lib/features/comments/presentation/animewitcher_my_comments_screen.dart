@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'comment_edit_dialog.dart';
 import 'comment_pager.dart';
+import 'comment_screen_messages.dart';
 import '../../../core/utils/relative_time.dart';
 import '../../../shared/widgets/confirm_dialog.dart';
 
@@ -16,7 +17,6 @@ import '../../../core/account/animewitcher_comment_models.dart';
 import '../../../core/account/animewitcher_sync_ids.dart';
 import '../../../core/account/firestore_rest_client.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
-import '../../../core/services/notification_service.dart';
 import '../../../core/router/app_router.dart';
 import 'animewitcher_replies_screen.dart';
 import 'widgets/animewitcher_comment_sort_control.dart';
@@ -36,7 +36,8 @@ class AnimeWitcherMyCommentsScreen extends ConsumerStatefulWidget {
 }
 
 class _AnimeWitcherMyCommentsScreenState
-    extends ConsumerState<AnimeWitcherMyCommentsScreen> {
+    extends ConsumerState<AnimeWitcherMyCommentsScreen>
+    with CommentScreenMessages<AnimeWitcherMyCommentsScreen> {
   int get _pageSize => widget.isReviews ? kAnimeWitcherReviewsPageSize : 20;
 
   bool get _isReviews => widget.isReviews;
@@ -103,7 +104,7 @@ class _AnimeWitcherMyCommentsScreenState
       _fetchPage,
       onError: (error) {
         if (_currentPager(pager)) {
-          _showMessage(_errorText(error), isError: true);
+          showCommentMessage(_errorText(error), isError: true);
         }
       },
     );
@@ -113,7 +114,8 @@ class _AnimeWitcherMyCommentsScreenState
     }
   }
 
-  Future<void> _changeSort(AnimeWitcherCommentSort sort) async {
+  Future<void> _changeSort(String value) async {
+    final sort = AnimeWitcherCommentSort.fromNameOr(value, _sort);
     if (sort == _sort) return;
     setState(() => _sort = sort);
     if (_scrollController.hasClients) _scrollController.jumpTo(0);
@@ -157,9 +159,9 @@ class _AnimeWitcherMyCommentsScreenState
           .updateOwnComment(comment, draft.text, spoiler: draft.spoiler);
       if (!_currentPager(pager)) return;
       _replaceComment(updated);
-      _showMessage(_editedMessage);
+      showCommentMessage(_editedMessage);
     } catch (error) {
-      if (_currentPager(pager)) _showMessage(_errorText(error), isError: true);
+      if (_currentPager(pager)) showCommentMessage(_errorText(error), isError: true);
     } finally {
       if (_currentPager(pager)) _setBusy(comment.path, false);
     }
@@ -182,11 +184,11 @@ class _AnimeWitcherMyCommentsScreenState
           .deleteOwnComment(comment);
       if (!_currentPager(pager)) return;
       setState(() {
-        _pager.items.removeWhere((item) => item.path == comment.path);
+        _pager.removePath(comment.path);
       });
-      _showMessage('تم حذف التعليق.');
+      showCommentMessage('تم حذف التعليق.');
     } catch (error) {
-      if (_currentPager(pager)) _showMessage(_errorText(error), isError: true);
+      if (_currentPager(pager)) showCommentMessage(_errorText(error), isError: true);
     } finally {
       if (_currentPager(pager)) _setBusy(comment.path, false);
     }
@@ -211,21 +213,16 @@ class _AnimeWitcherMyCommentsScreenState
           .closeOwnCommentReplies(comment);
       if (!_currentPager(pager)) return;
       _replaceComment(updated);
-      _showMessage('تم منع الردود.');
+      showCommentMessage('تم منع الردود.');
     } catch (error) {
-      if (_currentPager(pager)) _showMessage(_errorText(error), isError: true);
+      if (_currentPager(pager)) showCommentMessage(_errorText(error), isError: true);
     } finally {
       if (_currentPager(pager)) _setBusy(comment.path, false);
     }
   }
 
-  Future<void> _openReplies(AnimeWitcherComment comment) async {
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => AnimeWitcherRepliesScreen(parentComment: comment),
-      ),
-    );
-  }
+  Future<void> _openReplies(AnimeWitcherComment comment) =>
+      AnimeWitcherRepliesScreen.open(context, comment);
 
   void _openAnime(AnimeWitcherComment comment) {
     final animeId = comment.animeId?.trim();
@@ -247,7 +244,7 @@ class _AnimeWitcherMyCommentsScreenState
   void _replaceComment(AnimeWitcherComment updated) {
     final index = _pager.items.indexWhere((item) => item.path == updated.path);
     if (index < 0) return;
-    setState(() => _pager.items[index] = updated);
+    setState(() => _pager.replaceAt(index, updated));
   }
 
   void _setBusy(String path, bool busy) {
@@ -260,32 +257,9 @@ class _AnimeWitcherMyCommentsScreenState
     });
   }
 
-  void _showMessage(
-    String message, {
-    bool isError = false,
-    bool isInfo = false,
-  }) {
-    if (!mounted) return;
-    final notifications = ref.read(notificationServiceProvider);
-    if (isError) {
-      notifications.showError(message);
-    } else if (isInfo) {
-      notifications.showInfo(message);
-    } else {
-      notifications.showSuccess(message);
-    }
-  }
-
   String _sortTooltip() => _isReviews ? 'ترتيب المراجعات' : 'ترتيب التعليقات';
 
   String _screenTitle() => ((_isReviews ? 'مراجعاتي' : 'تعليقاتي'));
-
-  AnimeWitcherCommentSort _sortFromValue(String value) {
-    for (final option in AnimeWitcherCommentSort.values) {
-      if (option.name == value) return option;
-    }
-    return _sort;
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -317,9 +291,7 @@ class _AnimeWitcherMyCommentsScreenState
                 tooltip: _sortTooltip(),
                 selectedValue: _sort.name,
                 items: AnimeWitcherCommentSortControl.menuItems(),
-                onSelected: (value) {
-                  _changeSort(_sortFromValue(value));
-                },
+                onSelected: _changeSort,
               ),
       ),
       body: Center(

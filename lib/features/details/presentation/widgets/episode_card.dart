@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
@@ -17,8 +16,6 @@ import 'package:animewitcher/features/comments/presentation/anime3rb_comments_sc
 import 'package:animewitcher/features/comments/presentation/animewitcher_comments_screen.dart';
 import 'package:animewitcher/core/storage/history_repository.dart';
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
-import 'package:animewitcher/core/utils/download_progress_data.dart'
-    show DownloadProgressData;
 import 'package:animewitcher/core/utils/localized_text.dart';
 import 'package:animewitcher/core/utils/artwork_quality.dart';
 import 'package:animewitcher/core/utils/episode_label.dart';
@@ -26,6 +23,8 @@ import 'package:animewitcher/core/utils/image_fallbacks.dart';
 import 'package:animewitcher/core/utils/layout_constants.dart';
 import 'package:animewitcher/core/utils/responsive_breakpoints.dart';
 
+import 'package:animewitcher/shared/widgets/episode_filler_badge.dart';
+import 'package:animewitcher/shared/widgets/episode_watch_presentation.dart';
 import '../../../../shared/widgets/thumbnail_error_placeholder.dart';
 import '../../../library/presentation/download_delete_confirmation.dart';
 import '../../../library/presentation/download_progress_v2_provider.dart';
@@ -35,23 +34,20 @@ import '../details_controller.dart';
 import '../download_launcher.dart';
 import '../downloaded_file_provider.dart';
 import 'episode_action_chip.dart';
+import 'episode_download_index.dart';
 import 'download_progress_dialog.dart';
 import 'download_management_dialog.dart';
 import 'witanime_report_dialog.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 
-/// `{series} - {episode}` for download dialogs, keeping the name of numberless
-/// rows (specials, OVAs, مترجم/مدبلج) instead of an empty trailing dash.
-String _downloadDialogTitle(MultimediaItem parentItem, Episode episode) {
-  final label = formatEpisodeLabel(
-    episode: episode.episode,
-    title: episode.name,
-    isFinal: episode.isFinal,
-    serverName: episode.serverName,
-  );
-  // The dialog names the episode only ("الحلقة X"), like manga chapters.
-  return label.isEmpty ? parentItem.title : label;
-}
+String _downloadDialogTitle(MultimediaItem parentItem, Episode episode) =>
+    formatEpisodeLabel(
+      episode: episode.episode,
+      title: episode.name,
+      isFinal: episode.isFinal,
+      serverName: episode.serverName,
+      whenEmpty: () => parentItem.title,
+    );
 
 class EpisodeCard extends HookConsumerWidget {
   static const double _thumbnailAspectRatio = 16 / 9;
@@ -165,33 +161,14 @@ class EpisodeCard extends HookConsumerWidget {
     final hasServerName = episodeTitle.isNotEmpty;
     final historyRepo = ref.watch(historyRepositoryProvider);
     ref.watch(watchHistoryProvider);
-    final historyItem = historyForItem(historyRepo, parentItem)
-        .firstWhereOrNull(
-          (h) =>
-              h.item.url == parentItem.url &&
-              sameDownloadProvider(h.item, parentItem),
-        );
+    final historyItem = historyRepo.getWatchHistoryItem(parentItem);
 
-    final epPos = historyPositionForItem(
-      historyRepo,
-      parentItem,
-      episodeUrl: episode.url,
-      season: episode.season,
-      episode: episode.episode,
-    );
-    final epDur = historyDurationForItem(
-      historyRepo,
-      parentItem,
-      episodeUrl: episode.url,
-      season: episode.season,
-      episode: episode.episode,
-    );
+    final progress = episode.historyProgress(historyRepo, parentItem).progress;
 
     ref.watch(episodeWatchRevisionProvider);
     ref.watch(accountDataRevisionProvider);
     final episodeWatchRepo = ref.watch(episodeWatchRepositoryProvider);
 
-    final double progress = epDur > 0 ? (epPos / epDur).clamp(0.0, 1.0) : 0.0;
     final explicitWatchState = episodeExplicitStateFor(
       episodeWatchRepo,
       parentItem,
@@ -202,48 +179,23 @@ class EpisodeCard extends HookConsumerWidget {
       parentItem,
       episode,
     );
-    final displayedProgress = isWatched ? 1.0 : progress;
-
-    String? statusBadge;
-    if (isWatched) {
-      statusBadge = l10n.watched.toUpperCase();
-    } else if (progress > 0.02) {
-      statusBadge = l10n.watching.toUpperCase();
-    }
-
-    if (historyItem != null &&
-        statusBadge == null &&
-        explicitWatchState != false) {
-      final hSeason = historyItem.season ?? 1;
-      final hEpisode = historyItem.episode ?? 1;
-      final eSeason = episode.season;
-      final eEpisode = episode.episode;
-
-      if (eSeason == hSeason && eEpisode == hEpisode) {
-        statusBadge = l10n.lastWatched.toUpperCase();
-      }
-    }
-
-    final downloads =
-        ref.watch(downloadsProvider).value ?? const <DownloadItem>[];
-    final completedDownload = completedEpisodeDownload(
-      downloads,
-      parentItem,
-      episode,
+    final watch = episode.watchPresentation(
+      l10n,
+      historyItem,
+      progress,
+      isWatched: isWatched,
+      explicitWatchState: explicitWatchState,
     );
+
     final episodeTrackingUrl = episode.url.trim();
-    final activeDownload = downloads.firstWhereOrNull((item) {
-      final matchesEpisode =
-          item.trackingUrl.trim() == episodeTrackingUrl ||
-          (item.episode?.url.trim() ?? '') == episodeTrackingUrl;
-      if (!matchesEpisode ||
-          !sameDownloadProvider(item.item, parentItem) ||
-          item.item.url.trim() != parentItem.url.trim())
-        return false;
-      return item.status != TaskStatus.complete &&
-          item.status != TaskStatus.canceled;
-    });
-    final isDownloading = activeDownload != null;
+    final downloadIndex = episodeDownloadsForDetailsProvider(
+      episodeDownloadScope(parentItem),
+    );
+    final (:completed, :active) = ref.watch(
+      downloadIndex.select((index) => index.forEpisode(episodeTrackingUrl)),
+    );
+    final isDownloading = active != null;
+    final completedDownload = completed;
 
     final detailsState = ref.watch(
       detailsControllerProvider(detailsControllerKey(parentItem)),
@@ -253,22 +205,31 @@ class EpisodeCard extends HookConsumerWidget {
     final isSelectionMode = detailsState.selectedEpisodeKeys.isNotEmpty;
     final isSelected = detailsState.selectedEpisodeKeys.contains(selectionKey);
 
-    final progressMap = ref.watch(downloadProgressProvider);
-    final logicalId = activeDownload?.logicalId?.trim();
-    final downloadIdentity = logicalId != null && logicalId.isNotEmpty
-        ? logicalId
-        : episode.url;
-    final hasOwnedProgressIdentity =
-        (logicalId != null && logicalId.isNotEmpty) ||
-        progressMap[episode.url]?.taskId == activeDownload?.id;
-    final candidateProgress = logicalId != null && logicalId.isNotEmpty
-        ? progressMap[logicalId]
-        : null;
-    final downloadProgressData = candidateProgress?.taskId == activeDownload?.id
-        ? candidateProgress
-        : null;
-    final downloadProgress =
-        downloadProgressData?.progress ?? activeDownload?.progress ?? 0.0;
+    final logicalId = active?.logicalId?.trim();
+    final hasLogicalId = logicalId != null && logicalId.isNotEmpty;
+    final downloadIdentity = hasLogicalId ? logicalId : episode.url;
+    var hasOwnedProgressIdentity = hasLogicalId;
+    var downloadProgress = active?.progress ?? 0.0;
+    TaskStatus? downloadProgressStatus;
+    if (active != null) {
+      if (hasLogicalId) {
+        final (progress, status) = ref.watch(
+          downloadProgressProvider.select((items) {
+            final item = items[logicalId];
+            if (item == null || item.taskId != active.id) return (null, null);
+            return (item.progress, item.status);
+          }),
+        );
+        downloadProgress = progress ?? downloadProgress;
+        downloadProgressStatus = status;
+      } else {
+        hasOwnedProgressIdentity = ref.watch(
+          downloadProgressProvider.select(
+            (items) => items[episode.url]?.taskId == active.id,
+          ),
+        );
+      }
+    }
 
     final fileKey = downloadedFileKey(parentItem, episode: episode);
     // Each visible row resolves its file asynchronously. Watching the whole
@@ -479,8 +440,8 @@ class EpisodeCard extends HookConsumerWidget {
                 if (vertical)
                   _buildThumbnail(
                     context,
-                    displayedProgress,
-                    statusBadge,
+                    watch.progress,
+                    watch.statusBadge,
                     isWatched: isWatched,
                     width: double.infinity,
                   ),
@@ -491,8 +452,8 @@ class EpisodeCard extends HookConsumerWidget {
                     if (!vertical) ...[
                       _buildThumbnail(
                         context,
-                        displayedProgress,
-                        statusBadge,
+                        watch.progress,
+                        watch.statusBadge,
                         isWatched: isWatched,
                       ),
                       const SizedBox(width: LayoutConstants.spacingMd),
@@ -515,7 +476,7 @@ class EpisodeCard extends HookConsumerWidget {
                                 ),
                               if (episode.isFiller) ...[
                                 const SizedBox(width: 8),
-                                _buildFillerBadge(),
+                                buildEpisodeFillerBadge(),
                               ],
                             ],
                           ),
@@ -568,7 +529,7 @@ class EpisodeCard extends HookConsumerWidget {
                         downloadedFile,
                         isDownloading,
                         downloadProgress,
-                        downloadProgressData,
+                        downloadProgressStatus,
                         downloadIdentity,
                         hasOwnedProgressIdentity,
                         details,
@@ -610,7 +571,7 @@ class EpisodeCard extends HookConsumerWidget {
     File? downloadedFile,
     bool isDownloading,
     double downloadProgress,
-    DownloadProgressData? downloadProgressData,
+    TaskStatus? downloadProgressStatus,
     String downloadIdentity,
     bool hasOwnedProgressIdentity,
     MultimediaItem? details,
@@ -624,7 +585,7 @@ class EpisodeCard extends HookConsumerWidget {
       downloadedFile,
       isDownloading,
       downloadProgress,
-      downloadProgressData,
+      downloadProgressStatus,
       downloadIdentity,
       hasOwnedProgressIdentity,
       details,
@@ -725,7 +686,7 @@ class EpisodeCard extends HookConsumerWidget {
     File? downloadedFile,
     bool isDownloading,
     double downloadProgress,
-    DownloadProgressData? downloadProgressData,
+    TaskStatus? downloadProgressStatus,
     String downloadIdentity,
     bool hasOwnedProgressIdentity,
     MultimediaItem? details,
@@ -778,7 +739,7 @@ class EpisodeCard extends HookConsumerWidget {
         },
         child: Padding(
           padding: const EdgeInsets.all(4.0),
-          child: downloadProgressData?.status == TaskStatus.paused
+          child: downloadProgressStatus == TaskStatus.paused
               ? Icon(
                   Icons.pause_rounded,
                   size: 16,
@@ -824,24 +785,6 @@ class EpisodeCard extends HookConsumerWidget {
     }
   }
 
-  Widget _buildFillerBadge() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(
-        color: const Color(0xFFD32F2F),
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Text(
-        'فلر',
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 10,
-          fontWeight: FontWeight.w800,
-        ),
-      ),
-    );
-  }
-
   Widget _buildThumbnail(
     BuildContext context,
     double progress,
@@ -863,13 +806,21 @@ class EpisodeCard extends HookConsumerWidget {
     final placeholderColor = Theme.of(context)
         .colorScheme
         .surfaceContainerHighest;
+    final isEpisodeStill = episodePosterUrl != null;
+    final reusePortraitArtwork =
+        plain &&
+        !vertical &&
+        ResponsiveBreakpoints.isHandset(context) &&
+        !context.isHandsetLandscape;
 
-    Widget buildThumbnailImage() {
+    Widget buildThumbnailImage(double paintedWidth) {
       if (imageUrl == null || imageUrl.isEmpty) {
         return const ThumbnailErrorPlaceholder();
       }
       return ArtworkDecode(
-        paintedWidth: 140,
+        paintedWidth: paintedWidth,
+        sizeHighQualityToDisplay: true,
+        bucketStandardDecode: true,
         builder: (BuildContext context, int? decodeWidth) => CachedNetworkImage(
           imageUrl: imageUrl,
           fit: BoxFit.cover,
@@ -881,12 +832,18 @@ class EpisodeCard extends HookConsumerWidget {
           fadeOutDuration: Duration.zero,
           useOldImageOnUrlChange: true,
           placeholder: (_, _) => ColoredBox(color: placeholderColor),
-          errorWidget: (_, _, _) => episodePosterUrl != null
+          errorWidget: (_, _, _) => isEpisodeStill
               ? ColoredBox(color: placeholderColor)
               : const ThumbnailErrorPlaceholder(),
         ),
       );
     }
+
+    Widget buildArtwork() => LayoutBuilder(
+      builder: (_, constraints) => buildThumbnailImage(
+        constraints.hasBoundedWidth ? constraints.maxWidth : 140.0,
+      ),
+    );
 
     return Stack(
       children: [
@@ -896,7 +853,18 @@ class EpisodeCard extends HookConsumerWidget {
             width: width ?? 140,
             child: AspectRatio(
               aspectRatio: _thumbnailAspectRatio,
-              child: buildThumbnailImage(),
+              // The still needn't rebuild with badges or selection. Reuse
+              // the LayoutBuilder, not dimensions or an image: changes to the
+              // actual constraints, DPR or artwork quality still propagate.
+              child: reusePortraitArtwork
+                  ? HookBuilder(
+                      builder: (_) => useMemoized(buildArtwork, [
+                        imageUrl,
+                        isEpisodeStill,
+                        placeholderColor,
+                      ]),
+                    )
+                  : buildArtwork(),
             ),
           ),
         ),

@@ -88,12 +88,91 @@ class PlayerPanelChoice {
   final StreamSourceAudioType? audioType;
 }
 
+/// The picker owns one completed source snapshot. Group it once instead of
+/// re-scanning all rows on every playback update or language/audio toggle.
+class _QualitySources {
+  const _QualitySources(
+    this.ungrouped,
+    this.groups,
+    this.languages,
+    this.defaultLanguage,
+  );
+
+  final List<PlayerPanelChoice> ungrouped;
+  final Map<StreamSourceLanguage, _LanguageSources> groups;
+  final List<StreamSourceLanguage> languages;
+  final StreamSourceLanguage? defaultLanguage;
+
+  bool get isEmpty => languages.isEmpty && ungrouped.isEmpty;
+
+  factory _QualitySources.fromChoices(List<PlayerPanelChoice> choices) {
+    final groups = <StreamSourceLanguage, _LanguageSources>{};
+    for (final choice in choices) {
+      final language = choice.language;
+      if (language == null) continue;
+      (groups[language] ??= _LanguageSources()).add(choice);
+    }
+    if (groups.isEmpty) {
+      return _QualitySources(choices, groups, const [], null);
+    }
+    // The previous picker chose the first selected group in enum order,
+    // not the group whose selected choice was first in server order.
+    final languages = [
+      for (final language in StreamSourceLanguage.values)
+        if (groups.containsKey(language)) language,
+    ];
+    StreamSourceLanguage? selected;
+    for (final language in languages) {
+      final group = groups[language]!;
+      group.finish();
+      if (group.hasSelection) selected ??= language;
+    }
+    return _QualitySources(
+      const [],
+      groups,
+      languages,
+      selected ?? languages.first,
+    );
+  }
+}
+
+class _LanguageSources {
+  final choicesByMode = <StreamSourceAudioType?, List<PlayerPanelChoice>>{};
+  StreamSourceAudioType? _selectedMode;
+  bool hasSelection = false;
+  late final List<StreamSourceAudioType> modes;
+  StreamSourceAudioType? defaultMode;
+
+  void add(PlayerPanelChoice choice) {
+    final mode = choice.audioType;
+    (choicesByMode[mode] ??= <PlayerPanelChoice>[]).add(choice);
+    if (choice.selected) {
+      hasSelection = true;
+      final previous = _selectedMode;
+      if (mode != null && (previous == null || mode.index < previous.index)) {
+        _selectedMode = mode;
+      }
+    }
+  }
+
+  void finish() {
+    modes = [
+      for (final mode in StreamSourceAudioType.values)
+        if (choicesByMode.containsKey(mode)) mode,
+    ];
+    if (modes.isEmpty) return;
+    // Unlabelled audio was only displayed when the language had no modes.
+    choicesByMode.remove(null);
+    defaultMode = _selectedMode ?? modes.first;
+  }
+}
+
 class _PlayerSettingsPanelState extends State<PlayerSettingsPanel> {
   late _Tab _tab = _tabs.first;
   _Sub _sub = _Sub.none;
 
-  /// The quality list, fetched once per opening of the panel.
-  Future<List<PlayerPanelChoice>>? _qualityFuture;
+  /// The source projection, fetched once per opening of the panel.
+  Future<_QualitySources>? _qualityFuture;
   StreamSourceLanguage? _sourceLanguage;
   StreamSourceAudioType? _sourceAudioType;
 
@@ -297,12 +376,13 @@ extension on _PlayerSettingsPanelState {
         ),
         Divider(color: Colors.white.withValues(alpha: 0.1), height: 14),
         if (choices != null)
-          _choiceList(choices, accent)
+          _choiceItems(choices, accent)
         else
-          FutureBuilder<List<PlayerPanelChoice>>(
+          FutureBuilder<_QualitySources>(
             future: _qualityFuture ??=
-                widget.loadQualityChoices?.call() ??
-                Future.value(const <PlayerPanelChoice>[]),
+                (widget.loadQualityChoices?.call() ??
+                        Future.value(const <PlayerPanelChoice>[]))
+                    .then(_QualitySources.fromChoices),
             builder: (context, snapshot) {
               if (snapshot.connectionState != ConnectionState.done) {
                 return const Padding(
@@ -315,8 +395,8 @@ extension on _PlayerSettingsPanelState {
                   ),
                 );
               }
-              final loaded = snapshot.data ?? const <PlayerPanelChoice>[];
-              if (loaded.isEmpty) {
+              final loaded = snapshot.data;
+              if (loaded == null || loaded.isEmpty) {
                 return Padding(
                   padding: const EdgeInsets.all(12),
                   child: Text(
@@ -329,50 +409,26 @@ extension on _PlayerSettingsPanelState {
                   ),
                 );
               }
-              return _choiceList(loaded, accent);
+              return _sourceChoices(loaded, accent);
             },
           ),
       ],
     );
   }
 
-  Widget _choiceList(List<PlayerPanelChoice> list, Color accent) {
-    final sources = list.where((choice) => choice.language != null).toList();
-    if (sources.isEmpty) return _choiceItems(list, accent);
+  Widget _sourceChoices(_QualitySources sources, Color accent) {
+    final languages = sources.languages;
+    if (languages.isEmpty) return _choiceItems(sources.ungrouped, accent);
 
-    final languages = [
-      for (final language in StreamSourceLanguage.values)
-        if (sources.any((choice) => choice.language == language)) language,
-    ];
     final language = languages.contains(_sourceLanguage)
         ? _sourceLanguage!
-        : languages.firstWhere(
-            (option) => sources.any(
-              (choice) => choice.selected && choice.language == option,
-            ),
-            orElse: () => languages.first,
-          );
-    final languageSources = sources
-        .where((choice) => choice.language == language)
-        .toList();
-    final modes = [
-      for (final mode in StreamSourceAudioType.values)
-        if (languageSources.any((choice) => choice.audioType == mode)) mode,
-    ];
+        : sources.defaultLanguage!;
+    final group = sources.groups[language]!;
+    final modes = group.modes;
     final mode = modes.contains(_sourceAudioType)
         ? _sourceAudioType
-        : modes.isEmpty
-        ? null
-        : modes.firstWhere(
-            (option) => languageSources.any(
-              (choice) => choice.selected && choice.audioType == option,
-            ),
-            orElse: () => modes.first,
-          );
-    final visible = languageSources
-        .where((choice) => mode == null || choice.audioType == mode)
-        .toList();
-
+        : group.defaultMode;
+    final visible = group.choicesByMode[mode]!;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,

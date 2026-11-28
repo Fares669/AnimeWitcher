@@ -1,4 +1,3 @@
-import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 
 /// Whether a details/episodes horizontal swipe should be ignored because it
@@ -55,18 +54,5 @@ class DetailsDesktopTabSwitcher extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-class DetailsEpisodesSwipeGestureRecognizer
-    extends HorizontalDragGestureRecognizer {
-  DetailsEpisodesSwipeGestureRecognizer({required this.shouldIgnore});
-
-  final bool Function(Offset globalPosition) shouldIgnore;
-
-  @override
-  void addPointer(PointerDownEvent event) {
-    if (shouldIgnore(event.position)) return;
-    super.addPointer(event);
   }
 }

@@ -27,7 +27,8 @@ class SkipSegmentCache {
   /// Keyed by the episode's catalog URL, which is the one identifier that is
   /// still known with no network. A MyAnimeList id has to be resolved online,
   /// so it can only ever be a secondary key.
-  static String keyForEpisodeUrl(String episodeUrl) => 'url:${episodeUrl.trim()}';
+  static String keyForEpisodeUrl(String episodeUrl) =>
+      'url:${episodeUrl.trim()}';
 
   static String keyForMal(int malId, int episode) => 'mal:$malId:$episode';
 
@@ -36,8 +37,8 @@ class SkipSegmentCache {
       final raw = _storage.getString(_key);
       if (raw == null || raw.trim().isEmpty) return <String, dynamic>{};
       final decoded = jsonDecode(raw);
-      if (decoded is! Map) return <String, dynamic>{};
-      return decoded.map((k, v) => MapEntry(k.toString(), v));
+      if (decoded is Map<String, dynamic>) return decoded;
+      return <String, dynamic>{};
     } catch (_) {
       return <String, dynamic>{};
     }
@@ -49,18 +50,33 @@ class SkipSegmentCache {
     } catch (_) {}
   }
 
-  List<SkipSegment> read(String key) {
-    final entry = _readAll()[key];
-    if (entry is! List) return const <SkipSegment>[];
+  List<SkipSegment> read(String key) => _readEntry(_readAll()[key]);
+
+  List<SkipSegment> _readEntry(Object? entry) {
+    if (entry is! List<Object?>) return const <SkipSegment>[];
     final out = <SkipSegment>[];
     for (final raw in entry) {
-      if (raw is! Map) continue;
-      final start = (raw['start'] as num?)?.toDouble();
-      final end = (raw['end'] as num?)?.toDouble();
-      final type = SkipType.fromString('${raw['type']}');
-      if (start == null || end == null || end <= start) continue;
+      if (raw is! Map<String, dynamic>) continue;
+      final Object? start = raw['start'];
+      final Object? end = raw['end'];
+      final Object? label = raw['type'];
+      if (start is! num ||
+          end is! num ||
+          !start.isFinite ||
+          !end.isFinite ||
+          end <= start ||
+          label is! String) {
+        continue;
+      }
+      final type = SkipType.fromString(label);
       if (type == SkipType.unknown) continue;
-      out.add(SkipSegment(startTime: start, endTime: end, type: type));
+      out.add(
+        SkipSegment(
+          startTime: start.toDouble(),
+          endTime: end.toDouble(),
+          type: type,
+        ),
+      );
     }
     out.sort((a, b) => a.startTime.compareTo(b.startTime));
     return out;
@@ -68,8 +84,10 @@ class SkipSegmentCache {
 
   /// Reads whichever key has data, preferring the offline-safe URL key.
   List<SkipSegment> readAny(List<String> keys) {
+    if (keys.isEmpty) return const <SkipSegment>[];
+    final entries = _readAll();
     for (final key in keys) {
-      final segments = read(key);
+      final segments = _readEntry(entries[key]);
       if (segments.isNotEmpty) return segments;
     }
     return const <SkipSegment>[];

@@ -9,7 +9,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../../../core/account/anime3rb_account_models.dart';
 import '../../../../core/account/anime3rb_account_service.dart';
-import '../../../../core/network/http_defaults.dart';
+import '../../../../core/extensions/providers/anime3rb_webview_solver.dart';
 
 typedef Anime3rbBrowserAuthResult = ({
   Anime3rbProfile profile,
@@ -104,29 +104,7 @@ class _Anime3rbAuthWebViewScreenState
   @override
   void initState() {
     super.initState();
-    _controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setUserAgent(kDefaultBrowserUserAgent)
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onProgress: (progress) {
-            if (!mounted) return;
-            setState(() => _progress = progress / 100.0);
-          },
-          onUrlChange: (change) {
-            final nextUrl = change.url;
-            if (nextUrl == null) return;
-            _urlChangeTimer?.cancel();
-            _urlChangeTimer = Timer(const Duration(milliseconds: 500), () {
-              unawaited(_attemptSessionCapture(nextUrl));
-            });
-          },
-          onPageFinished: (url) {
-            _urlChangeTimer?.cancel();
-            unawaited(_attemptSessionCapture(url));
-          },
-        ),
-      );
+    _controller = Anime3rbWebViewSolver.createPlatformController();
     unawaited(_loadInitialPage());
   }
 
@@ -137,6 +115,28 @@ class _Anime3rbAuthWebViewScreenState
   }
 
   Future<void> _loadInitialPage() async {
+    await _controller.setJavaScriptMode(JavaScriptMode.unrestricted);
+    await Anime3rbWebViewSolver.configurePlatformWebView(_controller);
+    await _controller.setNavigationDelegate(
+      NavigationDelegate(
+        onProgress: (progress) {
+          if (!mounted) return;
+          setState(() => _progress = progress / 100.0);
+        },
+        onUrlChange: (change) {
+          final nextUrl = change.url;
+          if (nextUrl == null) return;
+          _urlChangeTimer?.cancel();
+          _urlChangeTimer = Timer(const Duration(milliseconds: 500), () {
+            unawaited(_attemptSessionCapture(nextUrl));
+          });
+        },
+        onPageFinished: (url) {
+          _urlChangeTimer?.cancel();
+          unawaited(_attemptSessionCapture(url));
+        },
+      ),
+    );
     if (widget.action == Anime3rbAuthAction.signIn ||
         widget.action == Anime3rbAuthAction.register) {
       try {

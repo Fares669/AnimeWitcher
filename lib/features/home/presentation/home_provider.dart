@@ -7,6 +7,7 @@ import '../../../../core/account/account_providers.dart';
 import '../../../../core/account/animewitcher_comment_models.dart'
     show animeWitcherNativeProviderId;
 import '../../../../core/extensions/extension_manager.dart';
+import '../../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../../core/storage/storage_service.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/domain/entity/manga.dart';
@@ -19,6 +20,40 @@ part 'home_provider.g.dart';
 @Riverpod(keepAlive: true)
 class HomeData extends _$HomeData {
   int _fetchGeneration = 0;
+  // Account restoration can emit several revisions without changing the
+  // public Home feed. This window is shorter than the regular account sync
+  // cadence so it doesn't turn off the occasional background refresh.
+  static const _accountRevisionCoalescingWindow = Duration(seconds: 30);
+  final _nativeLoadAge = Stopwatch();
+  (AnimeWitcherNativeProvider, AnimeWitcherProvider?, bool)? _nativeDemand;
+
+  AnimeWitcherProvider? _readMangaProvider() {
+    final mangaProviders = ref
+        .read(extensionManagerProvider)
+        .where(
+          (provider) => provider.supportedTypes.contains(ProviderType.manga),
+        );
+    return mangaProviders
+            .where(
+              (provider) =>
+                  provider.packageName == animeWitcherNativeProviderId,
+            )
+            .firstOrNull ??
+        mangaProviders.firstOrNull;
+  }
+
+  (AnimeWitcherNativeProvider, AnimeWitcherProvider?, bool)? _demandFor(
+    AnimeWitcherProvider? anime,
+    AnimeWitcherProvider? manga,
+  ) {
+    // Only the built-in public catalogue has these account dependencies.
+    // Other providers keep their existing refresh behavior.
+    if (anime is! AnimeWitcherNativeProvider ||
+        (manga != null && manga is! AnimeWitcherNativeProvider)) {
+      return null;
+    }
+    return (anime, manga, anime.hidesEcchiInDiscovery);
+  }
 
   @override
   HomeState build() {
@@ -26,13 +61,24 @@ class HomeData extends _$HomeData {
     // tear down a loaded home page. Refetch in the background instead.
     ref.listen<int>(accountDataRevisionProvider, (previous, next) {
       if (previous == next) return;
-      unawaited(fetch(keepCurrent: true));
+      final active = ref.read(activeProviderProvider);
+      if (active == null) return;
+      final manga = _readMangaProvider();
+      if (_nativeDemand != null &&
+          _nativeLoadAge.elapsed < _accountRevisionCoalescingWindow &&
+          _nativeDemand == _demandFor(active, manga)) {
+        // Account-owned rows, e.g. Continue Watching, observe the revision
+        // independently. Don't restart an equivalent public catalogue load.
+        return;
+      }
+      unawaited(_fetch(active, manga, keepCurrent: true));
     });
 
     ref.listen<AnimeWitcherProvider?>(activeProviderProvider, (previous, next) {
       if (previous?.packageName == next?.packageName) return;
       if (next == null) {
         ++_fetchGeneration;
+        _nativeDemand = null;
         state = const HomeNoProvider();
         return;
       }
@@ -113,6 +159,19 @@ class HomeData extends _$HomeData {
   /// return, and account sync use that path so the home page does not flash
   /// its loading shimmer.
   Future<void> fetch({bool keepCurrent = false}) async {
+    final active = ref.read(activeProviderProvider);
+    return _fetch(
+      active,
+      active == null ? null : _readMangaProvider(),
+      keepCurrent: keepCurrent,
+    );
+  }
+
+  Future<void> _fetch(
+    AnimeWitcherProvider? activeProvider,
+    AnimeWitcherProvider? mangaProvider, {
+    required bool keepCurrent,
+  }) async {
     final generation = ++_fetchGeneration;
     final previous = keepCurrent && state is HomeSuccess
         ? state as HomeSuccess
@@ -122,11 +181,17 @@ class HomeData extends _$HomeData {
       state = const HomeLoading();
     }
 
-    final activeProvider = ref.read(activeProviderProvider);
+    _nativeDemand = _demandFor(activeProvider, mangaProvider);
     if (activeProvider == null) {
       if (!ref.mounted || generation != _fetchGeneration) return;
       state = const HomeNoProvider();
       return;
+    }
+
+    if (_nativeDemand != null) {
+      _nativeLoadAge
+        ..reset()
+        ..start();
     }
 
     // News and the new manga chapters are asked for alongside the anime
@@ -134,19 +199,6 @@ class HomeData extends _$HomeData {
     // rows are in, and the other two join it when they land. Held back, the
     // page opened only when the slowest of the three answered.
     final news = _orNull(() => activeProvider.getHomeNewsPage(limit: 10));
-    final mangaProviders = ref
-        .read(extensionManagerProvider)
-        .where(
-          (provider) => provider.supportedTypes.contains(ProviderType.manga),
-        );
-    final mangaProvider =
-        mangaProviders
-            .where(
-              (provider) =>
-                  provider.packageName == animeWitcherNativeProviderId,
-            )
-            .firstOrNull ??
-        mangaProviders.firstOrNull;
     final manga = mangaProvider == null
         ? Future<MangaLatestChapterPage?>.value(null)
         : _orNull(() => mangaProvider.getLatestMangaPage(limit: 20));
@@ -183,6 +235,7 @@ class HomeData extends _$HomeData {
       );
     } catch (e) {
       if (!ref.mounted || generation != _fetchGeneration) return;
+      _nativeDemand = null;
       if (preserveCurrent) return;
       state = HomeError(e.toString());
       return;

@@ -2,6 +2,7 @@ import 'package:crypto/crypto.dart';
 
 import '../network/poster_cache.dart';
 
+import 'dart:collection';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -30,6 +31,32 @@ StorageService storageService(Ref ref) {
   throw UnimplementedError('StorageService must be initialized');
 }
 
+/// An owned, read-only copy of the ordered resume rows. Neither overrides
+/// nor callers can mutate it behind the history repository's projection.
+final class ContinueWatchingStorageSnapshot
+    extends UnmodifiableListView<Map<String, dynamic>> {
+  ContinueWatchingStorageSnapshot._(super.source);
+
+  // Hold only this token in the repository. A dormant view need not retain
+  // an old copy of all wire rows after storage publishes a newer snapshot.
+  final Object projectionIdentity = Object();
+}
+
+typedef _StoredLibraryCard = ({
+  Map<dynamic, dynamic> row,
+  String url,
+  String title,
+  int updatedAt,
+});
+
+/// A last-watched date for an already known local history row.
+typedef RecentHistoryUpdate = ({
+  String url,
+  String? episodeUrl,
+  int timestamp,
+  int position,
+});
+
 class StorageService {
   StorageService({DownloadPersistenceWorker? downloadPersistenceWorker})
     : _downloadPersistenceWorker = downloadPersistenceWorker == null
@@ -47,7 +74,8 @@ class StorageService {
     return worker.run(operation, <Object?>[kDownloadMetadataBox, ...arguments]);
   }
 
-  late Box<dynamic> _libraryBox;
+  Box<dynamic>? _openedLibraryBox;
+  Box<dynamic> get _libraryBox => _openedLibraryBox!;
   late Box<dynamic> _settingsBox;
   late Box<dynamic> _extensionsBox;
   late Box<dynamic> _historyBox;
@@ -63,7 +91,7 @@ class StorageService {
     final supportDir = await getApplicationSupportDirectory();
     Hive.init(supportDir.path);
 
-    _libraryBox = await _safeOpenBox(kLibraryBox);
+    _openedLibraryBox = await _safeOpenBox(kLibraryBox);
     _settingsBox = await _safeOpenBox(kSettingsBox);
     _extensionsBox = await _safeOpenBox(kExtensionsBox);
     await _downloadMetadata('hive.safeOpen', []);
@@ -401,17 +429,30 @@ class StorageService {
     }
   }
 
-  dynamic _libraryMetadata(String url, String field) {
-    final canonicalUrl = _canonicalMediaUrl(url);
-    for (var i = 0; i < _libraryBox.length; i++) {
-      final raw = _libraryBox.getAt(i);
+  final _libraryRowUrls = Expando<({String source, String canonical})>();
+
+  Map<dynamic, dynamic>? _firstLibraryRow(String canonicalUrl) {
+    // Hive's values iterator is in the same key order as getAt(). Iterate
+    // current rows, not cached metadata: local/cloud writes take effect now.
+    for (final raw in _libraryBox.values) {
       if (raw is! Map) continue;
-      if (_canonicalMediaUrl((raw['url'] as String?) ?? '') == canonicalUrl) {
-        return raw[field];
+      final source = (raw['url'] as String?) ?? '';
+      final cached = _libraryRowUrls[raw];
+      final String canonical;
+      if (cached != null && cached.source == source) {
+        canonical = cached.canonical;
+      } else {
+        canonical = _canonicalMediaUrl(source);
+        // Weakly associate only pure URL normalization with the live row.
+        _libraryRowUrls[raw] = (source: source, canonical: canonical);
       }
+      if (canonical == canonicalUrl) return raw;
     }
     return null;
   }
+
+  dynamic _libraryMetadata(String url, String field) =>
+      _firstLibraryRow(_canonicalMediaUrl(url))?[field];
 
   int _libraryMetadataInt(String url, String field) {
     final raw = _libraryMetadata(url, field);
@@ -437,90 +478,256 @@ class StorageService {
 
   bool isInLibrary(String url) {
     final canonicalUrl = _canonicalMediaUrl(url);
-    if (_libraryBox.containsKey(_getKey(canonicalUrl))) return true;
-    for (var i = 0; i < _libraryBox.length; i++) {
-      final raw = _libraryBox.getAt(i);
-      if (raw is Map &&
-          _canonicalMediaUrl((raw['url'] as String?) ?? '') == canonicalUrl) {
-        return true;
-      }
-    }
-    return false;
+    return _libraryBox.containsKey(_getKey(canonicalUrl)) ||
+        _firstLibraryRow(canonicalUrl) != null;
   }
 
   bool isLibraryItemFavorite(String url) {
-    final canonicalUrl = _canonicalMediaUrl(url);
-    for (var i = 0; i < _libraryBox.length; i++) {
-      final raw = _libraryBox.getAt(i);
-      if (raw is! Map) continue;
-      if (_canonicalMediaUrl((raw['url'] as String?) ?? '') == canonicalUrl) {
-        return _storedLibraryFavorite(raw);
-      }
-    }
-    return false;
+    final raw = _firstLibraryRow(_canonicalMediaUrl(url));
+    return raw != null && _storedLibraryFavorite(raw);
   }
 
   String? getLibraryItemCategory(String url) {
-    final canonicalUrl = _canonicalMediaUrl(url);
-    for (var i = 0; i < _libraryBox.length; i++) {
-      final raw = _libraryBox.getAt(i);
-      if (raw is! Map) continue;
-      if (_canonicalMediaUrl((raw['url'] as String?) ?? '') == canonicalUrl) {
-        return _storedLibraryCategory(raw);
-      }
-    }
-    return null;
+    final raw = _firstLibraryRow(_canonicalMediaUrl(url));
+    return raw == null ? null : _storedLibraryCategory(raw);
   }
 
-  List<MultimediaItem> getLibraryItems({String? category}) {
-    final entries = <({MultimediaItem item, int updatedAt})>[];
+  /// The item whose projected library URL exactly matches [url].
+  ///
+  /// [getLibraryItems] deduplicates in Hive order before sorting. The sort
+  /// cannot change the winner for a URL, so point reads can reuse that first
+  /// live row without hydrating or sorting unrelated cards. Like the old
+  /// list-based lookup, [url] itself is not normalized for equality.
+  MultimediaItem? getLibraryItemByExactUrl(String url) {
+    if (url.isEmpty || _canonicalMediaUrl(url) != url) return null;
+    final row = _firstLibraryRow(url);
+    if (row == null) return null;
+    return _hydrateLibraryCard((
+      row: row,
+      url: url,
+      title: (row['title'] as String?) ?? '',
+      updatedAt: (row['updatedAt'] as num?)?.toInt() ?? 0,
+    ), _storedLibraryContentType(row));
+  }
+
+  /// A cheap, conservative answer for a background upload after its deletes
+  /// have settled. If any row may be dirty, keep the normal sorted snapshot
+  /// and its fresh per-item checks after each asynchronous upload.
+  bool canSkipPendingLibraryUpload({
+    required String accountUid,
+    required bool manga,
+  }) {
+    final box = _openedLibraryBox;
+    if (box == null) return false;
+    for (final row in box.values) {
+      if (row is! Map) continue;
+      final type = row['type'] ?? row['contentType'];
+      final updatedAt = row['updatedAt'];
+      final url = row['url'];
+      // Leave exceptional or ambiguous legacy projection data to the original
+      // path. We only need to rule out every possible candidate, not to choose
+      // which duplicate would win the normal projection.
+      if (url is! String? ||
+          row['title'] is! String? ||
+          row['posterUrl'] is! String? ||
+          row['bannerUrl'] is! String? ||
+          row['description'] is! String? ||
+          row['catalogType'] is! String? ||
+          row['provider'] is! String? ||
+          row['year'] is! int? ||
+          updatedAt is! int? ||
+          type is! String?) {
+        return false;
+      }
+      if (url != null) {
+        try {
+          // The normal projection and its metadata lookups must see the same
+          // first row. Leave noncanonical aliases to that exact path.
+          if (_canonicalMediaUrl(url) != url) return false;
+        } on FormatException {
+          return false;
+        }
+      }
+      final owner = row['animeWitcherSyncedUid'];
+      if (owner is String && owner.isNotEmpty && owner.trim() == owner) {
+        if (owner != accountUid) continue;
+        final syncedAt = row['animeWitcherSyncedAt'];
+        if (updatedAt is int && syncedAt is int && updatedAt <= syncedAt) {
+          continue;
+        }
+      }
+      final isManga =
+          MultimediaItem.parseContentType(type) == MultimediaContentType.manga;
+      if (isManga == manga) return false;
+    }
+    return true;
+  }
+
+  List<MultimediaItem> getLibraryItems({String? category}) => [
+    for (final card in _orderedLibraryRows(category))
+      _hydrateLibraryCard(card, _storedLibraryContentType(card.row)),
+  ];
+
+  /// Page of the local shelf in the same order as [getLibraryItems], plus
+  /// the full unpaginated count for this media kind. Off-page rows remain raw
+  /// Hive metadata, not transient [MultimediaItem]s.
+  ({List<MultimediaItem> items, int total}) getLocalLibraryShelf({
+    required String category,
+    required bool manga,
+    required int limit,
+  }) => _hydrateLocalShelf(
+    _orderedLibraryRows(category),
+    manga: manga,
+    limit: limit,
+  );
+
+  /// Search can read several unmounted local shelves together. Bucket raw
+  /// row references in Hive order, then use the same per-shelf winners and
+  /// ordering as a single shelf. Nothing survives this read.
+  Map<String, ({List<MultimediaItem> items, int total})>
+  getLocalLibraryShelves({
+    required Map<String, int> limits,
+    required bool manga,
+  }) {
+    final rowsByShelf = <String, List<Map<dynamic, dynamic>>>{
+      for (final category in limits.keys)
+        _normalizeLibraryCategory(category): <Map<dynamic, dynamic>>[],
+    };
+    if (rowsByShelf.isEmpty) return {};
+    final favorites = rowsByShelf['favorite'];
+    final hasPrimary = rowsByShelf.length > (favorites == null ? 0 : 1);
+    for (final raw in _libraryBox.values) {
+      if (raw is! Map) continue;
+      if (hasPrimary) rowsByShelf[_storedLibraryCategory(raw)]?.add(raw);
+      if (favorites != null && _storedLibraryFavorite(raw)) favorites.add(raw);
+    }
+    return {
+      for (final entry in limits.entries)
+        entry.key: _hydrateLocalShelf(
+          _orderedLibraryRows(
+            null,
+            rows: rowsByShelf[_normalizeLibraryCategory(entry.key)]!,
+          ),
+          manga: manga,
+          limit: entry.value,
+        ),
+    };
+  }
+
+  ({List<MultimediaItem> items, int total}) _hydrateLocalShelf(
+    Iterable<_StoredLibraryCard> cards, {
+    required bool manga,
+    required int limit,
+  }) {
+    final items = <MultimediaItem>[];
+    var total = 0;
+    for (final card in cards) {
+      final type = _storedLibraryContentType(card.row);
+      if ((type == MultimediaContentType.manga) != manga) continue;
+      total++;
+      if (items.length < limit) items.add(_hydrateLibraryCard(card, type));
+    }
+    return (items: items, total: total);
+  }
+
+  List<_StoredLibraryCard> _orderedLibraryRows(
+    String? category, {
+    Iterable<dynamic>? rows,
+  }) {
+    final entries = <_StoredLibraryCard>[];
     final seen = <String>{};
     final normalizedFilter = category == null
         ? null
         : _normalizeLibraryCategory(category);
-    for (var i = 0; i < _libraryBox.length; i++) {
-      final raw = _libraryBox.getAt(i);
+    for (final raw in rows ?? _libraryBox.values) {
       if (raw is! Map) continue;
-      final map = Map<String, dynamic>.from(raw);
       if (normalizedFilter == 'favorite') {
         if (!_storedLibraryFavorite(raw)) continue;
       } else if (normalizedFilter != null &&
           _storedLibraryCategory(raw) != normalizedFilter) {
         continue;
       }
-      final canonicalUrl = _canonicalMediaUrl((map['url'] as String?) ?? '');
-      if (canonicalUrl.isEmpty || !seen.add(canonicalUrl)) continue;
-      final storedStatus = (map['status'] ?? '').toString();
-      final updatedAt = (map['updatedAt'] as num?)?.toInt() ?? 0;
+      final url = _canonicalMediaUrl((raw['url'] as String?) ?? '');
+      // The first canonical row in Hive order wins within a category even
+      // when it belongs to another media kind or has an older timestamp.
+      if (url.isEmpty || !seen.add(url)) continue;
       entries.add((
-        item: MultimediaItem(
-          title: (map['title'] as String?) ?? '',
-          url: canonicalUrl,
-          posterUrl: (map['posterUrl'] as String?) ?? '',
-          bannerUrl: map['bannerUrl'] as String?,
-          description: map['description'] as String?,
-          contentType: MultimediaItem.parseContentType(
-            (map['type'] as String?) ?? (map['contentType'] as String?),
-          ),
-          catalogType: map['catalogType'] as String?,
-          year: (map['year'] as num?)?.toInt(),
-          isDubbed: map['isDubbed'] == true,
-          provider: map['provider'] as String?,
-          status: storedStatus == 'completed'
-              ? ShowStatus.completed
-              : storedStatus == 'upcoming'
-              ? ShowStatus.upcoming
-              : ShowStatus.ongoing,
-        ),
-        updatedAt: updatedAt,
+        row: raw,
+        url: url,
+        title: (raw['title'] as String?) ?? '',
+        updatedAt: (raw['updatedAt'] as num?)?.toInt() ?? 0,
       ));
     }
     entries.sort((a, b) {
       final cmp = b.updatedAt.compareTo(a.updatedAt);
       if (cmp != 0) return cmp;
-      return a.item.title.toLowerCase().compareTo(b.item.title.toLowerCase());
+      return a.title.toLowerCase().compareTo(b.title.toLowerCase());
     });
-    return entries.map((e) => e.item).toList();
+    return entries;
+  }
+
+  MultimediaContentType _storedLibraryContentType(Map<dynamic, dynamic> row) =>
+      MultimediaItem.parseContentType(
+        (row['type'] as String?) ?? (row['contentType'] as String?),
+      );
+
+  MultimediaItem _hydrateLibraryCard(
+    _StoredLibraryCard card,
+    MultimediaContentType type,
+  ) {
+    final row = card.row;
+    final status = (row['status'] ?? '').toString();
+    return MultimediaItem(
+      title: card.title,
+      url: card.url,
+      posterUrl: (row['posterUrl'] as String?) ?? '',
+      bannerUrl: row['bannerUrl'] as String?,
+      description: row['description'] as String?,
+      contentType: type,
+      catalogType: row['catalogType'] as String?,
+      year: (row['year'] as num?)?.toInt(),
+      isDubbed: row['isDubbed'] == true,
+      provider: row['provider'] as String?,
+      status: status == 'completed'
+          ? ShowStatus.completed
+          : status == 'upcoming'
+          ? ShowStatus.upcoming
+          : ShowStatus.ongoing,
+    );
+  }
+
+  /// Number of unique local cards by persisted shelf, without hydrating cards.
+  Map<String, ({int anime, int manga})> getLocalLibraryCounts() {
+    final counts = <String, ({int anime, int manga})>{};
+    final seenByCategory = <String, Set<String>>{};
+    for (final raw in _libraryBox.values) {
+      if (raw is! Map) continue;
+      final category = _storedLibraryCategory(raw);
+      final favorite = _storedLibraryFavorite(raw);
+      if (category == null && !favorite) continue;
+      final url = _canonicalMediaUrl((raw['url'] as String?) ?? '');
+      if (url.isEmpty) continue;
+      // getLibraryItems filters by shelf before deduplicating, and the
+      // caller splits kinds after. A cross-kind duplicate keeps the first
+      // row for that shelf, even when another shelf has a different winner.
+      final newPrimary =
+          category != null && (seenByCategory[category] ??= {}).add(url);
+      final newFavorite =
+          favorite && (seenByCategory['favorite'] ??= {}).add(url);
+      if (!newPrimary && !newFavorite) continue;
+      final isManga =
+          _storedLibraryContentType(raw) == MultimediaContentType.manga;
+      void add(String key) {
+        final count = counts[key] ?? (anime: 0, manga: 0);
+        counts[key] = isManga
+            ? (anime: count.anime, manga: count.manga + 1)
+            : (anime: count.anime + 1, manga: count.manga);
+      }
+
+      if (newPrimary) add(category);
+      if (newFavorite) add('favorite');
+    }
+    return counts;
   }
 
   Future<void> setSelectedLibraryCategory(String category) async {
@@ -822,12 +1029,11 @@ class StorageService {
   // --- Artwork hosts ---
   // Remembers whether the MyAnimeList image CDN answered last time it was
   // probed, so the first frame can pick reachable artwork without waiting.
-  Future<void> setMalArtworkUnreachable(bool unreachable) async {
-    await _settingsBox.put('mal_artwork_unreachable', unreachable);
-    await _settingsBox.put(
-      'mal_artwork_probed_at',
-      DateTime.now().millisecondsSinceEpoch,
-    );
+  Future<void> setMalArtworkUnreachable(bool unreachable) {
+    return _settingsBox.putAll(<String, Object>{
+      'mal_artwork_unreachable': unreachable,
+      'mal_artwork_probed_at': DateTime.now().millisecondsSinceEpoch,
+    });
   }
 
   bool isMalArtworkUnreachable() {
@@ -872,63 +1078,6 @@ class StorageService {
     }
   }
 
-  // --- Onboarding ---
-  //
-  // Windows ships as a plain extracted folder rather than an installer that
-  // clears per-user app data, so the Hive-backed flag would survive a
-  // "reinstall" (delete-and-re-extract) and the dialog would never show
-  // again for a fresh copy. A marker file next to the executable tracks
-  // this instead: it disappears whenever the install folder is replaced.
-  Future<void> setWelcomeDialogSeen(bool seen) async {
-    await _settingsBox.put('welcome_dialog_seen', seen);
-    if (Platform.isWindows) {
-      await _writeWindowsWelcomeMarker(seen);
-    }
-  }
-
-  bool hasSeenWelcomeDialog() {
-    if (Platform.isWindows) {
-      final marker = _readWindowsWelcomeMarker();
-      if (marker != null) return marker;
-    }
-    return (_settingsBox.get('welcome_dialog_seen', defaultValue: false)
-            as bool?) ??
-        false;
-  }
-
-  File? _windowsWelcomeMarkerFile() {
-    try {
-      final exeDir = p.dirname(Platform.resolvedExecutable);
-      return File(p.join(exeDir, '.welcome_shown'));
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<void> _writeWindowsWelcomeMarker(bool seen) async {
-    final file = _windowsWelcomeMarkerFile();
-    if (file == null) return;
-    try {
-      if (seen) {
-        await file.writeAsString('1');
-      } else if (await file.exists()) {
-        await file.delete();
-      }
-    } catch (_) {}
-  }
-
-  /// Returns null (fall back to the Hive flag) if the marker file's
-  /// presence can't be determined, e.g. an unwritable install location.
-  bool? _readWindowsWelcomeMarker() {
-    final file = _windowsWelcomeMarkerFile();
-    if (file == null) return null;
-    try {
-      return file.existsSync();
-    } catch (_) {
-      return null;
-    }
-  }
-
   // --- Player Settings ---
   Future<void> setPlayerSetting(String key, dynamic value) async {
     await _settingsBox.put(key, value);
@@ -968,8 +1117,9 @@ class StorageService {
 
   static const String _kContinueWatchingMigrationV1 =
       'continue_watching_storage_v1_migrated';
-  List<Map<String, dynamic>>? _cachedContinueWatching;
+  ContinueWatchingStorageSnapshot? _cachedContinueWatching;
   bool _continueWatchingCacheDirty = true;
+  int _continueWatchingWritesInFlight = 0;
 
   Future<void> _migrateContinueWatchingStorage() async {
     if (_settingsBox.get(_kContinueWatchingMigrationV1, defaultValue: false) ==
@@ -1151,7 +1301,8 @@ class StorageService {
     String? syncedAccountUid,
     int? syncedAt,
   }) async {
-    final existing = _continueWatchingBox.get(_getKey(item.url));
+    final mainKey = _getKey(item.url);
+    final existing = _continueWatchingBox.get(mainKey);
     final previous = existing is Map
         ? Map<dynamic, dynamic>.from(existing)
         : const <dynamic, dynamic>{};
@@ -1195,14 +1346,60 @@ class StorageService {
         'animeWitcherSyncedAt': previous['animeWitcherSyncedAt'],
     };
 
-    await _continueWatchingBox.put(_getKey(item.url), entry);
     final isSeries =
         item.contentType == MultimediaContentType.series ||
         item.contentType == MultimediaContentType.anime;
-    if (isSeries && lastEpisodeUrl != null && lastEpisodeUrl.isNotEmpty) {
-      await _continueWatchingBox.put('EP_${_getKey(lastEpisodeUrl)}', entry);
+    final episodeKey =
+        isSeries && lastEpisodeUrl != null && lastEpisodeUrl.isNotEmpty
+        ? 'EP_${_getKey(lastEpisodeUrl)}'
+        : null;
+    // A remote import can return the exact already-saved entry on every
+    // foreground sync. Do not invalidate the list cache or rewrite the two
+    // Hive rows unless a value changed or an episode row must be repaired.
+    // Hive exposes in-flight values before they commit, so never take this
+    // shortcut while another Continue Watching write is still pending.
+    if (syncedAccountUid != null &&
+        syncedAt != null &&
+        syncedAt == timestamp &&
+        _continueWatchingWritesInFlight == 0 &&
+        _sameContinueWatchingRow(existing, entry)) {
+      final episode = episodeKey == null
+          ? null
+          : _continueWatchingBox.get(episodeKey);
+      if (episodeKey == null ||
+          identical(existing, episode) ||
+          _sameContinueWatchingRow(episode, entry)) {
+        return;
+      }
     }
-    _continueWatchingCacheDirty = true;
+
+    _continueWatchingWritesInFlight++;
+    try {
+      await _continueWatchingBox.put(mainKey, entry);
+      if (episodeKey != null) {
+        await _continueWatchingBox.put(episodeKey, entry);
+      }
+    } finally {
+      // A failed second put can still leave the main row changed.
+      _continueWatchingCacheDirty = true;
+      _continueWatchingWritesInFlight--;
+    }
+  }
+
+  static bool _sameContinueWatchingRow(
+    Object? raw,
+    Map<String, dynamic> entry,
+  ) {
+    if (raw is! Map || raw.length != entry.length) return false;
+    for (final field in entry.entries) {
+      final existing = raw[field.key];
+      if (existing.runtimeType != field.value.runtimeType ||
+          existing != field.value ||
+          (existing == null && !raw.containsKey(field.key))) {
+        return false;
+      }
+    }
+    return true;
   }
 
   Future<void> markContinueWatchingItemSynced(
@@ -1216,39 +1413,54 @@ class StorageService {
     final entry = Map<String, dynamic>.from(raw);
     entry['animeWitcherSyncedUid'] = accountUid;
     entry['animeWitcherSyncedAt'] = syncedAt;
-    await _continueWatchingBox.put(mainKey, entry);
+    _continueWatchingWritesInFlight++;
+    try {
+      await _continueWatchingBox.put(mainKey, entry);
 
-    final lastEpisodeUrl = entry['lastEpisodeUrl'] as String?;
-    if (lastEpisodeUrl != null && lastEpisodeUrl.isNotEmpty) {
-      final episodeKey = 'EP_${_getKey(lastEpisodeUrl)}';
-      final episodeRaw = _continueWatchingBox.get(episodeKey);
-      if (episodeRaw is Map) {
-        final episodeEntry = Map<String, dynamic>.from(episodeRaw);
-        episodeEntry['animeWitcherSyncedUid'] = accountUid;
-        episodeEntry['animeWitcherSyncedAt'] = syncedAt;
-        await _continueWatchingBox.put(episodeKey, episodeEntry);
+      final lastEpisodeUrl = entry['lastEpisodeUrl'] as String?;
+      if (lastEpisodeUrl != null && lastEpisodeUrl.isNotEmpty) {
+        final episodeKey = 'EP_${_getKey(lastEpisodeUrl)}';
+        final episodeRaw = _continueWatchingBox.get(episodeKey);
+        if (episodeRaw is Map) {
+          final episodeEntry = Map<String, dynamic>.from(episodeRaw);
+          episodeEntry['animeWitcherSyncedUid'] = accountUid;
+          episodeEntry['animeWitcherSyncedAt'] = syncedAt;
+          await _continueWatchingBox.put(episodeKey, episodeEntry);
+        }
       }
+    } finally {
+      _continueWatchingCacheDirty = true;
+      _continueWatchingWritesInFlight--;
     }
-    _continueWatchingCacheDirty = true;
   }
 
   Future<void> removeFromContinueWatching(String url) async {
-    final mainKey = _getKey(url);
-    await _continueWatchingBox.delete(mainKey);
-    final keysToDelete = <dynamic>[];
-    for (var i = 0; i < _continueWatchingBox.length; i++) {
-      final key = _continueWatchingBox.keyAt(i);
-      if (key is! String || !key.startsWith('EP_')) continue;
-      final raw = _continueWatchingBox.get(key);
-      if (raw is Map && raw['url'] == url) keysToDelete.add(key);
+    _continueWatchingWritesInFlight++;
+    try {
+      final mainKey = _getKey(url);
+      await _continueWatchingBox.delete(mainKey);
+      final keysToDelete = <dynamic>[];
+      for (var i = 0; i < _continueWatchingBox.length; i++) {
+        final key = _continueWatchingBox.keyAt(i);
+        if (key is! String || !key.startsWith('EP_')) continue;
+        final raw = _continueWatchingBox.get(key);
+        if (raw is Map && raw['url'] == url) keysToDelete.add(key);
+      }
+      await _continueWatchingBox.deleteAll(keysToDelete);
+    } finally {
+      _continueWatchingCacheDirty = true;
+      _continueWatchingWritesInFlight--;
     }
-    await _continueWatchingBox.deleteAll(keysToDelete);
-    _continueWatchingCacheDirty = true;
   }
 
   Future<void> clearAllContinueWatching() async {
-    await _continueWatchingBox.clear();
-    _continueWatchingCacheDirty = true;
+    _continueWatchingWritesInFlight++;
+    try {
+      await _continueWatchingBox.clear();
+    } finally {
+      _continueWatchingCacheDirty = true;
+      _continueWatchingWritesInFlight--;
+    }
   }
 
   List<Map<String, dynamic>> getContinueWatching() {
@@ -1260,16 +1472,17 @@ class StorageService {
       final key = _continueWatchingBox.keyAt(i);
       if (key is String && key.startsWith('EP_')) continue;
       final raw = _continueWatchingBox.getAt(i);
-      if (raw is Map) items.add(Map<String, dynamic>.from(raw));
+      if (raw is Map) items.add(Map<String, dynamic>.unmodifiable(raw));
     }
     items.sort(
       (a, b) => ((b['timestamp'] as int?) ?? 0).compareTo(
         (a['timestamp'] as int?) ?? 0,
       ),
     );
-    _cachedContinueWatching = items;
+    final snapshot = ContinueWatchingStorageSnapshot._(items);
+    _cachedContinueWatching = snapshot;
     _continueWatchingCacheDirty = false;
-    return items;
+    return snapshot;
   }
 
   Future<void> markHistoryItemSynced(
@@ -1319,26 +1532,126 @@ class StorageService {
     String? lastEpisodeUrl,
     int timestamp,
     int position,
-  ) async {
-    final canonicalUrl = _canonicalMediaUrl(url);
+  ) => _updateHistoryItem(
+    _canonicalMediaUrl(url),
+    lastEpisodeUrl,
+    timestamp,
+    position,
+  );
+
+  /// Applies a contiguous group of known Recently Watched rows in cloud
+  /// order. Only legacy keys are indexed, and the lookup lives for this
+  /// group, not for the lifetime of the history box.
+  Future<void> syncKnownRecentHistoryRows(
+    List<RecentHistoryUpdate> updates, {
+    required String accountUid,
+    required bool Function() isCurrent,
+  }) async {
+    if (updates.isEmpty || !isCurrent()) return;
+    Map<String, List<dynamic>>? aliases;
+    // Normal writes only add canonical/episode keys. If a raw box writer
+    // adds an alias while this group is committing, rebuild before the next
+    // row. Existing indexed entries are also revalidated at the point of use.
+    final changes = updates.length < 2
+        ? null
+        : _historyBox.watch().listen((event) {
+            final value = event.value;
+            if (!event.deleted &&
+                value is Map &&
+                _legacyHistoryUrl(event.key, value) != null) {
+              aliases = null;
+            }
+          });
+    try {
+      for (final update in updates) {
+        if (!isCurrent()) return;
+        final url = _canonicalMediaUrl(update.url);
+        if (changes != null) aliases ??= _indexLegacyHistoryKeys();
+        await _updateHistoryItem(
+          url,
+          update.episodeUrl,
+          update.timestamp,
+          update.position,
+          aliasKeys: aliases == null ? null : aliases![url] ?? const [],
+        );
+        if (!isCurrent()) return;
+        await markHistoryItemSynced(
+          url,
+          accountUid: accountUid,
+          syncedAt: update.timestamp,
+        );
+      }
+    } finally {
+      await changes?.cancel();
+    }
+  }
+
+  String? _legacyHistoryUrl(dynamic key, Map<dynamic, dynamic> entry) {
+    if (key is String && key.startsWith('EP_')) return null;
+    final rawUrl = (entry['url'] ?? '').toString();
+    if (rawUrl.isEmpty) return null;
+    final canonicalUrl = _canonicalMediaUrl(rawUrl);
+    return key == _getKey(canonicalUrl) ? null : canonicalUrl;
+  }
+
+  Map<String, List<dynamic>> _indexLegacyHistoryKeys() {
+    final aliases = <String, List<dynamic>>{};
+    for (var i = 0; i < _historyBox.length; i++) {
+      final key = _historyBox.keyAt(i);
+      final row = _historyBox.getAt(i);
+      if (row is! Map) continue;
+      final url = _legacyHistoryUrl(key, row);
+      if (url != null) (aliases[url] ??= []).add(key);
+    }
+    return aliases;
+  }
+
+  Future<void> _updateHistoryItem(
+    String canonicalUrl,
+    String? lastEpisodeUrl,
+    int timestamp,
+    int position, {
+    List<dynamic>? aliasKeys,
+  }) async {
     final mainKey = _getKey(canonicalUrl);
+    Map<dynamic, dynamic>? latestAlias;
+    var latestTimestamp = -1;
+    final staleMainKeys = <dynamic>[];
+    if (aliasKeys != null) {
+      for (final key in aliasKeys) {
+        final raw = _historyBox.get(key);
+        if (raw is! Map || !_historyEntryMatchesUrl(raw, canonicalUrl)) {
+          continue;
+        }
+        staleMainKeys.add(key);
+        final timestamp = _historyTimestamp(raw);
+        if (latestAlias == null || timestamp > latestTimestamp) {
+          latestAlias = raw;
+          latestTimestamp = timestamp;
+        }
+      }
+    }
     final entry =
-        _historyBox.get(mainKey) ?? _latestHistoryMainEntry(canonicalUrl);
+        _historyBox.get(mainKey) ??
+        (aliasKeys == null
+            ? _latestHistoryMainEntry(canonicalUrl)
+            : latestAlias);
     if (entry is Map) {
       final updatedEntry = Map<String, dynamic>.from(entry);
       updatedEntry['url'] = canonicalUrl;
       updatedEntry['timestamp'] = timestamp;
       updatedEntry['position'] = position;
 
-      final staleMainKeys = <dynamic>[];
-      for (var i = 0; i < _historyBox.length; i++) {
-        final key = _historyBox.keyAt(i);
-        if (key == mainKey || (key is String && key.startsWith('EP_'))) {
-          continue;
-        }
-        final raw = _historyBox.getAt(i);
-        if (raw is Map && _historyEntryMatchesUrl(raw, canonicalUrl)) {
-          staleMainKeys.add(key);
+      if (aliasKeys == null) {
+        for (var i = 0; i < _historyBox.length; i++) {
+          final key = _historyBox.keyAt(i);
+          if (key == mainKey || (key is String && key.startsWith('EP_'))) {
+            continue;
+          }
+          final raw = _historyBox.getAt(i);
+          if (raw is Map && _historyEntryMatchesUrl(raw, canonicalUrl)) {
+            staleMainKeys.add(key);
+          }
         }
       }
       if (staleMainKeys.isNotEmpty) {

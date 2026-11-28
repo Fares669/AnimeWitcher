@@ -1,5 +1,5 @@
 import '../domain/entity/multimedia_item.dart';
-import 'digit_normalization.dart';
+import 'rating_score.dart';
 
 enum CatalogRatingSource { mal, imdb, animeWitcher }
 
@@ -20,19 +20,19 @@ CatalogRating? preferredCatalogRating(MultimediaItem item) {
   if (episodeBadge.isNotEmpty) return null;
 
   final data = item.syncData ?? const <String, String>{};
-  final mal = _positiveScore(data['awMalScore']);
+  final mal = parsePositiveRatingScore(data['awMalScore']);
   if (mal != null) {
     return CatalogRating(source: CatalogRatingSource.mal, score: mal);
   }
 
-  final imdb = _positiveScore(
+  final imdb = parsePositiveRatingScore(
     data['awImdbScore'] ?? data['imdbRate'] ?? data['imdb_rate'],
   );
   if (imdb != null) {
     return CatalogRating(source: CatalogRatingSource.imdb, score: imdb);
   }
 
-  final animeWitcher = _positiveScore(data['awScore']);
+  final animeWitcher = parsePositiveRatingScore(data['awScore']);
   if (animeWitcher != null) {
     return CatalogRating(
       source: CatalogRatingSource.animeWitcher,
@@ -43,18 +43,4 @@ CatalogRating? preferredCatalogRating(MultimediaItem item) {
   return null;
 }
 
-String formatCatalogRatingScore(double score) {
-  return score
-      .toStringAsFixed(2)
-      .replaceFirst(RegExp(r'0+$'), '')
-      .replaceFirst(RegExp(r'[.]$'), '');
-}
-
-double? _positiveScore(String? raw) {
-  final normalized = normalizeLocalizedDigits((raw ?? '').trim());
-  if (normalized.isEmpty) return null;
-  final match = RegExp(r'[0-9]+(?:[.][0-9]+)?').firstMatch(normalized);
-  final score = match == null ? null : double.tryParse(match.group(0)!);
-  if (score == null || score <= 0) return null;
-  return score;
-}
+String formatCatalogRatingScore(double score) => formatRatingScore(score);

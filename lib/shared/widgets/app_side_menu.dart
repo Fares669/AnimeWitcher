@@ -1,5 +1,8 @@
+import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show SynchronousFuture, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,6 +12,98 @@ import '../../core/navigation/taskbar_destination.dart';
 import '../../l10n/generated/app_localizations.dart';
 import 'account_avatar_button.dart';
 import 'account_notifications_button.dart';
+
+const double _sideMenuMaxWidth = 320;
+const _sideMenuAccountInset = EdgeInsets.fromLTRB(8, 8, 12, 8);
+
+/// A cover photo keeps its fetch and error behavior, but only decodes the
+/// physical pixels needed for the drawer. The drawer's closed/Offstage state
+/// still lays out (and warms) this image before its opening animation.
+class _SideMenuCover extends StatelessWidget {
+  const _SideMenuCover({required this.url});
+
+  final String url;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final source = NetworkImage(url);
+      final dpr = MediaQuery.devicePixelRatioOf(context);
+      final layout = constraints.biggest;
+      // The ordinary drawer keeps its cover decode across window resizes and
+      // rotations at the same DPR. Standalone panels can still be wider.
+      final coverSize =
+          Size(
+            math.max(
+              layout.width,
+              _sideMenuMaxWidth - _sideMenuAccountInset.horizontal,
+            ),
+            layout.height,
+          ) *
+          (dpr * 1.25);
+      return Image(
+        key: const ValueKey<String>('app-side-menu-account-cover'),
+        image:
+            !kIsWeb && layout.isFinite && !layout.isEmpty && coverSize.isFinite
+            ? _SideMenuCoverImage(
+                source,
+                coverSize.width.ceil(),
+                coverSize.height.ceil(),
+              )
+            : source,
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => const SizedBox.shrink(),
+      );
+    },
+  );
+}
+
+/// An aspect-preserving BoxFit.cover decode. A wide source needs enough
+/// decoded height, while a portrait source needs enough width; choose one
+/// limiting dimension rather than distorting it or losing crop resolution.
+@immutable
+class _SideMenuCoverImage extends ImageProvider<_SideMenuCoverImage> {
+  const _SideMenuCoverImage(this.source, this.width, this.height);
+
+  final NetworkImage source;
+  final int width;
+  final int height;
+
+  @override
+  Future<_SideMenuCoverImage> obtainKey(ImageConfiguration configuration) =>
+      SynchronousFuture(this);
+
+  @override
+  ImageStreamCompleter loadImage(
+    _SideMenuCoverImage key,
+    ImageDecoderCallback decode,
+  ) {
+    final stream = key.source.loadImage(
+      key.source,
+      (buffer, {getTargetSize}) => decode(
+        buffer,
+        getTargetSize: (sourceWidth, sourceHeight) =>
+            key.width * sourceHeight >= key.height * sourceWidth
+            ? ui.TargetImageSize(width: math.min(key.width, sourceWidth))
+            : ui.TargetImageSize(height: math.min(key.height, sourceHeight)),
+      ),
+    );
+    stream.addEphemeralErrorListener(
+      (_, _) => scheduleMicrotask(() => imageCache.evict(key)),
+    );
+    return stream;
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is _SideMenuCoverImage &&
+      source == other.source &&
+      width == other.width &&
+      height == other.height;
+
+  @override
+  int get hashCode => Object.hash(source, width, height);
+}
 
 /// A row of the side menu that is not a tab: one of the pages the More tab
 /// used to hold, opened over the app.
@@ -113,6 +208,12 @@ class AppSideMenuButton extends StatelessWidget {
   }
 }
 
+typedef AppSideMenuEntriesBuilder = List<AppSideMenuEntry> Function(
+  BuildContext context,
+  WidgetRef ref,
+  bool menuVisible,
+);
+
 /// The phone layout without a bar: the pages fill the screen, and pulling
 /// one to the right — or its menu button — slides it aside to uncover a menu
 /// on the left, the account at its head and the pages under it, as ChatGPT
@@ -131,11 +232,16 @@ class AppSideMenuShell extends StatefulWidget {
     required this.onBackWhenClosed,
     required this.child,
     this.entries = const <AppSideMenuEntry>[],
+    this.entriesBuilder,
     this.showPageMenuButtons = true,
   });
 
   /// The pages under the tabs, after a divider.
   final List<AppSideMenuEntry> entries;
+
+  /// Supplies dynamic entries instead of [entries]. Their providers can be
+  /// observed without rebuilding the page or waking a fully closed drawer.
+  final AppSideMenuEntriesBuilder? entriesBuilder;
 
   final List<TaskbarDestination> destinations;
   final int currentBranchIndex;
@@ -158,7 +264,7 @@ class AppSideMenuShell extends StatefulWidget {
 
   /// The menu's width: most of a phone, never more than a comfortable column.
   static double menuWidthFor(double screenWidth) =>
-      math.min(screenWidth * 0.8, 320);
+      math.min(screenWidth * 0.8, _sideMenuMaxWidth);
 
   @override
   State<AppSideMenuShell> createState() => _AppSideMenuShellState();
@@ -273,6 +379,28 @@ class _AppSideMenuShellState extends State<AppSideMenuShell>
             child: child,
           );
 
+          // The menu's content changes with the shell or its own providers,
+          // not with the animation. Keep it mounted while translating it.
+          Widget panel(List<AppSideMenuEntry> entries) => AppSideMenuPanel(
+            destinations: widget.destinations,
+            currentBranchIndex: widget.currentBranchIndex,
+            entries: entries,
+            onDestination: _pick,
+            onEntry: _entry,
+            onAccount: _account,
+            onClose: _close,
+          );
+
+          final buildEntries = widget.entriesBuilder;
+          final menuPanel = draggable(
+            child: buildEntries == null
+                ? panel(widget.entries)
+                : Consumer(
+                    builder: (context, ref, _) =>
+                        panel(buildEntries(context, ref, !_closed)),
+                  ),
+          );
+
           return ColoredBox(
             color: colors.surfaceContainerLow,
             child: AnimatedBuilder(
@@ -298,17 +426,7 @@ class _AppSideMenuShellState extends State<AppSideMenuShell>
                         offstage: t == 0,
                         child: Transform.translate(
                           offset: Offset(-(1 - t) * width * 0.3, 0),
-                          child: draggable(
-                            child: AppSideMenuPanel(
-                              destinations: widget.destinations,
-                              currentBranchIndex: widget.currentBranchIndex,
-                              entries: widget.entries,
-                              onDestination: _pick,
-                              onEntry: _entry,
-                              onAccount: _account,
-                              onClose: _close,
-                            ),
-                          ),
+                          child: menuPanel,
                         ),
                       ),
                     ),
@@ -420,7 +538,7 @@ class AppSideMenuPanel extends ConsumerWidget {
                 padding: EdgeInsets.zero,
                 children: [
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 8, 12, 8),
+                    padding: _sideMenuAccountInset,
                     child: InkWell(
                       key: const ValueKey<String>('app-side-menu-account'),
                       borderRadius: BorderRadius.circular(16),
@@ -436,16 +554,7 @@ class AppSideMenuPanel extends ConsumerWidget {
                             fit: StackFit.expand,
                             children: [
                               ColoredBox(color: colors.surfaceContainerHighest),
-                              if (cover.isNotEmpty)
-                                Image.network(
-                                  cover,
-                                  key: const ValueKey<String>(
-                                    'app-side-menu-account-cover',
-                                  ),
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, _, _) =>
-                                      const SizedBox.shrink(),
-                                ),
+                              if (cover.isNotEmpty) _SideMenuCover(url: cover),
                               if (cover.isNotEmpty)
                                 ColoredBox(
                                   color: Colors.black.withValues(alpha: 0.38),

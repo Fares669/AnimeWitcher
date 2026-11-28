@@ -169,6 +169,23 @@ class PlayerGestureHandler extends _$PlayerGestureHandler {
     _writingLevel = false;
     _pendingLevel = null;
     _osdTimer?.cancel();
+    _osdTimer = null;
+    // This notifier outlives the player route. Do not retain closures that
+    // capture the disposed controls State and its player/backend references.
+    getSettings = null;
+    getDuration = null;
+    getPosition = null;
+    canSeek = null;
+    getMaxVolumeLevel = null;
+    onInteraction = null;
+    onHideControls = null;
+    onSeekRelative = null;
+    onSeekTo = null;
+    getVolumeLevel = null;
+    setVolumeLevel = null;
+    onVolumeChange = null;
+    toggleMuteLevel = null;
+    onDoubleTapAnimationStart = null;
     final detachedSession = _deviceSession;
     Future.microtask(() {
       if (ref.mounted && detachedSession == _deviceSession) {
@@ -435,9 +452,12 @@ class PlayerGestureHandler extends _$PlayerGestureHandler {
   }
 
   Future<void> handleDoubleTap(Offset tapPosition, double screenWidth) async {
-    if (getDuration?.call() == Duration.zero || getSettings == null) return;
+    final readSettings = getSettings;
+    if (getDuration?.call() == Duration.zero || readSettings == null) return;
 
-    final settings = await getSettings!();
+    final session = _deviceSession;
+    final settings = await readSettings();
+    if (session != _deviceSession) return;
     final isLeft = tapPosition.dx < screenWidth / 2;
     final seconds = settings.seekDuration;
 

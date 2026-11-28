@@ -332,6 +332,132 @@ void main() {
     expect(savedRate, 10);
   });
 
+  test('Anime3rb shelves keep order and fresh isolated cards across writes and accounts', () async {
+    final storage = _LocalLibraryStorage();
+    final accountBackend = _FakeAccountBackend();
+    final account = Anime3rbAccountService(
+      tokenStorage: _MemoryTokenStorage(storage),
+      backend: accountBackend,
+    );
+    final service = Anime3rbLibraryService(
+      storage: storage,
+      accountService: account,
+      backend: HttpAnime3rbLibraryBackend(_LivewireStubTransport()),
+    );
+    addTearDown(service.dispose);
+    addTearDown(account.dispose);
+    await account.completeBrowserAuth(sessionCookie: 'fixture=first');
+    String key(String id) =>
+        'anime3rb_lib_v1:${base64Url.encode(utf8.encode(id))}';
+    Map<String, dynamic> card(String name, int stamp, {bool favorite = true}) =>
+        {
+          'item': {
+            'title': '$name &amp;lt;',
+            'url': 'https://anime3rb.com/titles/$name',
+            'posterUrl': '',
+            'headers': {'x-fixture': 'unchanged'},
+            'tags': ['fixture'],
+            'episodes': [
+              {
+                'name': 'Episode',
+                'url': 'https://example.test/synthetic',
+                'headers': {'x-fixture': 'nested unchanged'},
+              },
+            ],
+          },
+          'category': 'watching',
+          'favorite': favorite,
+          'updatedAtMillis': stamp,
+        };
+    final tieFirst = card('tie-first', 10);
+    final tieNext = card('tie-next', 10, favorite: false);
+    final recent = card('latest', 14);
+    String snapshot() => jsonEncode({
+      'tie-first': tieFirst,
+      'tie-next': tieNext,
+      'latest': recent,
+    });
+    List<String> urls(List<MultimediaItem> cards) => [
+      for (final item in cards) item.url.split('/').last,
+    ];
+    const watching = LibraryCategory.watching;
+    const favorite = LibraryCategory.favorite;
+    await storage.setString(key('99'), snapshot());
+    expect(urls(service.itemsForCategory(watching)), [
+      'latest',
+      'tie-first',
+      'tie-next',
+    ]);
+    final delivered = service.itemsForCategory(favorite);
+    expect(urls(delivered), ['latest', 'tie-first']);
+    expect(service.countForCategory(watching), 3);
+    expect(
+      delivered.first.title,
+      MultimediaItem.fromJson(recent['item'] as Map<String, dynamic>).title,
+    );
+    delivered.first.headers!['x-fixture'] = 'changed';
+    delivered.first.tags!.clear();
+    delivered.first.episodes!.single.headers!['x-fixture'] = 'changed';
+    delivered.clear();
+    final fresh = service.itemsForCategory(favorite);
+    expect(urls(fresh), ['latest', 'tie-first']);
+    expect(fresh.first.headers!['x-fixture'], 'unchanged');
+    expect(
+      fresh.first.episodes!.single.headers!['x-fixture'],
+      'nested unchanged',
+    );
+    expect(fresh.first.tags, ['fixture']);
+
+    await storage.setString(
+      key('99'),
+      jsonEncode({'older': card('older', 30)}),
+    );
+    expect(urls(service.itemsForCategory(watching)), ['older']);
+    await storage.setString(key('99'), '{invalid');
+    expect(service.itemsForCategory(watching), isEmpty);
+    await storage.setString(
+      key('99'),
+      jsonEncode({
+        'valid': card('valid', 30),
+        'bad': {
+          'item': {'title': 7},
+        },
+      }),
+    );
+    expect(service.itemsForCategory(favorite), isEmpty);
+    await storage.setString(key('99'), snapshot());
+
+    // Re-authentication happens between reads, with identical bytes/UID.
+    expect(urls(service.itemsForCategory(watching)), [
+      'latest',
+      'tie-first',
+      'tie-next',
+    ]);
+    await account.signOut(notifyRemote: false);
+    await account.completeBrowserAuth(sessionCookie: 'fixture=relogin');
+    expect(urls(service.itemsForCategory(watching)), [
+      'latest',
+      'tie-first',
+      'tie-next',
+    ]);
+    await storage.setString(
+      key('100'),
+      jsonEncode({'second': card('second-account', 1)}),
+    );
+
+    await account.signOut(notifyRemote: false);
+    expect(service.itemsForCategory(watching), isEmpty);
+    accountBackend.profile = const Anime3rbProfile(
+      accountId: '100',
+      userSlug: 'tester-two',
+      displayName: 'Fixture Two',
+    );
+    await account.completeBrowserAuth(sessionCookie: 'fixture=second');
+    expect(urls(service.itemsForCategory(watching)), ['second-account']);
+    await storage.setString(key('100'), null);
+    expect(service.itemsForCategory(watching), isEmpty);
+  });
+
   test('Anime3rbLibraryService supports optimistic sync, outbox retry, rollback, and Witcher isolation', () async {
     final storage = _LocalLibraryStorage();
     await storage.setLibraryItemCategory(

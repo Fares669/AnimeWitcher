@@ -173,6 +173,7 @@ AnimeWitcherNativeProvider _provider(Dio dio, {bool highQuality = true}) =>
     AnimeWitcherNativeProvider(
       dio,
       _PosterQualitySettingsRepository(highQuality: highQuality),
+      algoliaSearchApiKey: 'synthetic-poster-quality-fixture',
     );
 
 Iterable<RequestOptions> _batchGets(List<RequestOptions> requests) =>

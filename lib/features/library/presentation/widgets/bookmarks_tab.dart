@@ -338,12 +338,11 @@ class LibraryEmptyState extends ConsumerWidget {
     final isManga = mediaKind == LibraryMediaKind.manga;
     final signedIn =
         isManga ||
-        (ref
-                .watch(animeWitcherAccountControllerProvider)
-                .asData
-                ?.value
-                .isSignedIn ??
-            false);
+        ref.watch(
+          animeWitcherAccountControllerProvider.select(
+            (account) => account.asData?.value.isSignedIn ?? false,
+          ),
+        );
     final colors = Theme.of(context).colorScheme;
     return Center(
       child: Padding(

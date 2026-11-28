@@ -11,6 +11,7 @@ import 'package:animewitcher/core/utils/episode_label.dart';
 import 'package:animewitcher/shared/widgets/thumbnail_error_placeholder.dart';
 
 import 'hotstar_player_style.dart';
+import 'player_key_activation.dart';
 import 'player_prompt_placement.dart';
 
 class NextEpisodeOverlay extends StatefulWidget {
@@ -317,6 +318,7 @@ class _NextEpisodeOverlayState extends State<NextEpisodeOverlay>
             if (imageUrl != null)
               ArtworkDecode(
                 paintedWidth: cardWidth,
+                sizeHighQualityToDisplay: true,
                 builder: (BuildContext context, int? decodeWidth) =>
                     CachedNetworkImage(
                       imageUrl: imageUrl,
@@ -651,7 +653,6 @@ class _PlayNowButton extends StatefulWidget {
 
 class _PlayNowButtonState extends State<_PlayNowButton>
     with SingleTickerProviderStateMixin {
-  FocusNode? _focusNode;
   bool _isFocused = false;
   bool _isHovered = false;
   late AnimationController _shineController;
@@ -667,18 +668,11 @@ class _PlayNowButtonState extends State<_PlayNowButton>
       vsync: this,
       duration: const Duration(milliseconds: 1000),
     );
-    if (widget.isTv) {
-      _focusNode = widget.focusNode ?? FocusNode();
-      _focusNode!.addListener(() {
-        if (mounted) setState(() => _isFocused = _focusNode!.hasFocus);
-      });
-    }
   }
 
   @override
   void dispose() {
     _shineController.dispose();
-    if (widget.focusNode == null) _focusNode?.dispose();
     super.dispose();
   }
 
@@ -807,19 +801,15 @@ class _PlayNowButtonState extends State<_PlayNowButton>
 
     if (widget.isTv) {
       return Focus(
-        focusNode: _focusNode,
-        autofocus: true,
-        onKeyEvent: (node, event) {
-          if (event is! KeyDownEvent) return KeyEventResult.ignored;
-          final key = event.logicalKey;
-          if (key == LogicalKeyboardKey.select ||
-              key == LogicalKeyboardKey.enter ||
-              key == LogicalKeyboardKey.space) {
-            widget.onPressed();
-            return KeyEventResult.handled;
+        focusNode: widget.focusNode,
+        onFocusChange: (focused) {
+          if (mounted && focused != _isFocused) {
+            setState(() => _isFocused = focused);
           }
-          return KeyEventResult.ignored;
         },
+        autofocus: true,
+        onKeyEvent: (_, event) =>
+            handlePlayerActivationKey(event, widget.onPressed),
         child: button,
       );
     }
@@ -849,29 +839,11 @@ class _CancelButton extends StatefulWidget {
 }
 
 class _CancelButtonState extends State<_CancelButton> {
-  FocusNode? _focusNode;
   bool _isFocused = false;
   bool _isHovered = false;
 
   bool get _isActive => _isFocused || _isHovered;
   static const double _skew = -0.21;
-
-  @override
-  void initState() {
-    super.initState();
-    if (widget.isTv) {
-      _focusNode = widget.focusNode ?? FocusNode();
-      _focusNode!.addListener(() {
-        if (mounted) setState(() => _isFocused = _focusNode!.hasFocus);
-      });
-    }
-  }
-
-  @override
-  void dispose() {
-    if (widget.focusNode == null) _focusNode?.dispose();
-    super.dispose();
-  }
 
   void _onHover(bool hovering) {
     if (!mounted) return;
@@ -997,7 +969,12 @@ class _CancelButtonState extends State<_CancelButton> {
 
     if (widget.isTv) {
       return Focus(
-        focusNode: _focusNode,
+        focusNode: widget.focusNode,
+        onFocusChange: (focused) {
+          if (mounted && focused != _isFocused) {
+            setState(() => _isFocused = focused);
+          }
+        },
         onKeyEvent: (node, event) {
           if (event is! KeyDownEvent) return KeyEventResult.ignored;
           final key = event.logicalKey;

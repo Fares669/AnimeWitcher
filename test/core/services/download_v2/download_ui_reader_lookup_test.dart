@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
@@ -172,8 +173,8 @@ void main() {
       await IOOverrides.runZoned(() async {
         await controller.load();
         await digestRead.future.timeout(const Duration(seconds: 2));
-        // The final digest has no further I/O before local preload publication.
-        // This event-loop barrier drains its completion microtasks first.
+        // The verified handle reached EOF and the path was checked. Let the result
+        // propagate through the local preload before mutating the page.
         await Future<void>.delayed(Duration.zero);
       }, createDirectory: (path) => _DigestObservedDirectory(
         parentZone.run(() => Directory(path)), adjacentPage.path, digestRead,
@@ -233,6 +234,7 @@ class _DigestObservedFile implements File {
   _DigestObservedFile(this.file, this.done);
   final File file;
   final Completer<void> done;
+  bool _readCompleted = false;
   @override
   String get path => file.path;
   @override
@@ -242,14 +244,39 @@ class _DigestObservedFile implements File {
   @override
   Future<int> length() => file.length();
   @override
-  Future<RandomAccessFile> open({FileMode mode = FileMode.read}) => file.open(mode: mode);
+  Future<FileStat> stat() async {
+    final metadata = await file.stat();
+    if (_readCompleted && !done.isCompleted) done.complete();
+    return metadata;
+  }
   @override
-  Stream<List<int>> openRead([int? start, int? end]) => file.openRead(start, end).transform(
-    StreamTransformer<List<int>, List<int>>.fromHandlers(handleDone: (sink) {
-      if (!done.isCompleted) done.complete();
-      sink.close();
-    }),
-  );
+  Future<RandomAccessFile> open({FileMode mode = FileMode.read}) async =>
+      _DigestObservedHandle(await file.open(mode: mode), () {
+        _readCompleted = true;
+      });
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+final class _DigestObservedHandle implements RandomAccessFile {
+  _DigestObservedHandle(this.file, this.onReadComplete);
+  final RandomAccessFile file;
+  final void Function() onReadComplete;
+  bool _reachedEof = false;
+
+  @override
+  Future<Uint8List> read(int count) async {
+    final bytes = await file.read(count);
+    _reachedEof = bytes.isEmpty;
+    return bytes;
+  }
+
+  @override
+  Future<void> close() async {
+    await file.close();
+    if (_reachedEof) onReadComplete();
+  }
+
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

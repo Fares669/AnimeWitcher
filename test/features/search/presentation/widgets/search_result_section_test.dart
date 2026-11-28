@@ -1,6 +1,7 @@
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/features/search/presentation/widgets/search_result_section.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+import 'package:animewitcher/shared/widgets/anime_catalog_shimmer.dart';
 import 'package:animewitcher/shared/widgets/catalog_direction.dart';
 import 'package:animewitcher/shared/widgets/multimedia_card.dart';
 import 'package:animewitcher/shared/widgets/shimmer_placeholder.dart';
@@ -82,6 +83,26 @@ void main() {
 
     await tester.pump();
     expect(find.byType(ShimmerPlaceholder), findsWidgets);
+
+    int outerBoundaries(Finder tile) {
+      var count = 0;
+      tester.element(tile.first).visitAncestorElements((ancestor) {
+        if (ancestor.widget is SliverGrid) return false;
+        if (ancestor.widget is RepaintBoundary) count++;
+        return true;
+      });
+      return count;
+    }
+
+    // MultimediaCard's own inner boundary isolates its poster/hover paint.
+    // Tail placeholders need a separate boundary for their animation.
+    final card = find.byType(MultimediaCard);
+    expect(outerBoundaries(card), 0);
+    expect(
+      find.descendant(of: card, matching: find.byType(RepaintBoundary)),
+      findsWidgets,
+    );
+    expect(outerBoundaries(find.byType(AnimePosterShimmer)), 1);
   });
 
   testWidgets('search result cards fill right to left in Arabic', (

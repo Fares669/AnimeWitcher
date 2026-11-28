@@ -40,10 +40,10 @@ class MangaViewAllScreen<T> extends StatefulWidget {
 
 class _MangaViewAllScreenState<T> extends State<MangaViewAllScreen<T>> {
   final ScrollController _scroll = ScrollController();
-  late final OffsetPager<T> _pager = OffsetPager<T>(
-    keyOf: widget.itemKey,
-    stopOnEmptyPage: true,
-  );
+  late OffsetPager<T> _pager = _newPager();
+
+  OffsetPager<T> _newPager() =>
+      OffsetPager<T>(keyOf: widget.itemKey, stopOnEmptyPage: true);
 
   @override
   void initState() {
@@ -59,18 +59,34 @@ class _MangaViewAllScreenState<T> extends State<MangaViewAllScreen<T>> {
   }
 
   Future<void> _reload() async {
-    setState(_pager.reset);
+    // An in-flight append keeps its own pager, never the refreshed one.
+    final retired = _pager;
+    setState(() {
+      _pager = _newPager();
+      // Release the previous catalog while its network response settles.
+      retired.reset();
+    });
     await _loadMore();
   }
 
   Future<void> _loadMore() async {
-    if (_pager.loading || !_pager.hasMore) return;
-    final future = _pager.loadNext((offset) => widget.load(offset));
+    if (!mounted || _pager.loading || !_pager.hasMore) return;
+    final pager = _pager;
+    bool isCurrent() => mounted && identical(pager, _pager);
+    final future = pager.loadNext((offset) async {
+      final page = await widget.load(offset);
+      if (isCurrent()) return page;
+      // Don't traverse, deduplicate or retain an obsolete page.
+      return (items: <T>[], nextOffset: offset, hasMore: false);
+    });
     setState(() {});
     await future;
-    if (mounted) setState(() {});
-    // A first page too short to scroll never asks for the next one.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _onScroll());
+    if (!isCurrent()) return;
+    setState(() {});
+    // Fill a viewport whose first page is too short to scroll.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (isCurrent()) _onScroll();
+    });
   }
 
   void _onScroll() {

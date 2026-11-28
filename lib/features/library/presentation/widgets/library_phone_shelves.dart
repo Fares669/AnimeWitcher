@@ -8,7 +8,6 @@ import '../../../../core/account/account_providers.dart';
 import '../../../../core/extensions/extension_manager.dart';
 import '../../../../core/extensions/providers/witanime_provider.dart';
 import '../../../../core/storage/library_category.dart';
-import '../../../../core/storage/library_repository.dart';
 import '../../../../core/storage/storage_service.dart';
 import '../../../../shared/widgets/app_search_field.dart';
 import '../../../../shared/widgets/app_side_menu.dart';
@@ -47,6 +46,14 @@ typedef _LibraryListTab = ({
   LibraryCategory? category,
 });
 
+typedef _LibrarySearchResults = ({
+  String input,
+  LibraryTitleQuery query,
+  LibraryMediaKind kind,
+  List<HistoryItem>? history,
+  List<MultimediaItem> items,
+});
+
 /// The phone library is always a poster grid. The bar below search selects a
 /// concrete list; the filter chooses Anime, Manga, or favorite Characters and
 /// which list tabs are visible.
@@ -73,11 +80,13 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
   final Map<(LibraryMediaKind, LibraryCategory), int?> _tabCounts = {};
   final PageStorageBucket _scrollBucket = PageStorageBucket();
   Object? _listsFor;
+  _LibrarySearchResults? _searchResults;
 
   @override
   void initState() {
     super.initState();
-    _prefs = LibraryShelfPrefs(ref.read(storageServiceProvider));
+    _prefs = LibraryShelfPrefs(ref.read(storageServiceProvider))
+      ..addListener(_forgetSearchResults);
     final library = ref.read(libraryProvider);
     _section = library.mediaKind == LibraryMediaKind.manga
         ? LibraryPhoneSection.manga
@@ -114,59 +123,101 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
     super.dispose();
   }
 
-  List<MultimediaItem> _list(
-    LibraryRepository repository,
-    LibraryMediaKind kind,
-    LibraryCategory category,
-  ) => _lists.putIfAbsent(
-    (kind, category),
-    () => sortLibraryItems(
-      ref.read(libraryProvider.notifier).itemsForCategory(kind, category),
-      _prefs.sort,
-    ),
-  );
+  List<MultimediaItem> _list(LibraryMediaKind kind, LibraryCategory category) =>
+      _lists.putIfAbsent(
+        (kind, category),
+        () => sortLibraryItems(
+          ref.read(libraryProvider.notifier).itemsForCategory(kind, category),
+          _prefs.sort,
+        ),
+      );
 
-  List<MultimediaItem> _entries(
+  Iterable<MultimediaItem> _entries(
     LibraryMediaKind kind,
-    LibraryRepository repository,
     List<HistoryItem> history, {
     required bool witanimeAnime,
-  }) {
-    final seen = <String>{};
-    final entries = <MultimediaItem>[];
-    for (final category in LibraryCategory.valuesForCatalog(
+  }) sync* {
+    final categories = LibraryCategory.valuesForCatalog(
       witanimeAnime: witanimeAnime,
-    )) {
-      if (!_prefs.shows(category)) continue;
-      for (final item in _list(repository, kind, category)) {
-        if (seen.add(item.url)) entries.add(item);
+    ).where(_prefs.shows);
+    final missing = categories
+        .where((category) => !_lists.containsKey((kind, category)))
+        .toList(growable: false);
+    if (missing.isNotEmpty) {
+      final shelves = ref
+          .read(libraryProvider.notifier)
+          .itemsForSearchShelves(kind, missing);
+      for (final entry in shelves.entries) {
+        _lists[(kind, entry.key)] = sortLibraryItems(entry.value, _prefs.sort);
+      }
+    }
+    final seen = <String>{};
+    for (final category in categories) {
+      for (final item in _list(kind, category)) {
+        if (seen.add(item.url)) yield item;
       }
     }
     if (libraryKindHasRecent(kind) && _prefs.showsRecent()) {
       for (final entry in sortLibraryHistory(
-        libraryRecentFor(history, kind),
+        libraryRecentEntries(history, kind).toList()
+          ..sort((a, b) => b.timestamp.compareTo(a.timestamp)),
         _prefs.sort,
       )) {
-        if (seen.add(entry.item.url)) entries.add(entry.item);
+        if (seen.add(entry.item.url)) yield entry.item;
       }
     }
-    return entries;
   }
 
-  List<MultimediaItem> _matches(List<MultimediaItem> entries) => [
-    for (final item in entries)
-      if (libraryItemMatches(item, _query)) item,
-  ];
+  void _forgetSearchResults() => _searchResults = null;
+
+  List<MultimediaItem> _searchItems(
+    LibraryMediaKind kind,
+    List<HistoryItem> history, {
+    required bool witanimeAnime,
+  }) {
+    // WatchHistory publishes immutable snapshots. Manga and hidden history
+    // do not participate in the search, so their updates need not reset it.
+    final sourceHistory = libraryKindHasRecent(kind) && _prefs.showsRecent()
+        ? history
+        : null;
+    final prior = _searchResults;
+    final reusable =
+        prior != null &&
+        prior.kind == kind &&
+        identical(prior.history, sourceHistory);
+    if (reusable && prior.input == _query) return prior.items;
+
+    final query = LibraryTitleQuery(_query);
+    final List<MultimediaItem> items;
+    if (reusable && query.sameWordsAs(prior.query)) {
+      items = prior.items;
+    } else if (reusable && query.narrows(prior.query)) {
+      items = query.filter(prior.items);
+    } else {
+      items = query.filter(
+        _entries(kind, history, witanimeAnime: witanimeAnime),
+      );
+    }
+    // Keep only the list that the grid would already hold. Clearing the field
+    // or changing a data/prefs source releases this view-local reference.
+    _searchResults = (
+      input: _query,
+      query: query,
+      kind: kind,
+      history: sourceHistory,
+      items: items,
+    );
+    return items;
+  }
 
   List<_LibraryListTab> _listTabs(
     LibraryMediaKind kind,
-    LibraryRepository repository,
     List<HistoryItem> history, {
     required bool witanimeAnime,
   }) {
     final tabs = <_LibraryListTab>[];
     if (libraryKindHasRecent(kind) && _prefs.showsRecent()) {
-      final count = libraryRecentFor(history, kind).length;
+      final count = libraryRecentEntries(history, kind).length;
       if (!_prefs.hideEmpty || count > 0) {
         tabs.add((
           key: LibraryShelfPrefs.recentKey,
@@ -176,15 +227,24 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
         ));
       }
     }
-    for (final category in LibraryCategory.valuesForCatalog(
+    final categories = LibraryCategory.valuesForCatalog(
       witanimeAnime: witanimeAnime,
-    )) {
-      if (!_prefs.shows(category)) continue;
+    ).where(_prefs.shows);
+    final missing = categories.where(
+      (category) => !_tabCounts.containsKey((kind, category)),
+    );
+    if (missing.isNotEmpty) {
+      final counts = ref
+          .read(libraryProvider.notifier)
+          .categoryCountsFor(kind, missing);
+      for (final entry in counts.entries) {
+        _tabCounts[(kind, entry.key)] = entry.value;
+      }
+    }
+
+    for (final category in categories) {
       // The server total can exceed the number of loaded poster cards.
-      final count = _tabCounts.putIfAbsent(
-        (kind, category),
-        () => ref.read(libraryProvider.notifier).categoryCount(kind, category),
-      );
+      final count = _tabCounts[(kind, category)];
       if (_prefs.hideEmpty && count == 0) continue;
       tabs.add((
         key: category.storageKey,
@@ -209,13 +269,10 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
     final category = tab.category;
     if (category != null) {
       unawaited(ref.read(libraryProvider.notifier).select(kind, category));
-    } else if (tab.key == LibraryShelfPrefs.recentKey) {
-      unawaited(_syncHistory());
     }
   }
 
   Widget _listBody(
-    LibraryRepository repository,
     LibraryMediaKind kind,
     _LibraryListTab tab, {
     required bool isActive,
@@ -224,10 +281,11 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
       return RecentWatchedBody(
         key: const ValueKey<String>('library-recent'),
         sort: _prefs.sort,
+        isActive: isActive,
       );
     }
     final category = tab.category!;
-    final items = _list(repository, kind, category);
+    final items = _list(kind, category);
     final page = ref
         .read(libraryProvider.notifier)
         .pageInfo(kind, category, loadedLocalCount: items.length);
@@ -270,10 +328,10 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
   @override
   Widget build(BuildContext context) {
     final library = ref.watch(libraryProvider);
-    final witanimeActive = ref.watch(activeProviderProvider) is WitanimeProvider;
+    final witanimeActive =
+        ref.watch(activeProviderProvider) is WitanimeProvider;
     final dataRevision = ref.watch(accountDataRevisionProvider);
     final history = ref.watch(watchHistoryProvider);
-    final repository = ref.read(libraryRepositoryProvider);
     final colors = Theme.of(context).colorScheme;
 
     return ListenableBuilder(
@@ -297,13 +355,14 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
         if (listsFor != _listsFor) {
           _lists.clear();
           _tabCounts.clear();
+          _forgetSearchResults();
           _listsFor = listsFor;
         }
 
         final searching = _query.trim().isNotEmpty;
         final kind = _sectionKind(_section);
-        final witanimeAnime =
-            witanimeActive && kind == LibraryMediaKind.anime;
+        if (!searching || kind == null) _forgetSearchResults();
+        final witanimeAnime = witanimeActive && kind == LibraryMediaKind.anime;
         final tabs = _section == LibraryPhoneSection.characters
             ? <_LibraryListTab>[
                 (
@@ -313,12 +372,7 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
                   category: null,
                 ),
               ]
-            : _listTabs(
-                kind!,
-                repository,
-                history,
-                witanimeAnime: witanimeAnime,
-              );
+            : _listTabs(kind!, history, witanimeAnime: witanimeAnime);
         final selected = _effectiveTab(tabs);
         final selectedIndex = selected == null
             ? 0
@@ -346,13 +400,10 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
                     embedded: true,
                   );
                 } else if (searching) {
-                  final shown = _matches(
-                    _entries(
-                      kind!,
-                      repository,
-                      history,
-                      witanimeAnime: witanimeAnime,
-                    ),
+                  final shown = _searchItems(
+                    kind!,
+                    history,
+                    witanimeAnime: witanimeAnime,
                   );
                   body = shown.isEmpty
                       ? Center(
@@ -391,7 +442,6 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
                         for (final tab in tabs)
                           Builder(
                             builder: (_) => _listBody(
-                              repository,
                               kind!,
                               tab,
                               isActive: tab.key == selected?.key,
@@ -521,7 +571,8 @@ class LibraryFilterPanel extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final witanimeActive = ref.watch(activeProviderProvider) is WitanimeProvider;
+    final witanimeActive =
+        ref.watch(activeProviderProvider) is WitanimeProvider;
     return ListenableBuilder(
       listenable: prefs,
       builder: (context, _) {

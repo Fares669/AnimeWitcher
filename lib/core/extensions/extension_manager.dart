@@ -46,22 +46,26 @@ final anime3rbCatalogProvider = Provider<Anime3rbProvider?>((ref) {
 class ExtensionManager extends _$ExtensionManager {
   @override
   List<AnimeWitcherProvider> build() {
+    final native = AnimeWitcherNativeProvider(
+      ref.watch(dioClientProvider),
+      ref.watch(settingsRepositoryProvider),
+      resolveAnimeByMalIds: ref
+          .watch(animeWitcherAccountServiceProvider)
+          .resolveAnimeByMalIds,
+      isEcchiHidden: () =>
+          ref
+              .read(animeWitcherAccountServiceProvider)
+              .snapshot
+              .profile
+              ?.privacySettings
+              .hideEcchiAnime ??
+          false,
+    );
+    ref.listen(accountDataRevisionProvider, (_, _) {
+      native.invalidateMangaCatalog();
+    });
     return <AnimeWitcherProvider>[
-      AnimeWitcherNativeProvider(
-        ref.watch(dioClientProvider),
-        ref.watch(settingsRepositoryProvider),
-        resolveAnimeByMalIds: ref
-            .watch(animeWitcherAccountServiceProvider)
-            .resolveAnimeByMalIds,
-        isEcchiHidden: () =>
-            ref
-                .read(animeWitcherAccountServiceProvider)
-                .snapshot
-                .profile
-                ?.privacySettings
-                .hideEcchiAnime ??
-            false,
-      ),
+      native,
       ?ref.watch(witanimeCatalogProvider),
       ?ref.watch(anime3rbCatalogProvider),
     ];

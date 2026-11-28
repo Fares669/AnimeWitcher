@@ -7,7 +7,6 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import '../../../home/presentation/widgets/home_section_header.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../../../core/account/account_providers.dart';
@@ -15,11 +14,12 @@ import '../../../../core/account/firestore_rest_client.dart';
 import '../../../../core/account/animewitcher_comment_models.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/extensions/providers/anime3rb_provider.dart';
+import '../../../../core/utils/avatar_image.dart';
 import '../../../../core/utils/localized_text.dart';
 import '../../../comments/presentation/anime3rb_comments_screen.dart';
 import '../../../comments/presentation/animewitcher_comments_screen.dart';
 import '../../../comments/presentation/animewitcher_replies_screen.dart';
-import '../../../../core/utils/avatar_image.dart';
+import '../../../home/presentation/widgets/home_section_header.dart';
 
 const Key kDetailsCommentsPreviewKey = Key('details-comments-preview');
 
@@ -41,7 +41,9 @@ class DetailsCommentsPreview extends ConsumerStatefulWidget {
 
 class _DetailsCommentsPreviewState
     extends ConsumerState<DetailsCommentsPreview> {
-  List<AnimeWitcherComment> _comments = const <AnimeWitcherComment>[];
+  // Keep each page's rows stable across pagination and parent rebuilds. A
+  // fresh backend read replaces the snapshot, including its action targets.
+  final List<Widget> _reviewRows = <Widget>[];
   bool _loading = true;
   bool _startedLoading = false;
   bool _loadingMore = false;
@@ -116,7 +118,7 @@ class _DetailsCommentsPreviewState
     super.didUpdateWidget(oldWidget);
     if (oldWidget.item.url != widget.item.url) {
       _startedLoading = false;
-      _comments = const <AnimeWitcherComment>[];
+      _reviewRows.clear();
       _loading = true;
       _loadingMore = false;
       _hasMore = true;
@@ -133,6 +135,7 @@ class _DetailsCommentsPreviewState
       return;
     }
     setState(() {
+      _reviewRows.clear();
       _loading = true;
       _loadingMore = false;
       _hasMore = true;
@@ -145,7 +148,9 @@ class _DetailsCommentsPreviewState
           .loadComments(target, limit: kDetailsCommentsPageSize);
       if (!mounted || widget.item.url != itemUrl) return;
       setState(() {
-        _comments = page.items;
+        _reviewRows
+          ..clear()
+          ..addAll(page.items.map(_reviewRow));
         _cursor = page.cursor;
         _hasMore = page.hasMore;
         _loading = false;
@@ -174,7 +179,7 @@ class _DetailsCommentsPreviewState
           );
       if (!mounted || widget.item.url != itemUrl) return;
       setState(() {
-        _comments = <AnimeWitcherComment>[..._comments, ...page.items];
+        _reviewRows.addAll(page.items.map(_reviewRow));
         _cursor = page.cursor;
         // A page that came back short is the end of them, whatever it says.
         _hasMore = page.hasMore && page.items.isNotEmpty;
@@ -208,6 +213,15 @@ class _DetailsCommentsPreviewState
     );
     if (mounted) _load();
   }
+
+  Widget _reviewRow(AnimeWitcherComment comment) => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: _CommentRow(
+      comment: comment,
+      onTap: _openAll,
+      onReplies: () => _openReplies(comment),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -257,7 +271,7 @@ class _DetailsCommentsPreviewState
               ),
               onTap: _load,
             )
-          else if (_comments.isEmpty)
+          else if (_reviewRows.isEmpty)
             _PreviewNotice(
               text: appText(
                 context,
@@ -267,15 +281,7 @@ class _DetailsCommentsPreviewState
               onTap: _openAll,
             )
           else ...[
-            for (final comment in _comments)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: _CommentRow(
-                  comment: comment,
-                  onTap: _openAll,
-                  onReplies: () => _openReplies(comment),
-                ),
-              ),
+            ..._reviewRows,
             if (_loadingMore)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 16),

@@ -23,91 +23,49 @@ Future<void> showAppLayoutPicker(
     isDesktopPlatform: wide,
   );
 
-  return showGlassDialog<void>(
+  return showGlassPreferencePicker(
     context: context,
-    barrierDismissible: !firstRun,
-    builder: (dialogContext) => PopScope(
-      canPop: !firstRun,
-      child: StatefulBuilder(
-        builder: (context, setState) {
-          final width = (MediaQuery.sizeOf(context).width - 64)
-              .clamp(280.0, 760.0)
-              .toDouble();
-          return AlertDialog(
-            surfaceTintColor: Colors.transparent,
-            // A short phone scrolls rather than running the cards into the
-            // buttons.
-            scrollable: true,
-            title: Text(firstRun ? 'اختر شكل التطبيق' : 'شكل التطبيق'),
-            content: SizedBox(
-              width: width,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    'مكان قائمة التنقل. يمكنك تغييره لاحقًا من الإعدادات.',
-                    style: Theme.of(context).textTheme.bodyMedium,
+    firstRun: firstRun,
+    maxWidth: 760,
+    // A short phone scrolls rather than running the cards into the buttons.
+    scrollable: true,
+    title: firstRun ? 'اختر شكل التطبيق' : 'شكل التطبيق',
+    description: 'مكان قائمة التنقل. يمكنك تغييره لاحقًا من الإعدادات.',
+    onConfirm: () => ref.read(appLayoutStyleProvider.notifier).select(selected),
+    // A phone's two side by side, each an upright phone: a row shares the width
+    // out exactly, where two halves in a wrap could round over and fold.
+    buildChoices: (setState, width) => !wide
+        ? Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var i = 0; i < choices.length; i++) ...[
+                if (i > 0) const SizedBox(width: 12),
+                Expanded(
+                  child: AppLayoutOptionCard(
+                    style: choices[i],
+                    selected: choices[i] == selected,
+                    phone: true,
+                    onTap: () => setState(() => selected = choices[i]),
                   ),
-                  const SizedBox(height: 16),
-                  // A phone's two side by side, each an upright phone: a row
-                  // shares the width out exactly, where two halves in a wrap
-                  // could round over and fold onto a second line.
-                  if (!wide)
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        for (var i = 0; i < choices.length; i++) ...[
-                          if (i > 0) const SizedBox(width: 12),
-                          Expanded(
-                            child: AppLayoutOptionCard(
-                              style: choices[i],
-                              selected: choices[i] == selected,
-                              phone: true,
-                              onTap: () =>
-                                  setState(() => selected = choices[i]),
-                            ),
-                          ),
-                        ],
-                      ],
-                    )
-                  else
-                    Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      children: [
-                        for (final style in choices)
-                          SizedBox(
-                            width: width >= 600 ? (width - 24) / 3 : width,
-                            child: AppLayoutOptionCard(
-                              style: style,
-                              selected: style == selected,
-                              onTap: () => setState(() => selected = style),
-                            ),
-                          ),
-                      ],
-                    ),
-                ],
-              ),
-            ),
-            actions: [
-              if (!firstRun)
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: Text('إلغاء'),
                 ),
-              FilledButton(
-                onPressed: () {
-                  ref.read(appLayoutStyleProvider.notifier).select(selected);
-                  Navigator.of(dialogContext).pop();
-                },
-                child: Text('تطبيق'),
-              ),
+              ],
             ],
-          );
-        },
-      ),
-    ),
+          )
+        : Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: [
+              for (final style in choices)
+                SizedBox(
+                  width: width >= 600 ? (width - 24) / 3 : width,
+                  child: AppLayoutOptionCard(
+                    style: style,
+                    selected: style == selected,
+                    onTap: () => setState(() => selected = style),
+                  ),
+                ),
+            ],
+          ),
   );
 }
 

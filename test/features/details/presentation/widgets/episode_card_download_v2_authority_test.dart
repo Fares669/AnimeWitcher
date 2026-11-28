@@ -24,7 +24,7 @@ void main() {
       'lib/features/details/presentation/widgets/episode_card.dart',
     ).readAsStringSync();
 
-    expect(source, contains('completedEpisodeDownload'));
+    expect(source, contains('episodeDownloadsForDetailsProvider'));
     expect(source, contains('Icons.delete_outline_rounded'));
     expect(source, contains('confirmAndRemoveDownload'));
     expect(source, isNot(contains('icon: Icons.download_done_rounded')));

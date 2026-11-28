@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:animewitcher/features/player/presentation/player_controller.dart';
 import 'package:animewitcher/features/player/presentation/widgets/player_stream_widgets.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -14,6 +15,10 @@ class _DeviceVolume extends PlayerController {
 
   @override
   PlayerState build() => const PlayerState();
+
+  void publishSpeed(double speed) {
+    state = state.copyWith(playbackSpeed: speed);
+  }
 
   @override
   Future<double> getVolumeLevel() async =>
@@ -51,6 +56,43 @@ void main() {
     await tester.pump();
     await tester.pump();
   }
+
+  testWidgets('playback state does not redraw the unchanged device volume', (
+    tester,
+  ) async {
+    final controller = _DeviceVolume();
+    await mount(tester, controller);
+    final slider = find.byTooltip('20%');
+    final mute = find.byTooltip('كتم الصوت');
+    expect(slider, findsOneWidget);
+    expect(mute, findsOneWidget);
+    final button = tester.element(mute);
+    final originalBounds = tester.getRect(slider);
+    var replacements = 0;
+    for (var i = 1; i <= 12; i++) {
+      final previous = tester.widget(slider);
+      controller.publishSpeed(1 + i * .05);
+      await tester.pump();
+      if (!identical(previous, tester.widget(slider))) replacements++;
+      expect(tester.getRect(slider), originalBounds);
+      expect(tester.element(mute), same(button));
+    }
+    debugPrint('C23_VOLUME_WIDGETS replacements=$replacements');
+    expect(replacements, 0);
+
+    // The real slider still writes mute and restore under keyboard focus.
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+    expect(FocusManager.instance.primaryFocus?.context, isNotNull);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(controller.writes, [0.0]);
+    expect(find.byTooltip('0%'), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(controller.writes, [0.0, 0.2]);
+    expect(find.byTooltip('20%'), findsOneWidget);
+  });
 
   testWidgets('failed device write restores the actual slider level', (
     tester,

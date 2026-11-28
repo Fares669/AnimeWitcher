@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:path/path.dart' as p;
@@ -214,6 +216,21 @@ List<List<DownloadItem>> groupDownloadsByEpisodeOrFile(
   List<DownloadItem> items,
 ) {
   if (items.isEmpty) return const [];
+  // Once every row has a logical ID, the legacy graph never looks at
+  // file/URL aliases. Insertion order is the first row of each bucket,
+  // exactly the same order the graph reports for those groups.
+  bool knownLogical(DownloadItem item) =>
+      item.logicalId?.trim().isNotEmpty == true;
+  if (knownLogical(items.first) &&
+      knownLogical(items.last) &&
+      items.every(knownLogical)) {
+    final logicalGroups = <String, List<DownloadItem>>{};
+    for (final item in items) {
+      logicalGroups.putIfAbsent(item.logicalId!.trim(), () => []).add(item);
+    }
+    return logicalGroups.values.toList();
+  }
+
   final parent = List<int>.generate(items.length, (i) => i);
 
   int find(int i) {
@@ -305,6 +322,15 @@ CollapsedDownloads collapseDuplicateDownloads(List<DownloadItem> items) {
     }
   }
 
+  // All groups were singletons and Task IDs are unique, so the
+  // first-occurrence-index sort cannot change the already-input order.
+  if (visible.length == items.length && keptIds.length == items.length) {
+    return CollapsedDownloads(
+      visible: visible,
+      extraCompleteRecords: extraComplete,
+    );
+  }
+
   final originalIndex = <String, int>{};
   for (var i = 0; i < items.length; i++) {
     originalIndex.putIfAbsent(items[i].id, () => i);
@@ -318,6 +344,123 @@ CollapsedDownloads collapseDuplicateDownloads(List<DownloadItem> items) {
         .where((item) => !keptIds.contains(item.id))
         .toList(),
   );
+}
+
+// A presentation tick changes transport values, not the stored media JSON.
+final class _DownloadProjectionMetadata {
+  _DownloadProjectionMetadata(Map<String, dynamic> metadata)
+    : item = MultimediaItem.fromJson(
+        Map<String, dynamic>.from(metadata['item'] as Map),
+      ),
+      episode = metadata['episode'] is Map
+          ? Episode.fromJson(
+              Map<String, dynamic>.from(metadata['episode'] as Map),
+            )
+          : null,
+      chapter = MangaChapter.fromJson(
+        metadata['taskSnapshot'] is Map
+            ? Map<String, dynamic>.from(
+                metadata['taskSnapshot'] as Map,
+              )['chapter']
+            : null,
+      );
+
+  final MultimediaItem item;
+  final Episode? episode;
+  final MangaChapter? chapter;
+
+  LogicalDownloadRecordV2? _lastRecord;
+  DownloadTransportSnapshot? _lastSnapshot;
+  DownloadItem? _lastRow;
+
+  DownloadItem project(
+    Map<String, dynamic> metadata,
+    LogicalDownloadRecordV2 record,
+    DownloadTransportSnapshot? snapshot,
+  ) {
+    // Each accepted event changes one transport snapshot, not the full
+    // download library. Keep only the latest row in the existing metadata
+    // cache, which is cleared on a durable metadata refresh.
+    final previous = identical(record, _lastRecord) ? _lastRow : null;
+    if (previous != null && identical(snapshot, _lastSnapshot)) {
+      return previous;
+    }
+    final trackingUrl =
+        previous?.trackingUrl ??
+        _trackingUrlFor(metadata, item, episode, chapter);
+    final row = DownloadItem(
+      // This is a display-only task, not the transport's mutable writer.
+      task:
+          previous?.task ??
+          _presentationTaskFor(record, trackingUrl: trackingUrl),
+      status: _taskStatusFor(record, snapshot),
+      progress: _progressFor(record, snapshot),
+      item: item,
+      episode: episode,
+      chapter: chapter,
+      mediaKind: record.mediaKind,
+      logicalId: record.logicalId.value,
+      artworkMetadataVerified:
+          previous?.artworkMetadataVerified ??
+          downloadArtworkMetadataMatchesRecordV2(metadata, record),
+      timestamp:
+          previous?.timestamp ??
+          (metadata['timestamp'] as int?) ??
+          record.updatedAtMillis,
+      trackingUrl: trackingUrl,
+      destinationPath: record.destinationPath,
+      parallelChunks: record.parallelChunks,
+      activeConnections: snapshot?.activeConnections ?? 0,
+      transferredBytes: snapshot?.transferredBytes,
+      totalBytes: snapshot?.totalBytes ?? record.expectedBytes,
+      completedPages: snapshot?.completedPages,
+      totalPages: snapshot?.totalPages,
+    );
+    _lastRecord = record;
+    _lastSnapshot = snapshot;
+    return _lastRow = row;
+  }
+}
+
+// Keep a permutation of the previous order only when every row has a logical
+// identity and deduplication kept every row. In that case equal ordering keys
+// imply the published ordering is unchanged even if transport values change.
+final class _DownloadProjectionOrder {
+  _DownloadProjectionOrder(List<DownloadItem> input, this._orderedRows)
+    : indices = Uint32List(input.length) {
+    final indexByRow = Map<DownloadItem, int>.identity();
+    for (var i = 0; i < input.length; i++) {
+      indexByRow[input[i]] = i;
+    }
+    for (var i = 0; i < _orderedRows.length; i++) {
+      indices[i] = indexByRow[_orderedRows[i]]!;
+    }
+  }
+
+  List<DownloadItem> _orderedRows;
+  final Uint32List indices;
+
+  List<DownloadItem>? reorder(List<DownloadItem> current) {
+    if (current.length != indices.length ||
+        indices.length != _orderedRows.length) {
+      return null;
+    }
+    for (var i = 0; i < current.length; i++) {
+      final before = _orderedRows[i];
+      final after = current[indices[i]];
+      if (identical(before, after)) continue;
+      if (before.logicalId != after.logicalId ||
+          before.id != after.id ||
+          before.status != after.status ||
+          before.timestamp != after.timestamp) {
+        return null;
+      }
+    }
+    return _orderedRows = List<DownloadItem>.generate(
+      current.length,
+      (i) => current[indices[i]],
+    );
+  }
 }
 
 @Riverpod(keepAlive: true)
@@ -340,11 +483,15 @@ class DownloadsNotifier extends _$DownloadsNotifier {
   List<LogicalDownloadRecordV2> _records = const <LogicalDownloadRecordV2>[];
   Map<String, Map<String, dynamic>> _metadataByTaskId =
       const <String, Map<String, dynamic>>{};
+  Map<String, Map<String, dynamic>>? _metadataByLogicalId;
+  final _parsedMetadata =
+      Map<Map<String, dynamic>, _DownloadProjectionMetadata>.identity();
   StreamSubscription<List<LogicalDownloadRecordV2>>? _recordsSubscription;
   StreamSubscription<void>? _presentationSubscription;
   Timer? _durableRefreshTimer;
   Timer? _connectionRefreshTimer;
   Future<void>? _durableReloadInFlight;
+  _DownloadProjectionOrder? _projectionOrder;
 
   @override
   Future<List<DownloadItem>> build() async {
@@ -354,14 +501,47 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     final storage = ref.read(storageServiceProvider);
     // Completed rows are local. Transport recovery may wait for the network.
     _records = await store.all();
-    _metadataByTaskId = await storage.getAllDownloadMetadata();
+    _replaceMetadataSnapshot(await storage.getAllDownloadMetadata());
     if (!ref.mounted) return const <DownloadItem>[];
+
+    var recordsSubscriptionDisposed = false;
+    var metadataReloadInFlight = false;
+    var metadataReloadRequested = false;
+    Future<void> reloadMetadata() async {
+      metadataReloadInFlight = true;
+      try {
+        do {
+          metadataReloadRequested = false;
+          final metadata = await storage.getAllDownloadMetadata();
+          if (recordsSubscriptionDisposed || !ref.mounted) return;
+          _replaceMetadataSnapshot(metadata);
+          _refreshPresentationState();
+        } while (metadataReloadRequested &&
+            !recordsSubscriptionDisposed &&
+            ref.mounted);
+      } finally {
+        metadataReloadInFlight = false;
+        // A failed read must not strand a newer durable change. Preserve the
+        // existing error handling and still start its fresh read.
+        if (metadataReloadRequested &&
+            !recordsSubscriptionDisposed &&
+            ref.mounted) {
+          unawaited(reloadMetadata());
+        }
+      }
+    }
 
     _recordsSubscription = manager.records.listen(
       (records) {
-        if (!ref.mounted) return;
+        if (recordsSubscriptionDisposed || !ref.mounted) return;
         _records = records;
-        unawaited(_reloadMetadataAndRefresh());
+        // Serializing full storage reads bounds work for overlapping durable
+        // events without delaying the first read or losing later metadata.
+        if (metadataReloadInFlight) {
+          metadataReloadRequested = true;
+        } else {
+          unawaited(reloadMetadata());
+        }
       },
       onError: (Object error, StackTrace stack) {
         if (!ref.mounted) return;
@@ -383,10 +563,10 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       for (final row in visible) {
         final logicalId = row.logicalId;
         if (logicalId == null) continue;
-        final observed = manager.snapshotFor(DownloadLogicalId(logicalId));
-        final connections = observed?.taskId == row.id
-            ? observed?.activeConnections ?? 0
-            : 0;
+        final connections = manager.activeConnectionsFor(
+          DownloadLogicalId(logicalId),
+          expectedTaskId: row.id,
+        );
         if (connections != row.activeConnections) {
           _refreshPresentationState();
           break;
@@ -406,25 +586,26 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     });
 
     ref.onDispose(() {
+      recordsSubscriptionDisposed = true;
       unawaited(_recordsSubscription?.cancel());
       unawaited(_presentationSubscription?.cancel());
       _durableRefreshTimer?.cancel();
       _connectionRefreshTimer?.cancel();
+      _projectionOrder = null;
     });
 
     return _projectList();
   }
 
-  void _refreshPresentationState() {
-    state = AsyncData(_projectList());
+  void _replaceMetadataSnapshot(Map<String, Map<String, dynamic>> metadata) {
+    _metadataByTaskId = metadata;
+    _metadataByLogicalId = null;
+    _parsedMetadata.clear();
+    _projectionOrder = null;
   }
 
-  Future<void> _reloadMetadataAndRefresh() async {
-    _metadataByTaskId = await ref
-        .read(storageServiceProvider)
-        .getAllDownloadMetadata();
-    if (!ref.mounted) return;
-    _refreshPresentationState();
+  void _refreshPresentationState() {
+    state = AsyncData(_projectList());
   }
 
   Future<void> _reloadDurableState() {
@@ -438,7 +619,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       final metadata = await storage.getAllDownloadMetadata();
       if (!ref.mounted) return;
       _records = records;
-      _metadataByTaskId = metadata;
+      _replaceMetadataSnapshot(metadata);
       _refreshPresentationState();
     }();
     _durableReloadInFlight = task;
@@ -449,12 +630,10 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     });
   }
 
-  List<DownloadItem> _projectList() {
-    final manager = ref.read(downloadManagerV2Provider);
-    final metadataByTaskId = _metadataByTaskId;
+  Map<String, Map<String, dynamic>> _indexMetadataByLogicalId() {
     final metadataByLogicalId = <String, Map<String, dynamic>>{};
 
-    for (final metadata in metadataByTaskId.values) {
+    for (final metadata in _metadataByTaskId.values) {
       final logicalId = (metadata['logicalId'] as String?)?.trim();
       if (logicalId == null || logicalId.isEmpty) continue;
       final previous = metadataByLogicalId[logicalId];
@@ -464,6 +643,14 @@ class DownloadsNotifier extends _$DownloadsNotifier {
         metadataByLogicalId[logicalId] = metadata;
       }
     }
+    return metadataByLogicalId;
+  }
+
+  List<DownloadItem> _projectList() {
+    final manager = ref.read(downloadManagerV2Provider);
+    final metadataByTaskId = _metadataByTaskId;
+    final metadataByLogicalId = _metadataByLogicalId ??=
+        _indexMetadataByLogicalId();
 
     final items = <DownloadItem>[];
     for (final record in _records) {
@@ -483,43 +670,10 @@ class DownloadsNotifier extends _$DownloadsNotifier {
           metadataByTaskId[record.taskId];
       if (metadata == null || metadata['item'] is! Map) continue;
 
-      final item = MultimediaItem.fromJson(
-        Map<String, dynamic>.from(metadata['item'] as Map),
+      final parsed = _parsedMetadata[metadata] ??= _DownloadProjectionMetadata(
+        metadata,
       );
-      final episode = metadata['episode'] is Map
-          ? Episode.fromJson(
-              Map<String, dynamic>.from(metadata['episode'] as Map),
-            )
-          : null;
-      final taskSnapshot = metadata['taskSnapshot'] is Map
-          ? Map<String, dynamic>.from(metadata['taskSnapshot'] as Map)
-          : const <String, dynamic>{};
-      final chapter = MangaChapter.fromJson(taskSnapshot['chapter']);
-      final trackingUrl = _trackingUrlFor(metadata, item, episode, chapter);
-      final task = _presentationTaskFor(record, trackingUrl: trackingUrl);
-      final projected = DownloadItem(
-        task: task,
-        status: _taskStatusFor(record, snapshot),
-        progress: _progressFor(record, snapshot),
-        item: item,
-        episode: episode,
-        chapter: chapter,
-        mediaKind: record.mediaKind,
-        logicalId: record.logicalId.value,
-        artworkMetadataVerified: downloadArtworkMetadataMatchesRecordV2(
-          metadata,
-          record,
-        ),
-        timestamp: (metadata['timestamp'] as int?) ?? record.updatedAtMillis,
-        trackingUrl: trackingUrl,
-        destinationPath: record.destinationPath,
-        parallelChunks: record.parallelChunks,
-        activeConnections: snapshot?.activeConnections ?? 0,
-        transferredBytes: snapshot?.transferredBytes,
-        totalBytes: snapshot?.totalBytes ?? record.expectedBytes,
-        completedPages: snapshot?.completedPages,
-        totalPages: snapshot?.totalPages,
-      );
+      final projected = parsed.project(metadata, record, snapshot);
       if (_isRemovalPending(projected)) continue;
       items.add(projected);
       if (projected.status == TaskStatus.complete &&
@@ -537,8 +691,25 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       }
     }
 
-    items.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-    return _orderDownloads(collapseDuplicateDownloads(items).visible);
+    final reordered = _projectionOrder?.reorder(items);
+    if (reordered != null) return reordered;
+
+    // Visibility, status, or timestamps changed, or this includes legacy
+    // identities. Recompute the exact previous ordering/deduplication rules.
+    if (items.length <= 1) {
+      _projectionOrder = null;
+      return items;
+    }
+    final cacheable = items.every(
+      (row) => row.logicalId?.trim().isNotEmpty == true,
+    );
+    final sorted = cacheable ? List<DownloadItem>.of(items) : items;
+    sorted.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    final ordered = _orderDownloads(collapseDuplicateDownloads(sorted).visible);
+    _projectionOrder = cacheable && ordered.length == items.length
+        ? _DownloadProjectionOrder(items, ordered)
+        : null;
+    return ordered;
   }
 
   List<DownloadItem> _orderDownloads(List<DownloadItem> items) {
@@ -860,11 +1031,4 @@ Task _presentationTask({
     allowPause: true,
     retries: 0,
   );
-}
-
-extension _FirstOrNull<T> on Iterable<T> {
-  T? get firstOrNull {
-    final iterator = this.iterator;
-    return iterator.moveNext() ? iterator.current : null;
-  }
 }

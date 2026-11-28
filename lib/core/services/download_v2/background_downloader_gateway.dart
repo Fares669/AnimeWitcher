@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:crypto/crypto.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter/services.dart'
+    show MethodChannel, MissingPluginException, PlatformException;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -16,6 +18,7 @@ import '../download_source_verification.dart';
 import '../persistent_parallel_download.dart';
 import '../../utils/local_file_io.dart';
 import '../../utils/download_resume.dart';
+import 'download_file_planner_v2.dart';
 import 'download_persistent_storage_v2.dart';
 import 'download_v2_diagnostics.dart';
 import 'download_v2_models.dart';
@@ -285,24 +288,41 @@ List<String> durableChildTaskIdsForParentV2(
   return ids;
 }
 
+({DownloadLogicalId logicalId, int generation, int? pageIndex})?
+_mangaParentIdentity(String taskId) {
+  final parent = parseDownloadTaskIdentityV2(taskId);
+  return parent != null &&
+          parent.pageIndex == null &&
+          parent.logicalId.value.startsWith('manga_')
+      ? parent
+      : null;
+}
+
 /// Exact generated Manga pages, including the older notification group.
 List<String> mangaChildTaskIdsForParentV2(
   Iterable<TaskRecord> records, String parentTaskId,
 ) {
-  final parent = parseDownloadTaskIdentityV2(parentTaskId);
-  if (parent == null || parent.pageIndex != null ||
-      !parent.logicalId.value.startsWith('manga_')) return [];
-  final ids = <String>[
-    for (final record in records)
-      if ((record.task.group == kDownloadV2SilentPackageGroup ||
-              record.task.group == kDownloadV2PackageGroup) &&
-          record.taskId.startsWith('${parentTaskId}_p') &&
-          parseDownloadTaskIdentityV2(record.taskId)?.pageIndex != null &&
-          parseDownloadTaskIdentityV2(record.taskId)?.logicalId == parent.logicalId &&
-          parseDownloadTaskIdentityV2(record.taskId)?.generation == parent.generation)
-        record.taskId,
-  ]..sort();
-  return ids;
+  final parent = _mangaParentIdentity(parentTaskId);
+  if (parent == null) return [];
+  final prefix = '${parentTaskId}_p';
+  final ids = <String>[];
+  for (final record in records) {
+    final group = record.task.group;
+    if (group != kDownloadV2SilentPackageGroup &&
+        group != kDownloadV2PackageGroup) {
+      continue;
+    }
+    final id = record.taskId;
+    if (!id.startsWith(prefix)) continue;
+    final child = parseDownloadTaskIdentityV2(id);
+    if (child != null &&
+        child.pageIndex != null &&
+        child.logicalId == parent.logicalId &&
+        child.generation == parent.generation) {
+      ids.add(id);
+    }
+  }
+  return ids..sort();
 }
 
 Future<void> configurePackageNotificationsV2(
@@ -700,6 +720,21 @@ final class PackageBackgroundDownloaderGateway
           ? kDownloadV2SilentPackageGroup
           : kDownloadV2PackageGroup,
     );
+    if (Platform.isLinux && task is ParallelDownloadTask) {
+      final identity = parseDownloadTaskIdentityV2(task.taskId);
+      if (identity != null && identity.pageIndex == null) {
+        try {
+          await prepareLinuxPackageVideoParentDirectoryV2(
+            destinationPath: spec.destinationPath,
+            logicalId: identity.logicalId,
+            packageFilePath: () => task.filePath(),
+          );
+        } on Exception {
+          // Preparation is best-effort. Leave filesystem failure and retry
+          // classification to the same package transfer as before.
+        }
+      }
+    }
     final transfer = await _downloader.transfers.start(task);
     return _handleFor(transfer);
   }
@@ -864,13 +899,24 @@ final class PackageBackgroundDownloaderGateway
     await _downloader.database.deleteRecordWithId(taskId);
   }
 
+  Future<List<TaskRecord>> _durableTrackingRecords(String parentTaskId) {
+    // Database.allRecords(group:) reads every task file before filtering.
+    // Keep unrelated task files out of the cleanup hot path when we own the
+    // serialized store; injected/legacy stores keep the default full read.
+    // ignore: invalid_use_of_visible_for_testing_member
+    final storage = _downloader.database.storage;
+    return storage is DownloadPersistentStorageV2
+        ? storage.retrieveDurableChildRecords(parentTaskId)
+        : _downloader.database.allRecords(group: kPersistentDownloadChunkGroup);
+  }
+
   Future<void> _ensureDurableTrackingSettled(String parentTaskId) async {
     final parent = await _downloader.database.recordForId(parentTaskId);
     var durable = _durableHandles.containsKey(parentTaskId) ||
         parent?.task.group == kDownloadV2DurableParallelGroup ||
         _pendingDurableStarts.keys.any((id) => id.startsWith('$parentTaskId.part.'));
     if (!durable) {
-      final records = await _downloader.database.allRecords(group: kPersistentDownloadChunkGroup);
+      final records = await _durableTrackingRecords(parentTaskId);
       durable = durableChildTaskIdsForParentV2(records, parentTaskId).isNotEmpty;
     }
     // Already-cleaned ordinary tracking must stay locally idempotent; its
@@ -884,6 +930,9 @@ final class PackageBackgroundDownloaderGateway
   }
 
   Future<void> _cleanupMangaChildTracking(String parentTaskId) async {
+    // The selector accepts only exact generated Manga parents, never video
+    // parents or page task IDs; there cannot be work for any other identity.
+    if (_mangaParentIdentity(parentTaskId) == null) return;
     final records = await _downloader.database.allRecords();
     final ids = mangaChildTaskIdsForParentV2(records, parentTaskId);
     if (ids.isEmpty) return;
@@ -893,7 +942,10 @@ final class PackageBackgroundDownloaderGateway
         .map((task) => task.taskId).toSet();
     final nativeIds = (await _downloader.allTasks(allGroups: true))
         .map((task) => task.taskId).where((id) => !pausedIds.contains(id)).toSet();
-    for (final record in records.where((record) => ids.contains(record.taskId))) {
+    // Inspect every matching record, including duplicate IDs under legacy
+    // filenames, without a linear search through all of the chapter's IDs.
+    final childIds = ids.toSet();
+    for (final record in records.where((r) => childIds.contains(r.taskId))) {
       final transfer = _downloader.transfers.forId(record.taskId);
       final status = transfer?.status ?? record.status;
       if (nativeIds.contains(record.taskId) ||
@@ -928,9 +980,7 @@ final class PackageBackgroundDownloaderGateway
         // Exact generation fences make retained metadata harmless.
       }
     }
-    final records = await _downloader.database.allRecords(
-      group: kPersistentDownloadChunkGroup,
-    );
+    final records = await _durableTrackingRecords(parentTaskId);
     final childIds = durableChildTaskIdsForParentV2(records, parentTaskId);
     if (childIds.isEmpty) return;
 
@@ -1638,6 +1688,25 @@ Future<bool> promoteCompletedDownloadFileV2(
   }
 }
 
+bool _equalPrefixChunk(Uint8List local, List<int> chunk, int offset) {
+  var index = 0;
+  // The HTTP and file paths already yield bytes. Compare wide views without
+  // copying, leaving short tails and non-typed lists to the original loop.
+  if (chunk is Uint8List && local.length >= 8) {
+    final a = ByteData.sublistView(local);
+    final b = ByteData.sublistView(chunk, offset, offset + local.length);
+    for (; index + 8 <= local.length; index += 8) {
+      if (a.getUint64(index, Endian.host) != b.getUint64(index, Endian.host)) {
+        return false;
+      }
+    }
+  }
+  for (; index < local.length; index++) {
+    if (local[index] != chunk[offset + index]) return false;
+  }
+  return true;
+}
+
 /// Verifies saved range bytes against the current authorized identity response.
 /// False requires contradictory source evidence; an unavailable probe throws.
 /// [verificationTimeout] bounds inactivity, including connection/headers. Only
@@ -1803,9 +1872,7 @@ Future<({bool matches, String? validator})> verifySavedRangeSourceV2(
         final local = await saved.read(end - offset);
         checkInterrupted();
         if (local.length != end - offset) throw localFileFailure;
-        for (var index = 0; index < local.length; index++) {
-          if (local[index] != chunk[offset + index]) return rejected;
-        }
+        if (!_equalPrefixChunk(local, chunk, offset)) return rejected;
         verifiedBytes += local.length;
         renewInactivity();
         offset = end;
@@ -2140,21 +2207,12 @@ Map<String, Object> _nativeBackgroundWaiterPayloadV2(
 ) {
   final task = candidate.task;
   final range = _diagnosticRangeBoundsV2(task);
-  return <String, Object>{
-    'taskId': task.taskId,
-    'taskJson': jsonEncode(task.toJson()),
-    'displayName': task.displayName,
-    'url': task.url,
-    'headers': Map<String, String>.from(task.headers),
-    'filename': task.filename,
-    'directory': task.directory,
-    'group': task.group,
-    'progress': 0.0,
-    if (range != null) 'expectedBytes': range.$2 - range.$1 + 1,
-    'generation': candidate.generation,
-    'claimId': candidate.claimId,
-    'claimLeaseMillis': candidate.claimLease.inMilliseconds,
-  };
+  final payload = nativeWaiterFields(task, false)..['progress'] = 0.0;
+  if (range != null) payload['expectedBytes'] = range.$2 - range.$1 + 1;
+  return payload
+    ..['generation'] = candidate.generation
+    ..['claimId'] = candidate.claimId
+    ..['claimLeaseMillis'] = candidate.claimLease.inMilliseconds;
 }
 
 (int, int)? _diagnosticRangeBoundsV2(DownloadTask task) {

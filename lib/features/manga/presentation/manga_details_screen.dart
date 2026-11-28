@@ -17,8 +17,8 @@ import '../../../core/utils/image_fallbacks.dart';
 import '../../../core/storage/manga_reading_repository.dart';
 import '../../../core/utils/localized_text.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
-import '../../../core/utils/window_controls_inset.dart';
 import '../../../l10n/generated/app_localizations.dart';
+import '../../../shared/widgets/app_page_header.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
 import '../../../shared/widgets/expandable_text.dart';
 import '../../../shared/widgets/loading_indicator.dart';
@@ -37,6 +37,25 @@ import 'manga_details_state.dart';
 import 'manga_resume_chapter.dart';
 import 'widgets/manga_chapter_list.dart';
 import 'widgets/manga_information_section.dart';
+
+/// Reading a long series is independent of download progress and the rest of
+/// the details screen. Re-project only when the chapter list or reading state
+/// changes, while the Read control needs its target.
+final _mangaDetailsResumeTargetProvider = Provider.autoDispose
+    .family<MangaResumeTarget?, String>((ref, itemUrl) {
+      final chapters = ref.watch(
+        mangaDetailsControllerProvider(itemUrl)
+            .select((state) => state.chapters.asData?.value),
+      );
+      if (chapters == null || chapters.isEmpty) return null;
+
+      ref.watch(mangaReadingRevisionProvider);
+      final repository = ref.watch(mangaReadingRepositoryProvider);
+      return mangaResumeTarget(
+        chapters,
+        (chapter) => repository.get(chapter.mangaId, chapter.id),
+      );
+    });
 
 @visibleForTesting
 MultimediaItem mangaDetailsItemWithCustomCover(
@@ -466,55 +485,12 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     );
   }
 
-  /// The bare bar the anime page uses on a wide window: one back button
-  /// floating over the artwork, and nothing else, since the actions sit in
-  /// the hero under the title.
-  PreferredSizeWidget _wideAppBar(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    return PreferredSize(
-      preferredSize: const Size.fromHeight(kToolbarHeight),
-      child: Directionality(
-        textDirection: TextDirection.ltr,
-        child: AppBar(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          scrolledUnderElevation: 0,
-          automaticallyImplyLeading: false,
-          leadingWidth: appleUsesPersistentLiquidGlassHeader ? 0 : 64,
-          leading: appleUsesPersistentLiquidGlassHeader
-              ? null
-              : Padding(
-                  padding: EdgeInsets.only(
-                    left: 8 + windowControlsLeadingInset,
-                  ),
-                  child: AppleLiquidGlassBackButton(
-                    size: 46,
-                    foregroundColor: theme.colorScheme.onSurface,
-                    fallbackColor: isDark ? Colors.black45 : Colors.white54,
-                    onPressed: () => Navigator.of(context).maybePop(),
-                  ),
-                ),
-          actions: const <Widget>[],
-        ),
-      ),
-    );
-  }
-
   /// The white read pill: the chapter the reader is up to, named.
   Widget _readPill(
     BuildContext context,
-    List<MangaChapter>? chapters,
-    void Function(MangaChapter chapter) open,
+    MangaResumeTarget? target,
+    ValueChanged<MangaChapter> open,
   ) {
-    ref.watch(mangaReadingRevisionProvider);
-    final repository = ref.watch(mangaReadingRepositoryProvider);
-    final target = chapters == null
-        ? null
-        : mangaResumeTarget(
-            chapters,
-            (chapter) => repository.get(chapter.mangaId, chapter.id),
-          );
     final chapterName = target?.chapter.name ?? '';
     final label = switch (target?.kind) {
       null => appText(context, english: 'Read', arabic: 'اقرأ'),
@@ -536,45 +512,31 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     };
 
     final colors = Theme.of(context).colorScheme;
-    final background = colors.primary;
     final foreground = colors.onPrimary;
-    return Semantics(
-      button: true,
+    return buildDetailsHeroPrimaryPill(
       label: label,
-      child: Material(
-        key: const ValueKey<String>('manga-read-pill'),
-        color: target != null ? background : background.withValues(alpha: 0.38),
-        borderRadius: BorderRadius.circular(kDetailsHeroActionHeight / 2),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: target == null ? null : () => open(target.chapter),
-          child: SizedBox(
-            height: kDetailsHeroActionHeight,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 22),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Icon(Icons.menu_book_rounded, size: 22, color: foreground),
-                  const SizedBox(width: 8),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 320),
-                    child: Text(
-                      label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: foreground,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
+      background: colors.primary,
+      materialKey: const ValueKey<String>('manga-read-pill'),
+      onTap: target == null ? null : () => open(target.chapter),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(Icons.menu_book_rounded, size: 22, color: foreground),
+          const SizedBox(width: 8),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 320),
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: foreground,
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -798,7 +760,6 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     BuildContext context, {
     required MultimediaItem item,
     required MangaDetailsState state,
-    required List<DownloadItem> downloads,
     required Library? libraryNotifier,
     required bool isFavorite,
     required LibraryCategory? currentCategory,
@@ -824,7 +785,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
 
     return Scaffold(
       extendBodyBehindAppBar: true,
-      appBar: _wideAppBar(context),
+      appBar: buildDesktopArtworkBackBar(context),
       bottomNavigationBar: _chapterSelectionBar == null
           ? null
           : KeyedSubtree(
@@ -907,41 +868,59 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
                   ),
                 ),
               ),
-              data: (chapters) => MangaChapterList(
-                embedded: true,
-                chapters: chapters,
-                transition: _chaptersReveal,
-                revealKey: const ValueKey<String>('manga-chapters-reveal'),
-                topAction: Align(
-                  alignment: AlignmentDirectional.centerStart,
-                  child: _readPill(context, chapters, open),
-                ),
-                onSelectionBarChanged: (bar) {
-                  if (!mounted || identical(_chapterSelectionBar, bar)) return;
-                  setState(() => _chapterSelectionBar = bar);
-                },
-                downloads: downloads,
-                onDeleteDownload: (download) =>
-                    unawaited(confirmAndRemoveDownload(context, ref, download)),
-                onOpen: open,
-                onDownload:
-                    widget.onDownloadChapter ??
-                    (chapter) => unawaited(controller.downloadChapter(chapter)),
-                onDownloadSelected: (selected) async {
-                  final customDownload = widget.onDownloadChapter;
-                  if (customDownload == null) {
-                    return controller.downloadChapters(selected);
-                  }
-                  var failed = 0;
-                  for (final chapter in selected) {
-                    try {
-                      customDownload(chapter);
-                    } catch (_) {
-                      failed++;
+              // Subscribe only once the chapter list is mounted. Download
+              // snapshots don't change the manga's hero or metadata.
+              data: (chapters) => Consumer(
+                builder: (_, chapterRef, _) => MangaChapterList(
+                  embedded: true,
+                  chapters: chapters,
+                  transition: _chaptersReveal,
+                  revealKey: const ValueKey<String>('manga-chapters-reveal'),
+                  topAction: Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: Consumer(
+                      builder: (context, ref, child) => _readPill(
+                        context,
+                        ref.watch(
+                          _mangaDetailsResumeTargetProvider(widget.item.url),
+                        ),
+                        open,
+                      ),
+                    ),
+                  ),
+                  onSelectionBarChanged: (bar) {
+                    if (!mounted || identical(_chapterSelectionBar, bar)) {
+                      return;
                     }
-                  }
-                  return failed;
-                },
+                    setState(() => _chapterSelectionBar = bar);
+                  },
+                  downloads:
+                      chapterRef.watch(downloadsProvider).value ??
+                      const <DownloadItem>[],
+                  onDeleteDownload: (download) => unawaited(
+                    confirmAndRemoveDownload(context, ref, download),
+                  ),
+                  onOpen: open,
+                  onDownload:
+                      widget.onDownloadChapter ??
+                      (chapter) =>
+                          unawaited(controller.downloadChapter(chapter)),
+                  onDownloadSelected: (selected) async {
+                    final customDownload = widget.onDownloadChapter;
+                    if (customDownload == null) {
+                      return controller.downloadChapters(selected);
+                    }
+                    var failed = 0;
+                    for (final chapter in selected) {
+                      try {
+                        customDownload(chapter);
+                      } catch (_) {
+                        failed++;
+                      }
+                    }
+                    return failed;
+                  },
+                ),
               ),
             ),
           SliverToBoxAdapter(
@@ -975,8 +954,6 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     );
     final item = mangaDetailsItemWithCustomCover(baseItem, customCover);
     _ensureUserRatingLoaded(item);
-    final downloads =
-        ref.watch(downloadsProvider).value ?? const <DownloadItem>[];
 
     Library? libraryNotifier;
     var isFavorite = false;
@@ -1005,7 +982,6 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
       context,
       item: item,
       state: state,
-      downloads: downloads,
       libraryNotifier: libraryNotifier,
       isFavorite: isFavorite,
       currentCategory: currentCategory,

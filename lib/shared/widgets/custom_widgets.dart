@@ -3,6 +3,51 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../core/utils/layout_constants.dart';
 
+/// Material frame for a multi-selection dock. Its caller owns placement,
+/// safe-area behavior, and the controls inside it.
+Material buildBatchSelectionDockFrame({
+  required ColorScheme colors,
+  required Widget child,
+}) => Material(
+  elevation: 10,
+  shadowColor: Colors.black.withValues(alpha: 0.30),
+  color: colors.surfaceContainerHigh,
+  shape: RoundedRectangleBorder(
+    borderRadius: BorderRadius.circular(20),
+    side: BorderSide(color: colors.outlineVariant.withValues(alpha: 0.45)),
+  ),
+  clipBehavior: Clip.antiAlias,
+  child: child,
+);
+
+/// Owns focus and cancels pending keyboard commits when a slider unmounts.
+mixin DpadSliderLifecycle<T extends StatefulWidget> on State<T> {
+  FocusNode? get suppliedSliderFocusNode;
+
+  late final FocusNode sliderNode;
+  late final VoidCallback _sliderFocusListener;
+  bool sliderFocused = false;
+  Timer? commitTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    sliderNode = suppliedSliderFocusNode ?? FocusNode();
+    _sliderFocusListener = () {
+      if (mounted) setState(() => sliderFocused = sliderNode.hasFocus);
+    };
+    sliderNode.addListener(_sliderFocusListener);
+  }
+
+  @override
+  void dispose() {
+    commitTimer?.cancel();
+    sliderNode.removeListener(_sliderFocusListener);
+    if (suppliedSliderFocusNode == null) sliderNode.dispose();
+    super.dispose();
+  }
+}
+
 /// A Slider widget that handles D-pad navigation properly on TV.
 /// Left/Right D-pad adjusts the value, Up/Down D-pad navigates to other focusable elements.
 class CustomSlider extends StatefulWidget {
@@ -47,32 +92,12 @@ class CustomSlider extends StatefulWidget {
   State<CustomSlider> createState() => _CustomSliderState();
 }
 
-class _CustomSliderState extends State<CustomSlider> {
-  late final FocusNode _focusNode;
-  bool _isFocused = false;
+class _CustomSliderState extends State<CustomSlider>
+    with DpadSliderLifecycle<CustomSlider> {
   bool _isDragging = false;
-  Timer? _seekCommitTimer;
-  late final VoidCallback _focusListener;
 
   @override
-  void initState() {
-    super.initState();
-    _focusNode = widget.focusNode ?? FocusNode();
-    _focusListener = () {
-      if (mounted) setState(() => _isFocused = _focusNode.hasFocus);
-    };
-    _focusNode.addListener(_focusListener);
-  }
-
-  @override
-  void dispose() {
-    _seekCommitTimer?.cancel();
-    _focusNode.removeListener(_focusListener);
-    if (widget.focusNode == null) {
-      _focusNode.dispose();
-    }
-    super.dispose();
-  }
+  FocusNode? get suppliedSliderFocusNode => widget.focusNode;
 
   void _handleDpadSeek(double newValue) {
     if (!_isDragging) {
@@ -81,8 +106,8 @@ class _CustomSliderState extends State<CustomSlider> {
     }
     widget.onChanged?.call(newValue);
 
-    _seekCommitTimer?.cancel();
-    _seekCommitTimer = Timer(const Duration(milliseconds: 500), () {
+    commitTimer?.cancel();
+    commitTimer = Timer(const Duration(milliseconds: 500), () {
       widget.onChangeEnd?.call(newValue);
       _isDragging = false;
     });
@@ -91,7 +116,7 @@ class _CustomSliderState extends State<CustomSlider> {
   @override
   Widget build(BuildContext context) {
     return Focus(
-      focusNode: _focusNode,
+      focusNode: sliderNode,
       canRequestFocus: widget.focusable,
       skipTraversal: !widget.focusable,
       onKeyEvent: (node, event) {
@@ -134,9 +159,9 @@ class _CustomSliderState extends State<CustomSlider> {
             widget.onArrowUp!();
             return KeyEventResult.handled;
           }
-          final success = _focusNode.focusInDirection(TraversalDirection.up);
+          final success = sliderNode.focusInDirection(TraversalDirection.up);
           if (!success) {
-            _focusNode.previousFocus();
+            sliderNode.previousFocus();
           }
           return KeyEventResult.handled;
         }
@@ -147,9 +172,9 @@ class _CustomSliderState extends State<CustomSlider> {
             widget.onArrowDown!();
             return KeyEventResult.handled;
           }
-          final success = _focusNode.focusInDirection(TraversalDirection.down);
+          final success = sliderNode.focusInDirection(TraversalDirection.down);
           if (!success) {
-            _focusNode.nextFocus();
+            sliderNode.nextFocus();
           }
           return KeyEventResult.handled;
         }
@@ -159,7 +184,7 @@ class _CustomSliderState extends State<CustomSlider> {
       child: Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(24),
-          border: _isFocused
+          border: sliderFocused
               ? Border.all(
                   color: Theme.of(context).colorScheme.primary,
                   width: 2,
@@ -181,7 +206,7 @@ class _CustomSliderState extends State<CustomSlider> {
             onChangeEnd: widget.onChangeEnd,
             activeColor:
                 widget.activeColor ??
-                (_isFocused ? Theme.of(context).colorScheme.primary : null),
+                (sliderFocused ? Theme.of(context).colorScheme.primary : null),
             inactiveColor: widget.inactiveColor,
           ),
         ),

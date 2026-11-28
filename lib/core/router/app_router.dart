@@ -90,6 +90,8 @@ class AppShellRouteData extends StatefulShellRouteData {
   const AppShellRouteData();
 
   static final GlobalKey<NavigatorState> $navigatorKey = rootNavigatorKey;
+  static const ShellNavigationContainerBuilder $navigatorContainerBuilder =
+      AppScaffold.buildBranchContainer;
 
   @override
   Page<void> pageBuilder(
@@ -205,11 +207,13 @@ class MangaDetailsRouteExtra {
 extension OpenDetailsRoute on MultimediaItem {
   Future<void> openDetails(BuildContext context) {
     final watch = switch (provider) {
-      WitanimeProvider.id when syncData?[WitanimeProvider.watchUrlKey] != null =>
+      WitanimeProvider.id
+          when syncData?[WitanimeProvider.watchUrlKey] != null =>
         WitanimeProvider.parseCatalogLink(
           syncData![WitanimeProvider.watchUrlKey]!,
         ),
-      Anime3rbProvider.id when syncData?[Anime3rbProvider.watchUrlKey] != null =>
+      Anime3rbProvider.id
+          when syncData?[Anime3rbProvider.watchUrlKey] != null =>
         Anime3rbProvider.parseCatalogLink(
           syncData![Anime3rbProvider.watchUrlKey]!,
         ),

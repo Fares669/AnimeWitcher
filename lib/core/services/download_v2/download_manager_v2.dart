@@ -22,6 +22,77 @@ import 'logical_download_store_v2.dart';
 import 'manga_chapter_manifest_v2.dart';
 import 'manga_chapter_transport_v2.dart';
 
+typedef _CanonicalPathInput = ({String original, String absolute});
+typedef _CanonicalPathResult = ({String? key, Object? error});
+
+// Worker entry points capture only path data, never the manager or gateway.
+Future<String> _readCanonicalPath(_CanonicalPathInput input) =>
+    runLocalFileIo(() => _canonicalPathOnDisk(input));
+
+Future<_CanonicalPathResult> _tryCanonicalPath(
+  _CanonicalPathInput input,
+) async {
+  try {
+    return (key: await _readCanonicalPath(input), error: null);
+  } catch (error) {
+    return (key: null, error: error);
+  }
+}
+
+Future<List<_CanonicalPathResult>> _canonicalPathBatch(
+  List<_CanonicalPathInput> inputs,
+) => runLocalFileIo(() {
+  final results = <_CanonicalPathResult>[];
+  for (final input in inputs) {
+    try {
+      results.add((key: _canonicalPathOnDisk(input), error: null));
+    } catch (error) {
+      results.add((key: null, error: error));
+    }
+  }
+  return results;
+});
+
+Future<int?> _findCanonicalPathInBatch(List<String> paths, String expected) =>
+    runLocalFileIo(() {
+      for (var index = 0; index < paths.length; index++) {
+        final path = paths[index];
+        final canonical = _canonicalPathOnDisk((
+          original: path,
+          absolute: File(path).absolute.path,
+        ));
+        if (canonical == expected) return index;
+      }
+      return null;
+    });
+
+String _canonicalPathOnDisk(_CanonicalPathInput input) {
+  var ancestor = p.normalize(input.absolute);
+  final missing = <String>[];
+  while (FileSystemEntity.typeSync(ancestor, followLinks: false) ==
+      FileSystemEntityType.notFound) {
+    try {
+      File(ancestor).resolveSymbolicLinksSync();
+      break;
+    } on FileSystemException catch (error) {
+      // Only proven missing components may be appended to a resolved key.
+      if (![2, 3].contains(error.osError?.errorCode)) rethrow;
+    }
+    final parent = p.dirname(ancestor);
+    if (parent == ancestor) {
+      throw FileSystemException(
+        'No existing destination ancestor',
+        input.original,
+      );
+    }
+    missing.insert(0, p.basename(ancestor));
+    ancestor = parent;
+  }
+  final resolved = File(ancestor).resolveSymbolicLinksSync();
+  final canonical = p.normalize(p.joinAll([resolved, ...missing]));
+  return Platform.isWindows ? canonical.toLowerCase() : canonical;
+}
+
 /// Application request for one logical episode download.
 ///
 /// Transport URLs and headers are deliberately absent. Every fresh generation
@@ -282,6 +353,17 @@ final class DownloadManagerV2 {
   }
 
   Future<void> _initialize() async {
+    final verification = _integrityVerifier.startupSession();
+    try {
+      await _initializeWithVerification(verification);
+    } finally {
+      verification.close();
+    }
+  }
+
+  Future<void> _initializeWithVerification(
+    DownloadStartupIntegritySessionV2 verification,
+  ) async {
     await _gateway.initialize();
     final rehydrated = await _gateway.rehydrate();
     final byTaskId = <String, DownloadTransportHandle>{
@@ -291,21 +373,58 @@ final class DownloadManagerV2 {
 
     final records = await _store.all()
       ..sort((a, b) => a.updatedAtMillis.compareTo(b.updatedAtMillis));
+    final obsoleteGenerations = _indexObsoleteRecoveredGenerations(
+      records,
+      byTaskId.keys,
+    );
     final startupDestinationOwners = <String, DownloadLogicalId>{};
     final startupDestinationKeys = <DownloadLogicalId, String>{};
     final indexingErrors = <DownloadLogicalId, Object>{};
     // Preserve oldest-owner precedence before reconciling video rows first.
+    // This pass builds a read-only snapshot, not authority for a later delete
+    // or write. Resolve each path independently in order, without starting an
+    // isolate per saved row. Mutation paths still recheck the filesystem.
+    const destinationBatchSize = 64;
+    final batchIds = <DownloadLogicalId>[];
+    final batchPaths = <_CanonicalPathInput>[];
+    Future<void> indexBatch() async {
+      if (batchPaths.isEmpty) return;
+      List<_CanonicalPathResult> results;
+      try {
+        results = await _canonicalPathBatch(batchPaths);
+      } catch (_) {
+        // If a worker cannot start/send this batch, keep per-record recovery
+        // semantics instead of treating all 64 destinations as failed.
+        results = [
+          for (final path in batchPaths) await _tryCanonicalPath(path),
+        ];
+      }
+      for (var i = 0; i < results.length; i++) {
+        final id = batchIds[i];
+        final result = results[i];
+        if (result.key case final String key) {
+          startupDestinationKeys[id] = key;
+          startupDestinationOwners.putIfAbsent(key, () => id);
+        } else {
+          indexingErrors[id] = result.error!;
+        }
+      }
+      batchIds.clear();
+      batchPaths.clear();
+    }
+
     for (final record in records) {
       _rememberRecord(record);
       if (record.intent == DownloadUserIntent.canceled) continue;
       try {
-        final key = await _canonicalDestinationPath(record.destinationPath);
-        startupDestinationKeys[record.logicalId] = key;
-        startupDestinationOwners.putIfAbsent(key, () => record.logicalId);
+        batchPaths.add(await _canonicalPathInput(record.destinationPath));
+        batchIds.add(record.logicalId);
       } catch (error) {
         indexingErrors[record.logicalId] = error;
       }
+      if (batchPaths.length == destinationBatchSize) await indexBatch();
     }
+    await indexBatch();
     final recoveries = <Future<void> Function()>[];
     for (final record in [
       ...records.where(
@@ -325,6 +444,8 @@ final class DownloadManagerV2 {
         continue;
       }
       if (record.mediaKind == DownloadMediaKind.mangaChapter) {
+        // Video checks finish before chapter recovery begins.
+        verification.close();
         // An unrelated chapter's deep verification must not gate local video controls.
         await _publishLocalReadiness();
       }
@@ -345,29 +466,20 @@ final class DownloadManagerV2 {
       }
 
       try {
-        final olderParents = <int, String>{};
-        for (final recovered in rehydrated) {
-          final identity = parseDownloadTaskIdentityV2(recovered.taskId);
-          if (identity == null ||
-              identity.logicalId != record.logicalId ||
-              identity.generation >= record.generation)
-            continue;
-          olderParents[identity.generation] = taskIdForGeneration(
-            identity.logicalId,
-            identity.generation,
-          );
-        }
-        for (final generation in olderParents.keys.toList()..sort()) {
-          final id = olderParents[generation]!;
-          startupOwnership = await _exactHandle(id);
-          if (startupOwnership == null) continue;
-          await _settleObsoleteHandle(
-            startupOwnership,
-            cancelEvenIfFinal: false,
-          );
-          await _gateway.removeTracking(id);
-          _forgetHandle(id);
-          startupOwnership = null;
+        final older = obsoleteGenerations.remove(record.logicalId);
+        if (older != null) {
+          for (final generation in older.toList()..sort()) {
+            final id = taskIdForGeneration(record.logicalId, generation);
+            startupOwnership = await _exactHandle(id);
+            if (startupOwnership == null) continue;
+            await _settleObsoleteHandle(
+              startupOwnership,
+              cancelEvenIfFinal: false,
+            );
+            await _gateway.removeTracking(id);
+            _forgetHandle(id);
+            startupOwnership = null;
+          }
         }
         if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
           await _pauseUnavailableProviderHandle(byTaskId[record.taskId]);
@@ -388,10 +500,12 @@ final class DownloadManagerV2 {
             destinationKey != null &&
             startupDestinationOwners[destinationKey] != record.logicalId;
         if (record.completedAtMillis != null) {
-          final result = await _verifyRecordDestination(
-            record,
-            repairManga: true,
-          );
+          final result = record.mediaKind == DownloadMediaKind.videoEpisode
+              ? await verification.verify(
+                  await _destinationFile(record.destinationPath),
+                  expectedBytes: record.expectedBytes,
+                )
+              : await _verifyRecordDestination(record, repairManga: true);
           if (!canAccessSourceDescriptor(record.sourceDescriptor)) {
             await _pauseUnavailableProviderHandle(startupOwnership);
             continue;
@@ -762,6 +876,7 @@ final class DownloadManagerV2 {
         await _recordStartupFailure(record, startupOwnership, error);
       }
     }
+    verification.close();
     await _cleanupEmptyDownloadFolders(sweepOrphans: true);
     await _publishLocalReadiness();
     for (final recover in recoveries) {
@@ -769,6 +884,32 @@ final class DownloadManagerV2 {
     }
     await _publishRecords();
     _scheduleAdmissionPromotion();
+  }
+
+  // Recovered task IDs are a startup snapshot. Index only obsolete
+  // generations (including chapter generations witnessed by page children),
+  // instead of parsing every recovered ID again for every stored record.
+  static Map<DownloadLogicalId, Set<int>> _indexObsoleteRecoveredGenerations(
+    List<LogicalDownloadRecordV2> records,
+    Iterable<String> recoveredTaskIds,
+  ) {
+    final cutoffs = <DownloadLogicalId, int>{
+      for (final record in records)
+        if (record.generation > 1) record.logicalId: record.generation,
+    };
+    final obsolete = <DownloadLogicalId, Set<int>>{};
+    if (cutoffs.isEmpty) return obsolete;
+    for (final taskId in recoveredTaskIds) {
+      final identity = parseDownloadTaskIdentityV2(taskId);
+      if (identity == null) continue;
+      final currentGeneration = cutoffs[identity.logicalId];
+      if (currentGeneration == null ||
+          identity.generation >= currentGeneration) {
+        continue;
+      }
+      (obsolete[identity.logicalId] ??= <int>{}).add(identity.generation);
+    }
+    return obsolete;
   }
 
   Future<void> _publishLocalReadiness() async {
@@ -1583,12 +1724,25 @@ final class DownloadManagerV2 {
     });
   }
 
-  DownloadTransportSnapshot? snapshotFor(DownloadLogicalId logicalId) {
+  bool _canViewSnapshot(DownloadLogicalId logicalId) {
     final record = _recordsByLogicalId[logicalId];
-    if (record != null && !canAccessSourceDescriptor(record.sourceDescriptor)) {
-      return null;
-    }
-    return _snapshots[logicalId];
+    return record == null || canAccessSourceDescriptor(record.sourceDescriptor);
+  }
+
+  DownloadTransportSnapshot? snapshotFor(DownloadLogicalId logicalId) =>
+      _canViewSnapshot(logicalId) ? _snapshots[logicalId] : null;
+
+  /// The presentation safety poll only needs the exact task's current count.
+  /// Missing, superseded, and zero-count snapshots contribute zero even under
+  /// a provider visibility change. Recheck access for every live writer.
+  int activeConnectionsFor(
+    DownloadLogicalId logicalId, {
+    required String expectedTaskId,
+  }) {
+    final snapshot = _snapshots[logicalId];
+    final count = snapshot?.activeConnections ?? 0;
+    if (count == 0 || snapshot!.taskId != expectedTaskId) return 0;
+    return _canViewSnapshot(logicalId) ? count : 0;
   }
 
   /// Applies read-only native throughput telemetry to the current generation.
@@ -2036,28 +2190,42 @@ final class DownloadManagerV2 {
     } while (_admissionPromotionRequested);
   }
 
-  /// Waiting downloads in admission order: FIFO by enqueue stamp, never by
-  /// last-write time — record rewrites (pause/resume, restart
-  /// reconciliation) must not reshuffle the queue. Logical id breaks legacy
-  /// ties so the order is total and deterministic.
+  bool _waitsForAdmission(LogicalDownloadRecordV2 record) =>
+      record.intent == DownloadUserIntent.active &&
+      canAccessSourceDescriptor(record.sourceDescriptor) &&
+      record.awaitingAdmission &&
+      !_pendingStopControls.containsKey(record.logicalId);
+
+  /// FIFO by enqueue stamp, never by last-write time. Logical id breaks
+  /// legacy timestamp ties in both the pass and its fresh head check.
+  int _compareAdmissionOrder(
+    LogicalDownloadRecordV2 a,
+    LogicalDownloadRecordV2 b,
+  ) {
+    final byEnqueue = a.queueOrderMillis.compareTo(b.queueOrderMillis);
+    return byEnqueue != 0
+        ? byEnqueue
+        : a.logicalId.value.compareTo(b.logicalId.value);
+  }
+
   List<LogicalDownloadRecordV2> _queueOrder(
     Iterable<LogicalDownloadRecordV2> records,
+  ) => records.where(_waitsForAdmission).toList()..sort(_compareAdmissionOrder);
+
+  DownloadLogicalId? _currentAdmissionHead(
+    Iterable<LogicalDownloadRecordV2> records,
+    Set<DownloadLogicalId> skipped,
   ) {
-    return records
-        .where(
-          (record) =>
-              record.intent == DownloadUserIntent.active &&
-              canAccessSourceDescriptor(record.sourceDescriptor) &&
-              record.awaitingAdmission &&
-              !_pendingStopControls.containsKey(record.logicalId),
-        )
-        .toList()
-      ..sort((a, b) {
-        final byEnqueue = a.queueOrderMillis.compareTo(b.queueOrderMillis);
-        return byEnqueue != 0
-            ? byEnqueue
-            : a.logicalId.value.compareTo(b.logicalId.value);
-      });
+    LogicalDownloadRecordV2? first;
+    for (final record in records) {
+      if (!_waitsForAdmission(record) || skipped.contains(record.logicalId)) {
+        continue;
+      }
+      if (first == null || _compareAdmissionOrder(record, first) < 0) {
+        first = record;
+      }
+    }
+    return first?.logicalId;
   }
 
   Future<void> _promoteAdmissionsPass() async {
@@ -2107,9 +2275,10 @@ final class DownloadManagerV2 {
             // download paused and resumed, a new one enqueued). Promoting
             // past the true head is what started queued chapters out of
             // order on device.
-            final head = _queueOrder(await _store.all())
-                .where((record) => !skipped.contains(record.logicalId));
-            if (head.isNotEmpty && head.first.logicalId != latest.logicalId) {
+            // Only the first eligible row is needed; keep this fresh read
+            // and find its head without sorting or copying all waiters again.
+            final head = _currentAdmissionHead(await _store.all(), skipped);
+            if (head != null && head != latest.logicalId) {
               return _AdmissionAttempt.superseded;
             }
             // No free slot: stop the pass instead of letting a later
@@ -3009,36 +3178,18 @@ final class DownloadManagerV2 {
     await _publishRecords();
   }
 
-  Future<String> _canonicalDestinationPath(String destinationPath) async {
+  Future<_CanonicalPathInput> _canonicalPathInput(
+    String destinationPath,
+  ) async {
     final file = !p.isAbsolute(destinationPath) && !Platform.isIOS
         ? File(p.absolute(destinationPath))
         : await _destinationFile(destinationPath);
-    return runLocalFileIo(() {
-      var ancestor = p.normalize(file.absolute.path);
-      final missing = <String>[];
-      while (FileSystemEntity.typeSync(ancestor, followLinks: false) ==
-          FileSystemEntityType.notFound) {
-        try {
-          File(ancestor).resolveSymbolicLinksSync();
-          break;
-        } on FileSystemException catch (error) {
-          // Only proven missing components may be appended to a resolved key.
-          if (![2, 3].contains(error.osError?.errorCode)) rethrow;
-        }
-        final parent = p.dirname(ancestor);
-        if (parent == ancestor) {
-          throw FileSystemException(
-            'No existing destination ancestor',
-            destinationPath,
-          );
-        }
-        missing.insert(0, p.basename(ancestor));
-        ancestor = parent;
-      }
-      final resolved = File(ancestor).resolveSymbolicLinksSync();
-      final canonical = p.normalize(p.joinAll([resolved, ...missing]));
-      return Platform.isWindows ? canonical.toLowerCase() : canonical;
-    });
+    return (original: destinationPath, absolute: file.absolute.path);
+  }
+
+  Future<String> _canonicalDestinationPath(String destinationPath) async {
+    final input = await _canonicalPathInput(destinationPath);
+    return _readCanonicalPath(input);
   }
 
   Future<LogicalDownloadRecordV2?> _findDestinationConflict(
@@ -3046,10 +3197,47 @@ final class DownloadManagerV2 {
     DownloadLogicalId? logicalId,
   ) async {
     final records = await _store.all();
+    const batchSize = 64;
+    final completed = <LogicalDownloadRecordV2>[];
+
+    Future<LogicalDownloadRecordV2?> checkCompleted() async {
+      if (completed.length == 1) {
+        final record = completed.removeLast();
+        return await _canonicalDestinationPath(record.destinationPath) ==
+                canonicalDestination
+            ? record
+            : null;
+      }
+      final index = await _findCanonicalPathInBatch([
+        for (final record in completed) record.destinationPath,
+      ], canonicalDestination);
+      final match = index == null ? null : completed[index];
+      completed.clear();
+      return match;
+    }
+
     for (final record in records) {
-      if (record.logicalId == logicalId ||
-          (record.intent == DownloadUserIntent.canceled &&
-              !_hasLiveOwnership(_snapshots[record.logicalId]))) {
+      if (record.logicalId == logicalId) continue;
+      // These rows do not need a platform lookup or a live ownership check.
+      // Read each path on disk in store order, stopping at the first conflict
+      // or error. Never reuse an earlier key to authorize a destructive action.
+      if (record.completedAtMillis != null &&
+          record.intent != DownloadUserIntent.canceled &&
+          p.isAbsolute(record.destinationPath)) {
+        completed.add(record);
+        if (completed.length < batchSize) continue;
+        final match = await checkCompleted();
+        if (match != null) return match;
+        continue;
+      }
+      // Evaluate any mutable canceled ownership only after the earlier
+      // completed paths have been checked, as in the sequential scan.
+      if (completed.isNotEmpty) {
+        final match = await checkCompleted();
+        if (match != null) return match;
+      }
+      if (record.intent == DownloadUserIntent.canceled &&
+          !_hasLiveOwnership(_snapshots[record.logicalId])) {
         continue;
       }
       if (await _canonicalDestinationPath(record.destinationPath) ==
@@ -3057,7 +3245,8 @@ final class DownloadManagerV2 {
         return record;
       }
     }
-    return null;
+    if (completed.isEmpty) return null;
+    return checkCompleted();
   }
 
   Future<File> _destinationFile(String destinationPath) async {

@@ -77,28 +77,15 @@ class AnimeWitcherCommentSortControl extends StatelessWidget {
     };
   }
 
-  static List<AppleNativeMenuItem> menuItems() {
-    return <AppleNativeMenuItem>[
+  static List<AppleNativeMenuItem> menuItems() => [
+    for (final sort in AnimeWitcherCommentSort.values)
       AppleNativeMenuItem(
-        value: AnimeWitcherCommentSort.newest.name,
-        label: labelFor(AnimeWitcherCommentSort.newest),
-        systemImage: systemImageFor(AnimeWitcherCommentSort.newest),
-        icon: fallbackIconFor(AnimeWitcherCommentSort.newest),
+        value: sort.name,
+        label: labelFor(sort),
+        systemImage: systemImageFor(sort),
+        icon: fallbackIconFor(sort),
       ),
-      AppleNativeMenuItem(
-        value: AnimeWitcherCommentSort.oldest.name,
-        label: labelFor(AnimeWitcherCommentSort.oldest),
-        systemImage: systemImageFor(AnimeWitcherCommentSort.oldest),
-        icon: fallbackIconFor(AnimeWitcherCommentSort.oldest),
-      ),
-      AppleNativeMenuItem(
-        value: AnimeWitcherCommentSort.mostLiked.name,
-        label: labelFor(AnimeWitcherCommentSort.mostLiked),
-        systemImage: systemImageFor(AnimeWitcherCommentSort.mostLiked),
-        icon: fallbackIconFor(AnimeWitcherCommentSort.mostLiked),
-      ),
-    ];
-  }
+  ];
 
   static double persistentWidth() => size;
 
@@ -156,9 +143,9 @@ class AnimeWitcherCommentSortControl extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final selected = AnimeWitcherCommentSort.values.firstWhere(
-      (value) => value.name == selectedValue,
-      orElse: () => AnimeWitcherCommentSort.commentsDefault,
+    final selected = AnimeWitcherCommentSort.fromNameOr(
+      selectedValue,
+      AnimeWitcherCommentSort.commentsDefault,
     );
     return SizedBox(
       width: width,

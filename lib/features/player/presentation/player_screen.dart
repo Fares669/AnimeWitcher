@@ -13,7 +13,6 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:video_view/video_view.dart' as vv;
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/utils/immersive_mode.dart';
@@ -23,27 +22,14 @@ import '../../../../core/storage/settings_repository.dart';
 import '../../../../features/settings/presentation/player_settings_provider.dart';
 import '../data/anime4k.dart';
 import 'widgets/animewitcher_player_controls.dart';
-import 'widgets/hotstar_player_style.dart';
 import 'widgets/player_ltr.dart';
+import 'widgets/player_subtitle_overlay.dart';
 import 'player_controller.dart';
 import 'player_shortcuts.dart';
 import 'player_teardown.dart';
 import 'player_platform_service.dart';
 import 'player_gesture_handler.dart';
-
-TextStyle _getSubtitleTextStyle(String? fontFamily, TextStyle baseStyle) {
-  if (fontFamily == null) return baseStyle;
-  switch (fontFamily.toLowerCase()) {
-    case 'open sans':
-      return GoogleFonts.openSans(textStyle: baseStyle);
-    case 'poppins':
-      return GoogleFonts.poppins(textStyle: baseStyle);
-    case 'ubuntu':
-      return GoogleFonts.ubuntu(textStyle: baseStyle);
-    default:
-      return baseStyle.copyWith(fontFamily: fontFamily);
-  }
-}
+import 'subtitle_typography.dart';
 
 class PlayerScreen extends ConsumerStatefulWidget {
   final MultimediaItem item;
@@ -681,10 +667,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     return false;
   }
 
-  Future<void> _restoreOrientation() => _platformService.restoreOrientation(
-    isTablet: _isTablet,
-    isTv: _isTv,
-  );
+  Future<void> _restoreOrientation() =>
+      _platformService.restoreOrientation(isTablet: _isTablet, isTv: _isTv);
 
   Future<void> _handleBack() async {
     if (!context.mounted || _isExiting) return;
@@ -833,166 +817,96 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     }
 
     return PlayerLtr(
-      child: ValueListenableBuilder<bool>(
-        valueListenable: _controlsVisible,
-        builder: (context, controlsVisible, _) {
-          return PopScope(
-            canPop: false,
-            onPopInvokedWithResult: (didPop, result) async {
-              if (didPop) return;
-              // Single guarded path (shared with the root key handler): close the
-              // sources panel, else hide TV controls. Only exit when nothing is
-              // left to dismiss. The de-dupe inside prevents the dual Back
-              // delivery (KeyEvent + route-pop) from skipping a step into exit.
-              if (_consumeBack()) return;
-              await _handleBack();
-            },
-            child: Scaffold(
-              body: Focus(
-                focusNode: _rootFocusNode,
-                autofocus: true,
-                onKeyEvent: _handleKey,
-                // Map the TV remote OK key (select) to ActivateIntent so the
-                // focused control activates natively (Enter/Space/gameButtonA are
-                // already mapped by WidgetsApp). When no control is focused this
-                // bubbles up to the root handler instead.
-                child: Shortcuts(
-                  shortcuts: const <ShortcutActivator, Intent>{
-                    SingleActivator(LogicalKeyboardKey.select):
-                        ActivateIntent(),
-                  },
-                  child: Stack(
-                    children: [
-                      RepaintBoundary(
-                        child: ValueListenableBuilder<BoxFit>(
-                          valueListenable: _videoFit,
-                          builder: (_, fit, child) => Center(
-                            // Phase 8: Switch engine based on stream type
-                            child: Consumer(
-                              builder: (context, ref, _) {
-                                final useExoPlayer = ref.watch(
-                                  playerControllerProvider.select(
-                                    (s) => s.useExoPlayer,
+      child: PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, result) async {
+          if (didPop) return;
+          // Single guarded path (shared with the root key handler): close the
+          // sources panel, else hide TV controls. Only exit when nothing is
+          // left to dismiss. The de-dupe inside prevents the dual Back
+          // delivery (KeyEvent + route-pop) from skipping a step into exit.
+          if (_consumeBack()) return;
+          await _handleBack();
+        },
+        child: Scaffold(
+          body: Focus(
+            focusNode: _rootFocusNode,
+            autofocus: true,
+            onKeyEvent: _handleKey,
+            // Map the TV remote OK key (select) to ActivateIntent so the
+            // focused control activates natively (Enter/Space/gameButtonA are
+            // already mapped by WidgetsApp). When no control is focused this
+            // bubbles up to the root handler instead.
+            child: Shortcuts(
+              shortcuts: const <ShortcutActivator, Intent>{
+                SingleActivator(LogicalKeyboardKey.select): ActivateIntent(),
+              },
+              child: Stack(
+                children: [
+                  RepaintBoundary(
+                    child: ValueListenableBuilder<BoxFit>(
+                      valueListenable: _videoFit,
+                      builder: (_, fit, child) => Center(
+                        // Phase 8: Switch engine based on stream type
+                        child: Consumer(
+                          builder: (context, ref, _) {
+                            final useExoPlayer = ref.watch(
+                              playerControllerProvider.select(
+                                (s) => s.useExoPlayer,
+                              ),
+                            );
+                            if (useExoPlayer) {
+                              return vv.VideoView(
+                                controller: _videoViewController,
+                                videoFit: fit,
+                              );
+                            }
+                            return Video(
+                              controller: _videoController,
+                              fit: fit,
+                              subtitleViewConfiguration:
+                                  const SubtitleViewConfiguration(
+                                    visible: false,
+                                    style: TextStyle(color: Colors.transparent),
                                   ),
-                                );
-                                if (useExoPlayer) {
-                                  return vv.VideoView(
-                                    controller: _videoViewController,
-                                    videoFit: fit,
-                                  );
-                                }
-                                return Video(
-                                  controller: _videoController,
-                                  fit: fit,
-                                  subtitleViewConfiguration:
-                                      const SubtitleViewConfiguration(
-                                        visible: false,
-                                        style: TextStyle(
-                                          color: Colors.transparent,
-                                        ),
-                                      ),
-                                  controls: (state) => const SizedBox.shrink(),
-                                );
-                              },
-                            ),
-                          ),
+                              controls: (state) => const SizedBox.shrink(),
+                            );
+                          },
                         ),
                       ),
-                      Consumer(
-                        builder: (context, ref, _) {
-                          final useExoPlayer = ref.watch(
-                            playerControllerProvider.select(
-                              (s) => s.useExoPlayer,
-                            ),
-                          );
-                          if (useExoPlayer) {
-                            return const SizedBox.shrink();
-                          }
-
-                          final subtitleSettings = ref
-                              .watch(playerSettingsProvider)
-                              .asData
-                              ?.value;
-
-                          return Positioned(
-                            bottom:
-                                (controlsVisible
-                                    ? HotstarPlayerStyle.bottomChromeHeight
-                                    : 20.0) +
-                                ((100 -
-                                        (subtitleSettings?.subtitlePosition ??
-                                            100.0)) *
-                                    (MediaQuery.sizeOf(context).height *
-                                        0.008)),
-                            left: 20,
-                            right: 20,
-                            child: SubtitleView(
-                              controller: _videoController,
-                              configuration: SubtitleViewConfiguration(
-                                style: TextStyle(
-                                  fontSize:
-                                      subtitleSettings?.subtitleSize ?? 22.0,
-                                  color: Color(
-                                    subtitleSettings?.subtitleColor ??
-                                        0xFFFFFFFF,
-                                  ),
-                                  backgroundColor:
-                                      Color(
-                                        subtitleSettings
-                                                ?.subtitleBackgroundColor ??
-                                            0x00000000,
-                                      ).withValues(
-                                        alpha:
-                                            subtitleSettings
-                                                ?.subtitleBackgroundOpacity ??
-                                            0.0,
-                                      ),
-                                  shadows: const [
-                                    Shadow(
-                                      offset: Offset(0, 1),
-                                      blurRadius: 2,
-                                      color: Colors.black,
-                                    ),
-                                  ],
-                                ),
-                                padding: EdgeInsets.zero,
-                              ),
-                            ),
-                          );
+                    ),
+                  ),
+                  PlayerSubtitleOverlay(
+                    controller: _videoController,
+                    controlsVisible: _controlsVisible,
+                  ),
+                  Positioned.fill(
+                    child: RepaintBoundary(
+                      child: AnimeWitcherPlayerControls(
+                        platformService: _platformService,
+                        key: _controlsKeyFinal,
+                        isLoading: isLoading,
+                        player: _player,
+                        videoViewController: _videoViewController,
+                        title: widget.item.title,
+                        backdropUrl: widget.item.backdropImageUrl,
+                        logoUrl: widget.item.logoUrl,
+                        onResize: _updateResizeMode,
+                        onBackPointer: _handleBack,
+                        onRequestRootFocus: () => _rootFocusNode.requestFocus(),
+                        onVisibilityChanged: (v) {
+                          if (!mounted) return;
+                          _controlsVisible.value = v;
+                          _publishPersistentPlayerHeader(controlsVisible: v);
                         },
                       ),
-                      Positioned.fill(
-                        child: RepaintBoundary(
-                          child: AnimeWitcherPlayerControls(
-                            platformService: _platformService,
-                            key: _controlsKeyFinal,
-                            isLoading: isLoading,
-                            player: _player,
-                            videoViewController: _videoViewController,
-                            title: widget.item.title,
-                            backdropUrl: widget.item.backdropImageUrl,
-                            logoUrl: widget.item.logoUrl,
-                            onResize: _updateResizeMode,
-                            onBackPointer: _handleBack,
-                            onRequestRootFocus: () =>
-                                _rootFocusNode.requestFocus(),
-                            onVisibilityChanged: (v) {
-                              if (!mounted) return;
-                              _controlsVisible.value = v;
-                              _publishPersistentPlayerHeader(
-                                controlsVisible: v,
-                              );
-                            },
-                          ),
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
-                ),
+                ],
               ),
             ),
-          );
-        },
+          ),
+        ),
       ),
     );
   }
@@ -1036,17 +950,8 @@ class _AnimeWitcherEmbeddedSubtitleViewState
     final path = settings.subTypefaceFilePath;
     if (path != null && path.isNotEmpty && !_customFontLoaded) {
       try {
-        final file = File(path);
-        if (await file.exists()) {
-          final bytes = await file.readAsBytes();
-          final fontLoader = FontLoader('CustomSubtitleFont');
-          fontLoader.addFont(Future.value(ByteData.sublistView(bytes)));
-          await fontLoader.load();
-          if (mounted) {
-            setState(() {
-              _customFontLoaded = true;
-            });
-          }
+        if (await loadCustomSubtitleFont(path) && mounted) {
+          setState(() => _customFontLoaded = true);
         }
       } catch (e) {
         debugPrint("Failed to load custom font: $e");
@@ -1066,48 +971,10 @@ class _AnimeWitcherEmbeddedSubtitleViewState
         final lines = snapshot.data ?? const [];
         if (lines.isEmpty) return const SizedBox.shrink();
 
-        // Map font family
-        String? fontFamily;
-        const List<String> builtInFonts = [
-          'Normal (system sans-serif)',
-          'Trebuchet MS',
-          'Netflix Sans',
-          'Google Sans',
-          'Open Sans',
-          'Futura',
-          'Consola',
-          'Gotham',
-          'Lucida Grande',
-          'STIX General',
-          'Times New Roman',
-          'Verdana',
-          'Ubuntu',
-          'Comic Sans',
-          'Poppins',
-        ];
-
-        if (settings.subTypefaceFilePath != null && _customFontLoaded) {
-          fontFamily = 'CustomSubtitleFont';
-        } else if (settings.subTypeface != null &&
-            settings.subTypeface! >= 0 &&
-            settings.subTypeface! < builtInFonts.length) {
-          if (settings.subTypeface == 0) {
-            fontFamily = null;
-          } else {
-            fontFamily = builtInFonts[settings.subTypeface!];
-          }
-        }
-
-        final fontSize = settings.subFixedTextSize ?? 22.0;
-
-        final baseStyle = TextStyle(
-          fontSize: fontSize,
-          fontWeight: settings.subBold ? FontWeight.bold : FontWeight.normal,
-          fontStyle: settings.subItalic ? FontStyle.italic : FontStyle.normal,
-          color: Color(settings.subForegroundColor),
+        final textStyle = subtitleTextStyle(
+          settings,
+          customFontLoaded: _customFontLoaded,
         );
-
-        final textStyle = _getSubtitleTextStyle(fontFamily, baseStyle);
 
         final edgeColor = Color(settings.subEdgeColor);
 

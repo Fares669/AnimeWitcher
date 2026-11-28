@@ -3,9 +3,9 @@ import 'download_diagnostic_log.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:background_downloader/background_downloader.dart';
-import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
 import 'download_connection_governor.dart';
@@ -14,8 +14,10 @@ import 'download_parallel.dart';
 import 'download_retry_policy.dart';
 import 'download_source_verification.dart';
 import 'download_telemetry.dart';
+import '../utils/download_file_digest.dart';
 import '../utils/download_resume.dart';
 import '../utils/local_file_io.dart';
+import '../utils/parallel_assembly_writer.dart';
 
 /// Child connections can report progress independently and in bursts. The
 /// logical episode, Flutter UI and iOS continued-processing task all publish
@@ -33,6 +35,13 @@ const Duration kParallelProgressPersistInterval = Duration(seconds: 2);
 /// Keep a small reserve beyond the remaining staging allocation so assembly
 /// does not consume the filesystem down to its last metadata blocks.
 const int kParallelAssemblyStorageReserveBytes = 8 * 1024 * 1024;
+
+// File.openRead uses 64 KiB blocks. Larger bounded reads cut asynchronous
+// file operations during assembly without buffering a complete range.
+const int _parallelAssemblyReadBytes = 256 * 1024;
+
+// Small assemblies do not justify starting a separate copy worker.
+const int _parallelAssemblyWorkerThresholdBytes = 16 * 1024 * 1024;
 
 enum ParallelAssemblyFailureReason { insufficientStorage }
 
@@ -1660,14 +1669,13 @@ class PersistentParallelDownload {
     });
   }
 
-  int _activeConnectionsForSession(_ParallelSession session) => session.parts
-      .where(
-        (part) =>
-            part.launched &&
-            !part.complete &&
-            _activeConnectionIds.contains(part.task.taskId),
-      )
-      .length;
+  bool _ownsActiveConnection(_DownloadPart part) =>
+      part.launched &&
+      !part.complete &&
+      _activeConnectionIds.contains(part.task.taskId);
+
+  int _activeConnectionsForSession(_ParallelSession session) =>
+      session.parts.where(_ownsActiveConnection).length;
 
   bool _hasActiveNativeClaimOffer(_DownloadPart part) {
     final offer = _nativeClaimOffers[part.task.taskId];
@@ -3046,42 +3054,50 @@ class PersistentParallelDownload {
   void _emitAggregateProgress(_ParallelSession session) {
     if (_disposed || !session.active || session.deleted) return;
     final task = session.task;
-    final progress = session.progress;
     final expectedBytes = session.size;
-    // Speed is presentation telemetry, not recovery authority. On iOS the
-    // exact bytes currently arriving live in URLSession's temporary file and
-    // therefore advance credibleProgress before they can advance durableBytes.
-    // Feeding only durableBytes into the speed estimator made progress move
-    // while the UI stayed at 0 MB/s until a whole Range finalized.
-    final observedBytes = session.parts.fold<int>(0, (sum, part) {
-      final credible = part.credibleProgress.clamp(0.0, 1.0).toDouble();
-      final bytes = (part.size * credible).round().clamp(0, part.size).toInt();
-      return sum + bytes;
-    });
-    final childSpeedBytesPerSecond = session.parts.fold<double>(0, (sum, part) {
-      if (!part.launched || part.complete || part.speed <= 0) return sum;
-      return sum + part.speed * 1000 * 1000;
-    });
+    // Live byte evidence can lead durable part files. Keep the raw weighted
+    // progress and rounded/clamped transfer evidence distinct, but compute
+    // both along with child speed in the same ordered scan.
+    var weightedProgress = 0.0;
+    var observedBytes = 0;
+    var childSpeedBytesPerSecond = 0.0;
+    for (final part in session.parts) {
+      final size = part.size;
+      final credible = part.credibleProgress;
+      weightedProgress += size * credible;
+      observedBytes += (size * credible.clamp(0.0, 1.0).toDouble())
+          .round()
+          .clamp(0, size)
+          .toInt();
+      if (!part.launched || part.complete || part.speed <= 0) continue;
+      childSpeedBytesPerSecond += part.speed * 1000 * 1000;
+    }
+    final progress = expectedBytes <= 0
+        ? 0.0
+        : weightedProgress / expectedBytes;
     final timestamp = DateTime.now();
-    final nativeBridgeContributors = session.parts
-        .where(
-          (part) =>
-              part.lastNativeBridgeAt != null &&
-              timestamp.difference(part.lastNativeBridgeAt!) <
-                  const Duration(seconds: 2) &&
-              part.speed > 0,
-        )
-        .toList(growable: false);
-    final nativeBridgeSpeedBytesPerSecond = nativeBridgeContributors
-        .fold<double>(0, (sum, part) => sum + part.speed * 1000 * 1000);
-    // Child-reported speed is only a fallback when byte totals are unavailable.
-    // Once credible bytes exist, use it only for one fresh native byte bridge;
-    // multiple child callbacks need the estimator's minimum observation window.
-    final fallbackSpeedBytesPerSecond = observedBytes <= 0
-        ? childSpeedBytesPerSecond
-        : nativeBridgeContributors.length == 1
-        ? nativeBridgeSpeedBytesPerSecond
-        : 0.0;
+    // Only an unambiguous, fresh native byte bridge can be the fallback once
+    // there are observed bytes. Stop at a second match without a temporary
+    // list: its presence already rules out that fallback.
+    var fallbackSpeedBytesPerSecond = childSpeedBytesPerSecond;
+    if (observedBytes > 0) {
+      fallbackSpeedBytesPerSecond = 0.0;
+      var hasFreshBridge = false;
+      for (final part in session.parts) {
+        final at = part.lastNativeBridgeAt;
+        if (at == null ||
+            timestamp.difference(at) >= const Duration(seconds: 2) ||
+            !(part.speed > 0)) {
+          continue;
+        }
+        if (hasFreshBridge) {
+          fallbackSpeedBytesPerSecond = 0.0;
+          break;
+        }
+        hasFreshBridge = true;
+        fallbackSpeedBytesPerSecond = part.speed * 1000 * 1000;
+      }
+    }
     final telemetry = _speedTelemetry.observe(
       taskId: task.taskId,
       transferredBytes: observedBytes,
@@ -3110,8 +3126,13 @@ class PersistentParallelDownload {
 
     DateTime? latestNativeAt;
     var nativeWrittenBytes = 0;
+    var activeConnections = 0;
+    var durableBytes = 0;
     var hasNativeByteEvidence = false;
+    // This diagnostic snapshot still happens after the host sample callback.
     for (final part in session.parts) {
+      if (_ownsActiveConnection(part)) activeConnections++;
+      durableBytes += part.durableBytes;
       final at = part.lastNativeBridgeAt;
       if (at != null &&
           (latestNativeAt == null || at.isAfter(latestNativeAt))) {
@@ -3127,9 +3148,7 @@ class PersistentParallelDownload {
     int? ageMs(DateTime? at) => at == null
         ? null
         : timestamp.difference(at).inMilliseconds.clamp(0, 1 << 30).toInt();
-    final activeConnections = _activeConnectionsForSession(session);
     final liveBytes = observedBytes;
-    final durableBytes = session.creditedBytes;
 
     if (liveBytes > session.lastDiagnosticLiveBytes) {
       session.lastDiagnosticAdvanceAt = timestamp;
@@ -5035,8 +5054,7 @@ class PersistentParallelDownload {
     await _parkForStorageFailure(session);
   }
 
-  Future<String> _fileDigest(File file) async =>
-      (await sha256.bind(file.openRead()).first).toString();
+  Future<String> _fileDigest(File file) => downloadFileDigest(file);
 
   Future<bool> _ownedPublicationSource(
     _ParallelSession session,
@@ -5304,10 +5322,37 @@ class PersistentParallelDownload {
     onUpdate(TaskProgressUpdate(session.task, 1, session.size, 0, Duration.zero));
 
     RandomAccessFile? output;
+    ParallelAssemblyWriter? writer;
+    Future<void> closeStaging() async {
+      final worker = writer;
+      final file = output;
+      writer = null;
+      output = null;
+      if (worker != null) {
+        await worker.close();
+      } else {
+        await file?.close();
+      }
+    }
     try {
-      output = await staging.open(mode: FileMode.write);
-      await output.truncate(session.size);
-      await output.setPosition(0);
+      if (session.size >= _parallelAssemblyWorkerThresholdBytes) {
+        try {
+          writer = await ParallelAssemblyWriter.tryOpen(
+            staging.path,
+            session.size,
+            _parallelAssemblyReadBytes,
+          );
+        } on IsolateSpawnException {
+          // Before the worker opens staging, keep the original async path if
+          // the VM cannot start another isolate.
+        }
+      }
+      if (writer == null) {
+        final file = await staging.open(mode: FileMode.write);
+        output = file;
+        await file.truncate(session.size);
+        await file.setPosition(0);
+      }
       var assembledBytes = 0;
       for (final part in session.parts) {
         final file = File(await part.task.filePath());
@@ -5316,40 +5361,68 @@ class PersistentParallelDownload {
           return;
         }
         if (!await _hasAssemblyHeadroom(session, target, remainingBytes: 0)) {
-          await output!.close();
-          output = null;
+          await closeStaging();
           await _handleAssemblyStorageFailure(session, staging);
           return;
         }
-        await for (final bytes in file.openRead()) {
+        final worker = writer;
+        if (worker != null) {
+          final copied = await worker.copy(file.path, part.size);
           if (session.deleted) return;
-          if (assembledBytes + bytes.length > session.size) {
+          if (!copied) {
             await _pause(session);
             return;
           }
-          await output!.writeFrom(bytes);
-          assembledBytes += bytes.length;
+          assembledBytes += part.size;
+          continue;
+        }
+        var remainingPartBytes = part.size;
+        final input = await file.open();
+        try {
+          while (true) {
+            final bytes = await input.read(_parallelAssemblyReadBytes);
+            if (session.deleted) return;
+            if (bytes.isEmpty) break;
+            if (bytes.length > remainingPartBytes ||
+                assembledBytes + bytes.length > session.size) {
+              await _pause(session);
+              return;
+            }
+            await output!.writeFrom(bytes);
+            remainingPartBytes -= bytes.length;
+            assembledBytes += bytes.length;
+          }
+        } finally {
+          await input.close();
+        }
+        if (remainingPartBytes != 0) {
+          await _pause(session);
+          return;
         }
       }
       if (assembledBytes != session.size) {
         await _pause(session);
         return;
       }
-      await output!.flush();
+      final worker = writer;
+      if (worker != null) {
+        await worker.flush();
+      } else {
+        await output!.flush();
+      }
     } on FileSystemException catch (error) {
       if (!_isInsufficientStorageError(error)) {
         await _pause(session);
         return;
       }
       try {
-        await output?.close();
+        await closeStaging();
       } catch (_) {}
-      output = null;
       await _handleAssemblyStorageFailure(session, staging, error: error);
       return;
     } finally {
       try {
-        await output?.close();
+        await closeStaging();
       } catch (_) {}
     }
     if (session.deleted) return;
@@ -5437,7 +5510,9 @@ class _ParallelSession {
   int sourceReplacementEpoch = 0;
   bool sourceReplacementActive = false;
 
-  int get size => parts.fold(0, (sum, part) => sum + part.size);
+  // Ranges are fixed for the life of this session, including across source
+  // replacement and child retries. Only their task handles/state can mutate.
+  late final int size = parts.fold(0, (sum, part) => sum + part.size);
   int get creditedBytes =>
       parts.fold<int>(0, (sum, part) => sum + part.durableBytes);
   double get progress => size <= 0

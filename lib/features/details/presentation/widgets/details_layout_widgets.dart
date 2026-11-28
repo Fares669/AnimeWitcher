@@ -1,6 +1,4 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
@@ -14,12 +12,10 @@ import 'package:animewitcher/shared/widgets/custom_widgets.dart';
 import 'package:animewitcher/shared/widgets/paged_rail.dart';
 
 import '../details_controller.dart';
-import '../../../library/presentation/downloads_provider.dart';
-
-import 'package:animewitcher/core/extensions/extension_manager.dart';
 
 import 'episode_card.dart';
 import 'episode_browse.dart';
+import 'episode_download_index.dart';
 import 'episode_search.dart';
 import 'episode_view_mode.dart';
 import 'details_hero_actions.dart';
@@ -31,18 +27,145 @@ import 'package:animewitcher/core/utils/responsive_breakpoints.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/core/utils/localized_text.dart';
 
-bool _shouldFilterEpisodesByDub(
-  DetailsState detailsState,
-  List<Episode> episodes,
-) {
-  if (detailsState.isMovie ||
-      detailsState.selectedDubStatus == DubStatus.none) {
-    return false;
+class _EpisodePresentation {
+  _EpisodePresentation({
+    required List<Episode> episodes,
+    required bool ascending,
+    required bool isMovie,
+    required this.selectedDubStatus,
+  }) {
+    final standalone =
+        !isMovie &&
+        isStandaloneEpisodeCatalog(
+          episodes.map(
+            (episode) => (serverName: episode.serverName, name: episode.name),
+          ),
+        );
+    showLanguageToggle =
+        !isMovie &&
+        !standalone &&
+        episodes.any((episode) => episode.dubStatus == DubStatus.dubbed) &&
+        episodes.any((episode) => episode.dubStatus == DubStatus.subbed);
+    final filter =
+        !isMovie && !standalone && selectedDubStatus != DubStatus.none;
+    ordered = episodesInDisplayOrder(
+      filter
+          ? episodes.where((episode) => episode.dubStatus == selectedDubStatus)
+          : episodes,
+      ascending: ascending,
+    );
   }
-  return !isStandaloneEpisodeCatalog([
-    for (final episode in episodes)
-      (serverName: episode.serverName, name: episode.name),
-  ]);
+
+  final DubStatus selectedDubStatus;
+  late final bool showLanguageToggle;
+  late final List<Episode> ordered;
+  late final List<List<Episode>> ranges = episodeRangesApply(ordered.length)
+      ? episodeRanges(ordered)
+      : const <List<Episode>>[];
+
+  int? _projectedRangeIndex;
+  List<Episode>? _projectedRange;
+
+  // Range membership uses the static list and display order only. Searching
+  // and live watch/download filters can reuse it without revisiting the
+  // entire season. Retain only the current range, never its live results.
+  List<Episode> rowsInBrowseRange(int? index) {
+    if (index == null || index < 0 || index >= ranges.length) {
+      _projectedRangeIndex = null;
+      _projectedRange = null;
+      return ordered;
+    }
+    if (index != _projectedRangeIndex) {
+      _projectedRange = episodeRowsInRange(
+        ordered,
+        ranges[index],
+      ).toList(growable: false);
+      _projectedRangeIndex = index;
+    }
+    return _projectedRange!;
+  }
+}
+
+bool _sameEpisodeRows(List<Episode> first, List<Episode> second) {
+  if (identical(first, second)) return true;
+  if (first.length != second.length) return false;
+  for (var i = 0; i < first.length; i++) {
+    if (!identical(first[i], second[i])) return false;
+  }
+  return true;
+}
+
+/// The controller may publish a fresh list of the same rows when watched
+/// state changes. Reuse the static projection in that case, never the live
+/// watch/download decisions. The controller replaces published season lists
+/// rather than mutating them, and new row objects invalidate the memo.
+_EpisodePresentation _useEpisodePresentation(
+  List<Episode> episodes,
+  DetailsState details,
+) {
+  final memo =
+      useRef<
+        ({
+          List<Episode> source,
+          (bool, bool, DubStatus) options,
+          _EpisodePresentation projection,
+        })?
+      >(null);
+  final options = (
+    details.isAscending,
+    details.isMovie,
+    details.selectedDubStatus,
+  );
+  final previous = memo.value;
+  if (previous != null &&
+      previous.options == options &&
+      _sameEpisodeRows(previous.source, episodes)) {
+    if (!identical(previous.source, episodes)) {
+      memo.value = (
+        source: episodes,
+        options: options,
+        projection: previous.projection,
+      );
+    }
+    return previous.projection;
+  }
+  final projection = _EpisodePresentation(
+    episodes: episodes,
+    ascending: details.isAscending,
+    isMovie: details.isMovie,
+    selectedDubStatus: details.selectedDubStatus,
+  );
+  memo.value = (source: episodes, options: options, projection: projection);
+  return projection;
+}
+
+List<Episode> _browseDetailsEpisodes(
+  WidgetRef ref, {
+  required MultimediaItem parentItem,
+  required _EpisodePresentation presentation,
+}) {
+  final filter = episodeListFilter.value;
+  final candidates = presentation.rowsInBrowseRange(episodeRangeIndex.value);
+  if (filter == EpisodeListFilter.all) return candidates;
+  EpisodeWatchRepository? watchRepository;
+  EpisodeDownloadMembership? completed;
+  if (filter == EpisodeListFilter.unwatched) {
+    ref.watch(episodeWatchRevisionProvider);
+    watchRepository = ref.watch(episodeWatchRepositoryProvider);
+  } else if (filter == EpisodeListFilter.downloaded) {
+    completed = ref.watch(
+      episodeDownloadsForDetailsProvider(episodeDownloadScope(parentItem))
+          .select((index) => index.completedEpisodes),
+    );
+  }
+  return browseEpisodes(
+    ordered: candidates,
+    rangeIndex: null,
+    filter: filter,
+    isWatched: (episode) =>
+        episodeIsWatchedFor(watchRepository!, parentItem, episode),
+    isDownloaded: (episode) => completed!.contains(episode.url.trim()),
+  );
 }
 
 /// What the play button should say for [itemUrl] right now.
@@ -319,146 +442,25 @@ class DetailsActionButtons extends HookConsumerWidget {
   }
 }
 
-class SliverDetailsDesktopEpisodeGrid extends ConsumerWidget {
-  final MultimediaItem parentItem;
-  final String itemUrl;
-  final bool isMovie;
-
-  const SliverDetailsDesktopEpisodeGrid({
-    super.key,
-    required this.parentItem,
-    required this.itemUrl,
-    required this.isMovie,
-  });
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    if (isMovie) return const SliverToBoxAdapter(child: SizedBox.shrink());
-
-    final detailsState = ref.watch(detailsControllerProvider(itemUrl));
-    var episodes = detailsState.seasonMap[detailsState.selectedSeason] ?? [];
-
-    if (episodes.isEmpty) {
-      return const SliverToBoxAdapter(child: SizedBox.shrink());
-    }
-
-    // Apply Language Filter
-    if (_shouldFilterEpisodesByDub(detailsState, episodes)) {
-      episodes = episodes
-          .where((e) => e.dubStatus == detailsState.selectedDubStatus)
-          .toList();
-    }
-
-    // Episode list UI v2: show every filtered episode without range batching.
-    final displayedEpisodes = episodesInDisplayOrder(
-      episodes,
-      ascending: detailsState.isAscending,
-    );
-
-    return SliverMainAxisGroup(
-      slivers: [
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: LayoutConstants.spacingMd),
-            child: Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 8,
-              runSpacing: 12,
-              children: [
-                Text(
-                  AppLocalizations.of(context)!.episodes,
-                  style: Theme.of(context).textTheme.headlineSmall
-                      ?.copyWith(fontWeight: FontWeight.bold),
-                ),
-                DetailsEpisodeFilterBar(itemUrl: itemUrl),
-              ],
-            ),
-          ),
-        ),
-        SliverLayoutBuilder(
-          builder: (context, constraints) {
-            final double crossAxisExtent = constraints.crossAxisExtent;
-            final int crossAxisCount = (crossAxisExtent / 480).ceil().clamp(
-              1,
-              5,
-            );
-            final int rowCount = (displayedEpisodes.length / crossAxisCount)
-                .ceil();
-
-            return SliverList.separated(
-              itemCount: rowCount,
-              separatorBuilder: (_, _) => const SizedBox(height: 16),
-              itemBuilder: (context, rowIndex) {
-                final int startIndex = rowIndex * crossAxisCount;
-                final int endIndex = (startIndex + crossAxisCount).clamp(
-                  0,
-                  displayedEpisodes.length,
-                );
-                final rowEpisodes = displayedEpisodes.sublist(
-                  startIndex,
-                  endIndex,
-                );
-
-                if (crossAxisCount == 1) {
-                  return EpisodeCard(
-                    key: ValueKey(rowEpisodes.single.url),
-                    episode: rowEpisodes.single,
-                    parentItem: parentItem,
-                  );
-                }
-
-                return IntrinsicHeight(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      for (var i = 0; i < crossAxisCount; i++)
-                        Expanded(
-                          child: Padding(
-                            padding: EdgeInsets.only(
-                              left: i == 0 ? 0 : 8,
-                              right: i == crossAxisCount - 1 ? 0 : 8,
-                            ),
-                            child: i < rowEpisodes.length
-                                ? EpisodeCard(
-                                    key: ValueKey(rowEpisodes[i].url),
-                                    episode: rowEpisodes[i],
-                                    parentItem: parentItem,
-                                  )
-                                : const SizedBox.shrink(),
-                          ),
-                        ),
-                    ],
-                  ),
-                );
-              },
-            );
-          },
-        ),
-      ],
-    );
-  }
-}
-
 /// One column in portrait; two side-by-side cards in phone landscape.
 class SliverEpisodeCardGrid extends StatelessWidget {
   const SliverEpisodeCardGrid({
     super.key,
-    required this.children,
+    required this.itemCount,
+    required this.itemBuilder,
     this.mainAxisSpacing = 12,
     this.crossAxisSpacing = 8,
   });
 
-  final List<Widget> children;
+  final int itemCount;
+  final IndexedWidgetBuilder itemBuilder;
   final double mainAxisSpacing;
   final double crossAxisSpacing;
 
   @override
   Widget build(BuildContext context) {
     final crossAxisCount = ResponsiveBreakpoints.episodeCrossAxisCount(context);
-    final rowCount = children.isEmpty
-        ? 0
-        : (children.length / crossAxisCount).ceil();
+    final rowCount = (itemCount / crossAxisCount).ceil();
 
     return SliverList.separated(
       itemCount: rowCount,
@@ -467,7 +469,7 @@ class SliverEpisodeCardGrid extends StatelessWidget {
         final startIndex = rowIndex * crossAxisCount;
         // A single card already determines its row height. IntrinsicHeight
         // adds a speculative layout pass to every newly visible episode.
-        if (crossAxisCount == 1) return children[startIndex];
+        if (crossAxisCount == 1) return itemBuilder(context, startIndex);
         return IntrinsicHeight(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -479,8 +481,8 @@ class SliverEpisodeCardGrid extends StatelessWidget {
                       left: i == 0 ? 0 : crossAxisSpacing / 2,
                       right: i == crossAxisCount - 1 ? 0 : crossAxisSpacing / 2,
                     ),
-                    child: startIndex + i < children.length
-                        ? children[startIndex + i]
+                    child: startIndex + i < itemCount
+                        ? itemBuilder(context, startIndex + i)
                         : const SizedBox.shrink(),
                   ),
                 ),
@@ -492,7 +494,7 @@ class SliverEpisodeCardGrid extends StatelessWidget {
   }
 }
 
-class SliverDetailsEpisodeList extends ConsumerWidget {
+class SliverDetailsEpisodeList extends HookConsumerWidget {
   final MultimediaItem parentItem;
   final String itemUrl;
   final bool isMovie;
@@ -527,55 +529,36 @@ class SliverDetailsEpisodeList extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (isMovie) return const SliverToBoxAdapter(child: SizedBox.shrink());
-
-    final detailsState = ref.watch(detailsControllerProvider(itemUrl));
-    var episodes = detailsState.seasonMap[detailsState.selectedSeason] ?? [];
-
-    if (episodes.isEmpty) {
+    final detailsState = isMovie
+        ? const DetailsState()
+        : ref.watch(detailsControllerProvider(itemUrl));
+    final episodes =
+        detailsState.seasonMap[detailsState.selectedSeason] ??
+        const <Episode>[];
+    final presentation = _useEpisodePresentation(episodes, detailsState);
+    if (isMovie || episodes.isEmpty) {
       return const SliverToBoxAdapter(child: SizedBox.shrink());
     }
-
-    // Apply Language Filter
-    if (_shouldFilterEpisodesByDub(detailsState, episodes)) {
-      episodes = episodes
-          .where((e) => e.dubStatus == detailsState.selectedDubStatus)
-          .toList();
-    }
-
-    final orderedEpisodes = episodesInDisplayOrder(
-      episodes,
-      ascending: detailsState.isAscending,
-    );
-    // Read the way the episode cards read them, so the filter agrees with
-    // what each card says.
-    ref.watch(episodeWatchRevisionProvider);
-    final watchRepository = ref.watch(episodeWatchRepositoryProvider);
-    final downloads =
-        ref.watch(downloadsProvider).value ?? const <DownloadItem>[];
-
     return ListenableBuilder(
       listenable: episodeBrowseListenable,
-      builder: (context, _) {
-        final displayedEpisodes = browseEpisodesFor(
-          parentItem: parentItem,
-          ordered: orderedEpisodes,
-          watchRepository: watchRepository,
-          downloads: downloads,
-        );
-        return _buildSliverEpisodes(
+      builder: (_, _) => Consumer(
+        builder: (context, ref, _) => _buildSliverEpisodes(
           context,
-          allEpisodes: orderedEpisodes,
-          displayedEpisodes: displayedEpisodes,
+          presentation: presentation,
+          displayedEpisodes: _browseDetailsEpisodes(
+            ref,
+            parentItem: parentItem,
+            presentation: presentation,
+          ),
           details: detailsState.item ?? detailsState.details.asData?.value,
-        );
-      },
+        ),
+      ),
     );
   }
 
   Widget _buildSliverEpisodes(
     BuildContext context, {
-    required List<Episode> allEpisodes,
+    required _EpisodePresentation presentation,
     required List<Episode> displayedEpisodes,
     required MultimediaItem? details,
   }) {
@@ -591,8 +574,13 @@ class SliverDetailsEpisodeList extends ConsumerWidget {
                     bottom: LayoutConstants.spacingMd,
                   ),
                   child: EpisodeBrowseBar(
-                    episodes: allEpisodes,
-                    leading: DetailsEpisodeFilterBar(itemUrl: itemUrl),
+                    episodes: presentation.ordered,
+                    ranges: presentation.ranges,
+                    leading: DetailsEpisodeFilterBar(
+                      itemUrl: itemUrl,
+                      visible: presentation.showLanguageToggle,
+                      selected: presentation.selectedDubStatus,
+                    ),
                     trailing: DetailsEpisodeSortButton(itemUrl: itemUrl),
                   ),
                 ),
@@ -617,20 +605,21 @@ class SliverDetailsEpisodeList extends ConsumerWidget {
         if (displayedEpisodes.isEmpty)
           const SliverToBoxAdapter(child: EpisodeBrowseEmpty()),
         SliverEpisodeCardGrid(
-          children: [
-            for (final ep in displayedEpisodes)
-              _withTransition(
-                EpisodeCard(
-                  key: ValueKey(ep.url),
-                  episode: ep,
-                  parentItem: parentItem,
-                  // Rows on the page, as the PC and tablet list has them: no
-                  // panel round each one, only the current or chosen
-                  // episode filled.
-                  plain: true,
-                ),
+          itemCount: displayedEpisodes.length,
+          itemBuilder: (_, index) {
+            final ep = displayedEpisodes[index];
+            return _withTransition(
+              EpisodeCard(
+                key: ValueKey(ep.url),
+                episode: ep,
+                parentItem: parentItem,
+                // Rows on the page, as the PC and tablet list has them: no
+                // panel round each one, only the current or chosen
+                // episode filled.
+                plain: true,
               ),
-          ],
+            );
+          },
         ),
       ],
     );
@@ -640,27 +629,22 @@ class SliverDetailsEpisodeList extends ConsumerWidget {
 class DetailsEpisodeFilterBar extends ConsumerWidget {
   final String itemUrl;
 
-  const DetailsEpisodeFilterBar({super.key, required this.itemUrl});
+  const DetailsEpisodeFilterBar({
+    super.key,
+    required this.itemUrl,
+    required this.visible,
+    required this.selected,
+  });
+
+  final bool visible;
+  final DubStatus selected;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final detailsState = ref.watch(detailsControllerProvider(itemUrl));
-    final allEpisodes =
-        detailsState.seasonMap[detailsState.selectedSeason] ?? [];
-
-    final isStandaloneCatalog = isStandaloneEpisodeCatalog([
-      for (final episode in allEpisodes)
-        (serverName: episode.serverName, name: episode.name),
-    ]);
-    final hasDub = allEpisodes.any((e) => e.dubStatus == DubStatus.dubbed);
-    final hasSub = allEpisodes.any((e) => e.dubStatus == DubStatus.subbed);
-    final showLanguageToggle =
-        !detailsState.isMovie && !isStandaloneCatalog && hasDub && hasSub;
-    if (!showLanguageToggle) return const SizedBox.shrink();
-
+    if (!visible) return const SizedBox.shrink();
     return SizedBox(
       height: 40,
-      child: _buildLanguageToggle(context, ref, detailsState.selectedDubStatus),
+      child: _buildLanguageToggle(context, ref, selected),
     );
   }
 
@@ -699,6 +683,43 @@ class DetailsEpisodeFilterBar extends ConsumerWidget {
   }
 }
 
+/// Shared glass toggle for the episode and chapter sort controls.
+Widget buildDetailsSortToggle(
+  BuildContext context, {
+  required bool ascending,
+  required Key inkWellKey,
+  required VoidCallback onTap,
+}) => SizedBox(
+  height: 40,
+  child: AppleLiquidGlassSurface(
+    borderRadius: BorderRadius.circular(20),
+    interactive: true,
+    fallbackColor: kDetailsHeroGlassFallback,
+    fallbackBorder: BorderSide(
+      color: Theme.of(context).colorScheme.onSurfaceVariant
+          .withValues(alpha: 0.12),
+    ),
+    child: Material(
+      color: Colors.transparent,
+      child: InkWell(
+        key: inkWellKey,
+        borderRadius: BorderRadius.circular(20),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Icon(
+            ascending
+                ? Icons.arrow_downward_rounded
+                : Icons.arrow_upward_rounded,
+            size: 22,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ),
+    ),
+  ),
+);
+
 class DetailsEpisodeSortButton extends ConsumerWidget {
   const DetailsEpisodeSortButton({super.key, required this.itemUrl});
 
@@ -709,37 +730,12 @@ class DetailsEpisodeSortButton extends ConsumerWidget {
     final ascending = ref.watch(
       detailsControllerProvider(itemUrl).select((state) => state.isAscending),
     );
-    return SizedBox(
-      height: 40,
-      child: AppleLiquidGlassSurface(
-        borderRadius: BorderRadius.circular(20),
-        interactive: true,
-        fallbackColor: kDetailsHeroGlassFallback,
-        fallbackBorder: BorderSide(
-          color: Theme.of(context).colorScheme.onSurfaceVariant
-              .withValues(alpha: 0.12),
-        ),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            key: const ValueKey<String>('episode-sort-toggle'),
-            borderRadius: BorderRadius.circular(20),
-            onTap: () => ref
-                .read(detailsControllerProvider(itemUrl).notifier)
-                .toggleSort(),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Icon(
-                ascending
-                    ? Icons.arrow_downward_rounded
-                    : Icons.arrow_upward_rounded,
-                size: 22,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-        ),
-      ),
+    return buildDetailsSortToggle(
+      context,
+      ascending: ascending,
+      inkWellKey: const ValueKey<String>('episode-sort-toggle'),
+      onTap: () =>
+          ref.read(detailsControllerProvider(itemUrl).notifier).toggleSort(),
     );
   }
 }
@@ -807,114 +803,8 @@ class _LanguageButtonState extends State<_LanguageButton> {
   }
 }
 
-class DetailsChip extends StatelessWidget {
-  final String label;
-
-  const DetailsChip({super.key, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Theme.of(context).dividerColor),
-      ),
-      child: Text(
-        label,
-        style: Theme.of(context).textTheme.bodySmall
-            ?.copyWith(fontWeight: FontWeight.w500),
-      ),
-    );
-  }
-}
-
-class DetailsProviderChip extends ConsumerWidget {
-  final String providerName;
-
-  const DetailsProviderChip({super.key, required this.providerName});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    bool isDebug = false;
-    String displayName = providerName;
-    try {
-      final manager = ref.read(extensionManagerProvider.notifier);
-      final p = manager.getAllProviders().firstWhere(
-        (p) => p.packageName == providerName || p.name == providerName,
-      );
-      displayName = p.name;
-      if (p.isDebug) {
-        isDebug = true;
-      }
-    } catch (e) {
-      if (kDebugMode) debugPrint('DetailsProviderChip.build: $e');
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
-            Theme.of(context).colorScheme.primary.withValues(alpha: 0.05),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(
-          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
-          width: 0.5,
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.extension_rounded,
-            size: 14,
-            color: Theme.of(context).colorScheme.primary,
-          ),
-          const SizedBox(width: 4),
-          Text(
-            displayName.toUpperCase(),
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.primary,
-              fontSize: 11,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 0.5,
-            ),
-          ),
-          if (isDebug) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: Colors.redAccent.withValues(alpha: 0.9),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                appText(context, english: 'DEBUG', arabic: 'تصحيح'),
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 8,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-/// Non-sliver desktop episode grid for use inside [DetailsDesktopHero]'s
-/// [SingleChildScrollView]. Mirrors [SliverDetailsDesktopEpisodeGrid] but
-/// uses [LayoutBuilder] + [Column] instead of sliver equivalents.
-class DetailsDesktopEpisodeColumn extends ConsumerWidget {
+/// Desktop episode grid laid out inside the details page's scroll view.
+class DetailsDesktopEpisodeColumn extends HookConsumerWidget {
   final MultimediaItem parentItem;
   final String itemUrl;
   final bool isMovie;
@@ -976,62 +866,45 @@ class DetailsDesktopEpisodeColumn extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (isMovie) return const SizedBox.shrink();
-
-    final detailsState = ref.watch(detailsControllerProvider(itemUrl));
-    var episodes = detailsState.seasonMap[detailsState.selectedSeason] ?? [];
-
-    if (episodes.isEmpty) return const SizedBox.shrink();
-
-    if (_shouldFilterEpisodesByDub(detailsState, episodes)) {
-      episodes = episodes
-          .where(
-            (episode) => episode.dubStatus == detailsState.selectedDubStatus,
-          )
-          .toList(growable: false);
-    }
-
-    final orderedEpisodes = episodesInDisplayOrder(
-      episodes,
-      ascending: detailsState.isAscending,
-    );
-    ref.watch(episodeWatchRevisionProvider);
-    final watchRepository = ref.watch(episodeWatchRepositoryProvider);
-    final downloads =
-        ref.watch(downloadsProvider).value ?? const <DownloadItem>[];
-
+    final detailsState = isMovie
+        ? const DetailsState()
+        : ref.watch(detailsControllerProvider(itemUrl));
+    final episodes =
+        detailsState.seasonMap[detailsState.selectedSeason] ??
+        const <Episode>[];
+    final presentation = _useEpisodePresentation(episodes, detailsState);
+    if (isMovie || episodes.isEmpty) return const SizedBox.shrink();
     return ListenableBuilder(
       listenable: Listenable.merge(<Listenable>[
         episodeSearchQuery,
         episodeBrowseListenable,
       ]),
-      builder: (context, _) {
-        final query = episodeSearchQuery.value;
-        final browsed = browseEpisodesFor(
-          parentItem: parentItem,
-          ordered: orderedEpisodes,
-          watchRepository: watchRepository,
-          downloads: downloads,
-        );
-        final displayedEpisodes = query.trim().isEmpty
-            ? browsed
-            : browsed
-                  .where(
-                    (episode) => episodeMatchesQuery(
-                      number: episode.episode,
-                      name: episode.name,
-                      query: query,
-                    ),
-                  )
-                  .toList(growable: false);
-        return _buildEpisodesSection(
-          context,
-          displayedEpisodes,
-          query,
-          allEpisodes: orderedEpisodes,
-          details: detailsState.item ?? detailsState.details.asData?.value,
-        );
-      },
+      builder: (_, _) => Consumer(
+        builder: (context, ref, _) {
+          final query = episodeSearchQuery.value;
+          final browsed = _browseDetailsEpisodes(
+            ref,
+            parentItem: parentItem,
+            presentation: presentation,
+          );
+          final search = EpisodeSearchQuery(query);
+          final displayedEpisodes = search.isEmpty
+              ? browsed
+              : browsed
+                    .where(
+                      (episode) =>
+                          search.matches(episode.episode, episode.name),
+                    )
+                    .toList(growable: false);
+          return _buildEpisodesSection(
+            context,
+            displayedEpisodes,
+            query,
+            presentation: presentation,
+            details: detailsState.item ?? detailsState.details.asData?.value,
+          );
+        },
+      ),
     );
   }
 
@@ -1039,7 +912,7 @@ class DetailsDesktopEpisodeColumn extends ConsumerWidget {
     BuildContext context,
     List<Episode> displayedEpisodes,
     String query, {
-    required List<Episode> allEpisodes,
+    required _EpisodePresentation presentation,
     required MultimediaItem? details,
   }) {
     return Column(
@@ -1060,8 +933,13 @@ class DetailsDesktopEpisodeColumn extends ConsumerWidget {
         Padding(
           padding: const EdgeInsets.only(bottom: LayoutConstants.spacingMd),
           child: EpisodeBrowseBar(
-            episodes: allEpisodes,
-            leading: DetailsEpisodeFilterBar(itemUrl: itemUrl),
+            episodes: presentation.ordered,
+            ranges: presentation.ranges,
+            leading: DetailsEpisodeFilterBar(
+              itemUrl: itemUrl,
+              visible: presentation.showLanguageToggle,
+              selected: presentation.selectedDubStatus,
+            ),
             trailing: DetailsEpisodeSortButton(itemUrl: itemUrl),
           ),
         ),

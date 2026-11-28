@@ -78,6 +78,7 @@ final class Anime4KFrameDedupRegistry {
 struct Anime4KMetalTelemetryAccumulator {
     private let windowCapacity: Int
     private var frameTimesMs: [Double] = []
+    private var oldestSample = 0
     private(set) var processedFrames = 0
     private(set) var skippedDuplicateFrames = 0
     private(set) var lateOrDroppedFrames = 0
@@ -91,9 +92,13 @@ struct Anime4KMetalTelemetryAccumulator {
     mutating func recordCompletedFrame(milliseconds: Double) {
         guard milliseconds.isFinite, milliseconds >= 0 else { return }
         processedFrames += 1
-        frameTimesMs.append(milliseconds)
-        if frameTimesMs.count > windowCapacity {
-            frameTimesMs.removeFirst(frameTimesMs.count - windowCapacity)
+        if frameTimesMs.count < windowCapacity {
+            frameTimesMs.append(milliseconds)
+        } else {
+            // Overwrite the oldest sample instead of shifting the window on every frame.
+            frameTimesMs[oldestSample] = milliseconds
+            oldestSample += 1
+            if oldestSample == windowCapacity { oldestSample = 0 }
         }
     }
 
@@ -116,7 +121,9 @@ struct Anime4KMetalTelemetryAccumulator {
             )
         }
 
-        let average = frameTimesMs.reduce(0, +) / Double(frameTimesMs.count)
+        // Sum in arrival order, including after the circular window wraps.
+        let tailSum = frameTimesMs[oldestSample...].reduce(0, +)
+        let average = frameTimesMs[..<oldestSample].reduce(tailSum, +) / Double(frameTimesMs.count)
         let sorted = frameTimesMs.sorted()
         let p95Index = max(
             0,

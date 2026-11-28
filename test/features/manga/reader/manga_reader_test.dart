@@ -2,13 +2,16 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/services/download_v2/manga_chapter_manifest_v2.dart';
 import 'package:animewitcher/core/storage/manga_reading_repository.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
+import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_controller.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_page_cache.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_screen.dart';
@@ -25,8 +28,11 @@ import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:super_sliver_list/super_sliver_list.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
@@ -155,9 +161,10 @@ final class _PerMangaReaderSettingsNotifier
 /// Serves real local image files as chapter pages, so the full screen
 /// can stream chapters whose images actually load.
 final class _LocalStreamProvider extends AnimeWitcherProvider {
-  _LocalStreamProvider(this.directory);
+  _LocalStreamProvider(this.directory, {this.extension = 'bmp'});
 
   final Directory directory;
+  final String extension;
   final List<String> requestedChapterIds = <String>[];
 
   @override
@@ -197,19 +204,98 @@ final class _LocalStreamProvider extends AnimeWitcherProvider {
       for (var i = 0; i < 3; i++)
         MangaPage(
           index: i,
-          imageUrl: File('${directory.path}/page-${i + 1}.bmp').uri.toString(),
+          imageUrl: File(
+            '${directory.path}/page-${i + 1}.$extension',
+          ).uri.toString(),
         ),
     ];
   }
 }
 
-final class _WebtoonStreamSettingsNotifier extends MangaReaderSettingsNotifier {
+final class _ReaderCachePathProvider extends PathProviderPlatform {
+  _ReaderCachePathProvider(this.root);
+
+  final String root;
+
   @override
-  MangaReaderSettings build() => const MangaReaderSettings(
+  Future<String?> getTemporaryPath() async => root;
+}
+
+final class _CacheUiIoProbe extends IOOverrides {
+  _CacheUiIoProbe(this.directory);
+
+  final String directory;
+  int synchronousListings = 0;
+  int synchronousStats = 0;
+  Duration synchronousListTime = Duration.zero;
+  Duration synchronousStatTime = Duration.zero;
+
+  @override
+  Directory createDirectory(String path) {
+    final delegate = super.createDirectory(path);
+    return path == directory ? _TracedCacheDirectory(delegate, this) : delegate;
+  }
+
+  @override
+  FileStat statSync(String path) {
+    if (!path.startsWith('$directory${Platform.pathSeparator}')) {
+      return super.statSync(path);
+    }
+    final timer = Stopwatch()..start();
+    final result = super.statSync(path);
+    synchronousStats++;
+    synchronousStatTime += timer.elapsed;
+    return result;
+  }
+}
+
+final class _TracedCacheDirectory implements Directory {
+  _TracedCacheDirectory(this._delegate, this._probe);
+
+  final Directory _delegate;
+  final _CacheUiIoProbe _probe;
+
+  @override
+  String get path => _delegate.path;
+
+  @override
+  Future<bool> exists() => _delegate.exists();
+
+  @override
+  Future<Directory> create({bool recursive = false}) =>
+      _delegate.create(recursive: recursive);
+
+  @override
+  List<FileSystemEntity> listSync({
+    bool recursive = false,
+    bool followLinks = true,
+  }) {
+    final timer = Stopwatch()..start();
+    final result = _delegate.listSync(
+      recursive: recursive,
+      followLinks: followLinks,
+    );
+    _probe.synchronousListings++;
+    _probe.synchronousListTime += timer.elapsed;
+    return result;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+final class _WebtoonStreamSettingsNotifier extends MangaReaderSettingsNotifier {
+  _WebtoonStreamSettingsNotifier({this.preloadWidth = 6});
+
+  final int preloadWidth;
+
+  @override
+  MangaReaderSettings build() => MangaReaderSettings(
     defaultMode: MangaReaderMode.webtoon,
     showReadingMode: false,
     keepScreenOn: false,
     fullScreen: false,
+    pagePreloadAmount: preloadWidth,
   );
 }
 
@@ -275,10 +361,316 @@ final class _DelayedReaderProgressRepository extends MangaReadingRepository {
   }
 }
 
+final class _NoOtherDownloadedChapters extends DownloadsNotifier {
+  @override
+  Future<List<DownloadItem>> build() async => const [];
+}
+
 void main() {
   setUpAll(() {
     VisibilityDetectorController.instance.updateInterval = Duration.zero;
   });
+  final webtoonFixtures =
+      ValueVariant<({int preloadWidth, int count, bool animated})>({
+        (preloadWidth: 6, count: 8, animated: false),
+        (preloadWidth: 2, count: 8, animated: false),
+        (preloadWidth: 2, count: 192, animated: false),
+        (preloadWidth: 2, count: 8, animated: true),
+      });
+  testWidgets('Webtoon resumes a completed chapter and persists physical scroll', (
+    tester,
+  ) async {
+    final (:preloadWidth, :count, :animated) = webtoonFixtures.currentValue!;
+    if (animated) {
+      tester.view.physicalSize = const Size(390, 420);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      // Keep the real coalesced visibility path, rather than immediate tests.
+      VisibilityDetectorController.instance.updateInterval =
+          const Duration(milliseconds: 100);
+      addTearDown(() {
+        VisibilityDetectorController.instance.updateInterval = Duration.zero;
+      });
+    }
+    const alternate = [219, 31, 149];
+    const chapter = MangaChapter(
+      id: 'plain-webtoon-chapter',
+      mangaId: 'plain-webtoon-manga',
+      url: 'https://example.test/webtoon/chapter',
+      name: 'Plain Webtoon chapter',
+    );
+    const resume = 3;
+    final dir = Directory.systemTemp.createTempSync('webtoon_offsets_');
+    addTearDown(() => dir.delete(recursive: true));
+    final digests = <int, String>{};
+    final colors = <int, List<int>>{};
+    await tester.runAsync(() async {
+      for (var i = 0; i < count; i++) {
+        final color = [20 + (i * 31) % 211, 30 + (i * 47) % 201, 88];
+        colors[i] = color;
+        final picture = img.Image(
+          width: 24,
+          height: animated ? 28 : 16,
+          frameDuration: 100,
+        );
+        img.fill(picture, color: img.ColorRgb8(color[0], color[1], color[2]));
+        if (animated) {
+          picture.addFrame(
+            img.fill(
+              img.Image(width: 24, height: 28, frameDuration: 100),
+              color: img.ColorRgb8(alternate[0], alternate[1], alternate[2]),
+            ),
+          );
+        }
+        final file = File('${dir.path}/${(i + 1).toString().padLeft(4, '0')}.gif');
+        await file.writeAsBytes(img.encodeGif(picture), flush: true);
+        digests[i] = await MangaChapterManifestV2.pageDigest(file);
+      }
+      await MangaChapterManifestV2(
+        version: MangaChapterManifestV2.currentVersion,
+        mangaId: chapter.mangaId,
+        chapterId: chapter.id,
+        pageCount: count,
+        completedIndexes: digests.keys.toSet(),
+        isComplete: true,
+        // Exercise both legacy chapters and integrity-checked downloads.
+        pageDigests: count > 8 ? digests : const <int, String>{},
+      ).writeTo(dir);
+    });
+    final provider = _ReaderProvider(emptyPages: true);
+    final progress = _RecordingReaderProgressRepository();
+    await progress.save(MangaReadingProgress(
+      mangaId: chapter.mangaId,
+      chapterId: chapter.id,
+      pageIndex: resume,
+      pageCount: count,
+      updatedAt: 1,
+    ));
+    final scrollView = find.byType(CustomScrollView);
+    final webtoon = find.byType(MangaWebtoonReader);
+    final launcher = find.text('Open local Webtoon');
+
+    Widget app() => ProviderScope(
+      overrides: [
+        extensionManagerProvider.overrideWith(() => _ReaderManager(provider)),
+        mangaReadingRepositoryProvider.overrideWithValue(progress),
+        mangaReaderSettingsProvider.overrideWith(
+          () => _WebtoonStreamSettingsNotifier(preloadWidth: preloadWidth),
+        ),
+        downloadsProvider.overrideWith(_NoOtherDownloadedChapters.new),
+      ],
+      child: MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Builder(builder: (context) => Scaffold(
+          body: TextButton(
+            onPressed: () => Navigator.of(context).push<void>(
+              MaterialPageRoute<void>(builder: (_) => MangaReaderScreen(
+                manga: MultimediaItem(
+                  title: 'Plain Webtoon manga',
+                  url: 'https://example.test/webtoon',
+                  posterUrl: '',
+                  provider: provider.packageName,
+                  contentType: MultimediaContentType.manga,
+                ),
+                chapter: chapter,
+                chapters: const [chapter],
+                localChapterDirectory: dir.path,
+              )),
+            ),
+            child: const Text('Open local Webtoon'),
+          ),
+        )),
+      ),
+    );
+
+    int? savedPage() => progress.get(chapter.mangaId, chapter.id)?.pageIndex;
+    Future<void> eventually(String stage, bool Function() ready) async {
+      // A hashed chapter performs sequential async filesystem checks. Give
+      // each real IO completion a fake-clock turn before counting paint.
+      final openingHashedChapter = count > 8 && stage == 'local chapter open';
+      final turns = openingHashedChapter ? 2048 : 480;
+      final delay = Duration(milliseconds: openingHashedChapter ? 2 : 6);
+      for (var i = 0; i < turns; i++) {
+        await tester.runAsync(() => Future<void>.delayed(delay));
+        await tester.pump(const Duration(milliseconds: 32));
+        if (ready()) {
+          debugPrint('Webtoon fixture: $stage ready; saved=${savedPage()}');
+          return;
+        }
+        // Stop on a real product error instead of calling it a slow fixture.
+        final screen = find.byType(MangaReaderScreen);
+        if (screen.evaluate().isNotEmpty) {
+          final label = AppLocalizations.of(tester.element(screen))?.retry;
+          if (label != null && find.text(label).evaluate().isNotEmpty) {
+            fail('Webtoon fixture: $stage hit the reader retry UI');
+          }
+        }
+      }
+      final screens = find.byType(MangaReaderScreen).evaluate().length;
+      fail('Webtoon fixture: $stage pending; '
+          'screen=$screens reader=${webtoon.evaluate().length} '
+          'saved=${savedPage()} provider=${provider.requestedChapterIds}');
+    }
+
+    Finder row(int index) => find.byKey(ValueKey('manga-webtoon-$index-$index'));
+    Finder painted(int index) =>
+        find.descendant(of: row(index), matching: find.byType(RawImage));
+    Future<List<int>> rgb(ui.Image image) async {
+      final copy = image.clone();
+      try {
+        final data = await tester.runAsync(
+          () => copy.toByteData(format: ui.ImageByteFormat.rawRgba),
+        );
+        expect(data, isNotNull);
+        return [for (var channel = 0; channel < 3; channel++) data!.getUint8(channel)];
+      } finally {
+        copy.dispose();
+      }
+    }
+
+    Future<void> expectPixels(int index) async {
+      await eventually('decoded page $index', () => painted(index).evaluate().any(
+        (element) => (element.widget as RawImage).image != null,
+      ));
+      final raw = tester.widget<RawImage>(painted(index));
+      final color = await rgb(raw.image!);
+      if (animated) {
+        expect(color, anyOf(equals(colors[index]), equals(alternate)));
+      } else {
+        expect(color, colors[index]);
+      }
+    }
+
+    Future<void> observeAnimation(int index) async {
+      if (!animated) return;
+      ui.Image image() => tester.widget<RawImage>(painted(index)).image!;
+      final pixelColors = <String>{};
+      var previous = image();
+      var frameChanges = 0;
+      for (var i = 0; i < 32; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 4)),
+        );
+        await tester.pump(const Duration(milliseconds: 48));
+        final current = image();
+        if (identical(current, previous)) continue;
+        frameChanges++;
+        previous = current;
+        if (pixelColors.length < 2) {
+          pixelColors.add((await rgb(current)).join(','));
+        }
+      }
+      expect(frameChanges, greaterThan(4));
+      expect(pixelColors, {colors[index]!.join(','), alternate.join(',')});
+    }
+
+    void expectLayout(int anchor, {Key? sessionCenter}) {
+      final scroll = tester.widget<CustomScrollView>(scrollView);
+      final slivers = scroll.slivers.whereType<SliverList>().toList();
+      expect(slivers, hasLength(2));
+      expect(slivers.first.delegate.estimatedChildCount, anchor);
+      expect(slivers.last.delegate.estimatedChildCount, count - anchor);
+      expect(scroll.center, isNotNull);
+      expect(scroll.center, slivers.last.key);
+      if (sessionCenter != null) expect(scroll.center, same(sessionCenter));
+    }
+
+    void expectVisibleGap(int page) {
+      final gap = find.descendant(
+        of: row(page),
+        matching: find.byKey(const ValueKey('manga-reader-page-gap')),
+      );
+      expect(gap, findsOneWidget);
+      expect(tester.widget<Padding>(gap).padding,
+          const EdgeInsets.only(bottom: 8));
+      expect(tester.getRect(painted(page)).overlaps(tester.getRect(scrollView)),
+          isTrue);
+    }
+
+    await tester.pumpWidget(app());
+    await tester.pumpAndSettle();
+    debugPrint('Webtoon fixture: open local chapter count=$count resume=$resume');
+    await tester.tap(launcher);
+    await eventually('local chapter open', () => webtoon.evaluate().isNotEmpty);
+    final state = tester.state(webtoon);
+    final initial = tester.widget<MangaWebtoonReader>(webtoon);
+    expect(initial.initialPage, resume);
+    expect(initial.pages, hasLength(count));
+    expect(
+      initial.pages.map((page) => page.imageUrl),
+      [
+        for (var i = 0; i < count; i++)
+          File('${dir.path}/${(i + 1).toString().padLeft(4, '0')}.gif')
+              .uri.toString(),
+      ],
+    );
+    expect(initial.doublePage, isFalse);
+    expect(initial.sectionDividers, isEmpty);
+    expect(initial.settings.showPageGaps, isTrue);
+    expect(initial.settings.pagePreloadAmount, preloadWidth);
+    final controller = initial.controller;
+    final sessionCenter = tester.widget<CustomScrollView>(scrollView).center;
+    expect(controller, isNotNull);
+    expectLayout(resume);
+    await expectPixels(resume);
+    expectVisibleGap(resume);
+    await observeAnimation(resume);
+    expect(provider.requestedChapterIds, isEmpty);
+
+    await tester.drag(scrollView, const Offset(0, -620));
+    await eventually('progress after forward', () => (savedPage() ?? -1) > resume);
+    final advanced = savedPage()!;
+    await expectPixels(advanced);
+    expect(tester.state(webtoon), same(state));
+    expect(tester.widget<MangaWebtoonReader>(webtoon).controller, same(controller));
+    expectLayout(resume, sessionCenter: sessionCenter);
+    expectVisibleGap(advanced);
+    await observeAnimation(advanced);
+    await tester.drag(scrollView, const Offset(0, 620));
+    await eventually('progress after reverse', () => (savedPage() ?? -1) < advanced);
+    final reversed = savedPage()!;
+    await expectPixels(reversed);
+    expect(tester.state(webtoon), same(state));
+    expectLayout(resume, sessionCenter: sessionCenter);
+    expectVisibleGap(reversed);
+    await observeAnimation(reversed);
+    await tester.drag(scrollView, const Offset(0, -620));
+    await eventually('progress after second forward', () => (savedPage() ?? -1) > reversed);
+    final last = savedPage()!;
+    await expectPixels(last);
+    expect(tester.state(webtoon), same(state));
+    expectLayout(resume, sessionCenter: sessionCenter);
+    expectVisibleGap(last);
+    expect(provider.requestedChapterIds, isEmpty);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await eventually('exit reader route', () =>
+        webtoon.evaluate().isEmpty && launcher.hitTestable().evaluate().isNotEmpty);
+    expect(savedPage(), last);
+    // Reopen with the file-image cache still warm: image settlement can
+    // notify Webtoon synchronously while Flutter is laying out a row.
+    await tester.tap(launcher);
+    await eventually('local chapter open', () => webtoon.evaluate().isNotEmpty);
+    expect(tester.widget<MangaWebtoonReader>(webtoon).initialPage, last);
+    expect(tester.state(webtoon), isNot(same(state)));
+    expectLayout(last);
+    await expectPixels(last);
+    expectVisibleGap(last);
+    await observeAnimation(last);
+    expect(provider.requestedChapterIds, isEmpty);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.runAsync(() async {
+      for (var i = 0; i < count; i++) {
+        final file = File('${dir.path}/${(i + 1).toString().padLeft(4, '0')}.gif');
+        expect(await MangaChapterManifestV2.pageDigest(file), digests[i]);
+      }
+    });
+  }, variant: webtoonFixtures);
+
   test('reader exposes webtoon, paged LTR and paged RTL modes', () {
     expect(MangaReaderMode.values, <MangaReaderMode>[
       MangaReaderMode.vertical,
@@ -405,6 +797,57 @@ void main() {
         .millisecondsSinceEpoch;
     await file.writeAsString(jsonEncode(data));
     expect(await cache.get('expired-m1', chapter), isNull);
+  });
+
+  test('reader cache trims oldest entries only after durable publication', () async {
+    final directory = await Directory.systemTemp.createTemp('reader_trim_');
+    addTearDown(() => directory.delete(recursive: true));
+    final cache = MangaReaderPageCache(cacheDirectory: directory);
+    final otherCache = MangaReaderPageCache(cacheDirectory: directory);
+    final now = DateTime.now();
+    Future<File> sparseFile(String name, int mebibytes, int age) async {
+      final file = File('${directory.path}/$name');
+      final handle = await file.open(mode: FileMode.write);
+      await handle.truncate(mebibytes * 1024 * 1024);
+      await handle.close();
+      await file.setLastModified(now.subtract(Duration(minutes: age)));
+      return file;
+    }
+    final old = await sparseFile('old.json', 20, 4);
+    final newer = await sparseFile('newer.json', 85, 2);
+    final unrelated = await sparseFile('unrelated.tmp', 105, 6);
+    const chapter = MangaChapter(
+      id: 'evict',
+      mangaId: 'm1',
+      url: '/evict',
+      name: 'Evict',
+    );
+    const oldPages = <MangaPage>[MangaPage(index: 0, imageUrl: 'old')];
+    const freshPages = <MangaPage>[
+      MangaPage(
+        index: 7,
+        imageUrl: ' https://example.test/new.webp ',
+        headers: {'Referer': 'https://example.test'},
+      ),
+    ];
+    await cache.put('m1', chapter, oldPages);
+    await otherCache.put('m1', chapter, freshPages);
+    final fresh = (await cache.get(' m1 ', chapter))!.single;
+    expect(fresh.index, 7);
+    expect(fresh.imageUrl, 'https://example.test/new.webp');
+    expect(fresh.headers, {'Referer': 'https://example.test'});
+    expect(await cache.get('different-owner', chapter), isNull);
+    await Future.wait<void>([
+      cache.waitForMaintenance(),
+      otherCache.waitForMaintenance(),
+    ]);
+    expect(await old.exists(), isFalse);
+    expect(await newer.exists(), isTrue);
+    expect(await unrelated.exists(), isTrue);
+    expect((await cache.get('m1', chapter))?.single.imageUrl, fresh.imageUrl);
+    expect((await directory.list().toList()).where(
+      (file) => file.path.endsWith('.tmp') && file.path != unrelated.path,
+    ), isEmpty);
   });
 
   test('a descending chapter list still navigates in reading order', () async {
@@ -735,6 +1178,85 @@ void main() {
       fail('webtoon stream did not reach the expected state');
     }
 
+    testWidgets('mock remote Webtoon paints and reopens with a warm disk cache', (
+      tester,
+    ) async {
+      const entries = 2400;
+      final root = Directory.systemTemp.createTempSync('reader_warm_cache_');
+      final directory = Directory(
+        '${root.path}/${MangaReaderPageCache.cacheFolderName}',
+      )..createSync();
+      final image = img.Image(width: 24, height: 16);
+      img.fill(image, color: img.ColorRgb8(35, 81, 122));
+      final bytes = img.encodeGif(image);
+      await tester.runAsync(() async {
+        for (var i = 1; i <= 3; i++) {
+          File('${root.path}/page-$i.gif').writeAsBytesSync(bytes);
+        }
+        final seed = jsonEncode({
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+          'pages': [{'imageUrl': File('${root.path}/page-1.gif').uri.toString()}],
+        });
+        for (var i = 0; i < entries; i++) {
+          File('${directory.path}/seed-$i.json').writeAsStringSync(seed);
+        }
+      });
+      addTearDown(() => root.delete(recursive: true));
+      final previousPaths = PathProviderPlatform.instance;
+      PathProviderPlatform.instance = _ReaderCachePathProvider(root.path);
+      addTearDown(() => PathProviderPlatform.instance = previousPaths);
+      final probe = _CacheUiIoProbe(directory.path);
+      final provider = _LocalStreamProvider(root, extension: 'gif');
+      final row = find.byKey(const ValueKey('manga-webtoon-0-0'));
+      final painted = find.descendant(of: row, matching: find.byType(RawImage));
+
+      Future<void> expectFirstPagePixels() async {
+        for (var attempt = 0; attempt < 100; attempt++) {
+          final images = tester.widgetList<RawImage>(painted)
+              .where((widget) => widget.image != null);
+          if (images.isNotEmpty) {
+            final pixels = await tester.runAsync(
+              () => images.first.image!.toByteData(
+                format: ui.ImageByteFormat.rawRgba,
+              ),
+            );
+            expect([for (var i = 0; i < 3; i++) pixels!.getUint8(i)], [35, 81, 122]);
+            return;
+          }
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 2)),
+          );
+          await tester.pump(const Duration(milliseconds: 16));
+        }
+        fail('the mock remote first page did not paint');
+      }
+
+      await IOOverrides.runWithIOOverrides(() async {
+        final open = Stopwatch()..start();
+        await pumpStreamScreen(tester, provider, firstChapter, chapters: const [firstChapter]);
+        await webtoonWhen(tester, (reader) => reader.pages.length == 3);
+        final readerReady = open.elapsedMicroseconds;
+        await expectFirstPagePixels();
+        debugPrint(
+          'reader-cache-fixture: entries=$entries '
+          'ui_list_sync=${probe.synchronousListings} '
+          'ui_stat_sync=${probe.synchronousStats} '
+          'list_us=${probe.synchronousListTime.inMicroseconds} '
+          'stat_us=${probe.synchronousStatTime.inMicroseconds} '
+          'reader_ready_us=$readerReady first_rgba_us=${open.elapsedMicroseconds}',
+        );
+        expect(provider.requestedChapterIds, [firstChapter.id]);
+        expect(probe.synchronousListings, isZero);
+        expect(probe.synchronousStats, isZero);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await pumpStreamScreen(tester, provider, firstChapter, chapters: const [firstChapter]);
+        await webtoonWhen(tester, (reader) => reader.pages.length == 3);
+        await expectFirstPagePixels();
+        expect(provider.requestedChapterIds, [firstChapter.id]);
+        await tester.pumpWidget(const SizedBox.shrink());
+      }, probe);
+    });
+
     testWidgets('opening a chapter leaves the previous one out of the stream', (
       tester,
     ) async {
@@ -810,6 +1332,10 @@ void main() {
         tester,
         (reader) => reader.pages.length == 3,
       );
+      final webtoon = find.byType(MangaWebtoonReader);
+      final state = tester.state(webtoon);
+      final controller = reader.controller;
+      final topBar = find.byKey(const ValueKey('manga-reader-top-bar'));
       // Scroll to the very bottom: chapter 2 joins below, then its pages
       // take over the screen.
       for (var i = 0; i < 60; i++) {
@@ -824,15 +1350,33 @@ void main() {
         reader = tester.widget<MangaWebtoonReader>(
           find.byType(MangaWebtoonReader),
         );
-        if (reader.pages.length == 6 &&
-            find.text('Chapter 2').evaluate().isNotEmpty) {
+        if (reader.pages.length == 6 && reader.initialPage >= 3) {
           break;
         }
       }
 
       expect(reader.pages.length, 6);
-      // The top bar names the chapter on screen, not the finished one.
-      expect(find.text('Chapter 2'), findsWidgets);
+      expect(reader.initialPage, greaterThanOrEqualTo(3));
+      expect(reader.sectionDividers.keys, [3]);
+      expect(find.descendant(of: topBar, matching: find.text('Chapter 2')),
+          findsOneWidget);
+
+      // Real reverse scroll crosses the same seam without navigation or
+      // re-creating the Webtoon slivers/controller.
+      for (var i = 0; i < 30 && reader.initialPage >= 3; i++) {
+        await tester.drag(find.byType(CustomScrollView), const Offset(0, 800));
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+        reader = tester.widget<MangaWebtoonReader>(webtoon);
+      }
+      expect(reader.initialPage, lessThan(3));
+      expect(reader.sectionDividers.keys, [3]);
+      expect(tester.state(webtoon), same(state));
+      expect(reader.controller, same(controller));
+      expect(find.descendant(of: topBar, matching: find.text('Chapter 1')),
+          findsOneWidget);
     });
 
     testWidgets('the chrome follows from a mid-list chapter into the next', (

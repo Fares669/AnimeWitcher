@@ -25,7 +25,6 @@ import '../../characters/presentation/character_details_screen.dart';
 import 'related_anime_screen.dart';
 import '../../comments/presentation/anime3rb_comments_screen.dart';
 import '../../comments/presentation/animewitcher_comments_screen.dart';
-import '../../../core/utils/window_controls_inset.dart';
 import '../../../core/utils/image_fallbacks.dart';
 import '../../../core/utils/resume_episode.dart';
 import '../../../core/theme/app_theme.dart';
@@ -35,8 +34,11 @@ import 'details_library_membership.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:animewitcher/core/utils/responsive_breakpoints.dart';
 
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/custom_widgets.dart';
 import 'package:animewitcher/shared/widgets/multimedia_card.dart';
+import 'package:animewitcher/shared/widgets/recoverable_network_state.dart';
 
 import '../../library/presentation/library_provider.dart';
 import '../../library/presentation/library_auth.dart';
@@ -86,18 +88,10 @@ class _DetailsLoadFailure extends StatefulWidget {
   State<_DetailsLoadFailure> createState() => _DetailsLoadFailureState();
 }
 
-class _DetailsLoadFailureState extends State<_DetailsLoadFailure> {
-  bool _isRetrying = false;
-
-  Future<void> _retry() async {
-    if (_isRetrying) return;
-    setState(() => _isRetrying = true);
-    try {
-      await widget.onRetry();
-    } finally {
-      if (mounted) setState(() => _isRetrying = false);
-    }
-  }
+class _DetailsLoadFailureState extends State<_DetailsLoadFailure>
+    with NetworkRetryState<_DetailsLoadFailure> {
+  @override
+  Future<void> Function() get onRetry => widget.onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -134,18 +128,7 @@ class _DetailsLoadFailureState extends State<_DetailsLoadFailure> {
             spacing: 12,
             runSpacing: 12,
             children: [
-              FilledButton.icon(
-                onPressed: _isRetrying ? null : _retry,
-                icon: _isRetrying
-                    ? const SizedBox.square(
-                        dimension: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.refresh_rounded),
-                label: Text(
-                  appText(context, english: 'Retry', arabic: 'إعادة المحاولة'),
-                ),
-              ),
+              buildRetryButton(context),
               OutlinedButton.icon(
                 onPressed: () {
                   if (GoRouter.maybeOf(context) == null) return;
@@ -192,6 +175,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   late final AnimationController _episodesRevealController;
   late final Animation<double> _episodesReveal;
   final GlobalKey _extraTabsKey = GlobalKey();
+  final _routeItemMerge = DetailsRouteItemMerge();
   int? _userRating;
   bool _loadingUserRating = false;
   bool _loadedUserRatingSignedIn = false;
@@ -1012,7 +996,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
                 .select((s) => s.isMovie),
           )
         : false;
-    final item = mergeDetailsItem(
+    final item = _routeItemMerge.resolve(
       fallback: widget.item,
       incoming: currentItem ?? details ?? widget.item,
       episodes: episodesAsync.asData?.value,
@@ -1039,7 +1023,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         // header instead, the desktop page opened on a row of buttons that
         // vanished a moment later, once the details arrived.
         extendBodyBehindAppBar: true,
-        appBar: _buildDesktopChromeAppBar(context),
+        appBar: buildDesktopArtworkBackBar(context),
         body: Center(
           child: AppLoadingIndicator(
             color: Theme.of(context).colorScheme.primary,
@@ -1085,7 +1069,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       bottomNavigationBar: selectedEpisodeCount == 0
           ? null
           : _buildEpisodeSelectionBar(context, selectedEpisodeCount),
-      appBar: _buildDesktopChromeAppBar(context),
+      appBar: buildDesktopArtworkBackBar(context),
       body: DetailsDesktopHero(
         compact: true,
         showPoster: true,
@@ -1317,17 +1301,8 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       top: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
-        child: Material(
-          elevation: 10,
-          shadowColor: Colors.black.withValues(alpha: 0.30),
-          color: colors.surfaceContainerHigh,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-            side: BorderSide(
-              color: colors.outlineVariant.withValues(alpha: 0.45),
-            ),
-          ),
-          clipBehavior: Clip.antiAlias,
+        child: buildBatchSelectionDockFrame(
+          colors: colors,
           child: SizedBox(
             height: 168,
             child: Padding(
@@ -1490,24 +1465,13 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     return child.copyWith(provider: parentProvider);
   }
 
-  List<MultimediaItem> _uniqueMediaItems(List<MultimediaItem>? items) {
-    if (items == null || items.isEmpty) {
-      return const <MultimediaItem>[];
-    }
-
-    final seen = <String>{};
+  List<MultimediaItem> _uniqueMediaItems(
+    List<MultimediaItem>? items,
+    Set<String> seen,
+  ) {
+    if (items == null || items.isEmpty) return const <MultimediaItem>[];
     return items
         .where((item) => seen.add(_mediaIdentity(item)))
-        .toList(growable: false);
-  }
-
-  List<MultimediaItem> _recommendationsWithoutRelatedLists(
-    List<MultimediaItem>? recommendations,
-    List<MultimediaItem>? related,
-  ) {
-    final relatedKeys = _uniqueMediaItems(related).map(_mediaIdentity).toSet();
-    return _uniqueMediaItems(recommendations)
-        .where((value) => !relatedKeys.contains(_mediaIdentity(value)))
         .toList(growable: false);
   }
 
@@ -1568,11 +1532,15 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       horizontal: MultimediaCardLayout.handsetPortraitGridHorizontalPadding,
     ),
   }) {
+    // Related wins on an identity present in both tabs. Seed the set while
+    // building that tab, then deduplicate Similar against it in one pass.
+    final seen = <String>{};
     final related = _uniqueMediaItems(
       relatedState.asData?.value ?? item.related,
+      seen,
     );
     final similarState = recommendationsState.whenData(
-      (value) => _recommendationsWithoutRelatedLists(value, related),
+      (value) => _uniqueMediaItems(value, seen),
     );
     final relatedHasMore = ref.watch(
       detailsControllerProvider(detailsControllerKey(widget.item))
@@ -1621,41 +1589,6 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     );
   }
 
-  /// The bare bar the desktop page wears: a back button over the artwork and
-  /// nothing else, since the anime's own actions sit under its title.
-  PreferredSizeWidget _buildDesktopChromeAppBar(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-
-    return PreferredSize(
-      preferredSize: const Size.fromHeight(kToolbarHeight),
-      child: Directionality(
-        textDirection: TextDirection.ltr,
-        child: AppBar(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          scrolledUnderElevation: 0,
-          automaticallyImplyLeading: false,
-          leadingWidth: appleUsesPersistentLiquidGlassHeader ? 0 : 64,
-          leading: appleUsesPersistentLiquidGlassHeader
-              ? null
-              : Padding(
-                  padding: EdgeInsets.only(
-                    left: 8 + windowControlsLeadingInset,
-                  ),
-                  child: AppleLiquidGlassBackButton(
-                    size: 46,
-                    foregroundColor: theme.colorScheme.onSurface,
-                    fallbackColor: isDark ? Colors.black45 : Colors.white54,
-                    onPressed: () => Navigator.of(context).maybePop(),
-                  ),
-                ),
-          actions: const <Widget>[],
-        ),
-      ),
-    );
-  }
-
   Widget _buildDesktopLayout(
     BuildContext context,
     MultimediaItem item,
@@ -1694,7 +1627,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       // own above the artwork, which cut a black strip across the top of
       // every anime.
       extendBodyBehindAppBar: true,
-      appBar: _buildDesktopChromeAppBar(context),
+      appBar: buildDesktopArtworkBackBar(context),
       body: DetailsDesktopHero(
         showPoster: !kIsWeb && defaultTargetPlatform == TargetPlatform.windows,
         displayItem: item,

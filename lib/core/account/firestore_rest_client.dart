@@ -147,10 +147,30 @@ class FirestoreRestClient {
       'projects/${AnimeWitcherAccountConfig.projectId}'
       '/databases/(default)/documents/$path';
 
-  Future<FirestoreDocument?> getDocument(String path, String idToken) async {
+  Future<FirestoreDocument?> getDocument(String path, String idToken) =>
+      _getDocument(path, idToken);
+
+  /// The foreground notification badge only needs one nested profile field.
+  Future<FirestoreDocument?> getNotificationCountDocument(
+    String profilePath,
+    String idToken,
+  ) => _getDocument(
+    profilePath,
+    idToken,
+    fieldMask: const ['statistics.not_seen_notif'],
+  );
+
+  Future<FirestoreDocument?> _getDocument(
+    String path,
+    String idToken, {
+    List<String>? fieldMask,
+  }) async {
     try {
       final response = await _dio.get<dynamic>(
         '$_documentsBase/${_encodedPath(path)}',
+        queryParameters: fieldMask == null
+            ? null
+            : <String, dynamic>{'mask.fieldPaths': fieldMask},
         options: _options(idToken),
       );
       final document = _decodeDocument(response.data);

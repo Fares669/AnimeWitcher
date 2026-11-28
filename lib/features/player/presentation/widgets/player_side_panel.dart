@@ -6,7 +6,6 @@ import 'package:cached_network_image/cached_network_image.dart';
 
 import 'dart:ui' show ImageFilter;
 
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:collection/collection.dart';
@@ -33,6 +32,7 @@ import '../../../details/presentation/widgets/download_management_dialog.dart';
 import '../../../details/presentation/widgets/download_progress_dialog.dart';
 import '../../../details/presentation/widgets/episode_action_chip.dart';
 import 'hotstar_player_style.dart';
+import 'player_key_activation.dart';
 
 import 'package:animewitcher/core/utils/artwork_quality.dart';
 import 'package:animewitcher/core/utils/episode_label.dart';
@@ -64,16 +64,14 @@ DownloadItem? _activeEpisodeDownload(
   });
 }
 
-String _playerEpisodeDownloadTitle(MultimediaItem item, Episode episode) {
-  final label = formatEpisodeLabel(
-    episode: episode.episode,
-    title: episode.name,
-    isFinal: episode.isFinal,
-    serverName: episode.serverName,
-  );
-  // The dialog names the episode only ("الحلقة X"), like manga chapters.
-  return label.isEmpty ? item.title : label;
-}
+String _playerEpisodeDownloadTitle(MultimediaItem item, Episode episode) =>
+    formatEpisodeLabel(
+      episode: episode.episode,
+      title: episode.name,
+      isFinal: episode.isFinal,
+      serverName: episode.serverName,
+      whenEmpty: () => item.title,
+    );
 
 void _showPendingEpisodeDownloadProgress(
   BuildContext context,
@@ -140,11 +138,12 @@ void _showPendingEpisodeDownloadProgress(
 ///
 /// Visibility animates the drawer width (0 → [panel width]); the content is held
 /// at full width by an [OverflowBox] pinned to the right edge, so it slides
-/// cleanly from the right in both directions while staying mounted. Mounting
-/// persists so the content can drive focus on open. While closed it ignores
-/// pointers and is excluded from focus, so taps and D-pad fall through to the
-/// chrome below.
-class PlayerSidePanel extends StatelessWidget {
+/// cleanly from the right in both directions. The shell is present from the
+/// start, but the content only mounts on the first opening. Once mounted,
+/// keep it for subsequent focus, scrolling and in-flight choices. While
+/// closed it ignores pointers and is excluded from focus, so taps and D-pad
+/// fall through to the chrome below.
+class PlayerSidePanel extends StatefulWidget {
   final bool isVisible;
   final bool isTv;
   final VoidCallback onDismiss;
@@ -159,7 +158,21 @@ class PlayerSidePanel extends StatelessWidget {
   });
 
   @override
+  State<PlayerSidePanel> createState() => _PlayerSidePanelState();
+}
+
+class _PlayerSidePanelState extends State<PlayerSidePanel> {
+  late bool _hasOpened = widget.isVisible;
+
+  @override
+  void didUpdateWidget(covariant PlayerSidePanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isVisible) _hasOpened = true;
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final PlayerSidePanel(:isVisible, :onDismiss, :child) = widget;
     final size = MediaQuery.sizeOf(context);
     final isCompact = size.shortestSide < 600;
     final basePanelWidth = isCompact
@@ -199,12 +212,14 @@ class PlayerSidePanel extends StatelessWidget {
                   alignment: Alignment.centerRight,
                   minWidth: panelWidth,
                   maxWidth: panelWidth,
-                  child: _PanelSurface(
-                    child: FocusTraversalGroup(
-                      policy: WidgetOrderTraversalPolicy(),
-                      child: child,
-                    ),
-                  ),
+                  child: _hasOpened
+                      ? _PanelSurface(
+                          child: FocusTraversalGroup(
+                            policy: WidgetOrderTraversalPolicy(),
+                            child: child,
+                          ),
+                        )
+                      : null,
                 ),
               ),
             ),
@@ -368,11 +383,9 @@ class _PlayerEpisodesPanelState extends ConsumerState<PlayerEpisodesPanel> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && ref.read(playerControllerProvider).showEpisodeList) {
-        _focusAnchor();
-      }
-    });
+    if (ref.read(playerControllerProvider).showEpisodeList) {
+      _focusAnchor();
+    }
   }
 
   @override
@@ -440,69 +453,64 @@ class _PlayerEpisodesPanelState extends ConsumerState<PlayerEpisodesPanel> {
     ref.watch(accountDataRevisionProvider);
     final episodeWatchRepo = ref.watch(episodeWatchRepositoryProvider);
 
-    final seasons = episodes.map((e) => e.season).toSet().toList()..sort();
+    final bySeason = episodes.groupListsBy((episode) => episode.season);
+    final seasons = bySeason.keys.toList()..sort();
     final multiSeason = seasons.length > 1;
 
-    final rows = <Widget>[];
-    var anchorAssigned = false;
+    // Keep only the row descriptors here. Creating every card eagerly
+    // projected watch history for the full catalogue at every revision,
+    // even when only its first few rows could be laid out by the scroll view.
+    final rows = <Object>[];
     for (final season in seasons) {
-      final seasonEps = episodes.where((e) => e.season == season).toList();
-      if (multiSeason) {
-        rows.add(_PanelSubheader(title: l10n.seasonWithNumber(season)));
-      }
-      for (final ep in seasonEps) {
-        final isCurrent = ep.url == currentUrl;
-        final isAnchor = isCurrent && !anchorAssigned;
-        if (isAnchor) anchorAssigned = true;
-        final pos = historyPositionForItem(
-          historyRepo,
-          widget.item,
-          episodeUrl: ep.url,
-          season: ep.season,
-          episode: ep.episode,
-        );
-        final dur = historyDurationForItem(
-          historyRepo,
-          widget.item,
-          episodeUrl: ep.url,
-          season: ep.season,
-          episode: ep.episode,
-        );
-        final isWatched = episodeIsWatchedFor(
-          episodeWatchRepo,
-          widget.item,
-          ep,
-        );
-        rows.add(
-          _EpisodeRow(
-            parentItem: widget.item,
-            episode: ep,
-            isCurrent: isCurrent,
-            isWatched: isWatched,
-            progress: isWatched
-                ? 1.0
-                : (dur > 0 ? (pos / dur).clamp(0.0, 1.0) : 0.0),
-            isTv: widget.isTv,
-            focusNode: isAnchor ? _anchorNode : null,
-            onTap: () async {
-              widget.onClose();
-              final selected = await ref
-                  .read(playbackLauncherProvider)
-                  .chooseSourceForItem(
-                    context,
-                    widget.item,
-                    ep.url,
-                    episode: ep,
-                  );
-              if (selected == null || !mounted) return;
-              await ref
-                  .read(playerControllerProvider.notifier)
-                  .loadEpisode(ep, selectedSource: selected);
-            },
-          ),
-        );
-      }
+      if (multiSeason) rows.add(season);
+      rows.addAll(bySeason[season]!);
     }
+    final anchorIndex = rows.indexWhere(
+      (row) => row is Episode && row.url == currentUrl,
+    );
+
+    Widget buildRow(BuildContext _, int index) {
+      final row = rows[index];
+      if (row is int) return _PanelSubheader(title: l10n.seasonWithNumber(row));
+      final ep = row as Episode;
+      final pos = historyPositionForItem(
+        historyRepo,
+        widget.item,
+        episodeUrl: ep.url,
+        season: ep.season,
+        episode: ep.episode,
+      );
+      final dur = historyDurationForItem(
+        historyRepo,
+        widget.item,
+        episodeUrl: ep.url,
+        season: ep.season,
+        episode: ep.episode,
+      );
+      final isWatched = episodeIsWatchedFor(episodeWatchRepo, widget.item, ep);
+      return _EpisodeRow(
+        parentItem: widget.item,
+        episode: ep,
+        isCurrent: ep.url == currentUrl,
+        isWatched: isWatched,
+        progress: isWatched
+            ? 1.0
+            : (dur > 0 ? (pos / dur).clamp(0.0, 1.0) : 0.0),
+        isTv: widget.isTv,
+        focusNode: index == anchorIndex ? _anchorNode : null,
+        onTap: () async {
+          widget.onClose();
+          final selected = await ref
+              .read(playbackLauncherProvider)
+              .chooseSourceForItem(context, widget.item, ep.url, episode: ep);
+          if (selected == null || !mounted) return;
+          await ref
+              .read(playerControllerProvider.notifier)
+              .loadEpisode(ep, selectedSource: selected);
+        },
+      );
+    }
+
     return SafeArea(
       left: false,
       child: Column(
@@ -557,7 +565,7 @@ class _PlayerEpisodesPanelState extends ConsumerState<PlayerEpisodesPanel> {
           Expanded(
             child: episodes.isEmpty
                 ? _EmptyHint(text: l10n.noEpisodesFound)
-                : _OptionList(children: rows),
+                : _OptionList(itemCount: rows.length, itemBuilder: buildRow),
           ),
         ],
       ),
@@ -814,17 +822,8 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
       child: Focus(
         focusNode: widget.focusNode,
         onFocusChange: (v) => setState(() => _focused = v),
-        onKeyEvent: (node, event) {
-          if (event is! KeyDownEvent) return KeyEventResult.ignored;
-          final key = event.logicalKey;
-          if (key == LogicalKeyboardKey.select ||
-              key == LogicalKeyboardKey.enter ||
-              key == LogicalKeyboardKey.space) {
-            widget.onTap();
-            return KeyEventResult.handled;
-          }
-          return KeyEventResult.ignored;
-        },
+        onKeyEvent: (_, event) =>
+            handlePlayerActivationKey(event, widget.onTap),
         child: MouseRegion(
           cursor: SystemMouseCursors.click,
           onEnter: (_) => setState(() => _hovered = true),
@@ -1049,6 +1048,7 @@ class _EpisodeThumbnail extends StatelessWidget {
               if (hasPoster)
                 ArtworkDecode(
                   paintedWidth: 104,
+                  sizeHighQualityToDisplay: true,
                   builder: (BuildContext context, int? decodeWidth) =>
                       CachedNetworkImage(
                         imageUrl: posterUrl!,
@@ -1144,18 +1144,20 @@ class _ThumbPlaceholder extends StatelessWidget {
 }
 
 class _OptionList extends StatelessWidget {
-  final List<Widget> children;
+  final int itemCount;
+  final IndexedWidgetBuilder itemBuilder;
 
-  const _OptionList({required this.children});
+  const _OptionList({required this.itemCount, required this.itemBuilder});
 
   @override
   Widget build(BuildContext context) {
     return FocusTraversalGroup(
       policy: WidgetOrderTraversalPolicy(),
-      child: ListView(
+      child: ListView.builder(
         padding: const EdgeInsets.symmetric(vertical: 12),
         scrollCacheExtent: const ScrollCacheExtent.pixels(1200),
-        children: children,
+        itemCount: itemCount,
+        itemBuilder: itemBuilder,
       ),
     );
   }

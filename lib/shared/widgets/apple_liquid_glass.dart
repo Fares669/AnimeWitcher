@@ -1568,64 +1568,6 @@ class _AppleNativeMenuButtonState extends State<AppleNativeMenuButton> {
 
 const _appleSearchGlassActionsViewType =
     'com.animewitcher.app/search_glass_actions';
-const _appleLiquidGlassPresenterChannel = MethodChannel(
-  'com.animewitcher.app/liquid_glass_presenter',
-);
-
-/// Returns true only when iOS is using Apple's iOS 26+ Liquid Glass APIs.
-Future<bool> appleNativeLiquidGlassAvailable() async {
-  if (!_usesNativeAppleLiquidGlass) return false;
-  try {
-    return await _appleLiquidGlassPresenterChannel.invokeMethod<bool>(
-          'isAvailable',
-        ) ??
-        false;
-  } on PlatformException {
-    return false;
-  } on MissingPluginException {
-    return false;
-  }
-}
-
-/// Presents the sort picker as a fully native SwiftUI Liquid Glass overlay.
-Future<String?> showAppleNativeSearchSort({
-  required String initialValue,
-  required List<Map<String, String>> items,
-  required Color tintColor,
-}) async {
-  return _appleLiquidGlassPresenterChannel.invokeMethod<String>(
-    'showSearchSort',
-    <String, Object?>{
-      'initialValue': initialValue,
-      'items': items,
-      'isArabic': true,
-      'tintColor': tintColor.toARGB32(),
-    },
-  );
-}
-
-/// Presents the full search filter UI inside the native iOS view hierarchy.
-///
-/// Keeping the labels and controls in the same native hierarchy as the glass
-/// is important: Apple's Liquid Glass also applies foreground treatment to the
-/// content above the material, which a background-only Flutter platform view
-/// cannot reproduce.
-Future<Map<String, dynamic>?> showAppleNativeSearchFilters({
-  required Map<String, Object?> options,
-  required Map<String, Object?> initialValue,
-  required Color tintColor,
-}) async {
-  final response = await _appleLiquidGlassPresenterChannel
-      .invokeMethod<Object?>('showSearchFilters', <String, Object?>{
-        'options': options,
-        'initialValue': initialValue,
-        'isArabic': true,
-        'tintColor': tintColor.toARGB32(),
-      });
-  if (response == null) return null;
-  if (response is Map) return Map<String, dynamic>.from(response);
-  return null;
-}
 
 /// Two search actions rendered entirely by UIKit.
 ///

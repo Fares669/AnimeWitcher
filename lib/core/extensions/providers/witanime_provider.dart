@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:dio/dio.dart';
 import 'package:html/dom.dart';
 import 'package:html/parser.dart' as html;
@@ -8,6 +6,7 @@ import '../../domain/entity/multimedia_item.dart';
 import '../../utils/digit_normalization.dart';
 import '../../utils/html_synopsis.dart';
 import '../base_provider.dart';
+import 'show_json_ld.dart';
 import 'witanime_filter_values.dart';
 import 'witanime_playback.dart';
 import 'witanime_transport.dart';
@@ -390,7 +389,7 @@ class WitanimeProvider extends AnimeWitcherProvider {
     final uri = link.work;
     final document = await _document(uri);
     final main = _requireMain(document);
-    final json = _metadata(document);
+    final json = readShowJsonLdMetadata(document);
     final title = _text(main.querySelector('h1')) ?? _string(json['name']);
     if (title == null) {
       throw const FormatException('Witanime work title missing');
@@ -762,23 +761,6 @@ class WitanimeProvider extends AnimeWitcherProvider {
 
   static bool _hasLabel(Element root, Set<String> labels) =>
       root.querySelectorAll('span').any((span) => labels.contains(_text(span)));
-
-  static Map<String, dynamic> _metadata(Document document) {
-    for (final script in document.querySelectorAll(
-      'script[type="application/ld+json"]',
-    )) {
-      try {
-        final value = jsonDecode(script.text);
-        if (value is Map<String, dynamic> &&
-            const {'TVSeries', 'Movie'}.contains(value['@type'])) {
-          return value;
-        }
-      } on FormatException {
-        continue;
-      }
-    }
-    return const {};
-  }
 
   static String? _extractDescription(Element main, Map<String, dynamic> json) {
     final first = main.querySelector('p.leading-relaxed');

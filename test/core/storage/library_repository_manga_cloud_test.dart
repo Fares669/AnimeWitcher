@@ -58,6 +58,9 @@ final class _LibraryStorage extends StorageService {
   String? getLibraryItemCategory(String url) => _categories[url];
 
   @override
+  MultimediaItem? getLibraryItemByExactUrl(String url) => _items[url];
+
+  @override
   List<MultimediaItem> getLibraryItems({String? category}) {
     if (category == null) return _items.values.toList(growable: false);
     return _items.values

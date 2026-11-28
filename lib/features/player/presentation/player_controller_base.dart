@@ -13,6 +13,7 @@ import 'package:path/path.dart' as p;
 import 'package:video_view/video_view.dart'
     show VideoController, SubtitleTrackConfig, VideoControllerPlaybackState;
 
+import '../../../../core/account/account_providers.dart';
 import '../../../../core/logger/app_logger.dart';
 
 import '../../../../core/providers/anime_data_source_settings_provider.dart';
@@ -50,6 +51,7 @@ import '../../../../core/storage/settings_repository.dart';
 import 'playback_recovery_policy.dart';
 import 'playback_resume.dart';
 import 'player_platform_service.dart';
+import 'skip_duration_wait.dart';
 import '../data/anime4k.dart';
 import '../data/anime4k_shader_library.dart';
 import '../data/anime4k_performance.dart';
@@ -268,6 +270,23 @@ class PlayerState {
   }
 }
 
+typedef _ContinueCheckpoint = ({
+  int position,
+  int duration,
+  String? streamUrl,
+  String? episodeUrl,
+  int accountRevision,
+});
+
+class _PendingContinueCheckpoint {
+  _PendingContinueCheckpoint(this.item, this.episode, this.values);
+
+  final MultimediaItem item;
+  final Episode? episode;
+  final _ContinueCheckpoint values;
+  bool retryOnFailure = false;
+}
+
 class PlayerController extends Notifier<PlayerState> {
   PlaybackLogRedactor _logRedactor = PlaybackLogRedactor();
 
@@ -288,6 +307,7 @@ class PlayerController extends Notifier<PlayerState> {
   Future<void>? _localPlaybackReady;
 
   bool _hasMarkedWatched = false;
+  _PendingContinueCheckpoint? _pendingContinueCheckpoint;
   int _catalogGeneration = 0;
 
   Player get player => _player;
@@ -466,7 +486,14 @@ class PlayerController extends Notifier<PlayerState> {
   /// from the title. Needed to submit a viewer's marks back to AniSkip.
   int? _resolvedMalId;
   int _skipFetchGeneration = 0;
-  bool _skipNeedsDurationRefresh = false;
+  SkipDurationWait _skipDuration = SkipDurationWait();
+  int? _skipSourceSession;
+  bool _skipOpenDispatched = false;
+  bool _skipLookupStarted = false;
+  String? _skipVideoViewSource;
+  bool _skipMediaKitReady = false;
+  bool _skipMediaKitReset = false;
+  int? _skipMediaKitEarlyDuration;
   bool _hasConfirmedPlaybackFrame = false;
 
   // RC1 — when a stream fails to start with a decode/codec error (common on
@@ -480,6 +507,18 @@ class PlayerController extends Notifier<PlayerState> {
   bool _suppressNextEpisodeDetection = false;
   bool _isNextEpisodeOverlayForced = false;
   bool _userDismissedOverlay = false;
+  ({
+    List<Episode>? episodes,
+    Episode? episode,
+    String videoUrl,
+    Episode? next,
+  })? _nextEpisodeOverlayLookup;
+  ({
+    int sourceSessionId,
+    String nextUrl,
+    bool skipsFiller,
+    List<Episode>? fillerEpisodes,
+  })? _nextEpisodeWarmAttempt;
   bool _manualSelectionPending = false;
   // Audio tracks that have already failed with decode errors for the current
   // stream. When one track fails, we try the next one before source-switching.
@@ -590,6 +629,8 @@ class PlayerController extends Notifier<PlayerState> {
   int _beginSourceSession({bool resetAttempts = false}) {
     _cancelAutoSubtitleSelection();
     final nextSessionId = ++_sourceSessionSerial;
+    if (_skipSourceSession != null) _resetSkipDuration();
+    if (_skipLookupStarted) _skipSourceSession = nextSessionId;
     _userDismissedOverlay = false;
     state = state.copyWith(
       sourceSessionId: nextSessionId,
@@ -660,6 +701,8 @@ class PlayerController extends Notifier<PlayerState> {
     // disposeController() being called, clean up subscriptions.
     ref.onDispose(() {
       _isDisposed = true;
+      _skipDuration.cancel();
+      _pendingContinueCheckpoint = null;
       _cancelAutoSubtitleSelection();
       _disableAnime4kMetal();
       ++_sourceSessionSerial;
@@ -766,6 +809,8 @@ class PlayerController extends Notifier<PlayerState> {
     _midPlaybackErrorTimer?.cancel();
     _midPlaybackErrorTimer = null;
     _resetBufferWatchdog();
+    _nextEpisodeOverlayLookup = null;
+    _nextEpisodeWarmAttempt = null;
     _player = player;
     _videoViewController = videoViewController;
     _videoUrl = videoUrl;
@@ -783,9 +828,9 @@ class PlayerController extends Notifier<PlayerState> {
     _isApplyingPendingResumeSeek = false;
     _pendingResumeSeekFuture = null;
     _hasMarkedWatched = false;
+    _pendingContinueCheckpoint = null;
     ++_catalogGeneration;
-    ++_skipFetchGeneration;
-    _skipNeedsDurationRefresh = false;
+    _resetSkipDuration();
     _resolvedMalId = null;
     _item = item;
 
@@ -936,22 +981,68 @@ class PlayerController extends Notifier<PlayerState> {
     }
   }
 
-  void _maybeFetchSkipSegments({int? knownDurationSec}) {
-    // Downloaded episodes used to bail out here, which left them with no skip
-    // button at all. They now go through the same path: the cache answers
-    // offline, and the online sources still run when there is a connection.
-    unawaited(_fetchAndLogSkipSegments(knownDurationSec: knownDurationSec));
+  void _resetSkipDuration() {
+    _skipDuration.cancel();
+    _skipDuration = SkipDurationWait();
+    ++_skipFetchGeneration;
+    _skipSourceSession = null;
+    _skipOpenDispatched = false;
+    _skipLookupStarted = false;
+    _skipVideoViewSource = null;
+    _skipMediaKitReady = false;
+    _skipMediaKitReset = false;
+    _skipMediaKitEarlyDuration = null;
   }
 
-  void _refreshSkipSegmentsIfDurationPending(int? durationSec) {
-    if (!_skipNeedsDurationRefresh ||
-        _isDisposed ||
-        durationSec == null ||
-        durationSec <= 0) {
+  SkipDurationWait _armSkipDuration(
+    int sourceSessionId, {
+    String? videoViewSource,
+  }) {
+    // Automatic failover and reconnect can open another file within the same
+    // source session. Its duration must not inherit the failed file's.
+    if (_skipOpenDispatched) _resetSkipDuration();
+    _skipSourceSession = sourceSessionId;
+    _skipOpenDispatched = true;
+    _skipVideoViewSource = videoViewSource;
+    if (!_skipLookupStarted) _maybeFetchSkipSegments();
+    return _skipDuration;
+  }
+
+  void _maybeFetchSkipSegments({bool actualDurationRefresh = false}) {
+    // Downloaded episodes also use the cache and the normal lookup, including
+    // when the embedded chapter markers are the only online-independent data.
+    _skipLookupStarted = true;
+    unawaited(
+      _fetchAndLogSkipSegments(actualDurationRefresh: actualDurationRefresh),
+    );
+  }
+
+  void _reportSkipDuration(int durationSec) {
+    if (!_skipDuration.report(durationSec)) return;
+    // A fallback lookup may still be in flight. It cannot overwrite this pass.
+    ++_skipFetchGeneration;
+    _maybeFetchSkipSegments(actualDurationRefresh: true);
+  }
+
+  void _onMediaKitSkipDuration(Duration duration) {
+    if (_skipVideoViewSource != null ||
+        !_skipOpenDispatched ||
+        !_isCurrentSourceSession(_skipSourceSession!)) {
       return;
     }
-    _skipNeedsDurationRefresh = false;
-    _maybeFetchSkipSegments(knownDurationSec: durationSec);
+    // media_kit.open resets the duration stream before loading the new file.
+    // Don't adopt queued values from the previous file or a failed open.
+    if (duration == Duration.zero) {
+      _skipMediaKitReset = true;
+      _skipMediaKitEarlyDuration = null;
+      return;
+    }
+    if (!_skipMediaKitReset || duration.inSeconds <= 0) return;
+    if (_skipMediaKitReady) {
+      _reportSkipDuration(duration.inSeconds);
+    } else {
+      _skipMediaKitEarlyDuration = duration.inSeconds;
+    }
   }
 
   /// Cache keys for the episode playing, offline-safe key first.
@@ -971,42 +1062,6 @@ class PlayerController extends Notifier<PlayerState> {
       );
     }
     return keys;
-  }
-
-  /// Episode length in seconds, or null while the media is still opening.
-  /// AniSkip uses it to scale crowd-sourced timestamps to this exact file.
-  int? _currentDurationSeconds() {
-    final dur = state.useExoPlayer
-        ? Duration(
-            milliseconds: _videoViewController?.mediaInfo.value?.duration ?? 0,
-          )
-        : _player.state.duration;
-    return dur > Duration.zero ? dur.inSeconds : null;
-  }
-
-  /// Skip segments are looked up as soon as playback starts, which is
-  /// usually before the engine reports a duration. Without a length AniSkip
-  /// hands back every submission it has for the episode — including entries
-  /// timed against other releases, which overlap each other. Waiting the
-  /// couple of seconds it takes for the duration to land gets the set that
-  /// actually matches this file.
-  Future<int?> _awaitDurationSeconds({
-    Duration timeout = const Duration(seconds: 4),
-  }) async {
-    final immediate = _currentDurationSeconds();
-    if (immediate != null) return immediate;
-
-    final deadline = DateTime.now().add(timeout);
-    while (!_isDisposed && DateTime.now().isBefore(deadline)) {
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-      final value = _currentDurationSeconds();
-      if (value != null) return value;
-    }
-    // The engine is still opening the file. The catalog knows the runtime,
-    // which is close enough for AniSkip to match a submission, and beats
-    // making the viewer wait for a skip button that arrives after the
-    // opening has already played.
-    return _catalogRuntimeSeconds();
   }
 
   /// Episode runtime in seconds as published by the catalog (`awDuration` or
@@ -1043,11 +1098,17 @@ class PlayerController extends Notifier<PlayerState> {
     } catch (_) {}
   }
 
-  Future<void> _fetchAndLogSkipSegments({int? knownDurationSec}) async {
+  Future<void> _fetchAndLogSkipSegments({
+    required bool actualDurationRefresh,
+  }) async {
     final episode = _episode;
     if (episode == null) return;
     final skipGen = _skipFetchGeneration;
+    final durationWait = _skipDuration;
     bool isSkipCurrent() => !_isDisposed && skipGen == _skipFetchGeneration;
+    Future<int?> lookupDuration() async =>
+        await durationWait.wait() ??
+        (isSkipCurrent() ? _catalogRuntimeSeconds() : null);
     if (state.isLive || _item.contentType == MultimediaContentType.livestream) {
       if (kDebugMode) {
         _debugPrint(
@@ -1092,7 +1153,7 @@ class PlayerController extends Notifier<PlayerState> {
     // downloaded) is on disk, so show it straight away. This is the only
     // path that works with no connection.
     final cache = ref.read(skipSegmentCacheProvider);
-    if (knownDurationSec == null) {
+    if (!actualDurationRefresh) {
       final cached = cache.readAny(_skipCacheKeys());
       if (cached.isNotEmpty) {
         state = state.copyWith(skipSegments: cached);
@@ -1237,11 +1298,8 @@ class PlayerController extends Notifier<PlayerState> {
 
       if (resolvedMalId != null) {
         try {
-          final durationSec = knownDurationSec ?? await _awaitDurationSeconds();
+          final durationSec = await lookupDuration();
           if (!isSkipCurrent()) return;
-          if (durationSec == null && knownDurationSec == null) {
-            _skipNeedsDurationRefresh = true;
-          }
           if (kDebugMode) {
             _debugPrint(
               'AniSkip: querying mal=$resolvedMalId season=$season '
@@ -1288,8 +1346,7 @@ class PlayerController extends Notifier<PlayerState> {
               .byMalId(resolvedMalId);
           if (!isSkipCurrent()) return;
           if (ids != null && (ids.imdbId != null || ids.tmdbId != null)) {
-            final durationSec =
-                knownDurationSec ?? await _awaitDurationSeconds();
+            final durationSec = await lookupDuration();
             if (!isSkipCurrent()) return;
             introDbSegments = await ref
                 .read(introDbServiceProvider)
@@ -1319,13 +1376,18 @@ class PlayerController extends Notifier<PlayerState> {
     }
     // 3. The file's own chapter markers. Per-file data, so it covers the
     // episodes no crowd-sourced service has, and it costs no network call.
-    final durationSec = knownDurationSec ?? await _awaitDurationSeconds();
+    final durationSec = await lookupDuration();
     if (!isSkipCurrent()) return;
     try {
-      chapterSegments = await ChapterSkipSource.read(
-        _player,
-        durationSec: durationSec?.toDouble(),
-      );
+      // A pending open can still expose the previous file's chapter list.
+      // After open returns, media_kit has unloaded that file, even if the new
+      // file hasn't reported a duration.
+      if (_skipMediaKitReady) {
+        chapterSegments = await ChapterSkipSource.read(
+          _player,
+          durationSec: durationSec?.toDouble(),
+        );
+      }
       if (!isSkipCurrent()) return;
       if (kDebugMode) {
         _debugPrint('Chapters returned ${chapterSegments.length} segments:');
@@ -1362,10 +1424,12 @@ class PlayerController extends Notifier<PlayerState> {
   }
 
   void _setupVideoViewListeners() {
-    if (_videoViewController == null) return;
+    final controller = _videoViewController;
+    if (controller == null) return;
 
-    _videoViewController!.mediaInfo.addListener(() {
-      final info = _videoViewController!.mediaInfo.value;
+    controller.mediaInfo.addListener(() {
+      if (_isDisposed || !identical(_videoViewController, controller)) return;
+      final info = controller.mediaInfo.value;
       if (info != null) {
         final detectedIsLive =
             _item.contentType == MultimediaContentType.livestream
@@ -1391,8 +1455,9 @@ class PlayerController extends Notifier<PlayerState> {
             _suppressNextEpisodeDetection) {
           _suppressNextEpisodeDetection = false;
         }
-        if (info.duration > 0) {
-          _refreshSkipSegmentsIfDurationPending(info.duration ~/ 1000);
+        if (_skipVideoViewSource == info.source &&
+            _isCurrentSourceSession(_skipSourceSession!)) {
+          _reportSkipDuration(info.duration ~/ 1000);
         }
       }
     });
@@ -1564,108 +1629,88 @@ class PlayerController extends Notifier<PlayerState> {
         _lastSavedPosition = Duration(milliseconds: posMs);
       }
 
-      if (!_suppressNextEpisodeDetection &&
-          (_item.contentType == MultimediaContentType.series ||
-              _item.contentType == MultimediaContentType.anime)) {
-        final remainingSecs = (durationMs - posMs) / 1000;
-
-        // Show next episode overlay if within last 15 seconds or video ended.
-        // It persists until the user dismisses it or loads a new episode.
-        if (remainingSecs <= 15.0) {
-          final currentEp = _episode ?? _resolveCurrentEpisode();
-          List<Episode>? episodes = _item.episodes;
-          if (isSeries &&
-              currentEp != null &&
-              currentEp.dubStatus != DubStatus.none) {
-            episodes = episodes
-                ?.where((e) => e.dubStatus == currentEp.dubStatus)
-                .toList();
-          }
-
-          int? currentIndex;
-          if (currentEp != null) {
-            currentIndex = episodes?.indexWhere((e) => e.url == currentEp.url);
-          } else {
-            currentIndex = episodes?.indexWhere((e) => e.url == _videoUrl);
-          }
-          if (currentIndex != null &&
-              currentIndex != -1 &&
-              episodes != null &&
-              currentIndex < episodes.length - 1) {
-            final next = episodes[currentIndex + 1];
-            if (!_userDismissedOverlay && !state.showNextEpisodeOverlay) {
-              state = state.copyWith(
-                showNextEpisodeOverlay: true,
-                nextEpisodeTitle: next.name,
-                nextEpisodePosterUrl: _episodeArtwork(next),
-                nextEpisodeRating: next.rating,
-                nextEpisodeNumber: next.episode,
-                nextEpisodeSeason: next.season,
-                nextEpisodeRuntime: next.runtime,
-                nextEpisodeDescription: next.description,
-                nextEpisodeIsFinal: next.isFinal,
-                nextEpisodeServerName: next.serverName,
-              );
-            }
-            // After the card, never before it: a prefetch that throws must
-            // not be able to take the next-episode prompt down with it.
-            _warmNextEpisodeSources(next);
-            // Ensure it persists if video completes and resets position
-            _isNextEpisodeOverlayForced = true;
-          }
-          return;
-        }
-
-        if (remainingSecs > 15.0) {
-          if (state.showNextEpisodeOverlay && !_isNextEpisodeOverlayForced) {
-            state = state.copyWith(showNextEpisodeOverlay: false);
-          }
-        }
-      }
+      _updateNextEpisodeOverlay(durationMs - posMs);
     });
   }
 
-  void forceNextEpisodeOverlay() {
-    if (_item.contentType != MultimediaContentType.series &&
-        _item.contentType != MultimediaContentType.anime) {
+  // Both playback engines trigger the same card in the final 15 seconds.
+  void _updateNextEpisodeOverlay(int remainingMs) {
+    if (_suppressNextEpisodeDetection ||
+        (_item.contentType != MultimediaContentType.series &&
+            _item.contentType != MultimediaContentType.anime)) {
       return;
     }
-    if (_userDismissedOverlay) return;
+    if (remainingMs > 15000) {
+      // A rewind can bring the viewer back to the end after the warm cache
+      // expires. Re-arm outside the window, but ignore small clock jitter.
+      if (remainingMs > 16000) _nextEpisodeWarmAttempt = null;
+      if (state.showNextEpisodeOverlay && !_isNextEpisodeOverlayForced) {
+        state = state.copyWith(showNextEpisodeOverlay: false);
+      }
+      return;
+    }
+    final next = _episodeAfterCurrentForOverlay();
+    if (next == null) return;
+    if (!_userDismissedOverlay && !state.showNextEpisodeOverlay) {
+      _showNextEpisodeOverlay(next, description: next.description);
+    }
+    // Always warm after publishing the card, never before.
+    _warmNextEpisodeSources(next);
+    _isNextEpisodeOverlayForced = true;
+  }
 
-    final currentEp = _episode ?? _resolveCurrentEpisode();
-    List<Episode>? episodes = _item.episodes;
-    if (isSeries &&
-        currentEp != null &&
-        currentEp.dubStatus != DubStatus.none) {
-      episodes = episodes
-          ?.where((e) => e.dubStatus == currentEp.dubStatus)
-          .toList();
+  Episode? _episodeAfterCurrentForOverlay() {
+    final episodes = _item.episodes;
+    final previous = _nextEpisodeOverlayLookup;
+    if (previous != null &&
+        identical(previous.episodes, episodes) &&
+        identical(previous.episode, _episode) &&
+        previous.videoUrl == _videoUrl) {
+      return previous.next;
     }
 
-    int? currentIndex;
-    if (currentEp != null) {
-      currentIndex = episodes?.indexWhere((e) => e.url == currentEp.url);
-    } else {
-      currentIndex = episodes?.indexWhere((e) => e.url == _videoUrl);
-    }
+    // Episode catalog updates replace the list. A normal clock tick does
+    // not change the lookup, including when the current episode is last.
+    final active = currentEpisode;
+    final next = episodeAtOffsetInVariant(
+      episodes,
+      currentUrl: active?.url ?? _videoUrl,
+      variant: isSeries ? active?.dubStatus ?? DubStatus.none : DubStatus.none,
+    );
+    _nextEpisodeOverlayLookup = (
+      episodes: episodes,
+      episode: _episode,
+      videoUrl: _videoUrl,
+      next: next,
+    );
+    return next;
+  }
 
-    if (currentIndex != null &&
-        currentIndex != -1 &&
-        episodes != null &&
-        currentIndex < episodes.length - 1) {
-      final next = episodes[currentIndex + 1];
+  void _showNextEpisodeOverlay(Episode next, {String? description}) {
+    state = state.copyWith(
+      showNextEpisodeOverlay: true,
+      nextEpisodeTitle: next.name,
+      nextEpisodePosterUrl: _episodeArtwork(next),
+      nextEpisodeRating: next.rating,
+      nextEpisodeNumber: next.episode,
+      nextEpisodeSeason: next.season,
+      nextEpisodeRuntime: next.runtime,
+      nextEpisodeDescription: description,
+      nextEpisodeIsFinal: next.isFinal,
+      nextEpisodeServerName: next.serverName,
+    );
+  }
+
+  void forceNextEpisodeOverlay() {
+    if (_userDismissedOverlay ||
+        (_item.contentType != MultimediaContentType.series &&
+            _item.contentType != MultimediaContentType.anime)) {
+      return;
+    }
+    final next = _episodeAfterCurrentForOverlay();
+    if (next != null) {
       _isNextEpisodeOverlayForced = true;
-      state = state.copyWith(
-        showNextEpisodeOverlay: true,
-        nextEpisodeTitle: next.name,
-        nextEpisodePosterUrl: _episodeArtwork(next),
-        nextEpisodeRating: next.rating,
-        nextEpisodeNumber: next.episode,
-        nextEpisodeSeason: next.season,
-        nextEpisodeRuntime: next.runtime,
-        nextEpisodeIsFinal: next.isFinal,
-        nextEpisodeServerName: next.serverName,
-      );
+      _showNextEpisodeOverlay(next);
     }
   }
 
@@ -1678,7 +1723,10 @@ class PlayerController extends Notifier<PlayerState> {
 
   void _setupDurationListener() {
     _durationSub?.cancel();
-    _durationSub = _player.stream.duration.listen((duration) {
+    final player = _player;
+    _durationSub = player.stream.duration.listen((duration) {
+      if (_isDisposed || !identical(_player, player)) return;
+      _onMediaKitSkipDuration(duration);
       if (duration.inMilliseconds >= 30000) {
         _lastKnownPlaybackDurationMs = duration.inMilliseconds;
       }
@@ -1686,7 +1734,6 @@ class PlayerController extends Notifier<PlayerState> {
         if (_pendingResumeSeekPosition != null) {
           unawaited(_flushPendingResumeSeek());
         }
-        _refreshSkipSegmentsIfDurationPending(duration.inSeconds);
         // Safe point to re-enable next-episode detection: the new episode's
         // duration is now confirmed, so remaining-time calculations are valid.
         if (_suppressNextEpisodeDetection) {
@@ -1867,7 +1914,7 @@ class PlayerController extends Notifier<PlayerState> {
     // event propagates, making state.track.audio unreliable at error time).
     _trackSub?.cancel();
     _trackSub = _player.stream.track.listen((track) {
-      final id = track.audio.id.toString();
+      final id = track.audio.id;
       if (id != 'no' && id != 'auto') {
         _lastKnownAudioTrackId = id;
       }
@@ -1876,20 +1923,17 @@ class PlayerController extends Notifier<PlayerState> {
     _errorSub = _player.stream.error.listen((error) {
       if (_isReconnectingCurrentStream || _isRecoveringFromStall) return;
       if (kDebugMode) _debugPrint("Player Error: $error");
-      if (error.toString().toLowerCase().contains("abort")) return;
+      final errLower = error.toLowerCase();
+      if (errLower.contains('abort')) return;
 
-      final isAudioDecodeError = error.toString().toLowerCase().contains(
-        'decoding audio',
-      );
+      final isAudioDecodeError = errLower.contains('decoding audio');
 
       // Video decode errors (h264 hardware-accelerator failures, PPS/SPS state
       // loss after an audio track switch) are transient during active playback:
       // the decoder self-heals on the next keyframe. Restarting the entire
       // source would be far worse than letting the stall watchdog handle a
       // truly broken stream (position stuck for 5 s → watchdog calls play()).
-      final isVideoDecodeError = error.toString().toLowerCase().contains(
-        'decoding video',
-      );
+      final isVideoDecodeError = errLower.contains('decoding video');
       if (isVideoDecodeError &&
           !state.isLive &&
           _hasConfirmedPlaybackFrame &&
@@ -1922,25 +1966,28 @@ class PlayerController extends Notifier<PlayerState> {
         }
         _audioFailoverLastTime = now;
 
-        if (_lastKnownAudioTrackId != null) {
-          _failedAudioTrackIds.add(_lastKnownAudioTrackId!);
-        } else {
-          // stream.track hasn't fired yet (error came in before the first
-          // track-change event). Mark the first real track as failed so we
-          // don't loop back to it.
-          final firstReal = _player.state.tracks.audio.firstWhereOrNull(
-            (t) => t.id != 'no' && t.id != 'auto',
-          );
-          if (firstReal != null) {
-            _failedAudioTrackIds.add(firstReal.id.toString());
+        final lastFailed = _lastKnownAudioTrackId;
+        if (lastFailed != null) _failedAudioTrackIds.add(lastFailed);
+        // Before the first track event, assume the first real rendition failed.
+        // In the same scan, remember the first Off entry for exhaustion and
+        // stop at the earliest remaining rendition in backend order.
+        var markFirstAsFailed = lastFailed == null;
+        AudioTrack? nextTrack;
+        AudioTrack? noTrack;
+        for (final track in _player.state.tracks.audio) {
+          final id = track.id;
+          if (id == 'no') {
+            noTrack ??= track;
+          } else if (id != 'auto') {
+            if (markFirstAsFailed) {
+              _failedAudioTrackIds.add(id);
+              markFirstAsFailed = false;
+            } else if (!_failedAudioTrackIds.contains(id)) {
+              nextTrack = track;
+              break;
+            }
           }
         }
-        final nextTrack = _player.state.tracks.audio.firstWhereOrNull(
-          (t) =>
-              t.id != 'no' &&
-              t.id != 'auto' &&
-              !_failedAudioTrackIds.contains(t.id.toString()),
-        );
         if (nextTrack != null) {
           if (kDebugMode) {
             _debugPrint(
@@ -1948,7 +1995,7 @@ class PlayerController extends Notifier<PlayerState> {
               ' — trying next: ${nextTrack.id} (${nextTrack.language})',
             );
           }
-          _lastKnownAudioTrackId = nextTrack.id.toString();
+          _lastKnownAudioTrackId = nextTrack.id;
           _player.setAudioTrack(nextTrack).catchError((_) {});
           return;
         }
@@ -1960,9 +2007,6 @@ class PlayerController extends Notifier<PlayerState> {
             '[Player] All audio tracks failed — disabling audio to preserve video playback.',
           );
         }
-        final noTrack = _player.state.tracks.audio.firstWhereOrNull(
-          (t) => t.id == 'no',
-        );
         if (noTrack != null) {
           _player.setAudioTrack(noTrack).catchError((_) {});
         }
@@ -1977,7 +2021,6 @@ class PlayerController extends Notifier<PlayerState> {
         // decoding once and retry the SAME source. If it still fails,
         // _forceSoftwareDecode is already set so we fall through to the
         // next source.
-        final errLower = error.toString().toLowerCase();
         final looksLikeDecodeFailure =
             errLower.contains('decod') ||
             errLower.contains('codec') ||
@@ -2419,67 +2462,7 @@ class PlayerController extends Notifier<PlayerState> {
         _lastSavedPosition = pos;
       }
 
-      // Next Episode Detection (Series only, trigger 15s before end)
-      if (!_suppressNextEpisodeDetection &&
-          (_item.contentType == MultimediaContentType.series ||
-              _item.contentType == MultimediaContentType.anime)) {
-        final durationMs = duration.inMilliseconds;
-        final posMs = pos.inMilliseconds;
-        final remainingSecs = (durationMs - posMs) / 1000;
-
-        // Show next episode overlay if within last 15 seconds or video ended.
-        // It persists until the user dismisses it or loads a new episode.
-        if (remainingSecs <= 15.0) {
-          final currentEp = _episode ?? _resolveCurrentEpisode();
-          List<Episode>? episodes = _item.episodes;
-          if (isSeries &&
-              currentEp != null &&
-              currentEp.dubStatus != DubStatus.none) {
-            episodes = episodes
-                ?.where((e) => e.dubStatus == currentEp.dubStatus)
-                .toList();
-          }
-
-          int? currentIndex;
-          if (currentEp != null) {
-            currentIndex = episodes?.indexWhere((e) => e.url == currentEp.url);
-          } else {
-            currentIndex = episodes?.indexWhere((e) => e.url == _videoUrl);
-          }
-          if (currentIndex != null &&
-              currentIndex != -1 &&
-              episodes != null &&
-              currentIndex < episodes.length - 1) {
-            final next = episodes[currentIndex + 1];
-            if (!_userDismissedOverlay && !state.showNextEpisodeOverlay) {
-              state = state.copyWith(
-                showNextEpisodeOverlay: true,
-                nextEpisodeTitle: next.name,
-                nextEpisodePosterUrl: _episodeArtwork(next),
-                nextEpisodeRating: next.rating,
-                nextEpisodeNumber: next.episode,
-                nextEpisodeSeason: next.season,
-                nextEpisodeRuntime: next.runtime,
-                nextEpisodeDescription: next.description,
-                nextEpisodeIsFinal: next.isFinal,
-                nextEpisodeServerName: next.serverName,
-              );
-            }
-            // After the card, never before it: a prefetch that throws must
-            // not be able to take the next-episode prompt down with it.
-            _warmNextEpisodeSources(next);
-            // Ensure it persists if video completes and resets position
-            _isNextEpisodeOverlayForced = true;
-          }
-          return;
-        }
-
-        if (remainingSecs > 15.0) {
-          if (state.showNextEpisodeOverlay && !_isNextEpisodeOverlayForced) {
-            state = state.copyWith(showNextEpisodeOverlay: false);
-          }
-        }
-      }
+      _updateNextEpisodeOverlay(duration.inMilliseconds - pos.inMilliseconds);
     });
   }
 
@@ -2873,6 +2856,7 @@ class PlayerController extends Notifier<PlayerState> {
         play && !_shouldPauseLocalStartup(playUrl),
       );
       final subs = state.externalSubtitles;
+      _armSkipDuration(sourceSessionId, videoViewSource: finalUrl);
 
       if (subs.isNotEmpty && _videoViewSupportsMergedExternalSubtitles) {
         _videoViewController!.openWithSubtitles(
@@ -2964,12 +2948,22 @@ class PlayerController extends Notifier<PlayerState> {
       if (!_isCurrentSourceSession(sourceSessionId)) return;
     }
 
+    final skipDuration = _armSkipDuration(sourceSessionId);
+    // The reset event is distinct, so an already-zero duration might not emit.
+    _skipMediaKitReset = player.state.duration == Duration.zero;
     await player.open(
       Media(mediaKitUrl, httpHeaders: headers),
       play: play && !_shouldPauseLocalStartup(playUrl),
     );
     if (!_isCurrentSourceSession(sourceSessionId)) {
       return;
+    }
+    if (identical(_skipDuration, skipDuration)) {
+      _skipMediaKitReady = true;
+      if (_skipMediaKitEarlyDuration case final duration?) {
+        _reportSkipDuration(duration);
+        _skipMediaKitEarlyDuration = null;
+      }
     }
     state = state.copyWith(useExoPlayer: false, isSeekable: true);
     unawaited(applyAnime4kShaders());
@@ -3870,6 +3864,7 @@ class PlayerController extends Notifier<PlayerState> {
     _waitingForNetworkRecovery = false;
     _wasNetworkOffline = false;
     _hasMarkedWatched = false;
+    _pendingContinueCheckpoint = null;
     _lastKnownPlaybackPositionMs = 0;
     _lastKnownPlaybackDurationMs = 0;
     _recoveryPositionMs = null;
@@ -3877,8 +3872,7 @@ class PlayerController extends Notifier<PlayerState> {
     _pendingResumeSeekPosition = null;
     _isApplyingPendingResumeSeek = false;
     _pendingResumeSeekFuture = null;
-    ++_skipFetchGeneration;
-    _skipNeedsDurationRefresh = false;
+    _resetSkipDuration();
     if (state.skipSegments.isNotEmpty) {
       state = state.copyWith(skipSegments: const []);
     }
@@ -3919,14 +3913,32 @@ class PlayerController extends Notifier<PlayerState> {
       final settings = ref.read(playerSettingsProvider).asData?.value;
       if (settings != null && !settings.prefetchNextEpisode) return;
 
-      final behaviour = settings?.fillerBehaviour ?? FillerBehaviour.note;
-      final target = behaviour == FillerBehaviour.skip && next.isFiller
-          ? (nextStoryEpisodeOrNull ?? next)
-          : next;
+      final skipsFiller =
+          settings?.fillerBehaviour == FillerBehaviour.skip && next.isFiller;
+      final fillerEpisodes = skipsFiller ? _item.episodes : null;
+      final previous = _nextEpisodeWarmAttempt;
+      if (previous != null &&
+          previous.sourceSessionId == state.sourceSessionId &&
+          previous.nextUrl == next.url &&
+          previous.skipsFiller == skipsFiller &&
+          identical(previous.fillerEpisodes, fillerEpisodes)) {
+        return;
+      }
+
+      final target = skipsFiller ? (nextStoryEpisodeOrNull ?? next) : next;
       if (target.url.trim().isEmpty) return;
 
       final provider = _resolveProvider();
       if (provider == null) return;
+      // The source cache deliberately forgets failures so an explicit fetch
+      // can retry. A clock tick is not an explicit request: don't start that
+      // work again on every tick when the viewer is offline or a server fails.
+      _nextEpisodeWarmAttempt = (
+        sourceSessionId: state.sourceSessionId,
+        nextUrl: next.url,
+        skipsFiller: skipsFiller,
+        fillerEpisodes: fillerEpisodes,
+      );
       ref.read(streamSourcePrefetchProvider).warm(provider, target.url);
     } catch (e) {
       if (kDebugMode) _debugPrint('Next-episode prefetch skipped: $e');
@@ -4151,6 +4163,7 @@ class PlayerController extends Notifier<PlayerState> {
       final currentEpisode = _resolveCurrentEpisode();
       // Mark watched locally once playback reaches 90%.
       if (progressPercent >= 90) {
+        _pendingContinueCheckpoint = null;
         if (!_hasMarkedWatched) {
           if (isSeries && currentEpisode != null) {
             unawaited(
@@ -4213,32 +4226,95 @@ class PlayerController extends Notifier<PlayerState> {
 
       // 3. Normal local progress saving.
       if (progressPercent > 5 || isSeries) {
-        ref
-            .read(continueWatchingProvider.notifier)
-            .saveProgress(
-              _item,
-              pos,
-              dur,
-              lastStreamUrl: state.currentStream?.url,
-              lastEpisodeUrl: currentEpisode?.url ?? _currentProgressUrl,
-              season: currentEpisode?.season,
-              episode: currentEpisode?.episode,
-              episodeTitle: currentEpisode == null
-                  ? null
-                  : episodeTitleForStorage(
-                      episode: currentEpisode.episode,
-                      title: currentEpisode.name,
-                      isFinal: currentEpisode.isFinal,
-                      serverName: currentEpisode.serverName,
-                    ),
-              episodeServerName: currentEpisode?.serverName,
-              episodeServerNumber: currentEpisode?.serverNumber,
-              episodePosterUrl: _episodeArtwork(currentEpisode),
-            );
+        _writeContinueCheckpoint(
+          position: pos,
+          duration: dur,
+          streamUrl: state.currentStream?.url,
+          episodeUrl: currentEpisode?.url ?? _currentProgressUrl,
+          episode: currentEpisode,
+        );
       }
     } catch (e) {
       if (kDebugMode) _debugPrint("History save failed: $e");
     }
+  }
+
+  void _writeContinueCheckpoint({
+    required int position,
+    required int duration,
+    String? streamUrl,
+    String? episodeUrl,
+    Episode? episode,
+  }) {
+    final item = _item;
+    final values = (
+      position: position,
+      duration: duration,
+      streamUrl: streamUrl,
+      episodeUrl: episodeUrl,
+      accountRevision: ref.read(accountDataRevisionProvider),
+    );
+    final pending = _pendingContinueCheckpoint;
+    // Pause, progress thresholds and Back can meet while Hive is still
+    // writing the same bookmark. Don't queue another local write and sync
+    // for that same intent. A newer/different checkpoint always goes through.
+    if (pending != null &&
+        identical(pending.item, item) &&
+        identical(pending.episode, episode) &&
+        pending.values == values) {
+      pending.retryOnFailure = true;
+      return;
+    }
+
+    final notifier = ref.read(continueWatchingProvider.notifier);
+    final checkpoint = _PendingContinueCheckpoint(item, episode, values);
+    final artwork = _episodeArtwork(episode);
+    final title = episode == null
+        ? null
+        : episodeTitleForStorage(
+            episode: episode.episode,
+            title: episode.name,
+            isFinal: episode.isFinal,
+            serverName: episode.serverName,
+          );
+
+    Future<void> write() => notifier.saveProgress(
+      item,
+      position,
+      duration,
+      lastStreamUrl: streamUrl,
+      lastEpisodeUrl: episodeUrl,
+      season: episode?.season,
+      episode: episode?.episode,
+      episodeTitle: title,
+      episodeServerName: episode?.serverName,
+      episodeServerNumber: episode?.serverNumber,
+      episodePosterUrl: artwork,
+    );
+    _pendingContinueCheckpoint = checkpoint;
+    unawaited(() async {
+      try {
+        try {
+          await write();
+        } catch (_) {
+          // Preserve one retry if an overlapping save was suppressed, but
+          // never replay an old checkpoint over a newer intent or account.
+          if (!checkpoint.retryOnFailure ||
+              !identical(_pendingContinueCheckpoint, checkpoint) ||
+              !ref.mounted ||
+              ref.read(accountDataRevisionProvider) != values.accountRevision) {
+            rethrow;
+          }
+          await write();
+        }
+      } catch (error) {
+        if (kDebugMode) _debugPrint('History save failed: $error');
+      } finally {
+        if (identical(_pendingContinueCheckpoint, checkpoint)) {
+          _pendingContinueCheckpoint = null;
+        }
+      }
+    }());
   }
 
   void disposeController({Player? player}) {
@@ -4246,9 +4322,12 @@ class PlayerController extends Notifier<PlayerState> {
     if (player != null && _isInitialized && !identical(_player, player)) return;
     if (_isDisposed) return;
     _isDisposed = true;
+    _skipDuration.cancel();
     _cancelAutoSubtitleSelection();
     _disableAnime4kMetal();
     final closingSession = ++_sourceSessionSerial;
+    _nextEpisodeOverlayLookup = null;
+    _nextEpisodeWarmAttempt = null;
     _pendingResumeSeekPosition = null;
     _stallTimer?.cancel();
     _stallTimer = null;
@@ -4278,11 +4357,6 @@ class PlayerController extends Notifier<PlayerState> {
     _midPlaybackErrorTimer?.cancel();
     _midPlaybackErrorTimer = null;
 
-    // Best-effort cleanup of subtitle temp files we wrote into the OS temp
-    // dir. Don't await — the player has to close fast, and the next launch
-    // will catch any leftovers. Fixes audit finding H5.
-    unawaited(_cleanupSubtitleTempFiles());
-
     if (_isInitialized) saveProgress();
     Future.microtask(() {
       if (ref.mounted &&
@@ -4291,30 +4365,6 @@ class PlayerController extends Notifier<PlayerState> {
         state = const PlayerState();
       }
     });
-  }
-
-  // Walks the OS temp dir and deletes any subtitle file the app's subtitle
-  // download pipeline wrote (naming convention: `sub_*` or `temp_sub_*`).
-  // Pattern-based rather than tracked-set-based because the search flow runs
-  // in a separate provider and tracking handoff is fragile.
-  Future<void> _cleanupSubtitleTempFiles() async {
-    try {
-      final tempDir = await getTemporaryDirectory();
-      if (!await tempDir.exists()) return;
-      await for (final entity in tempDir.list(followLinks: false)) {
-        if (entity is! File) continue;
-        final name = p.basename(entity.path);
-        if (name.startsWith('sub_') || name.startsWith('temp_sub_')) {
-          try {
-            await entity.delete();
-          } catch (_) {
-            // Another player session may already have deleted it. Ignore.
-          }
-        }
-      }
-    } catch (e) {
-      if (kDebugMode) _debugPrint('[PlayerController] subtitle cleanup: $e');
-    }
   }
 
   Future<int> _findFirstWorkingStream(

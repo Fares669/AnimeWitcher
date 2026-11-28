@@ -1,8 +1,13 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart' show SynchronousFuture, kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:octo_image/octo_image.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/utils/artwork_quality.dart';
+import '../../../../core/utils/image_utils.dart';
 import '../../../../core/account/animewitcher_comment_models.dart';
 import '../../../comments/presentation/animewitcher_comments_screen.dart';
 import '../../../../shared/widgets/taskbar_visibility.dart';
@@ -163,18 +168,57 @@ class NewsCard extends StatelessWidget {
 
     return ArtworkDecode(
       paintedWidth: compact ? 200 : MediaQuery.sizeOf(context).width,
-      builder: (BuildContext context, int? decodeWidth) => CachedNetworkImage(
-        imageUrl: url,
-        fit: BoxFit.cover,
-        width: double.infinity,
-        height: double.infinity,
-        memCacheWidth: decodeWidth,
-        filterQuality: FilterQuality.medium,
-        fadeInDuration: const Duration(milliseconds: 120),
-        fadeOutDuration: Duration.zero,
-        placeholder: (context, url) => _imageFallback(colors),
-        errorWidget: (context, url, error) => _imageFallback(colors),
-      ),
+      builder: (context, decodeWidth) {
+        Widget original() => CachedNetworkImage(
+          imageUrl: url,
+          fit: BoxFit.cover,
+          width: double.infinity,
+          height: double.infinity,
+          memCacheWidth: decodeWidth,
+          filterQuality: FilterQuality.medium,
+          fadeInDuration: const Duration(milliseconds: 120),
+          fadeOutDuration: Duration.zero,
+          placeholder: (context, url) => _imageFallback(colors),
+          errorWidget: (context, url, error) => _imageFallback(colors),
+        );
+
+        // Only the standard-quality two-column grid used the entire
+        // viewport as the width of each tile. Keep full-quality, the compact
+        // rail, one-column layouts and the web loader on the existing path.
+        if (kIsWeb || compact || !expandToFill || decodeWidth == null) {
+          return original();
+        }
+        final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1;
+        return LayoutBuilder(
+          builder: (context, slot) {
+            final width = slot.maxWidth * dpr;
+            final height = slot.maxHeight * dpr;
+            if (!width.isFinite ||
+                !height.isFinite ||
+                width <= 0 ||
+                height <= 0 ||
+                width >= decodeWidth) {
+              return original();
+            }
+            return OctoImage(
+              image: _NewsGridCover(
+                CachedNetworkImageProvider(url),
+                (width / 32).ceil() * 32,
+                (height / 32).ceil() * 32,
+                decodeWidth,
+              ),
+              fit: BoxFit.cover,
+              width: double.infinity,
+              height: double.infinity,
+              filterQuality: FilterQuality.medium,
+              fadeInDuration: const Duration(milliseconds: 120),
+              fadeOutDuration: Duration.zero,
+              placeholderBuilder: (_) => _imageFallback(colors),
+              errorBuilder: (_, _, _) => _imageFallback(colors),
+            );
+          },
+        );
+      },
     );
   }
 
@@ -234,4 +278,49 @@ String _newsTimeAgo(BuildContext context, DateTime? date) {
 
   final value = elapsed.inDays;
   return ('منذ ' + (value == 1 ? 'يوم' : value.toString() + ' يوم'));
+}
+
+/// Decode enough for a cover crop while never exceeding the previous
+/// standard-quality budget. The original encoded file/cache is unchanged.
+@immutable
+class _NewsGridCover extends ImageProvider<_NewsGridCover> {
+  const _NewsGridCover(this.source, this.width, this.height, this.maxWidth);
+
+  final CachedNetworkImageProvider source;
+  final int width;
+  final int height;
+  final int maxWidth;
+
+  @override
+  Future<_NewsGridCover> obtainKey(ImageConfiguration configuration) =>
+      SynchronousFuture(this);
+
+  @override
+  ImageStreamCompleter loadImage(
+    _NewsGridCover key,
+    ImageDecoderCallback decode,
+  ) {
+    final stream = key.source.loadImage(
+      key.source,
+      (buffer, {getTargetSize}) => decode(
+        buffer,
+        getTargetSize: coverDecodeTarget(key.width, key.height, key.maxWidth),
+      ),
+    );
+    stream.addEphemeralErrorListener(
+      (_, _) => scheduleMicrotask(() => imageCache.evict(key)),
+    );
+    return stream;
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is _NewsGridCover &&
+      other.source == source &&
+      other.width == width &&
+      other.height == height &&
+      other.maxWidth == maxWidth;
+
+  @override
+  int get hashCode => Object.hash(source, width, height, maxWidth);
 }

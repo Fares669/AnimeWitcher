@@ -31,79 +31,68 @@ class Anime4kPlayerSheet {
                 ? (size.width - 32).clamp(260.0, 340.0).toDouble()
                 : 360.0;
 
-            return Dialog(
-              backgroundColor: HotstarPlayerStyle.background,
-              insetPadding: EdgeInsets.symmetric(
-                horizontal: isCompact ? 14 : 16,
-                vertical: isCompact ? 16 : 24,
-              ),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(isCompact ? 14 : 16),
-              ),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: maxWidth,
-                  maxHeight: size.height * 0.8,
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(18, 0, 18, 10),
+            return HotstarPlayerStyle.dialogFrame(
+              compact: isCompact,
+              radius: isCompact ? 14 : 16,
+              size: Size(maxWidth, size.height * 0.8),
+              body: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(18, 0, 18, 10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'ANIME4K',
+                            style: TextStyle(
+                              color: HotstarPlayerStyle.secondaryText,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1.2,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            anime4kModeHint(context, mode),
+                            style: const TextStyle(
+                              color: HotstarPlayerStyle.secondaryText,
+                              fontSize: 12,
+                              height: 1.35,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Flexible(
+                      child: SingleChildScrollView(
                         child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Text(
-                              'ANIME4K',
-                              style: TextStyle(
-                                color: HotstarPlayerStyle.secondaryText,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: 1.2,
+                            for (final value in Anime4kMode.values)
+                              _ModeRow(
+                                label: value == Anime4kMode.off
+                                    ? appText(
+                                        context,
+                                        english: 'Off',
+                                        arabic: 'إيقاف',
+                                      )
+                                    : '${appText(context, english: 'Mode', arabic: 'النمط')} ${value.label}',
+                                selected: mode == value,
+                                onTap: () {
+                                  setState(() => mode = value);
+                                  onModeSelected(value);
+                                  Navigator.pop<void>(ctx);
+                                },
                               ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              anime4kModeHint(context, mode),
-                              style: const TextStyle(
-                                color: HotstarPlayerStyle.secondaryText,
-                                fontSize: 12,
-                                height: 1.35,
-                              ),
-                            ),
                           ],
                         ),
                       ),
-                      Flexible(
-                        child: SingleChildScrollView(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              for (final value in Anime4kMode.values)
-                                _ModeRow(
-                                  label: value == Anime4kMode.off
-                                      ? appText(
-                                          context,
-                                          english: 'Off',
-                                          arabic: 'إيقاف',
-                                        )
-                                      : '${appText(context, english: 'Mode', arabic: 'النمط')} ${value.label}',
-                                  selected: mode == value,
-                                  onTap: () {
-                                    setState(() => mode = value);
-                                    onModeSelected(value);
-                                    Navigator.pop<void>(ctx);
-                                  },
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             );

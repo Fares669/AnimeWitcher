@@ -2,10 +2,10 @@ import 'more_sidebar_shell.dart';
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:animewitcher/shared/widgets/underline_segment_tabs.dart';
 
 import '../../../core/account/account_providers.dart';
@@ -13,11 +13,11 @@ import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
-import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../../core/router/app_router.dart';
+import 'more_catalog_grid_layout.dart';
 
 typedef _RankingPageLoader = Future<ProviderMediaPage> Function(
   AnimeWitcherGlobalRanking ranking, {
@@ -70,49 +70,36 @@ class _GlobalStatisticsScreenState extends ConsumerState<GlobalStatisticsScreen>
   Widget build(BuildContext context) {
     final accountRevision = ref.watch(accountDataRevisionProvider);
 
-    final embedded = MorePaneScope.of(context);
-    final headerTop = appPageHeaderContentTopInset(context);
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppPageAppBar(
-        title: 'الإحصائيات العالمية',
-        canPop: !embedded && Navigator.of(context).canPop(),
-        onBack: () => Navigator.of(context).pop(),
+    return buildMoreCatalogTabs(
+      context,
+      title: 'الإحصائيات العالمية',
+      controller: _tabController,
+      tabLabels: AnimeWitcherGlobalRanking.values.map(
+        (ranking) => ranking.arabicTitle,
       ),
-      body: Padding(
-        padding: EdgeInsets.only(top: headerTop),
-        child: Column(
-          children: [
-            _RankingTabs(controller: _tabController),
-            Expanded(
-              child: TabBarView(
-                controller: _tabController,
-                children: [
-                  for (
-                    var index = 0;
-                    index < AnimeWitcherGlobalRanking.values.length;
-                    index++
-                  )
-                    LazyTabChild(
-                      controller: _tabController,
-                      index: index,
-                      builder: (context) {
-                        final ranking = AnimeWitcherGlobalRanking.values[index];
-                        return _RankingPage(
-                          key: ValueKey<String>(
-                            'global-ranking-page-${ranking.queryType}-$accountRevision',
-                          ),
-                          ranking: ranking,
-                          loadPage: _loadPage,
-                        );
-                      },
-                    ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
+      tabChildren: () => [
+        for (
+          var index = 0;
+          index < AnimeWitcherGlobalRanking.values.length;
+          index++
+        )
+          LazyTabChild(
+            controller: _tabController,
+            index: index,
+            builder: (context) {
+              final ranking = AnimeWitcherGlobalRanking.values[index];
+              return _RankingPage(
+                key: ValueKey<String>(
+                  'global-ranking-page-${ranking.queryType}-$accountRevision',
+                ),
+                ranking: ranking,
+                loadPage: _loadPage,
+                tabs: _tabController,
+                tabIndex: index,
+              );
+            },
+          ),
+      ],
     );
   }
 }
@@ -122,11 +109,15 @@ class _RankingPage extends StatefulWidget {
     super.key,
     required this.ranking,
     required this.loadPage,
+    required this.tabs,
+    required this.tabIndex,
   });
 
   final AnimeWitcherGlobalRanking ranking;
 
   final _RankingPageLoader loadPage;
+  final TabController tabs;
+  final int tabIndex;
 
   @override
   State<_RankingPage> createState() => _RankingPageState();
@@ -136,9 +127,12 @@ class _RankingPageState extends State<_RankingPage>
     with AutomaticKeepAliveClientMixin<_RankingPage> {
   static const int _pageSize = animeWitcherRankingPageSize;
   static const double _loadMoreThreshold = 900;
+  static const int _appendIndexMinItems = _pageSize * 4;
 
   final ScrollController _scrollController = ScrollController();
   final List<MultimediaItem> _items = <MultimediaItem>[];
+  Set<String>? _appendKeys;
+  late final ValueNotifier<bool> _tabTickerEnabled;
   int _nextOffset = 0;
   bool _hasMore = true;
   bool _initialLoading = true;
@@ -153,11 +147,17 @@ class _RankingPageState extends State<_RankingPage>
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
+    _tabTickerEnabled = ValueNotifier<bool>(_isTabVisible);
+    widget.tabs.addListener(_onTabChange);
+    widget.tabs.animation?.addListener(_updateTabTicker);
     _loadInitial();
   }
 
   @override
   void dispose() {
+    widget.tabs.removeListener(_onTabChange);
+    widget.tabs.animation?.removeListener(_updateTabTicker);
+    _tabTickerEnabled.dispose();
     _scrollController
       ..removeListener(_onScroll)
       ..dispose();
@@ -170,17 +170,63 @@ class _RankingPageState extends State<_RankingPage>
     return '${item.id}|${item.title}';
   }
 
+  bool get _isTabVisible {
+    final tabs = widget.tabs;
+    if (tabs.indexIsChanging) {
+      // TabBarView warps a multi-tab tap to just the outgoing and incoming
+      // pages. Animation values between their indices aren't visible pages.
+      return widget.tabIndex == tabs.previousIndex ||
+          widget.tabIndex == tabs.index;
+    }
+    // During a gesture, leave both partially visible tabs free to animate.
+    final position = tabs.animation?.value ?? tabs.index.toDouble();
+    return (position - widget.tabIndex).abs() < 1;
+  }
+
+  void _updateTabTicker() {
+    _tabTickerEnabled.value = _isTabVisible;
+  }
+
+  void _onTabChange() {
+    if (widget.tabs.index != widget.tabIndex) _appendKeys = null;
+    _updateTabTicker();
+  }
+
   void _replaceItems(List<MultimediaItem> incoming) {
+    _appendKeys = null;
     _items
       ..clear()
       ..addAll(incoming);
   }
 
-  void _appendItems(List<MultimediaItem> incoming) {
-    final existing = _items.map(_itemKey).toSet();
-    for (final item in incoming) {
-      if (existing.add(_itemKey(item))) _items.add(item);
+  void _appendItems(List<MultimediaItem> incoming, {required bool hasMore}) {
+    final saved = _appendKeys;
+    _appendKeys = null;
+    final existing = saved ?? <String>{};
+    // The index is worth retaining only for deeper scrolling on the current
+    // tab. Keep the first page intact and drop the index at a fresh page zero,
+    // on leaving the tab, or when no more pages can reuse it.
+    var retain =
+        hasMore &&
+        widget.tabs.index == widget.tabIndex &&
+        _items.length + incoming.length >= _appendIndexMinItems;
+    if (saved == null) {
+      for (final item in _items) {
+        existing.add(_itemKey(item));
+        // Providers can override getters on subclasses. Keep re-reading those
+        // keys on later appends, exactly as the uncached path did.
+        retain = retain && item.runtimeType == MultimediaItem;
+      }
     }
+    for (final item in incoming) {
+      if (existing.add(_itemKey(item))) {
+        _items.add(item);
+        retain = retain && item.runtimeType == MultimediaItem;
+      }
+    }
+    _appendKeys = retain && _items.length >= _appendIndexMinItems
+        ? existing
+        : null;
   }
 
   Future<void> _loadInitial() async {
@@ -231,10 +277,11 @@ class _RankingPageState extends State<_RankingPage>
       final nextOffset = page.nextOffset > requestedOffset
           ? page.nextOffset
           : requestedOffset + _pageSize;
+      final hasMore = page.hasMore && page.nextOffset > requestedOffset;
       setState(() {
-        _appendItems(page.items);
+        _appendItems(page.items, hasMore: hasMore);
         _nextOffset = nextOffset;
-        _hasMore = page.hasMore && page.nextOffset > requestedOffset;
+        _hasMore = hasMore;
         _loadingMore = false;
       });
       _maybeFillViewport();
@@ -273,7 +320,10 @@ class _RankingPageState extends State<_RankingPage>
   Widget build(BuildContext context) {
     super.build(context);
     if (_initialLoading && _items.isEmpty) {
-      return const AnimeCatalogShimmer();
+      return _rankingShimmerTicker(
+        _tabTickerEnabled,
+        const AnimeCatalogShimmer(),
+      );
     }
     if (_initialError != null && _items.isEmpty) {
       return _RankingError(onRetry: _loadInitial);
@@ -297,6 +347,7 @@ class _RankingPageState extends State<_RankingPage>
       controller: _scrollController,
       items: _items,
       ranking: widget.ranking,
+      shimmerTickerEnabled: _tabTickerEnabled,
       loadingMore: _loadingMore,
       loadMoreError: _loadMoreError != null,
       onLoadMoreRetry: _loadMore,
@@ -305,29 +356,23 @@ class _RankingPageState extends State<_RankingPage>
   }
 }
 
-class _RankingTabs extends StatelessWidget {
-  const _RankingTabs({required this.controller});
-
-  final TabController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    const rankings = AnimeWitcherGlobalRanking.values;
-    return FilterStyleTabBar(
-      controller: controller,
-      tabs: [
-        for (final ranking in rankings)
-          FilterStyleTab(label: ranking.arabicTitle),
-      ],
+// The hidden ranking may keep its items and scroll position mounted, but its
+// loading effects only need ticks when visible. Keep refresh and real grid
+// animation/scroll controllers outside this private placeholder gate.
+Widget _rankingShimmerTicker(ValueListenable<bool> enabled, Widget child) =>
+    ValueListenableBuilder<bool>(
+      valueListenable: enabled,
+      child: child,
+      builder: (context, value, child) =>
+          TickerMode(enabled: value, child: child!),
     );
-  }
-}
 
 class _RankingGrid extends StatelessWidget {
   const _RankingGrid({
     required this.controller,
     required this.items,
     required this.ranking,
+    required this.shimmerTickerEnabled,
     required this.loadingMore,
     required this.loadMoreError,
     required this.onLoadMoreRetry,
@@ -338,6 +383,7 @@ class _RankingGrid extends StatelessWidget {
   final List<MultimediaItem> items;
   final AnimeWitcherGlobalRanking ranking;
 
+  final ValueListenable<bool> shimmerTickerEnabled;
   final bool loadingMore;
   final bool loadMoreError;
   final Future<void> Function() onLoadMoreRetry;
@@ -345,7 +391,7 @@ class _RankingGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDesktop = context.isDesktop;
+    final grid = moreCatalogGridLayout(context);
     final footerCount = loadingMore
         ? AnimeCatalogShimmer.loadMoreCount
         : loadMoreError
@@ -358,35 +404,16 @@ class _RankingGrid extends StatelessWidget {
           key: PageStorageKey<String>('global-ranking-${ranking.queryType}'),
           controller: controller,
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.fromLTRB(
-            MultimediaCardLayout.catalogGridHorizontalPadding(context),
-            16,
-            MultimediaCardLayout.catalogGridHorizontalPadding(context),
-            110,
-          ),
-          gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
-            context,
-            maxCrossAxisExtent: isDesktop ? 240 : 150,
-            childAspectRatio: MultimediaCardLayout.gridAspectRatio(
-              isPortrait: true,
-              isDesktop: isDesktop,
-            ),
-            crossAxisSpacing: MultimediaCardLayout.catalogGridCrossAxisSpacing(
-              context,
-            ),
-            mainAxisSpacing: MultimediaCardLayout.catalogGridMainAxisSpacing(
-              context,
-            ),
-            handsetPortraitCrossAxisCount:
-                MultimediaCardLayout.handsetPortraitGridColumns,
-            horizontalPadding:
-                MultimediaCardLayout.catalogGridHorizontalPadding(context),
-          ),
+          padding: grid.padding,
+          gridDelegate: grid.delegate,
           itemCount: items.length + footerCount,
           itemBuilder: (context, index) {
             if (index >= items.length) {
               if (loadingMore) {
-                return const AnimePosterShimmer();
+                return _rankingShimmerTicker(
+                  shimmerTickerEnabled,
+                  const AnimePosterShimmer(),
+                );
               }
               return Center(
                 child: TextButton.icon(

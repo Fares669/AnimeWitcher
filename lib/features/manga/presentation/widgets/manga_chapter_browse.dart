@@ -1,4 +1,5 @@
 import '../../../../core/domain/entity/manga.dart';
+import '../../../../core/utils/digit_normalization.dart';
 
 /// Which chapters the list shows.
 enum MangaChapterFilter { all, unread, downloaded }
@@ -65,36 +66,27 @@ MangaChapter? mangaChapterForNumber(List<MangaChapter> chapters, double n) {
 /// Whether [chapter] answers [query], the way the anime episode search
 /// does: a number keeps the chapters whose number starts with it — "1" keeps
 /// 1, 10 to 19 and 100 up — and words search the chapter's name.
-bool mangaChapterMatchesQuery(MangaChapter chapter, String query) {
-  final needle = _westernDigits(query).trim().replaceAll(',', '.');
-  if (needle.isEmpty) return true;
-  if (RegExp(r'^\d+(\.\d*)?$').hasMatch(needle)) {
-    final number = chapter.number;
-    final label = number != null
-        ? _chapterNumberLabel(number)
-        : RegExp(r'\d+(\.\d+)?')
-              .firstMatch(_westernDigits(chapter.name))
-              ?.group(0);
-    return label != null && label.startsWith(needle);
-  }
-  return chapter.name.toLowerCase().contains(needle.toLowerCase());
-}
+bool mangaChapterMatchesQuery(MangaChapter chapter, String query) =>
+    mangaChapterMatcher(query)(chapter);
 
-String _chapterNumberLabel(double number) => number == number.truncateToDouble()
-    ? number.toInt().toString()
-    : number.toString();
+final _numericQuery = RegExp(r'^\d+(\.\d*)?$');
+final _numberInTitle = RegExp(r'\d+(\.\d+)?');
 
-/// Arabic-Indic and Persian digits as 0-9, so either keyboard finds a
-/// chapter.
-String _westernDigits(String value) {
-  const arabic = '٠١٢٣٤٥٦٧٨٩';
-  const persian = '۰۱۲۳۴۵۶۷۸۹';
-  final out = StringBuffer();
-  for (final rune in value.runes) {
-    final char = String.fromCharCode(rune);
-    final a = arabic.indexOf(char);
-    final f = persian.indexOf(char);
-    out.write(a >= 0 ? '$a' : (f >= 0 ? '$f' : char));
+/// Prepare once when filtering a list, not once for every chapter in it.
+bool Function(MangaChapter) mangaChapterMatcher(String query) {
+  final needle = normalizeLocalizedDigits(query).trim().replaceAll(',', '.');
+  if (needle.isEmpty) return (_) => true;
+  if (_numericQuery.hasMatch(needle)) {
+    return (chapter) {
+      final number = chapter.number;
+      final label = number == null
+          ? _numberInTitle
+                .firstMatch(normalizeLocalizedDigits(chapter.name))
+                ?.group(0)
+          : _number(number);
+      return label != null && label.startsWith(needle);
+    };
   }
-  return out.toString();
+  final text = needle.toLowerCase();
+  return (chapter) => chapter.name.toLowerCase().contains(text);
 }

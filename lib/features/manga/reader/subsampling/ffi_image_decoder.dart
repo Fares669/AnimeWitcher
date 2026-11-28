@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:ui' as ui;
 
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
@@ -26,6 +27,10 @@ class DecodeParams {
     this.cropBorders = false,
   });
 
+  int get pixelWidth => (right - left) ~/ sampleSize;
+  int get pixelHeight => (bottom - top) ~/ sampleSize;
+  int get pixelBytes => pixelWidth * pixelHeight * 4;
+
   Map<String, dynamic> toJson() => {
     "filePath": filePath,
     "left": left,
@@ -48,25 +53,94 @@ class DecodeParams {
   }
 }
 
-/// Result returned after decoding a region
+/// Owns the native output pixels and their admission budget. Consumers must
+/// dispose unused pixels, or hand the result to [consumeImage].
 class DecodeResult {
-  final int? pointerAddress;
+  DecodeResult({this.error, this.width = 0, this.height = 0})
+    : _pixelWidth = 0,
+      _pixelHeight = 0;
+
+  DecodeResult._pixels(
+    this._pointerAddress,
+    this._releaseBudget,
+    this._pixelWidth,
+    this._pixelHeight, {
+    required this.width,
+    required this.height,
+  }) : error = null;
+
+  int? _pointerAddress;
+  final int _pixelWidth;
+  final int _pixelHeight;
+  VoidCallback? _releaseBudget;
+  bool _converting = false;
+  int? get pointerAddress => _pointerAddress;
   final int width;
   final int height;
   final String? error;
 
-  DecodeResult({
-    this.pointerAddress,
-    this.width = 0,
-    this.height = 0,
-    this.error,
-  });
+  void _freeNativePixels() {
+    final address = _pointerAddress;
+    _pointerAddress = null;
+    if (address != null) calloc.free(Pointer<Uint8>.fromAddress(address));
+  }
+
+  void _finish() {
+    _freeNativePixels();
+    final releaseBudget = _releaseBudget;
+    _releaseBudget = null;
+    releaseBudget?.call();
+  }
+
+  /// Dispose unused pixels. Once conversion begins, it owns all disposal.
+  void dispose() {
+    if (!_converting) _finish();
+  }
+
+  /// Transfers the pixels into an engine image. Free the isolate's buffer
+  /// as soon as the engine has copied it, but hold its budget through upload.
+  Future<ui.Image> consumeImage() async {
+    final width = _pixelWidth;
+    final height = _pixelHeight;
+    final address = _pointerAddress;
+    if (_converting || address == null) {
+      throw StateError('Tile pixels are no longer available');
+    }
+    _converting = true;
+    ui.ImmutableBuffer? buffer;
+    ui.ImageDescriptor? descriptor;
+    ui.Codec? codec;
+    try {
+      buffer = await ui.ImmutableBuffer.fromUint8List(
+        Pointer<Uint8>.fromAddress(address).asTypedList(width * height * 4),
+      );
+      _freeNativePixels();
+      descriptor = ui.ImageDescriptor.raw(
+        buffer,
+        width: width,
+        height: height,
+        pixelFormat: ui.PixelFormat.rgba8888,
+      );
+      codec = await descriptor.instantiateCodec();
+      return (await codec.getNextFrame()).image;
+    } finally {
+      codec?.dispose();
+      descriptor?.dispose();
+      buffer?.dispose();
+      _finish();
+    }
+  }
 }
 
 /// FFI interop interface with the native C++ library.
 /// Manages loading the dynamic library and asynchronous execution
 /// of decoding tasks in background Isolates.
 class FfiImageDecoder {
+  FfiImageDecoder() : _tileBudget = _defaultTileBudget;
+
+  @visibleForTesting
+  FfiImageDecoder.withTileBudget(this._tileBudget) : assert(_tileBudget > 0);
+
   static DynamicLibrary? _dylib;
 
   bool _isRunning = false;
@@ -76,10 +150,64 @@ class FfiImageDecoder {
   SendPort? _sendPort;
 
   final List<_DecodeJob> _queue = [];
-  // Max concurrent decode jobs sent to the isolate.
-  // 3 parallel jobs keeps tile throughput high without overloading memory.
+  // Keep ordinary pages pipelined, but a 4096×4096 tile alone can occupy
+  // 64 MiB. Bound the total staging pixels even after the isolate replies.
   static const int _maxConcurrent = 3;
+  static const int _defaultTileBudget = 48 * 1024 * 1024;
+  final int _tileBudget;
   int _activeJobs = 0;
+  int _reservedTileBytes = 0;
+  int _workerGeneration = 0;
+
+  @visibleForTesting
+  int get debugReservedTileBytes => _reservedTileBytes;
+  int _renderers = 0;
+  bool _trimWhenIdle = false;
+  bool _nativeCacheMayBeDirty = false;
+
+  /// Retain decoded native contexts while an image view is mounted.
+  /// Contexts can contain a full RGBA image even though Flutter draws tiles.
+  VoidCallback retainRenderer() {
+    _renderers++;
+    _trimWhenIdle = false;
+    var released = false;
+    return () {
+      if (released) return;
+      released = true;
+      _renderers--;
+      if (_renderers != 0) return;
+      _trimWhenIdle = true;
+      // Let widgets replacing each other in the same frame retain the cache.
+      scheduleMicrotask(_trimIdleNativeCache);
+    };
+  }
+
+  void _trimIdleNativeCache() {
+    final port = _sendPort;
+    if (port == null ||
+        !_trimWhenIdle ||
+        !_nativeCacheMayBeDirty ||
+        _renderers != 0 ||
+        _activeJobs != 0 ||
+        _queue.isNotEmpty) {
+      return;
+    }
+    _nativeCacheMayBeDirty = false;
+    port.send('clearCache');
+  }
+
+  @visibleForTesting
+  Future<int> debugNativeCacheEntryCount() async {
+    final port = _sendPort;
+    if (port == null) return 0;
+    final response = ReceivePort();
+    try {
+      port.send(response.sendPort);
+      return await response.first as int;
+    } finally {
+      response.close();
+    }
+  }
 
   void cancel(Object token) {
     _queue.removeWhere((job) {
@@ -255,6 +383,17 @@ class FfiImageDecoder {
     final Map<String, bool> lruOrder = {};
     const int maxCacheSize = 5;
 
+    void clearCache() {
+      for (final ctx in cachedContexts.values) {
+        if (ctx.address != 0) {
+          _freeDecoder(ctx);
+        }
+      }
+      cachedContexts.clear();
+      lruOrder.clear();
+      cachedDimensions.clear();
+    }
+
     receivePort.listen((message) async {
       if (message is Map<String, dynamic>) {
         final responsePort = message['responsePort'] as SendPort;
@@ -375,16 +514,11 @@ class FfiImageDecoder {
           calloc.free(rgbaBuffer);
           responsePort.send({'success': false, 'error': "FFI error: $e"});
         }
-      } else if (message == 'dispose') {
-        for (final ctx in cachedContexts.values) {
-          if (ctx.address != 0) {
-            _freeDecoder(ctx);
-          }
-        }
-        cachedContexts.clear();
-        lruOrder.clear();
-        cachedDimensions.clear();
-        receivePort.close();
+      } else if (message == 'clearCache' || message == 'dispose') {
+        clearCache();
+        if (message == 'dispose') receivePort.close();
+      } else if (message is SendPort) {
+        message.send(cachedContexts.length);
       }
     });
   }
@@ -393,6 +527,11 @@ class FfiImageDecoder {
     DecodeParams params, {
     Object? cancelToken,
   }) async {
+    if (params.sampleSize <= 0 ||
+        params.pixelWidth <= 0 ||
+        params.pixelHeight <= 0) {
+      return DecodeResult(error: 'Invalid tile size');
+    }
     await start();
     if (_sendPort == null) {
       if (kDebugMode) {
@@ -467,49 +606,79 @@ class FfiImageDecoder {
     }
 
     while (_activeJobs < _maxConcurrent && _queue.isNotEmpty) {
-      final job = _queue.removeLast();
+      var next = _queue.length - 1;
+      bool fits(int bytes) =>
+          bytes == 0 ||
+          _reservedTileBytes == 0 ||
+          bytes <= _tileBudget - _reservedTileBytes;
+      if (!fits(_queue[next].pixelBytes)) {
+        // A single oversized tile may run alone. While waiting for its
+        // budget, dimension-only requests can still reserve page layout.
+        next = _queue.lastIndexWhere((job) => job.action == 'getDimensions');
+        if (next < 0) break;
+      }
+      final job = _queue.removeAt(next);
+      final bytes = job.pixelBytes;
+      final generation = _workerGeneration;
+      _reservedTileBytes += bytes;
       _activeJobs++;
+      _nativeCacheMayBeDirty = true;
 
       final responsePort = ReceivePort();
       responsePort.listen((response) {
         responsePort.close();
-        _activeJobs--;
-
-        if (!job.completer.isCompleted) {
-          if (response is Map<String, dynamic>) {
-            if (response['success'] == true) {
-              if (job.action == 'getDimensions') {
-                job.completer.complete([
-                  response['width'] as int,
-                  response['height'] as int,
-                ]);
-              } else {
-                final pointerAddress = response['pointerAddress'] as int?;
-                job.completer.complete(
-                  DecodeResult(
-                    pointerAddress: pointerAddress,
-                    width: response['width'] as int,
-                    height: response['height'] as int,
-                  ),
-                );
-              }
-            } else {
-              if (kDebugMode) {
-                print('Image job failed: ${response['error']}');
-              }
-              if (job.action == 'getDimensions') {
-                job.completer.complete(null);
-              } else {
-                job.completer.complete(
-                  DecodeResult(error: response['error'] as String?),
-                );
-              }
-            }
+        final current = generation == _workerGeneration;
+        if (current) _activeJobs--;
+        var transferred = false;
+        if (response is Map<String, dynamic> && response['success'] == true) {
+          if (job.action == 'getDimensions') {
+            job.completer.complete(
+              current
+                  ? [response['width'] as int, response['height'] as int]
+                  : null,
+            );
           } else {
-            job.completer.complete(null);
+            final pointerAddress = response['pointerAddress'] as int?;
+            if (current && pointerAddress != null) {
+              transferred = true;
+              job.completer.complete(
+                DecodeResult._pixels(
+                  pointerAddress,
+                  () {
+                    if (generation != _workerGeneration) return;
+                    _reservedTileBytes -= bytes;
+                    _processNext();
+                  },
+                  job.params.pixelWidth,
+                  job.params.pixelHeight,
+                  width: response['width'] as int,
+                  height: response['height'] as int,
+                ),
+              );
+            } else {
+              if (pointerAddress != null) {
+                calloc.free(Pointer<Uint8>.fromAddress(pointerAddress));
+              }
+              job.completer.complete(null);
+            }
           }
+        } else if (response is Map<String, dynamic>) {
+          if (kDebugMode && current) {
+            debugPrint('Image job failed: ${response['error']}');
+          }
+          if (job.action == 'getDimensions' || !current) {
+            job.completer.complete(null);
+          } else {
+            job.completer.complete(
+              DecodeResult(error: response['error'] as String?),
+            );
+          }
+        } else {
+          job.completer.complete(null);
         }
 
+        if (!current) return;
+        if (!transferred) _reservedTileBytes -= bytes;
         _processNext();
       });
 
@@ -519,6 +688,7 @@ class FfiImageDecoder {
         'responsePort': responsePort.sendPort,
       });
     }
+    _trimIdleNativeCache();
   }
 
   bool getImageDimensions(
@@ -567,7 +737,10 @@ class FfiImageDecoder {
     _cIsolate = null;
     _receivePort = null;
     _isRunning = false;
+    _workerGeneration++;
     _activeJobs = 0;
+    _reservedTileBytes = 0;
+    _nativeCacheMayBeDirty = false;
 
     for (final job in _queue) {
       if (!job.completer.isCompleted) {
@@ -587,6 +760,8 @@ class _DecodeJob {
   final Completer<dynamic> completer;
   final Object? cancelToken;
   final String? action;
+
+  int get pixelBytes => action == 'getDimensions' ? 0 : params.pixelBytes;
 
   _DecodeJob({
     required this.params,

@@ -51,7 +51,7 @@ class Anime3rbCommentTarget {
     final link = Anime3rbProvider.parseCatalogLink(episode.url);
     final pageUri = link?.watch ?? Uri.tryParse(episode.url.trim());
     if (pageUri == null) return null;
-    final epNum = episode.episode ?? 0;
+    final epNum = episode.episode;
     final label = epNum > 0
         ? '${parent.title} · الحلقة $epNum'
         : parent.title;

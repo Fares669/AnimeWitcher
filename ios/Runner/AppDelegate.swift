@@ -3,6 +3,7 @@ import Flutter
 import UIKit
 import SwiftUI
 import UserNotifications
+import WebKit
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
@@ -12,6 +13,8 @@ import UserNotifications
   private var liquidGlassPresenterChannel: FlutterMethodChannel?
   private var persistentGlassHeaderChannel: FlutterMethodChannel?
   private var persistentGlassHeaderController: ApplePersistentGlassHeaderNativeController?
+  private var anime3rbWebViewChannel: FlutterMethodChannel?
+  private var anime3rbWebViewBridge: Anime3rbNativeWebViewBridge?
 
   override func application(
     _ application: UIApplication,
@@ -500,6 +503,17 @@ import UserNotifications
 #endif
 
     downloadContinuedProcessingChannel = channel
+
+    let anime3rbChannel = FlutterMethodChannel(
+      name: "com.animewitcher.app/anime3rb_webview",
+      binaryMessenger: messenger
+    )
+    let anime3rbBridge = Anime3rbNativeWebViewBridge(channel: anime3rbChannel)
+    anime3rbChannel.setMethodCallHandler { [weak anime3rbBridge] call, result in
+      anime3rbBridge?.handle(call, result: result)
+    }
+    anime3rbWebViewChannel = anime3rbChannel
+    anime3rbWebViewBridge = anime3rbBridge
   }
 }
 
@@ -661,6 +675,51 @@ private func animeWitcherMenuImage(
     systemName: name,
     withConfiguration: UIImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
   )?.withTintColor(tintColor, renderingMode: .alwaysOriginal)
+}
+
+private func actionHasMenu(_ action: [String: Any]) -> Bool {
+  let menuItems = action["menuItems"] as? [[String: Any]] ?? []
+  return !menuItems.isEmpty
+}
+
+private func actionTitle(_ action: [String: Any]) -> String? {
+  guard let raw = action["title"] as? String else { return nil }
+  let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+  return title.isEmpty ? nil : title
+}
+
+private func animeWitcherActionMenu(
+  _ action: [String: Any],
+  onSelect: @escaping (String) -> Void
+) -> UIMenu? {
+  guard #available(iOS 14.0, *) else { return nil }
+  let selectedValue = action["selectedValue"] as? String
+  let menuTint = animeWitcherUIColor(
+    action["menuTintColor"],
+    fallback: animeWitcherUIColor(action["color"], fallback: .label)
+  )
+  let rawItems = action["menuItems"] as? [[String: Any]] ?? []
+  guard !rawItems.isEmpty else { return nil }
+  let children: [UIAction] = rawItems.compactMap { menuItem in
+    guard let value = menuItem["value"] as? String,
+          let label = menuItem["label"] as? String else { return nil }
+    let isDestructive = menuItem["destructive"] as? Bool == true
+    let image = (menuItem["systemImage"] as? String).flatMap { name -> UIImage? in
+      if isDestructive { return UIImage(systemName: name) }
+      return animeWitcherMenuImage(named: name, tintColor: menuTint)
+    }
+    var attributes: UIMenuElement.Attributes = []
+    if isDestructive { attributes.insert(.destructive) }
+    return UIAction(
+      title: label,
+      image: image,
+      attributes: attributes,
+      state: value == selectedValue ? .on : .off
+    ) { _ in
+      onSelect(value)
+    }
+  }
+  return UIMenu(children: children)
 }
 
 private func animeWitcherConfigureGlassButton(
@@ -957,17 +1016,6 @@ private final class ApplePersistentGlassHeaderNativeController: NSObject {
     }
   }
 
-  private func actionHasMenu(_ action: [String: Any]) -> Bool {
-    let menuItems = action["menuItems"] as? [[String: Any]] ?? []
-    return !menuItems.isEmpty
-  }
-
-  private func actionTitle(_ action: [String: Any]) -> String? {
-    guard let raw = action["title"] as? String else { return nil }
-    let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    return title.isEmpty ? nil : title
-  }
-
   private func actionTitleOnly(_ action: [String: Any]) -> Bool {
     action["titleOnly"] as? Bool == true && actionTitle(action) != nil
   }
@@ -979,37 +1027,9 @@ private final class ApplePersistentGlassHeaderNativeController: NSObject {
   }
 
   private func makeMenu(actionIndex: Int, action: [String: Any]) -> UIMenu? {
-    guard #available(iOS 14.0, *) else { return nil }
-    let selectedValue = action["selectedValue"] as? String
-    let menuTint = animeWitcherUIColor(
-      action["menuTintColor"],
-      fallback: animeWitcherUIColor(action["color"], fallback: .label)
-    )
-    let rawItems = action["menuItems"] as? [[String: Any]] ?? []
-    guard !rawItems.isEmpty else { return nil }
-    let children: [UIAction] = rawItems.compactMap { [weak self] menuItem in
-      guard let value = menuItem["value"] as? String,
-            let label = menuItem["label"] as? String else { return nil }
-      let isDestructive = menuItem["destructive"] as? Bool == true
-      let image = (menuItem["systemImage"] as? String).flatMap { name -> UIImage? in
-        if isDestructive { return UIImage(systemName: name) }
-        return animeWitcherMenuImage(named: name, tintColor: menuTint)
-      }
-      var attributes: UIMenuElement.Attributes = []
-      if isDestructive { attributes.insert(.destructive) }
-      return UIAction(
-        title: label,
-        image: image,
-        attributes: attributes,
-        state: value == selectedValue ? .on : .off
-      ) { _ in
-        self?.channel.invokeMethod(
-          "selected",
-          arguments: ["index": actionIndex, "value": value]
-        )
-      }
+    animeWitcherActionMenu(action) { [weak self] value in
+      self?.channel.invokeMethod("selected", arguments: ["index": actionIndex, "value": value])
     }
-    return UIMenu(children: children)
   }
 
   private func configureActionItem(
@@ -1716,53 +1736,10 @@ private final class AppleNativeToolbarPlatformView: NSObject, FlutterPlatformVie
     }
   }
 
-  private func makeMenu(
-    actionIndex: Int,
-    action: [String: Any]
-  ) -> UIMenu? {
-    guard #available(iOS 14.0, *) else { return nil }
-    let selectedValue = action["selectedValue"] as? String
-    let menuTint = animeWitcherUIColor(
-      action["menuTintColor"],
-      fallback: animeWitcherUIColor(action["color"], fallback: .label)
-    )
-    let rawItems = action["menuItems"] as? [[String: Any]] ?? []
-    guard !rawItems.isEmpty else { return nil }
-
-    let children: [UIAction] = rawItems.compactMap { [weak self] menuItem in
-      guard let value = menuItem["value"] as? String,
-            let label = menuItem["label"] as? String else { return nil }
-      let isDestructive = menuItem["destructive"] as? Bool == true
-      let image = (menuItem["systemImage"] as? String).flatMap { name -> UIImage? in
-        if isDestructive { return UIImage(systemName: name) }
-        return animeWitcherMenuImage(named: name, tintColor: menuTint)
-      }
-      var attributes: UIMenuElement.Attributes = []
-      if isDestructive { attributes.insert(.destructive) }
-      return UIAction(
-        title: label,
-        image: image,
-        attributes: attributes,
-        state: value == selectedValue ? .on : .off
-      ) { _ in
-        self?.channel.invokeMethod(
-          "selected",
-          arguments: ["index": actionIndex, "value": value]
-        )
-      }
+  private func makeMenu(actionIndex: Int, action: [String: Any]) -> UIMenu? {
+    animeWitcherActionMenu(action) { [weak self] value in
+      self?.channel.invokeMethod("selected", arguments: ["index": actionIndex, "value": value])
     }
-    return UIMenu(children: children)
-  }
-
-  private func actionHasMenu(_ action: [String: Any]) -> Bool {
-    let menuItems = action["menuItems"] as? [[String: Any]] ?? []
-    return !menuItems.isEmpty
-  }
-
-  private func actionTitle(_ action: [String: Any]) -> String? {
-    guard let raw = action["title"] as? String else { return nil }
-    let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    return title.isEmpty ? nil : title
   }
 
   private func actionKind(_ action: [String: Any]) -> Int {
@@ -2810,6 +2787,7 @@ private func presentAppleSearchSort(
   presenter.present(host, animated: true)
 }
 
+
 @available(iOS 26.0, *)
 private func presentAppleSearchFilters(
   from presenter: UIViewController,
@@ -2840,4 +2818,930 @@ private func presentAppleSearchFilters(
   host.modalTransitionStyle = .crossDissolve
   presenter.present(host, animated: true)
 }
+
+// MARK: - Native Anime3rb Cloudflare WKWebView Bridge
+
+/// Presents a pure native UIKit `WKWebView` sheet for Anime3rb Cloudflare
+/// verification with zero Flutter `UiKitView` / `Opacity(0.01)` /
+/// `window.webkit.messageHandlers` / page-world JS polling interference, and
+/// keeps the cleared `WKWebView` parked so subsequent same-origin requests can
+/// run `window.fetch` inside `WKContentWorld.defaultClient` using Apple's
+/// native CFNetwork TLS/HTTP2 stack and `WKHTTPCookieStore`.
+private final class Anime3rbNativeWebViewBridge: NSObject {
+  private static let cloudflareCookieNames: Set<String> = [
+    "cf_clearance",
+    "__cf_bm",
+    "_cfuvid",
+    "cf_chl_2",
+    "cf_chl_rc_m",
+    "cf_chl_rc_ni",
+  ]
+  private static let forbiddenFetchHeaders: Set<String> = [
+    "cookie",
+    "user-agent",
+    "referer",
+    "origin",
+    "host",
+    "content-length",
+    "connection",
+    "accept-encoding",
+  ]
+
+  private weak var channel: FlutterMethodChannel?
+  private var activeSession: Anime3rbNativeChallengeSession?
+  private var parkedWebView: WKWebView?
+  private var parkedHostContainer: UIView?
+  private var parkedOrigin: String?
+  private var parkedIdleTimer: Timer?
+
+  init(channel: FlutterMethodChannel) {
+    self.channel = channel
+    super.init()
+  }
+
+  func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    DispatchQueue.main.async { [weak self] in
+      guard let self else {
+        result(nil)
+        return
+      }
+      switch call.method {
+      case "solveChallenge":
+        guard let args = call.arguments as? [String: Any],
+              let rawUrl = args["url"] as? String,
+              let url = URL(string: rawUrl) else {
+          result(nil)
+          return
+        }
+        let title = (args["title"] as? String) ?? "التحقق من Anime3rb"
+        let subtitle = (args["subtitle"] as? String) ?? "أكمل التحقق الأمني للمتابعة في التصفح والتحميل."
+        let timeoutSeconds = (args["timeoutSeconds"] as? NSNumber)?.doubleValue ?? 90.0
+        self.startChallenge(
+          url: url,
+          title: title,
+          subtitle: subtitle,
+          timeoutSeconds: max(15.0, timeoutSeconds),
+          result: result
+        )
+
+      case "fetch":
+        guard let args = call.arguments as? [String: Any],
+              let rawUrl = args["url"] as? String,
+              let url = URL(string: rawUrl) else {
+          result(nil)
+          return
+        }
+        let method = ((args["method"] as? String) ?? "GET").uppercased()
+        let headers = (args["headers"] as? [String: String]) ?? [:]
+        let body = args["body"] as? String
+        self.performParkedFetch(
+          url: url,
+          method: method,
+          headers: headers,
+          body: body,
+          result: result
+        )
+
+      case "disposeParked":
+        self.disposeParkedWebView()
+        result(true)
+
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+  }
+
+  fileprivate func emitDiagnostic(
+    action: String,
+    status: String? = nil,
+    durationMs: Int? = nil,
+    reason: String? = nil,
+    result: Bool? = nil
+  ) {
+    var payload: [String: Any] = ["action": action]
+    if let status, !status.isEmpty { payload["status"] = status }
+    if let durationMs { payload["durationMs"] = durationMs }
+    if let reason, !reason.isEmpty { payload["reason"] = reason }
+    if let result { payload["result"] = result }
+    channel?.invokeMethod("diagnostic", arguments: payload)
+  }
+
+  private static func originString(for url: URL) -> String? {
+    guard let scheme = url.scheme?.lowercased(),
+          let host = url.host?.lowercased() else {
+      return nil
+    }
+    if let port = url.port {
+      return "\(scheme)://\(host):\(port)"
+    }
+    return "\(scheme)://\(host)"
+  }
+
+  fileprivate static func clearCloudflareCookies(
+    for host: String?,
+    includeCache: Bool,
+    completion: @escaping () -> Void
+  ) {
+    let dataStore = WKWebsiteDataStore.default()
+    let targetHost = host?.lowercased() ?? "anime3rb.com"
+    dataStore.httpCookieStore.getAllCookies { cookies in
+      let matching = cookies.filter { cookie in
+        guard cloudflareCookieNames.contains(cookie.name) else { return false }
+        let domain = cookie.domain.lowercased()
+        return domain.contains(targetHost)
+          || targetHost.contains(domain)
+          || domain.contains("anime3rb.com")
+          || domain.contains("vid3rb.com")
+      }
+      let group = DispatchGroup()
+      for cookie in matching {
+        group.enter()
+        dataStore.httpCookieStore.delete(cookie) {
+          group.leave()
+        }
+      }
+      group.notify(queue: .main) {
+        if includeCache {
+          let cacheTypes: Set<String> = [
+            WKWebsiteDataTypeDiskCache,
+            WKWebsiteDataTypeMemoryCache,
+          ]
+          dataStore.removeData(ofTypes: cacheTypes, modifiedSince: .distantPast) {
+            DispatchQueue.main.async {
+              completion()
+            }
+          }
+        } else {
+          completion()
+        }
+      }
+    }
+  }
+
+  private func startChallenge(
+    url: URL,
+    title: String,
+    subtitle: String,
+    timeoutSeconds: TimeInterval,
+    result: @escaping FlutterResult
+  ) {
+    if activeSession != nil {
+      activeSession?.cancel(reason: "replaced")
+      activeSession = nil
+    }
+    if let origin = Self.originString(for: url), parkedOrigin == origin {
+      disposeParkedWebView()
+    }
+
+    weak var sessionRef: Anime3rbNativeChallengeSession?
+    let session = Anime3rbNativeChallengeSession(
+      bridge: self,
+      initialUrl: url,
+      title: title,
+      subtitle: subtitle,
+      timeoutSeconds: timeoutSeconds
+    ) { [weak self] outcome, solvedWebView in
+      guard let self else {
+        result(outcome)
+        return
+      }
+      if let sessionRef, self.activeSession === sessionRef {
+        self.activeSession = nil
+      }
+      if let outcome, let solvedWebView, let origin = Self.originString(for: url) {
+        self.parkWebView(solvedWebView, origin: origin)
+      }
+      result(outcome)
+    }
+    sessionRef = session
+    activeSession = session
+    session.start()
+  }
+
+  private func parkWebView(_ webView: WKWebView, origin: String) {
+    disposeParkedWebView()
+    webView.navigationDelegate = nil
+    webView.uiDelegate = nil
+    webView.removeFromSuperview()
+
+    // Keep the cleared WKWebView attached in a 1x1 non-interactive container on
+    // the active window so WebKit retains its live WebContent process for fetch().
+    if let hostView = animeWitcherTopViewController()?.view.window
+      ?? animeWitcherTopViewController()?.view {
+      let container = UIView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+      container.isUserInteractionEnabled = false
+      container.alpha = 0.01
+      container.clipsToBounds = true
+      webView.translatesAutoresizingMaskIntoConstraints = true
+      webView.frame = container.bounds
+      container.addSubview(webView)
+      hostView.insertSubview(container, at: 0)
+      parkedHostContainer = container
+    }
+
+    parkedWebView = webView
+    parkedOrigin = origin
+    touchParkedIdleTimer()
+  }
+
+  private func touchParkedIdleTimer() {
+    parkedIdleTimer?.invalidate()
+    parkedIdleTimer = Timer.scheduledTimer(withTimeInterval: 15 * 60, repeats: false) { [weak self] _ in
+      self?.disposeParkedWebView()
+    }
+  }
+
+  private func disposeParkedWebView() {
+    parkedIdleTimer?.invalidate()
+    parkedIdleTimer = nil
+    parkedWebView?.stopLoading()
+    parkedWebView?.removeFromSuperview()
+    parkedWebView = nil
+    parkedHostContainer?.removeFromSuperview()
+    parkedHostContainer = nil
+    parkedOrigin = nil
+  }
+
+  private func performParkedFetch(
+    url: URL,
+    method: String,
+    headers: [String: String],
+    body: String?,
+    result: @escaping FlutterResult
+  ) {
+    guard let webView = parkedWebView,
+          let origin = Self.originString(for: url),
+          origin == parkedOrigin else {
+      result(nil)
+      return
+    }
+    touchParkedIdleTimer()
+
+    var safeHeaders: [String: String] = [:]
+    for (key, value) in headers {
+      let lower = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+      if lower.isEmpty || Self.forbiddenFetchHeaders.contains(lower) || lower.hasPrefix("sec-") {
+        continue
+      }
+      safeHeaders[key] = value
+    }
+
+    let script = """
+    const opts = {
+      method: method || 'GET',
+      credentials: 'include',
+      redirect: 'follow',
+      headers: headers || {}
+    };
+    if (body !== null && body !== undefined && opts.method !== 'GET' && opts.method !== 'HEAD') {
+      opts.body = body;
+    }
+    const resp = await fetch(url, opts);
+    const hdrs = {};
+    try {
+      resp.headers.forEach((v, k) => {
+        const key = String(k).toLowerCase();
+        if (!hdrs[key]) hdrs[key] = [];
+        hdrs[key].push(String(v));
+      });
+    } catch (_) {}
+    const text = await resp.text();
+    return {
+      status: resp.status,
+      url: resp.url || url,
+      headers: hdrs,
+      body: text
+    };
+    """
+
+    let arguments: [String: Any] = [
+      "url": url.absoluteString,
+      "method": method,
+      "headers": safeHeaders,
+      "body": body ?? NSNull(),
+    ]
+
+    let startedAt = Date()
+    webView.callAsyncJavaScript(
+      script,
+      arguments: arguments,
+      in: nil,
+      in: .defaultClient
+    ) { [weak self] callResult in
+      DispatchQueue.main.async {
+        let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+        switch callResult {
+        case .success(let raw):
+          guard let dict = raw as? [String: Any],
+                let status = (dict["status"] as? NSNumber)?.intValue else {
+            self?.emitDiagnostic(
+              action: "webview_fetch",
+              status: "failed",
+              durationMs: elapsedMs,
+              reason: "invalid_payload"
+            )
+            self?.disposeParkedWebView()
+            result(nil)
+            return
+          }
+          self?.touchParkedIdleTimer()
+          self?.emitDiagnostic(
+            action: "webview_fetch",
+            status: status >= 400 ? "http_error" : "ok",
+            durationMs: elapsedMs,
+            reason: status >= 400 ? "http_\(status)" : nil
+          )
+          result(dict)
+
+        case .failure:
+          self?.emitDiagnostic(
+            action: "webview_fetch",
+            status: "failed",
+            durationMs: elapsedMs,
+            reason: "js_fetch_error"
+          )
+          self?.disposeParkedWebView()
+          result(nil)
+        }
+      }
+    }
+  }
+}
+
+private final class Anime3rbChallengeSheetViewController: UIViewController {
+  let webView: WKWebView
+  private let subtitleText: String
+  private let onRefresh: () -> Void
+  private let onClose: () -> Void
+  private let onFirstAppear: () -> Void
+  private let progressView = UIProgressView(progressViewStyle: .bar)
+  private var progressObservation: NSKeyValueObservation?
+  private var didTriggerFirstAppear = false
+
+  init(
+    webView: WKWebView,
+    titleText: String,
+    subtitleText: String,
+    onRefresh: @escaping () -> Void,
+    onClose: @escaping () -> Void,
+    onFirstAppear: @escaping () -> Void
+  ) {
+    self.webView = webView
+    self.subtitleText = subtitleText
+    self.onRefresh = onRefresh
+    self.onClose = onClose
+    self.onFirstAppear = onFirstAppear
+    super.init(nibName: nil, bundle: nil)
+    self.title = titleText
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
+
+  deinit {
+    progressObservation?.invalidate()
+  }
+
+  override func viewDidLoad() {
+    super.viewDidLoad()
+    view.backgroundColor = .systemBackground
+
+    let closeItem = UIBarButtonItem(
+      barButtonSystemItem: .close,
+      target: self,
+      action: #selector(closeTapped)
+    )
+    let refreshItem = UIBarButtonItem(
+      barButtonSystemItem: .refresh,
+      target: self,
+      action: #selector(refreshTapped)
+    )
+    navigationItem.leftBarButtonItem = closeItem
+    navigationItem.rightBarButtonItem = refreshItem
+    if !subtitleText.isEmpty {
+      navigationItem.prompt = subtitleText
+    }
+
+    progressView.translatesAutoresizingMaskIntoConstraints = false
+    progressView.isHidden = true
+    view.addSubview(progressView)
+
+    webView.removeFromSuperview()
+    webView.translatesAutoresizingMaskIntoConstraints = false
+    view.addSubview(webView)
+
+    NSLayoutConstraint.activate([
+      progressView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+      progressView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      progressView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+      progressView.heightAnchor.constraint(equalToConstant: 2),
+
+      webView.topAnchor.constraint(equalTo: progressView.bottomAnchor),
+      webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+      webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+    ])
+
+    progressObservation = webView.observe(\.estimatedProgress, options: [.new]) { [weak self] view, _ in
+      DispatchQueue.main.async {
+        guard let self else { return }
+        let p = Float(view.estimatedProgress)
+        self.progressView.isHidden = p <= 0 || p >= 1
+        self.progressView.setProgress(p, animated: true)
+      }
+    }
+  }
+
+  override func viewDidAppear(_ animated: Bool) {
+    super.viewDidAppear(animated)
+    if !didTriggerFirstAppear {
+      didTriggerFirstAppear = true
+      onFirstAppear()
+    }
+  }
+
+  @objc private func closeTapped() {
+    onClose()
+  }
+
+  @objc private func refreshTapped() {
+    onRefresh()
+  }
+}
+
+private final class Anime3rbNativeChallengeSession: NSObject,
+  WKNavigationDelegate,
+  WKUIDelegate,
+  UIAdaptivePresentationControllerDelegate
+{
+  private weak var bridge: Anime3rbNativeWebViewBridge?
+  private let initialUrl: URL
+  private let titleText: String
+  private let subtitleText: String
+  private let timeoutSeconds: TimeInterval
+  private let completion: ([String: Any]?, WKWebView?) -> Void
+
+  private var webView: WKWebView?
+  private var hiddenHostView: UIView?
+  private var navController: UINavigationController?
+  private var timeoutTimer: Timer?
+  private var completed = false
+  private var presented = false
+  private var sawChallenge = false
+  private var lastMainFrameStatus: Int = 0
+  private var lastMainFrameCfMitigated = false
+  private var startedAt = Date()
+
+  private var isAnime3rbHost: Bool {
+    let host = initialUrl.host?.lowercased() ?? ""
+    return host == "anime3rb.com" || host.hasSuffix(".anime3rb.com")
+  }
+
+  init(
+    bridge: Anime3rbNativeWebViewBridge,
+    initialUrl: URL,
+    title: String,
+    subtitle: String,
+    timeoutSeconds: TimeInterval,
+    completion: @escaping ([String: Any]?, WKWebView?) -> Void
+  ) {
+    self.bridge = bridge
+    self.initialUrl = initialUrl
+    self.titleText = title
+    self.subtitleText = subtitle
+    self.timeoutSeconds = timeoutSeconds
+    self.completion = completion
+    super.init()
+  }
+
+  func start() {
+    startedAt = Date()
+    timeoutTimer = Timer.scheduledTimer(withTimeInterval: timeoutSeconds, repeats: false) { [weak self] _ in
+      self?.finish(outcome: nil, solvedWebView: nil, endReason: "cf_timeout")
+    }
+
+    let config = WKWebViewConfiguration()
+    config.websiteDataStore = WKWebsiteDataStore.default()
+    config.allowsInlineMediaPlayback = true
+    config.defaultWebpagePreferences.allowsContentJavaScript = true
+
+    // Keep WKWebView completely untouched: no customUserAgent override,
+    // no WKScriptMessageHandler, no WKUserScript.
+    let wv = WKWebView(frame: UIScreen.main.bounds, configuration: config)
+    wv.navigationDelegate = self
+    wv.uiDelegate = self
+    wv.allowsBackForwardNavigationGestures = false
+    self.webView = wv
+
+    let dataStore = WKWebsiteDataStore.default()
+    let targetHost = initialUrl.host?.lowercased() ?? "anime3rb.com"
+    dataStore.httpCookieStore.getAllCookies { [weak self] cookies in
+      DispatchQueue.main.async {
+        guard let self, !self.completed else { return }
+        let now = Date()
+        let hasClearance = cookies.contains { cookie in
+          guard cookie.name == "cf_clearance", !cookie.value.isEmpty else { return false }
+          let domain = cookie.domain.lowercased()
+          let domainMatches = domain.contains(targetHost) || targetHost.contains(domain)
+          if !domainMatches { return false }
+          if let exp = cookie.expiresDate, exp <= now { return false }
+          return true
+        }
+        self.bridge?.emitDiagnostic(
+          action: "cf_start",
+          status: "ok",
+          reason: hasClearance ? "native_wk_existing_clearance" : "native_wk_fresh",
+          result: hasClearance
+        )
+        if hasClearance {
+          self.startSilentCheck()
+        } else {
+          self.presentSheetAndLoad(clearStaleCookies: false)
+        }
+      }
+    }
+  }
+
+  func cancel(reason: String) {
+    finish(outcome: nil, solvedWebView: nil, endReason: reason)
+  }
+
+  private func startSilentCheck() {
+    guard let webView, !completed else { return }
+    if let hostWindow = animeWitcherTopViewController()?.view.window
+      ?? animeWitcherTopViewController()?.view {
+      let container = UIView(frame: hostWindow.bounds)
+      container.isUserInteractionEnabled = false
+      container.alpha = 0.0
+      webView.frame = container.bounds
+      container.addSubview(webView)
+      hostWindow.insertSubview(container, at: 0)
+      hiddenHostView = container
+    }
+    webView.load(URLRequest(url: initialUrl))
+  }
+
+  private func presentSheetAndLoad(clearStaleCookies: Bool) {
+    guard !completed, !presented, let webView else { return }
+    guard let presenter = animeWitcherTopViewController() else {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+        guard let self, !self.completed, !self.presented else { return }
+        if animeWitcherTopViewController() != nil {
+          self.presentSheetAndLoad(clearStaleCookies: clearStaleCookies)
+        } else {
+          self.finish(outcome: nil, solvedWebView: nil, endReason: "no_presenter")
+        }
+      }
+      return
+    }
+
+    presented = true
+    hiddenHostView?.removeFromSuperview()
+    hiddenHostView = nil
+    webView.stopLoading()
+
+    let sheetVC = Anime3rbChallengeSheetViewController(
+      webView: webView,
+      titleText: titleText,
+      subtitleText: subtitleText,
+      onRefresh: { [weak self] in
+        self?.handleRefreshTapped()
+      },
+      onClose: { [weak self] in
+        self?.finish(outcome: nil, solvedWebView: nil, endReason: "cf_dismissed")
+      },
+      onFirstAppear: { [weak self] in
+        guard let self, !self.completed else { return }
+        self.bridge?.emitDiagnostic(
+          action: "cf_revealed",
+          status: "ok",
+          reason: clearStaleCookies ? "stale_clearance" : "native_sheet"
+        )
+        let loadFresh = { [weak self] in
+          guard let self, !self.completed else { return }
+          self.lastMainFrameStatus = 0
+          self.lastMainFrameCfMitigated = false
+          self.webView?.load(URLRequest(url: self.initialUrl))
+        }
+        if clearStaleCookies {
+          Anime3rbNativeWebViewBridge.clearCloudflareCookies(
+            for: self.initialUrl.host,
+            includeCache: false,
+            completion: loadFresh
+          )
+        } else {
+          loadFresh()
+        }
+      }
+    )
+
+    let nav = UINavigationController(rootViewController: sheetVC)
+    nav.modalPresentationStyle = .pageSheet
+    if let sheet = nav.sheetPresentationController {
+      sheet.detents = [.large()]
+      sheet.prefersGrabberVisible = true
+    }
+    nav.presentationController?.delegate = self
+    navController = nav
+    presenter.present(nav, animated: true)
+  }
+
+  private func handleRefreshTapped() {
+    guard !completed else { return }
+    bridge?.emitDiagnostic(action: "cf_refresh_clear", status: "ok")
+    Anime3rbNativeWebViewBridge.clearCloudflareCookies(
+      for: initialUrl.host,
+      includeCache: true
+    ) { [weak self] in
+      guard let self, !self.completed else { return }
+      self.lastMainFrameStatus = 0
+      self.lastMainFrameCfMitigated = false
+      self.webView?.load(URLRequest(url: self.initialUrl))
+    }
+  }
+
+  // MARK: - UIAdaptivePresentationControllerDelegate
+
+  func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+    finish(outcome: nil, solvedWebView: nil, endReason: "cf_dismissed")
+  }
+
+  // MARK: - WKUIDelegate
+
+  func webView(
+    _ webView: WKWebView,
+    createWebViewWith configuration: WKWebViewConfiguration,
+    for navigationAction: WKNavigationAction,
+    windowFeatures: WKWindowFeatures
+  ) -> WKWebView? {
+    // Do not hijack Turnstile/challenge frames into the main frame.
+    return nil
+  }
+
+  // MARK: - WKNavigationDelegate
+
+  func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+    lastMainFrameStatus = 0
+    lastMainFrameCfMitigated = false
+  }
+
+  func webView(
+    _ webView: WKWebView,
+    decidePolicyFor navigationResponse: WKNavigationResponse,
+    decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
+  ) {
+    guard navigationResponse.isForMainFrame else {
+      decisionHandler(.allow)
+      return
+    }
+    if let httpResp = navigationResponse.response as? HTTPURLResponse {
+      lastMainFrameStatus = httpResp.statusCode
+      var mitigated = false
+      for (k, v) in httpResp.allHeaderFields {
+        if let key = k as? String,
+           key.lowercased() == "cf-mitigated",
+           let value = v as? String,
+           value.lowercased() == "challenge" {
+          mitigated = true
+          break
+        }
+      }
+      lastMainFrameCfMitigated = mitigated
+      bridge?.emitDiagnostic(
+        action: "nav_response",
+        status: "http_\(httpResp.statusCode)",
+        reason: mitigated ? "cf_mitigated" : "normal"
+      )
+      let isHttpChallenge = mitigated || httpResp.statusCode == 403 || httpResp.statusCode == 503
+      if isHttpChallenge {
+        sawChallenge = true
+        if !presented {
+          // Existing clearance failed: cancel the hidden request and start fresh
+          // inside the real visible native sheet so Turnstile never initializes hidden.
+          decisionHandler(.cancel)
+          presentSheetAndLoad(clearStaleCookies: true)
+          return
+        }
+      }
+    }
+    decisionHandler(.allow)
+  }
+
+  func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+    guard !completed else { return }
+
+    // While Cloudflare is serving a 403/503/cf-mitigated challenge page, do NOT
+    // evaluate any JavaScript on the page at all so Turnstile runs untouched.
+    if lastMainFrameCfMitigated || lastMainFrameStatus == 403 || lastMainFrameStatus == 503 {
+      sawChallenge = true
+      bridge?.emitDiagnostic(
+        action: "nav_finish",
+        status: "cf_http",
+        reason: "http_\(lastMainFrameStatus)"
+      )
+      if !presented {
+        presentSheetAndLoad(clearStaleCookies: true)
+      }
+      return
+    }
+
+    inspectLoadedDocument(webView: webView)
+  }
+
+  func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+    let nsErr = error as NSError
+    if nsErr.domain == NSURLErrorDomain && nsErr.code == NSURLErrorCancelled { return }
+    bridge?.emitDiagnostic(
+      action: "nav_error",
+      status: "failed",
+      reason: "\(nsErr.domain)_\(nsErr.code)"
+    )
+  }
+
+  func webView(
+    _ webView: WKWebView,
+    didFailProvisionalNavigation navigation: WKNavigation!,
+    withError error: Error
+  ) {
+    let nsErr = error as NSError
+    if nsErr.domain == NSURLErrorDomain && nsErr.code == NSURLErrorCancelled { return }
+    bridge?.emitDiagnostic(
+      action: "nav_error",
+      status: "failed",
+      reason: "\(nsErr.domain)_\(nsErr.code)"
+    )
+  }
+
+  private func inspectLoadedDocument(webView: WKWebView) {
+    let script = """
+    (function() {
+      const href = String(window.location && window.location.href ? window.location.href : '');
+      const title = (document.title || '').toLowerCase();
+      const textLower = document.body ? String(document.body.textContent || '').toLowerCase() : '';
+      const cfEl = document.querySelector(
+        '#challenge-form, #challenge-running, #challenge-stage, #challenge-body-text, #cf-please-wait, .cf-browser-verification, .ray-id, script[src*="/cdn-cgi/challenge-platform/"]'
+      );
+      const isCf = !!cfEl ||
+        href.indexOf('/cdn-cgi/challenge') !== -1 ||
+        title.indexOf('just a moment') !== -1 ||
+        title.indexOf('attention required') !== -1 ||
+        title.indexOf('لحظة واحدة') !== -1 ||
+        title.indexOf('security verification') !== -1 ||
+        title.indexOf('التحقق الأمني') !== -1 ||
+        textLower.indexOf('checking your browser') !== -1 ||
+        textLower.indexOf('verify you are human') !== -1 ||
+        textLower.indexOf('performing security verification') !== -1 ||
+        textLower.indexOf('verifies you are not a bot') !== -1 ||
+        textLower.indexOf('security service to protect against malicious bots') !== -1 ||
+        textLower.indexOf('إجراء التحقق الأمني') !== -1 ||
+        textLower.indexOf('يتحقق من أنك') !== -1 ||
+        textLower.indexOf('تأكد من أنك إنسان') !== -1;
+      const hasAppContent = !!document.querySelector(
+        'meta[name="csrf-token"], #videos, .titles-list, .title-card, a[href*="/titles/"], a[href*="/episode/"], [wire\\\\:id], [wire\\\\:snapshot]'
+      );
+      const visibleLen = (!isCf && document.body) ? String(document.body.innerText || '').trim().length : 0;
+      return {
+        isCf: isCf,
+        hasAppContent: hasAppContent,
+        visibleLen: visibleLen,
+        ua: navigator.userAgent || '',
+        html: (!isCf && (hasAppContent || visibleLen >= 80) && document.documentElement)
+          ? document.documentElement.outerHTML
+          : ''
+      };
+    })()
+    """
+
+    // Run inside WKContentWorld.defaultClient so inspection stays isolated from
+    // the page's JavaScript world.
+    webView.evaluateJavaScript(script, in: nil, in: .defaultClient) { [weak self] evalResult in
+      DispatchQueue.main.async {
+        guard let self, !self.completed else { return }
+        guard case .success(let raw) = evalResult,
+              let dict = raw as? [String: Any] else {
+          return
+        }
+        let isCf = (dict["isCf"] as? Bool) ?? false
+        let hasAppContent = (dict["hasAppContent"] as? Bool) ?? false
+        let visibleLen = (dict["visibleLen"] as? NSNumber)?.intValue ?? 0
+        let ua = (dict["ua"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let html = (dict["html"] as? String) ?? ""
+
+        if isCf {
+          self.sawChallenge = true
+          self.bridge?.emitDiagnostic(action: "nav_finish", status: "cf_dom")
+          if !self.presented {
+            self.presentSheetAndLoad(clearStaleCookies: true)
+          }
+          return
+        }
+
+        if self.isAnime3rbHost && !hasAppContent && visibleLen < 80 {
+          self.bridge?.emitDiagnostic(action: "nav_finish", status: "incomplete")
+          return
+        }
+
+        self.collectCookiesAndFinish(
+          webView: webView,
+          html: html,
+          userAgent: ua,
+          allowFlushRetry: self.sawChallenge
+        )
+      }
+    }
+  }
+
+  private func collectCookiesAndFinish(
+    webView: WKWebView,
+    html: String,
+    userAgent: String,
+    allowFlushRetry: Bool
+  ) {
+    let targetHost = initialUrl.host?.lowercased() ?? "anime3rb.com"
+    webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { [weak self] cookies in
+      DispatchQueue.main.async {
+        guard let self, !self.completed else { return }
+        var map: [String: String] = [:]
+        for cookie in cookies {
+          let domain = cookie.domain.lowercased()
+          if domain.contains(targetHost)
+            || targetHost.contains(domain)
+            || domain.contains("anime3rb.com")
+            || domain.contains("vid3rb.com") {
+            let name = cookie.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = cookie.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty && !value.isEmpty {
+              map[name] = value
+            }
+          }
+        }
+        let hasClearance = map["cf_clearance"] != nil
+        if !hasClearance && allowFlushRetry {
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+            guard let self, !self.completed else { return }
+            self.collectCookiesAndFinish(
+              webView: webView,
+              html: html,
+              userAgent: userAgent,
+              allowFlushRetry: false
+            )
+          }
+          return
+        }
+
+        let elapsedMs = Int(Date().timeIntervalSince(self.startedAt) * 1000)
+        self.bridge?.emitDiagnostic(
+          action: "cf_solved",
+          status: "ok",
+          durationMs: elapsedMs,
+          reason: self.sawChallenge ? "after_challenge" : "already_clear",
+          result: hasClearance
+        )
+        let payload: [String: Any] = [
+          "cookies": map,
+          "html": html,
+          "userAgent": userAgent,
+        ]
+        self.finish(outcome: payload, solvedWebView: webView, endReason: nil)
+      }
+    }
+  }
+
+  private func finish(outcome: [String: Any]?, solvedWebView: WKWebView?, endReason: String?) {
+    guard !completed else { return }
+    completed = true
+    timeoutTimer?.invalidate()
+    timeoutTimer = nil
+    hiddenHostView?.removeFromSuperview()
+    hiddenHostView = nil
+
+    if let endReason {
+      bridge?.emitDiagnostic(action: endReason, status: "cancelled")
+    }
+
+    let completionCallback = self.completion
+    let trackedWebView = self.webView
+    let completeNow = { [weak self] in
+      if solvedWebView == nil {
+        trackedWebView?.stopLoading()
+        trackedWebView?.navigationDelegate = nil
+        trackedWebView?.uiDelegate = nil
+        trackedWebView?.removeFromSuperview()
+      }
+      self?.webView = nil
+      self?.navController = nil
+      completionCallback(outcome, solvedWebView)
+    }
+
+    if let nav = navController, nav.presentingViewController != nil {
+      nav.dismiss(animated: true, completion: completeNow)
+    } else {
+      completeNow()
+    }
+  }
+}
+
 

@@ -102,8 +102,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
 
   Widget _buildWide(BuildContext context) {
     final libraryState = ref.watch(libraryProvider);
-    final witanimeActive = ref.watch(activeProviderProvider) is WitanimeProvider;
-    final history = ref.watch(watchHistoryProvider);
+    final witanimeActive =
+        ref.watch(activeProviderProvider) is WitanimeProvider;
     final kind = libraryState.mediaKind;
     final category =
         witanimeActive &&
@@ -111,21 +111,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
             !isWitanimeSyncedCategory(libraryState.category)
         ? LibraryCategory.watching
         : libraryState.category;
-    final counts = <LibraryMediaKind, Map<LibraryCategory, int?>>{
-      for (final listKind in LibraryMediaKind.values)
-        listKind: <LibraryCategory, int?>{
-          for (final listCategory in LibraryCategory.valuesForCatalog(
-            witanimeAnime: witanimeActive && listKind == LibraryMediaKind.anime,
-          ))
-            listCategory: ref
-                .read(libraryProvider.notifier)
-                .categoryCount(listKind, listCategory),
-        },
-    };
-    final recentCount = libraryRecentFor(
-      history,
-      LibraryMediaKind.anime,
-    ).length;
+    final counts = ref
+        .read(libraryProvider.notifier)
+        .categoryCounts(witanimeAnime: witanimeActive);
     final title = _characters
         ? libraryCharactersLabel(context)
         : _recent
@@ -146,43 +134,49 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
               children: [
                 SizedBox(
                   width: 272,
-                  child: LibrarySideList(
-                    kind: kind,
-                    category: category,
-                    witanimeAnime: witanimeActive,
-                    recentSelected: _recent,
-                    charactersSelected: _characters,
-                    onCharacters: () => setState(() {
-                      _recent = false;
-                      _characters = true;
-                    }),
-                    counts: counts,
-                    recentCount: recentCount,
-                    prefs: _prefs,
-                    onFilter: () => _openFilter(kind),
-                    onRecent: () {
-                      setState(() {
-                        _recent = true;
-                        _characters = false;
-                      });
-                      // Server history is fetched on demand, not each time
-                      // the user opens a cached anime/manga library shelf.
-                      unawaited(
-                        ref
-                            .read(watchHistoryProvider.notifier)
-                            .refreshFromServer()
-                            .catchError((Object _) {}),
+                  // Watch-history changes affect only this badge, not the
+                  // selected shelf or the other counts' storage projection.
+                  child: Consumer(
+                    builder: (context, ref, _) {
+                      final recentCount = ref.watch(
+                        watchHistoryProvider.select(
+                          (history) => libraryRecentEntries(
+                            history,
+                            LibraryMediaKind.anime,
+                          ).length,
+                        ),
                       );
-                    },
-                    onSelect: (listKind, listCategory) {
-                      setState(() {
-                        _recent = false;
-                        _characters = false;
-                      });
-                      unawaited(
-                        ref
-                            .read(libraryProvider.notifier)
-                            .select(listKind, listCategory),
+                      return LibrarySideList(
+                        kind: kind,
+                        category: category,
+                        witanimeAnime: witanimeActive,
+                        recentSelected: _recent,
+                        charactersSelected: _characters,
+                        onCharacters: () => setState(() {
+                          _recent = false;
+                          _characters = true;
+                        }),
+                        counts: counts,
+                        recentCount: recentCount,
+                        prefs: _prefs,
+                        onFilter: () => _openFilter(kind),
+                        onRecent: () {
+                          setState(() {
+                            _recent = true;
+                            _characters = false;
+                          });
+                        },
+                        onSelect: (listKind, listCategory) {
+                          setState(() {
+                            _recent = false;
+                            _characters = false;
+                          });
+                          unawaited(
+                            ref
+                                .read(libraryProvider.notifier)
+                                .select(listKind, listCategory),
+                          );
+                        },
                       );
                     },
                   ),
@@ -223,7 +217,19 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                                 key: const ValueKey<String>('library-recent'),
                                 sort: _prefs.sort,
                               )
-                            : BookmarksTab(sort: _prefs.sort),
+                            // Keep the active shelf widget stable on display-
+                            // only filter changes. It still watches library data.
+                            : switch (_prefs.sort) {
+                                LibrarySort.added => const BookmarksTab(
+                                  sort: LibrarySort.added,
+                                ),
+                                LibrarySort.name => const BookmarksTab(
+                                  sort: LibrarySort.name,
+                                ),
+                                LibrarySort.year => const BookmarksTab(
+                                  sort: LibrarySort.year,
+                                ),
+                              },
                       ),
                     ],
                   ),

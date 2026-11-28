@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:video_view/video_view.dart' as vv;
@@ -11,6 +10,7 @@ import '../../../skip/data/skip_service.dart';
 import '../player_controller.dart';
 import '../../../settings/presentation/player_settings_provider.dart';
 import 'player_prompt_placement.dart';
+import 'player_key_activation.dart';
 
 /// Displays a contextual "Skip Intro / Skip Recap / Skip Outro" button
 /// when the current playback position falls inside a known [SkipSegment].
@@ -265,16 +265,7 @@ class SkipPill extends StatelessWidget {
         focusNode: focusNode,
         autofocus: isTv && controlsVisible,
         canRequestFocus: controlsVisible,
-        onKeyEvent: (node, event) {
-          if (event is! KeyDownEvent) return KeyEventResult.ignored;
-          if (event.logicalKey == LogicalKeyboardKey.select ||
-              event.logicalKey == LogicalKeyboardKey.enter ||
-              event.logicalKey == LogicalKeyboardKey.space) {
-            onPressed();
-            return KeyEventResult.handled;
-          }
-          return KeyEventResult.ignored;
-        },
+        onKeyEvent: (_, event) => handlePlayerActivationKey(event, onPressed),
         child: Builder(
           builder: (context) {
             final isFocused = Focus.of(context).hasFocus;

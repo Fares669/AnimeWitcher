@@ -14,6 +14,11 @@ import '../../support/memory_storage_service.dart';
 class _AccountStorage extends MemoryStorageService {
   @override
   String? getString(String key) => null;
+
+  @override
+  Future<void> remove(String key) async {
+    settings.remove(key);
+  }
 }
 
 class _MemorySecureStorage extends SecureTokenStorage {
@@ -43,6 +48,16 @@ class _BlockingAuth extends FirebaseAuthRestClient {
   }
 }
 
+AnimeWitcherSession _validSession() => AnimeWitcherSession(
+  uid: 'uid-1',
+  idToken: 'still-valid-token',
+  refreshToken: 'refresh-token',
+  expiresAt: DateTime.now().add(const Duration(hours: 1)),
+  signInMethod: AnimeWitcherSignInMethod.email,
+  email: 'viewer@example.com',
+  providerIds: const <String>['password'],
+);
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -53,15 +68,6 @@ void main() {
       final secure = _MemorySecureStorage(storage);
       final auth = _BlockingAuth();
 
-      final session = AnimeWitcherSession(
-        uid: 'uid-1',
-        idToken: 'still-valid-token',
-        refreshToken: 'refresh-token',
-        expiresAt: DateTime.now().add(const Duration(hours: 1)),
-        signInMethod: AnimeWitcherSignInMethod.email,
-        email: 'viewer@example.com',
-        providerIds: const <String>['password'],
-      );
       const profile = AnimeWitcherProfile(
         documentId: 'profile-1',
         uid: 'uid-1',
@@ -71,7 +77,7 @@ void main() {
         providerIds: <String>['password'],
       );
       secure.values['animewitcher_account_session_v1'] = jsonEncode(
-        session.toJson(),
+        _validSession().toJson(),
       );
       secure.values['animewitcher_account_profile_v1'] = jsonEncode(
         profile.toJson(),
@@ -110,8 +116,50 @@ void main() {
 
       // Verification must still happen; it just must not hold the cached
       // account hostage behind the network on every launch.
-      await auth.lookupStarted.future.timeout(const Duration(milliseconds: 250));
+      await auth.lookupStarted.future.timeout(
+        const Duration(milliseconds: 250),
+      );
       expect(auth.lookupResult.isCompleted, isFalse);
+    },
+  );
+
+  test(
+    'startup verifies a cached credential even without a cached profile',
+    () async {
+      final storage = _AccountStorage();
+      final secure = _MemorySecureStorage(storage);
+      final auth = _BlockingAuth();
+      secure.values['animewitcher_account_session_v1'] = jsonEncode(
+        _validSession().toJson(),
+      );
+      final service = AnimeWitcherAccountService(
+        storage: storage,
+        secureStorage: secure,
+        auth: auth,
+      );
+      final container = ProviderContainer(
+        overrides: [
+          animeWitcherAccountServiceProvider.overrideWithValue(service),
+        ],
+      );
+      addTearDown(() async {
+        if (!auth.lookupResult.isCompleted) {
+          auth.lookupResult.complete(<String, dynamic>{'emailVerified': false});
+        }
+        await Future<void>.delayed(Duration.zero);
+        container.dispose();
+      });
+
+      final restored = await container.read(
+        animeWitcherAccountControllerProvider.future,
+      );
+      expect(restored.isSignedIn, isFalse);
+      expect(container.read(accountDataRevisionProvider), 0);
+      await auth.lookupStarted.future.timeout(const Duration(seconds: 1));
+      auth.lookupResult.complete(<String, dynamic>{'emailVerified': false});
+      await Future<void>.delayed(Duration.zero);
+      expect(container.read(accountDataRevisionProvider), 1);
+      expect(secure.values['animewitcher_account_session_v1'], isNull);
     },
   );
 }

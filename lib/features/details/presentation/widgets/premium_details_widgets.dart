@@ -1,19 +1,14 @@
 import 'dart:async';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
-import 'package:animewitcher/core/utils/artwork_quality.dart';
-import 'package:animewitcher/shared/widgets/cards_wrapper.dart';
-import 'package:animewitcher/shared/widgets/paged_rail.dart';
+import 'package:animewitcher/core/utils/digit_normalization.dart';
 import 'package:animewitcher/shared/widgets/shimmer_placeholder.dart';
-import 'package:url_launcher/url_launcher.dart';
-import 'package:animewitcher/shared/widgets/multimedia_card.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
+import '../details_ratings.dart';
 import 'countdown_unit_visibility.dart';
 import 'details_ratings_row.dart';
-import '../../../../core/utils/avatar_image.dart';
 
 String _detailsText(
   BuildContext context, {
@@ -31,20 +26,6 @@ class MetadataBar extends ConsumerWidget {
     final value = raw.toString().trim();
     if (value.isEmpty || value.toLowerCase() == 'null') return null;
     return value;
-  }
-
-  String _normalizeDigits(String value) {
-    const arabic = '٠١٢٣٤٥٦٧٨٩';
-    const eastern = '۰۱۲۳۴۵۶۷۸۹';
-    return value
-        .replaceAllMapped(
-          RegExp(r'[٠-٩]'),
-          (match) => '${arabic.indexOf(match.group(0)!)}',
-        )
-        .replaceAllMapped(
-          RegExp(r'[۰-۹]'),
-          (match) => '${eastern.indexOf(match.group(0)!)}',
-        );
   }
 
   String _statusLabel(BuildContext context, Map<String, String> data) {
@@ -89,7 +70,7 @@ class MetadataBar extends ConsumerWidget {
     ]) {
       if (candidate == null) continue;
 
-      final normalized = _normalizeDigits(candidate.toLowerCase());
+      final normalized = normalizeLocalizedDigits(candidate.toLowerCase());
       if (normalized == 'undefined' ||
           normalized == 'undefined عام 0' ||
           normalized == 'undefined year 0' ||
@@ -102,7 +83,7 @@ class MetadataBar extends ConsumerWidget {
 
     var year = _clean(data['awYear']) ?? item.year?.toString();
     if (year != null) {
-      final normalizedYear = _normalizeDigits(year);
+      final normalizedYear = normalizeLocalizedDigits(year);
       final match = RegExp(r'(?:19|20)[0-9]{2}').firstMatch(normalizedYear);
       if (match != null) {
         year = match.group(0);
@@ -116,7 +97,7 @@ class MetadataBar extends ConsumerWidget {
 
     season = season.replaceAll('عام ', '').trim();
     final embeddedYear = RegExp(r'(?:19|20)[0-9]{2}')
-        .firstMatch(_normalizeDigits(season))
+        .firstMatch(normalizeLocalizedDigits(season))
         ?.group(0);
     final displayYear = year ?? embeddedYear;
 
@@ -146,7 +127,7 @@ class MetadataBar extends ConsumerWidget {
   int? _episodeCount(Map<String, String> data) {
     final raw = _clean(data['awEpisodes']);
     if (raw == null) return null;
-    final normalized = _normalizeDigits(raw);
+    final normalized = normalizeLocalizedDigits(raw);
     final match = RegExp(r'[0-9]+').firstMatch(normalized);
     final count = match == null ? null : int.tryParse(match.group(0)!);
     if (count == null || count <= 0) return null;
@@ -234,6 +215,8 @@ class MetadataBar extends ConsumerWidget {
       );
     }
 
+    // Visibility and the rendered badges share one fresh projection.
+    final ratings = AnimeDetailsRatings.fromItem(item);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -242,9 +225,9 @@ class MetadataBar extends ConsumerWidget {
           const SizedBox(height: 2),
           _buildMetadataRow(secondRow, separatorStyle),
         ],
-        if (hasDetailsRatingsSummary(item)) ...[
+        if (ratings.hasSummary) ...[
           const SizedBox(height: 2),
-          DetailsRatingsSummary(item: item),
+          DetailsRatingsSummary(ratings: ratings),
         ],
       ],
     );
@@ -260,14 +243,31 @@ class NextAiringWidget extends StatefulWidget {
   State<NextAiringWidget> createState() => _NextAiringWidgetState();
 }
 
+enum _CountdownUnit {
+  days('يوم', ValueKey('countdown-days')),
+  hours('ساعة', ValueKey('countdown-hours')),
+  minutes('دقيقة', ValueKey('countdown-minutes')),
+  seconds('ثانية', ValueKey('countdown-seconds'));
+
+  const _CountdownUnit(this.label, this.key);
+
+  final String label;
+  final Key key;
+
+  int valueIn(Duration remaining) => switch (this) {
+    days => remaining.inDays,
+    hours => remaining.inHours.remainder(24),
+    minutes => remaining.inMinutes.remainder(60),
+    seconds => remaining.inSeconds.remainder(60),
+  };
+}
+
 class _NextAiringWidgetState extends State<NextAiringWidget> {
   Timer? _timer;
-  late Duration _remaining;
-
-  DateTime get _airingDate => DateTime.fromMillisecondsSinceEpoch(
-    widget.nextAiring.unixTime * 1000,
-    isUtc: true,
-  );
+  final _values = [
+    for (final _ in _CountdownUnit.values) ValueNotifier<int>(0),
+  ];
+  late int _visibleCount;
 
   @override
   void initState() {
@@ -283,40 +283,59 @@ class _NextAiringWidgetState extends State<NextAiringWidget> {
     }
   }
 
-  Duration _calculateRemaining() {
-    final difference = _airingDate.difference(DateTime.now().toUtc());
+  Duration _calculateRemaining(DateTime airingDate) {
+    final difference = airingDate.difference(DateTime.now().toUtc());
     return difference.isNegative ? Duration.zero : difference;
+  }
+
+  int _updateUnitValues(Duration remaining) {
+    final count = CountdownUnitVisibility.visibleCountFor(remaining);
+    final units = _CountdownUnit.values;
+    for (var index = units.length - count; index < units.length; index++) {
+      _values[index].value = units[index].valueIn(remaining);
+    }
+    return count;
   }
 
   void _startCountdown() {
     _timer?.cancel();
-    _remaining = _calculateRemaining();
-    if (_remaining == Duration.zero) return;
+    final airingDate = DateTime.fromMillisecondsSinceEpoch(
+      widget.nextAiring.unixTime * 1000,
+      isUtc: true,
+    );
+    _visibleCount = _updateUnitValues(_calculateRemaining(airingDate));
+    if (_visibleCount == 0) return;
 
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      final remaining = _calculateRemaining();
       if (!mounted) return;
 
-      setState(() => _remaining = remaining);
-      if (remaining == Duration.zero) _timer?.cancel();
+      // Most ticks change only the seconds text, not the heading, labels or
+      // card layout. Rebuild the row only when a leading unit disappears.
+      final count = _updateUnitValues(_calculateRemaining(airingDate));
+      if (count != _visibleCount) setState(() => _visibleCount = count);
+      if (count == 0) _timer?.cancel();
     });
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    for (final value in _values) {
+      value.dispose();
+    }
     super.dispose();
   }
 
-  Widget _buildCountdownCard(
-    BuildContext context, {
-    Key? key,
-    required String value,
-    required String label,
-  }) {
-    final colors = Theme.of(context).colorScheme;
+  Widget _buildCountdownCard(BuildContext context, int index) {
+    final unit = _CountdownUnit.values[index];
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final valueStyle = theme.textTheme.headlineSmall?.copyWith(
+      fontWeight: FontWeight.w800,
+      height: 1,
+    );
     return Container(
-      key: key,
+      key: unit.key,
       constraints: const BoxConstraints(minHeight: 72),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
       decoration: BoxDecoration(
@@ -329,21 +348,23 @@ class _NextAiringWidgetState extends State<NextAiringWidget> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Text(
-            value,
-            textDirection: TextDirection.ltr,
-            textAlign: TextAlign.center,
-            maxLines: 1,
-            style: Theme.of(context).textTheme.headlineSmall
-                ?.copyWith(fontWeight: FontWeight.w800, height: 1),
+          ValueListenableBuilder<int>(
+            valueListenable: _values[index],
+            builder: (context, value, child) => Text(
+              value.toString(),
+              textDirection: TextDirection.ltr,
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              style: valueStyle,
+            ),
           ),
           const SizedBox(height: 6),
           Text(
-            label,
+            unit.label,
             textAlign: TextAlign.center,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+            style: theme.textTheme.labelMedium?.copyWith(
               color: colors.onSurfaceVariant,
               fontWeight: FontWeight.w600,
             ),
@@ -354,41 +375,13 @@ class _NextAiringWidgetState extends State<NextAiringWidget> {
   }
 
   Widget _buildCountdownRow(BuildContext context) {
-    final visibility = CountdownUnitVisibility.fromRemaining(_remaining);
-    final days = _remaining.inDays.toString();
-    final hours = _remaining.inHours.remainder(24).toString();
-    final minutes = _remaining.inMinutes.remainder(60).toString();
-    final seconds = _remaining.inSeconds.remainder(60).toString();
-
-    final cards = <Widget>[
-      if (visibility.showDays)
-        _buildCountdownCard(
-          context,
-          key: const ValueKey('countdown-days'),
-          value: days,
-          label: 'يوم',
-        ),
-      if (visibility.showHours)
-        _buildCountdownCard(
-          context,
-          key: const ValueKey('countdown-hours'),
-          value: hours,
-          label: 'ساعة',
-        ),
-      if (visibility.showMinutes)
-        _buildCountdownCard(
-          context,
-          key: const ValueKey('countdown-minutes'),
-          value: minutes,
-          label: 'دقيقة',
-        ),
-      if (visibility.showSeconds)
-        _buildCountdownCard(
-          context,
-          key: const ValueKey('countdown-seconds'),
-          value: seconds,
-          label: 'ثانية',
-        ),
+    final cards = [
+      for (
+        var index = _CountdownUnit.values.length - _visibleCount;
+        index < _CountdownUnit.values.length;
+        index++
+      )
+        _buildCountdownCard(context, index),
     ];
 
     return Directionality(
@@ -438,7 +431,7 @@ class _NextAiringWidgetState extends State<NextAiringWidget> {
             ),
           ),
           const SizedBox(height: 10),
-          if (_remaining == Duration.zero)
+          if (_visibleCount == 0)
             Text(
               _detailsText(
                 context,
@@ -455,332 +448,6 @@ class _NextAiringWidgetState extends State<NextAiringWidget> {
             _buildCountdownRow(context),
         ],
       ),
-    );
-  }
-}
-
-class CastCarousel extends StatelessWidget {
-  final List<Actor> cast;
-  final void Function(Actor actor)? onActorTap;
-  final VoidCallback? onShowMore;
-
-  const CastCarousel({
-    super.key,
-    required this.cast,
-    this.onActorTap,
-    this.onShowMore,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final extra = onShowMore == null ? 0 : 1;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8.0),
-          child: Text(
-            _detailsText(context, english: 'Cast', arabic: 'طاقم الشخصيات'),
-            style: Theme.of(context).textTheme.titleLarge
-                ?.copyWith(fontWeight: FontWeight.bold),
-          ),
-        ),
-        SizedBox(
-          height: 160,
-          child: PagedRail(
-            // 80 (cast card) + 16 (separator in [separatorBuilder]) = 96 stride.
-            itemExtent: 96,
-            itemCount: cast.length + extra,
-            separatorBuilder: (_, _) => const SizedBox(width: 16),
-            itemBuilder: (context, index) {
-              if (index >= cast.length) {
-                return SizedBox(
-                  width: 80,
-                  child: InkWell(
-                    onTap: onShowMore,
-                    borderRadius: BorderRadius.circular(40),
-                    child: Column(
-                      children: [
-                        CircleAvatar(
-                          radius: 35,
-                          backgroundColor: Theme.of(context).colorScheme.primary
-                              .withValues(alpha: 0.16),
-                          child: Icon(
-                            Icons.more_horiz_rounded,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          _detailsText(
-                            context,
-                            english: 'More',
-                            arabic: 'المزيد',
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(fontWeight: FontWeight.bold),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              }
-              final actor = cast[index];
-              final content = Column(
-                children: [
-                  CircleAvatar(
-                    radius: 35,
-                    backgroundImage: avatarImage(
-                      context,
-                      actor.image,
-                      radius: 35,
-                    ),
-                    child: actor.image == null
-                        ? const Icon(Icons.person)
-                        : null,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    actor.name,
-                    textDirection: TextDirection.ltr,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.bodySmall
-                        ?.copyWith(fontWeight: FontWeight.bold),
-                  ),
-                  if (actor.role != null)
-                    Text(
-                      actor.role!,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.labelSmall
-                          ?.copyWith(color: Theme.of(context).hintColor),
-                    ),
-                ],
-              );
-              return SizedBox(
-                width: 80,
-                child: onActorTap == null
-                    ? content
-                    : InkWell(
-                        onTap: () => onActorTap!(actor),
-                        borderRadius: BorderRadius.circular(12),
-                        child: content,
-                      ),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class TrailersSection extends StatelessWidget {
-  final List<Trailer> trailers;
-  const TrailersSection({super.key, required this.trailers});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8.0),
-          child: Text(
-            _detailsText(
-              context,
-              english: 'Trailers & Extras',
-              arabic: 'العرض الدعائي',
-            ),
-            style: Theme.of(context).textTheme.titleLarge
-                ?.copyWith(fontWeight: FontWeight.bold),
-          ),
-        ),
-        SizedBox(
-          height: 160,
-          child: PagedRail(
-            // 240 (trailer card) + 16 (separator in [separatorBuilder]) = 256
-            // stride so the snap unit matches the on-screen card+gap pitch.
-            itemExtent: 256,
-            itemCount: trailers.length,
-            separatorBuilder: (_, _) => const SizedBox(width: 16),
-            itemBuilder: (context, index) {
-              final trailer = trailers[index];
-              return CardsWrapper(
-                onTap: () async {
-                  final uri = Uri.tryParse(trailer.url);
-                  if (uri != null) {
-                    await launchUrl(uri, mode: LaunchMode.externalApplication);
-                  }
-                },
-                child: Container(
-                  width: 240,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    color: Theme.of(context).colorScheme.surfaceContainer,
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      _YoutubeThumbnail(
-                        videoId: _extractYoutubeId(trailer.url),
-                      ),
-                      Container(
-                        color: Colors.black26,
-                        child: const Center(
-                          child: Icon(
-                            Icons.play_circle_fill_rounded,
-                            color: Colors.white,
-                            size: 48,
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        bottom: 8,
-                        left: 8,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.black87,
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            _detailsText(
-                              context,
-                              english: 'Trailer',
-                              arabic: 'إعلان',
-                            ),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  String _extractYoutubeId(String url) {
-    // Simple extraction for common patterns
-    if (url.contains("v=")) return url.split("v=")[1].split("&")[0];
-    if (url.contains("be/")) return url.split("be/")[1].split("?")[0];
-    return "";
-  }
-}
-
-/// Trailer still at the best resolution YouTube has for the video.
-///
-/// `maxresdefault` only exists for HD uploads, so each size falls back to the
-/// next one down instead of showing the placeholder icon.
-class _YoutubeThumbnail extends StatelessWidget {
-  const _YoutubeThumbnail({required this.videoId});
-
-  static const List<String> _sizes = <String>[
-    'maxresdefault',
-    'sddefault',
-    'hqdefault',
-    'mqdefault',
-  ];
-
-  final String videoId;
-
-  @override
-  Widget build(BuildContext context) => _buildSize(0);
-
-  Widget _buildSize(int index) {
-    if (videoId.isEmpty || index >= _sizes.length) {
-      return const Center(child: Icon(Icons.movie_rounded));
-    }
-    return ArtworkDecode(
-      paintedWidth: 240,
-      builder: (BuildContext context, int? decodeWidth) => CachedNetworkImage(
-        imageUrl: 'https://img.youtube.com/vi/$videoId/${_sizes[index]}.jpg',
-        fit: BoxFit.cover,
-        memCacheWidth: decodeWidth,
-        filterQuality: FilterQuality.medium,
-        errorWidget: (_, _, _) => _buildSize(index + 1),
-      ),
-    );
-  }
-}
-
-class RecommendationsCarousel extends StatelessWidget {
-  final List<MultimediaItem> items;
-  final void Function(MultimediaItem) onItemTap;
-  final String? title;
-  final bool showRelationBadge;
-
-  const RecommendationsCarousel({
-    super.key,
-    required this.items,
-    required this.onItemTap,
-    this.title,
-    this.showRelationBadge = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cardWidth = MultimediaCardLayout.cardWidth(context, isPortrait: true);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8.0),
-          child: Text(
-            title ??
-                _detailsText(
-                  context,
-                  english: 'More Like This',
-                  arabic: 'المزيد مثل هذا',
-                ),
-            style: Theme.of(context).textTheme.titleLarge
-                ?.copyWith(fontWeight: FontWeight.bold),
-          ),
-        ),
-        SizedBox(
-          height: MultimediaCardLayout.listHeight(cardWidth, isPortrait: true),
-          child: Directionality(
-            textDirection: TextDirection.rtl,
-            child: PagedRail(
-              // cardWidth + 12 (separator from [separatorBuilder]); the rail
-              // is rendered RTL so swiping right advances to the next card.
-              itemExtent: cardWidth + 12,
-              itemCount: items.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 12),
-              itemBuilder: (context, index) {
-                final item = items[index];
-                return MultimediaCard.fromItem(
-                  key: ValueKey('${title ?? 'more-like-this'}-rail-$index'),
-                  item: item,
-                  heroTag: heroTagWithUrl('related', item, index),
-                  showRelationBadge: showRelationBadge,
-                  onTap: () => onItemTap(item),
-                );
-              },
-            ),
-          ),
-        ),
-      ],
     );
   }
 }

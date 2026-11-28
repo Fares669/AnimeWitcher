@@ -1,11 +1,13 @@
 import 'dart:async';
 
 import '../../../../shared/widgets/confirm_dialog.dart';
+import '../../../../shared/widgets/custom_widgets.dart';
 
 import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/app_side_menu.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -37,7 +39,6 @@ import 'completed_download_chapter_card.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../../../core/utils/file_size_formatter.dart';
-import '../../../../core/utils/download_progress_data.dart';
 import '../../../../shared/widgets/loading_indicator.dart';
 import '../../../../shared/widgets/underline_segment_tabs.dart';
 
@@ -102,6 +103,13 @@ Future<void> _removeMissingDownload(
   await ref.read(downloadsProvider.notifier).removeDownload(item);
 }
 
+bool _canPauseDownload(TaskStatus status) => switch (status) {
+  TaskStatus.running ||
+  TaskStatus.enqueued ||
+  TaskStatus.waitingToRetry => true,
+  _ => false,
+};
+
 class DownloadsTab extends ConsumerStatefulWidget {
   const DownloadsTab({super.key, this.headerPadding = EdgeInsets.zero});
 
@@ -118,6 +126,39 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
   final Set<String> _selectedIds = <String>{};
   bool _bulkInFlight = false;
   int _tabIndex = 0;
+  List<DownloadItem>? _uniqueDownloadRows;
+
+  List<DownloadItem> _visibleRowsFor(List<DownloadItem> rows) {
+    final previous = _uniqueDownloadRows;
+    if (identical(previous, rows)) return rows;
+    if (previous != null && previous.length == rows.length) {
+      // With unique task IDs and one nonempty logical identity per row the
+      // duplicate resolver cannot change visibility or order. A transfer tick
+      // only replaces its own row. Keep fresh rows for controls and artwork.
+      var sameIdentities = true;
+      for (var i = 0; i < rows.length; i++) {
+        if (!identical(rows[i], previous[i]) &&
+            (rows[i].id != previous[i].id ||
+                rows[i].logicalId != previous[i].logicalId)) {
+          sameIdentities = false;
+          break;
+        }
+      }
+      if (sameIdentities) {
+        _uniqueDownloadRows = rows;
+        return rows;
+      }
+    }
+    final visible = collapseDuplicateDownloads(rows).visible;
+    final ids = <String>{};
+    final unique =
+        visible.length == rows.length &&
+        rows.every(
+          (row) => row.logicalId?.trim().isNotEmpty == true && ids.add(row.id),
+        );
+    _uniqueDownloadRows = unique ? rows : null;
+    return unique ? rows : visible;
+  }
 
   void _toggleSelected(DownloadItem item) {
     setState(() {
@@ -170,10 +211,7 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
       } else {
         for (final item in items) {
           try {
-            if (action == 'pause' &&
-                (item.status == TaskStatus.running ||
-                    item.status == TaskStatus.enqueued ||
-                    item.status == TaskStatus.waitingToRetry)) {
+            if (action == 'pause' && _canPauseDownload(item.status)) {
               await notifier.pauseDownload(item.id);
             } else if (action == 'resume' && item.status == TaskStatus.paused) {
               await notifier.resumeDownload(item.id);
@@ -226,17 +264,8 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
       top: false,
       child: Directionality(
         textDirection: TextDirection.rtl,
-        child: Material(
-          elevation: 10,
-          shadowColor: Colors.black.withValues(alpha: 0.30),
-          color: colors.surfaceContainerHigh,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-            side: BorderSide(
-              color: colors.outlineVariant.withValues(alpha: 0.45),
-            ),
-          ),
-          clipBehavior: Clip.antiAlias,
+        child: buildBatchSelectionDockFrame(
+          colors: colors,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Column(
@@ -379,39 +408,34 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
   Widget build(BuildContext context) {
     super.build(context);
     final downloadsAsync = ref.watch(downloadsProvider);
-    final activeProgress = ref.watch(downloadProgressProvider);
     final l10n = AppLocalizations.of(context)!;
 
     // Keep local completed rows available through refreshes and transport errors.
-    final visibleDownloads = collapseDuplicateDownloads(
+    final visibleDownloads = _visibleRowsFor(
       downloadsAsync.hasValue
           ? downloadsAsync.value ?? const <DownloadItem>[]
           : const <DownloadItem>[],
-    ).visible;
-    final completed = visibleDownloads
-        .where((item) => !isActiveDownloadStatus(item.status))
-        .toList();
-    final active = visibleDownloads
-        .where((item) => isActiveDownloadStatus(item.status))
-        .toList();
-    final currentDownloads = _tabIndex == 0 ? active : completed;
-    final selected = currentDownloads
-        .where((item) => _selectedIds.contains(item.id))
-        .toList();
-    final currentSelectedIds = selected.map((item) => item.id).toSet();
-    final canPause = selected.any(
-      (item) =>
-          item.status == TaskStatus.running ||
-          item.status == TaskStatus.enqueued ||
-          item.status == TaskStatus.waitingToRetry,
     );
+    final active = <DownloadItem>[];
+    final completed = <DownloadItem>[];
+    for (final item in visibleDownloads) {
+      (isActiveDownloadStatus(item.status) ? active : completed).add(item);
+    }
+    final currentDownloads = _tabIndex == 0 ? active : completed;
+    final selected = _selectedIds.isEmpty
+        ? const <DownloadItem>[]
+        : currentDownloads
+              .where((item) => _selectedIds.contains(item.id))
+              .toList();
+    final currentSelectedIds = selected.isEmpty
+        ? const <String>{}
+        : selected.map((item) => item.id).toSet();
+    final canPause = selected.any((item) => _canPauseDownload(item.status));
     final canResume = selected.any((item) => item.status == TaskStatus.paused);
     final controllableActive = active
         .where(
           (item) =>
-              item.status == TaskStatus.running ||
-              item.status == TaskStatus.enqueued ||
-              item.status == TaskStatus.waitingToRetry ||
+              _canPauseDownload(item.status) ||
               item.status == TaskStatus.paused,
         )
         .toList();
@@ -561,7 +585,6 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
                             skipLoadingOnReload: false,
                             data: (_) => _ActiveDownloadsList(
                               items: active,
-                              activeProgress: activeProgress,
                               emptyMessage: l10n.noDownloadsYet,
                               selectedIds: currentSelectedIds,
                               onToggleSelection: _toggleSelected,
@@ -682,14 +705,12 @@ class _DownloadsEmptyState extends StatelessWidget {
 class _ActiveDownloadsList extends StatelessWidget {
   const _ActiveDownloadsList({
     required this.items,
-    required this.activeProgress,
     required this.emptyMessage,
     required this.selectedIds,
     required this.onToggleSelection,
   });
 
   final List<DownloadItem> items;
-  final Map<String, DownloadProgressData> activeProgress;
   final String emptyMessage;
   final Set<String> selectedIds;
   final ValueChanged<DownloadItem> onToggleSelection;
@@ -708,27 +729,12 @@ class _ActiveDownloadsList extends StatelessWidget {
         separatorBuilder: (context, index) => const SizedBox(height: 16),
         itemBuilder: (context, index) {
           final download = items[index];
-          final logicalId = download.logicalId?.trim();
-          final trackingUrl = download.task.metaData.isNotEmpty
-              ? download.task.metaData
-              : download.task.url;
-          final progressData = logicalId?.isNotEmpty == true
-              ? activeProgress[logicalId]
-              : activeProgress[trackingUrl];
-          final double displayProgress =
-              progressData?.progress ?? download.progress;
-          final TaskStatus displayStatus =
-              progressData?.status ?? download.status;
-
-          return _DownloadItemTile(
+          return _ActiveDownloadRow(
             key: ValueKey(download.id),
             item: download,
-            progress: displayProgress,
-            status: displayStatus,
-            progressData: progressData,
             selecting: selectedIds.isNotEmpty,
             selected: selectedIds.contains(download.id),
-            onToggleSelection: () => onToggleSelection(download),
+            onToggleSelection: onToggleSelection,
           );
         },
       ),
@@ -736,7 +742,54 @@ class _ActiveDownloadsList extends StatelessWidget {
   }
 }
 
-class _CompletedDownloadsList extends StatelessWidget {
+// A transfer update replaces only the changed DownloadItem. Keep unaffected
+// mounted rows' tile configurations stable; each tile still watches its own
+// projected progress and inherited settings independently.
+class _ActiveDownloadRow extends StatefulWidget {
+  const _ActiveDownloadRow({
+    super.key,
+    required this.item,
+    required this.selecting,
+    required this.selected,
+    required this.onToggleSelection,
+  });
+
+  final DownloadItem item;
+  final bool selecting;
+  final bool selected;
+  final ValueChanged<DownloadItem> onToggleSelection;
+
+  @override
+  State<_ActiveDownloadRow> createState() => _ActiveDownloadRowState();
+}
+
+class _ActiveDownloadRowState extends State<_ActiveDownloadRow> {
+  late Widget _tile = _buildTile();
+
+  @override
+  void didUpdateWidget(covariant _ActiveDownloadRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.item, widget.item) ||
+        oldWidget.selecting != widget.selecting ||
+        oldWidget.selected != widget.selected) {
+      _tile = _buildTile();
+    }
+  }
+
+  Widget _buildTile() => _DownloadItemTile(
+    item: widget.item,
+    selecting: widget.selecting,
+    selected: widget.selected,
+    onToggleSelection: _toggleSelection,
+  );
+
+  void _toggleSelection() => widget.onToggleSelection(widget.item);
+
+  @override
+  Widget build(BuildContext context) => _tile;
+}
+
+class _CompletedDownloadsList extends StatefulWidget {
   const _CompletedDownloadsList({
     required this.items,
     required this.emptyMessage,
@@ -752,14 +805,30 @@ class _CompletedDownloadsList extends StatelessWidget {
   final ValueChanged<List<DownloadItem>> onToggleGroupSelection;
 
   @override
-  Widget build(BuildContext context) {
-    if (items.isEmpty) {
-      return _DownloadsEmptyState(message: emptyMessage);
-    }
+  State<_CompletedDownloadsList> createState() =>
+      _CompletedDownloadsListState();
+}
 
-    final Map<String, List<DownloadItem>> grouped = {};
-    final List<String> keys = [];
-    for (final item in items) {
+class _CompletedDownloadsListState extends State<_CompletedDownloadsList> {
+  late List<MapEntry<String, List<DownloadItem>>> _groups;
+
+  @override
+  void initState() {
+    super.initState();
+    _groupRows();
+  }
+
+  @override
+  void didUpdateWidget(covariant _CompletedDownloadsList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Committed rows keep their identity on another transfer's progress tick.
+    // Rebuild the groups only for a genuinely new completed snapshot.
+    if (!listEquals(oldWidget.items, widget.items)) _groupRows();
+  }
+
+  void _groupRows() {
+    final grouped = <String, List<DownloadItem>>{};
+    for (final item in widget.items) {
       final mediaIdentity =
           item.item.tmdbId?.toString() ??
           (item.item.url.trim().isNotEmpty
@@ -769,27 +838,30 @@ class _CompletedDownloadsList extends StatelessWidget {
           ? downloadProviderScopeV2(item.item.provider) ?? ''
           : '';
       final key = '${item.mediaKind.name}:$source:$mediaIdentity';
-      if (!grouped.containsKey(key)) {
-        keys.add(key);
-        grouped[key] = [];
-      }
-      grouped[key]!.add(item);
+      grouped.putIfAbsent(key, () => []).add(item);
     }
+    _groups = grouped.entries.toList(growable: false);
+  }
 
+  @override
+  Widget build(BuildContext context) {
+    if (_groups.isEmpty) {
+      return _DownloadsEmptyState(message: widget.emptyMessage);
+    }
     return Directionality(
       textDirection: TextDirection.ltr,
       child: ListView.separated(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
-        itemCount: keys.length,
+        itemCount: _groups.length,
         separatorBuilder: (context, index) => const SizedBox(height: 16),
         itemBuilder: (context, index) {
-          final key = keys[index];
+          final group = _groups[index];
           return _GroupedDownloadTile(
-            key: ValueKey(key),
-            items: grouped[key]!,
-            selectedIds: selectedIds,
-            onToggleSelection: onToggleSelection,
-            onToggleGroupSelection: onToggleGroupSelection,
+            key: ValueKey(group.key),
+            items: group.value,
+            selectedIds: widget.selectedIds,
+            onToggleSelection: widget.onToggleSelection,
+            onToggleGroupSelection: widget.onToggleGroupSelection,
           );
         },
       ),
@@ -818,6 +890,9 @@ class _GroupedDownloadTile extends ConsumerStatefulWidget {
 
 class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
   late Future<File?> _poster;
+  late Future<bool> _showNetworkFallback;
+  Widget? _posterWidget;
+  (String?, Color)? _posterInputs;
   bool _deleteInFlight = false;
   List<DownloadItem> get items => widget.items;
 
@@ -836,24 +911,45 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
   @override
   void initState() {
     super.initState();
-    _poster = _loadPoster();
+    _startPosterLookup();
   }
 
   @override
   void didUpdateWidget(covariant _GroupedDownloadTile oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (_posterKey(oldWidget.items) != _posterKey(items)) {
-      _poster = _loadPoster();
+    if (!identical(oldWidget.items, items) &&
+        _posterKey(oldWidget.items) != _posterKey(items)) {
+      _startPosterLookup();
     }
   }
 
-  Future<File?> _loadPoster() async {
+  void _startPosterLookup() {
+    _posterWidget = null;
+    final input = items;
+    final local = _findLocalPoster(input);
+    _poster = local.then((saved) => saved ?? _restorePoster(input));
+    // A retained poster should not start a second disk/network image decode.
+    // Bound the grace period so slow storage or a very large group cannot hold
+    // up the ordinary remote fallback.
+    _showNetworkFallback =
+        AppImageFallbacks.poster(input.first.item.posterUrl) == null
+        ? Future.value(false)
+        : local
+              .then((saved) => saved == null)
+              .timeout(const Duration(milliseconds: 60), onTimeout: () => true);
+  }
+
+  Future<File?> _findLocalPoster(List<DownloadItem> input) async {
     // A group's first row may lack artwork while another retained copy exists.
-    for (final item in items) {
+    for (final item in input) {
       final saved = await existingDownloadedPosterArtwork(_artworkId(item));
       if (saved != null) return saved;
     }
-    for (final item in items) {
+    return null;
+  }
+
+  Future<File?> _restorePoster(List<DownloadItem> input) async {
+    for (final item in input) {
       if (!item.artworkMetadataVerified) continue;
       final saved = await ensureDownloadedPosterArtwork(
         logicalId: _artworkId(item),
@@ -864,17 +960,70 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
     return null;
   }
 
-  Widget _posterPlaceholder(ThemeData theme) => Container(
-    width: 80,
-    height: 120,
-    color: theme.dividerColor,
-    child: const Icon(Icons.movie_outlined),
-  );
+  Widget _posterFor(String? rawUrl, Color dividerColor) {
+    final inputs = (rawUrl, dividerColor);
+    final previous = _posterWidget;
+    if (previous != null && _posterInputs == inputs) return previous;
+    _posterInputs = inputs;
+
+    Widget placeholder() => Container(
+      width: 80,
+      height: 120,
+      color: dividerColor,
+      child: const Icon(Icons.movie_outlined),
+    );
+
+    final url = AppImageFallbacks.poster(rawUrl);
+    final poster = _poster;
+    final showNetworkFallback = _showNetworkFallback;
+    // Keep the mounted image builders out of selection and transfer updates.
+    // ArtworkDecode still owns its quality and device pixel ratio dependencies.
+    return _posterWidget = ClipRRect(
+      borderRadius: BorderRadius.circular(LayoutConstants.radiusMd),
+      child: ArtworkDecode(
+        paintedWidth: 80,
+        sizeHighQualityToDisplay: true,
+        builder: (BuildContext context, int? decodeWidth) =>
+            FutureBuilder<File?>(
+              key: ObjectKey(poster),
+              future: poster,
+              builder: (context, snapshot) {
+                final saved = snapshot.data;
+                if (saved != null) {
+                  return Image.file(
+                    saved,
+                    width: 80,
+                    height: 120,
+                    fit: BoxFit.cover,
+                    cacheWidth: decodeWidth,
+                    filterQuality: FilterQuality.medium,
+                    errorBuilder: (_, _, _) => placeholder(),
+                  );
+                }
+                if (url == null) return placeholder();
+                return FutureBuilder<bool>(
+                  future: showNetworkFallback,
+                  builder: (context, fallback) => fallback.data != true
+                      ? placeholder()
+                      : CachedNetworkImage(
+                          imageUrl: url,
+                          width: 80,
+                          height: 120,
+                          fit: BoxFit.cover,
+                          memCacheWidth: decodeWidth,
+                          filterQuality: FilterQuality.medium,
+                          errorWidget: (_, _, _) => placeholder(),
+                        ),
+                );
+              },
+            ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final l10n = AppLocalizations.of(context)!;
     final firstItem = items.first;
     final selecting = widget.selectedIds.isNotEmpty;
     final anySelected = items.any(
@@ -883,29 +1032,7 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
     final allSelected = items.every(
       (item) => widget.selectedIds.contains(item.id),
     );
-    final episodeSortAscending = ref.watch(episodeSortAscendingProvider);
     final isManga = firstItem.mediaKind == DownloadMediaKind.mangaChapter;
-
-    final orderedItems = isManga
-        ? (List<DownloadItem>.from(items)..sort((a, b) {
-            final an = a.chapter?.number;
-            final bn = b.chapter?.number;
-            if (an != null && bn != null) {
-              final compare = an.compareTo(bn);
-              if (compare != 0) {
-                return episodeSortAscending ? compare : -compare;
-              }
-            }
-            final compare = (a.chapter?.name ?? '').compareTo(
-              b.chapter?.name ?? '',
-            );
-            return episodeSortAscending ? compare : -compare;
-          }))
-        : episodeItemsInDisplayOrder(
-            items,
-            episodeOf: (item) => item.episode,
-            ascending: episodeSortAscending,
-          );
 
     return Card(
       margin: EdgeInsets.zero,
@@ -938,44 +1065,7 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
           child: Row(
             textDirection: TextDirection.ltr,
             children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(LayoutConstants.radiusMd),
-                child: ArtworkDecode(
-                  paintedWidth: 80,
-                  builder: (BuildContext context, int? decodeWidth) =>
-                      FutureBuilder<File?>(
-                        future: _poster,
-                        builder: (context, snapshot) {
-                          final saved = snapshot.data;
-                          if (saved != null) {
-                            return Image.file(
-                              saved,
-                              width: 80,
-                              height: 120,
-                              fit: BoxFit.cover,
-                              cacheWidth: decodeWidth,
-                              filterQuality: FilterQuality.medium,
-                              errorBuilder: (_, _, _) =>
-                                  _posterPlaceholder(theme),
-                            );
-                          }
-                          return CachedNetworkImage(
-                            imageUrl:
-                                AppImageFallbacks.poster(
-                                  firstItem.item.posterUrl,
-                                ) ??
-                                '',
-                            width: 80,
-                            height: 120,
-                            fit: BoxFit.cover,
-                            memCacheWidth: decodeWidth,
-                            filterQuality: FilterQuality.medium,
-                            errorWidget: (_, _, _) => _posterPlaceholder(theme),
-                          );
-                        },
-                      ),
-                ),
-              ),
+              _posterFor(firstItem.item.posterUrl, theme.dividerColor),
               const SizedBox(width: LayoutConstants.spacingMd),
               Expanded(
                 child: Column(
@@ -1041,79 +1131,105 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
             ],
           ),
         ),
-        children: orderedItems.asMap().entries.map((entry) {
-          final download = entry.value;
-          final isLast = entry.key == orderedItems.length - 1;
-
-          return Column(
-            children: [
-              if (entry.key == 0)
-                Divider(
-                  height: 1,
-                  color: theme.dividerColor.withValues(alpha: 0.4),
-                ),
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: LayoutConstants.spacingMd,
-                  vertical: LayoutConstants.spacingSm,
-                ),
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onLongPress: () => widget.onToggleSelection(download),
-                  child: isManga
-                      ? CompletedDownloadChapterCard(
-                          key: ValueKey(download.id),
-                          item: download,
-                          selecting: selecting,
-                          selected: widget.selectedIds.contains(download.id),
-                          onOpen: () => widget.selectedIds.isNotEmpty
-                              ? widget.onToggleSelection(download)
-                              : _openMangaChapter(
-                                  context,
-                                  download,
-                                  orderedItems,
-                                ),
-                          onDelete: () => widget.selectedIds.isNotEmpty
-                              ? widget.onToggleSelection(download)
-                              : unawaited(
-                                  confirmAndRemoveDownload(
-                                    context,
-                                    ref,
-                                    download,
-                                  ),
-                                ),
-                        )
-                      : CompletedDownloadEpisodeCard(
-                          key: ValueKey(download.id),
-                          item: download,
-                          selecting: selecting,
-                          selected: widget.selectedIds.contains(download.id),
-                          onPlay: () => widget.selectedIds.isNotEmpty
-                              ? widget.onToggleSelection(download)
-                              : _playLocalFile(context, ref, download, l10n),
-                          onDelete: () => widget.selectedIds.isNotEmpty
-                              ? widget.onToggleSelection(download)
-                              : unawaited(
-                                  confirmAndRemoveDownload(
-                                    context,
-                                    ref,
-                                    download,
-                                  ),
-                                ),
-                        ),
-                ),
-              ),
-              if (!isLast)
-                Divider(
-                  height: 1,
-                  indent: LayoutConstants.spacingMd,
-                  endIndent: LayoutConstants.spacingMd,
-                  color: theme.dividerColor.withValues(alpha: 0.4),
-                ),
-            ],
-          );
-        }).toList(),
+        children: [
+          _CompletedDownloadRows(
+            items: items,
+            isManga: isManga,
+            builder: (context, ref, orderedItems) => _buildDownloadRows(
+              context,
+              ref,
+              orderedItems,
+              isManga: isManga,
+              selecting: selecting,
+            ),
+          ),
+        ],
       ),
+    );
+  }
+
+  Widget _buildDownloadRows(
+    BuildContext context,
+    WidgetRef ref,
+    List<DownloadItem> orderedItems, {
+    required bool isManga,
+    required bool selecting,
+  }) {
+    final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context)!;
+    return Column(
+      children: orderedItems.asMap().entries.map((entry) {
+        final download = entry.value;
+        final isLast = entry.key == orderedItems.length - 1;
+
+        return Column(
+          children: [
+            if (entry.key == 0)
+              Divider(
+                height: 1,
+                color: theme.dividerColor.withValues(alpha: 0.4),
+              ),
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: LayoutConstants.spacingMd,
+                vertical: LayoutConstants.spacingSm,
+              ),
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onLongPress: () => widget.onToggleSelection(download),
+                child: isManga
+                    ? CompletedDownloadChapterCard(
+                        key: ValueKey(download.id),
+                        item: download,
+                        selecting: selecting,
+                        selected: widget.selectedIds.contains(download.id),
+                        onOpen: () => widget.selectedIds.isNotEmpty
+                            ? widget.onToggleSelection(download)
+                            : _openMangaChapter(
+                                context,
+                                download,
+                                orderedItems,
+                              ),
+                        onDelete: () => widget.selectedIds.isNotEmpty
+                            ? widget.onToggleSelection(download)
+                            : unawaited(
+                                confirmAndRemoveDownload(
+                                  context,
+                                  ref,
+                                  download,
+                                ),
+                              ),
+                      )
+                    : CompletedDownloadEpisodeCard(
+                        key: ValueKey(download.id),
+                        item: download,
+                        selecting: selecting,
+                        selected: widget.selectedIds.contains(download.id),
+                        onPlay: () => widget.selectedIds.isNotEmpty
+                            ? widget.onToggleSelection(download)
+                            : _playLocalFile(context, ref, download, l10n),
+                        onDelete: () => widget.selectedIds.isNotEmpty
+                            ? widget.onToggleSelection(download)
+                            : unawaited(
+                                confirmAndRemoveDownload(
+                                  context,
+                                  ref,
+                                  download,
+                                ),
+                              ),
+                      ),
+              ),
+            ),
+            if (!isLast)
+              Divider(
+                height: 1,
+                indent: LayoutConstants.spacingMd,
+                endIndent: LayoutConstants.spacingMd,
+                color: theme.dividerColor.withValues(alpha: 0.4),
+              ),
+          ],
+        );
+      }).toList(),
     );
   }
 
@@ -1143,16 +1259,19 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
     WidgetRef ref,
     DownloadItem item,
     AppLocalizations l10n,
-  ) => ref
-      .read(playbackLauncherProvider)
-      .play(
-        context,
-        item.trackingUrl,
-        baseItem: _savedPlaybackItem(item, items),
-        episode: item.episode,
-        resolveUrl: () => _resolveLocalPlaybackUrl(ref, item),
-        onMissingFile: () => _removeMissingDownload(context, ref, item, l10n),
-      );
+  ) {
+    final groupItems = items;
+    return ref
+        .read(playbackLauncherProvider)
+        .playDownloaded(
+          context,
+          item.trackingUrl,
+          prepareBaseItem: () => _savedPlaybackItem(item, groupItems),
+          episode: item.episode,
+          resolveUrl: () => _resolveLocalPlaybackUrl(ref, item),
+          onMissingFile: () => _removeMissingDownload(context, ref, item, l10n),
+        );
+  }
 
   Future<void> _confirmDeleteAll(BuildContext context, WidgetRef ref) async {
     if (_deleteInFlight) return;
@@ -1186,21 +1305,84 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
   }
 }
 
+// ExpansionTile only mounts this projection while the group is open.
+// Selection and active-transfer updates do not change the completed rows
+// or their order. Keep the same projection until either one changes.
+class _CompletedDownloadRows extends ConsumerStatefulWidget {
+  const _CompletedDownloadRows({
+    required this.items,
+    required this.isManga,
+    required this.builder,
+  });
+
+  final List<DownloadItem> items;
+  final bool isManga;
+  final Widget Function(BuildContext, WidgetRef, List<DownloadItem>) builder;
+
+  @override
+  ConsumerState<_CompletedDownloadRows> createState() =>
+      _CompletedDownloadRowsState();
+}
+
+class _CompletedDownloadRowsState
+    extends ConsumerState<_CompletedDownloadRows> {
+  List<DownloadItem>? _input;
+  late List<DownloadItem> _ordered;
+  late bool _ascending;
+  late bool _isManga;
+
+  @override
+  Widget build(BuildContext context) {
+    final ascending = ref.watch(episodeSortAscendingProvider);
+    final items = widget.items;
+    final isManga = widget.isManga;
+    if (!identical(_input, items) ||
+        _ascending != ascending ||
+        _isManga != isManga) {
+      _ordered = _orderRows(items, isManga: isManga, ascending: ascending);
+      _input = items;
+      _ascending = ascending;
+      _isManga = isManga;
+    }
+    return widget.builder(context, ref, _ordered);
+  }
+
+  List<DownloadItem> _orderRows(
+    List<DownloadItem> items, {
+    required bool isManga,
+    required bool ascending,
+  }) {
+    return isManga
+        ? (List<DownloadItem>.from(items)..sort((a, b) {
+            final an = a.chapter?.number;
+            final bn = b.chapter?.number;
+            if (an != null && bn != null) {
+              final compare = an.compareTo(bn);
+              if (compare != 0) {
+                return ascending ? compare : -compare;
+              }
+            }
+            final compare = (a.chapter?.name ?? '').compareTo(
+              b.chapter?.name ?? '',
+            );
+            return ascending ? compare : -compare;
+          }))
+        : episodeItemsInDisplayOrder(
+            items,
+            episodeOf: (item) => item.episode,
+            ascending: ascending,
+          );
+  }
+}
+
 class _DownloadItemTile extends ConsumerStatefulWidget {
   final DownloadItem item;
-  final double progress;
-  final TaskStatus status;
-  final DownloadProgressData? progressData;
   final bool selecting;
   final bool selected;
   final VoidCallback onToggleSelection;
 
   const _DownloadItemTile({
-    super.key,
     required this.item,
-    required this.progress,
-    required this.status,
-    this.progressData,
     required this.selecting,
     required this.selected,
     required this.onToggleSelection,
@@ -1215,23 +1397,74 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
   bool _deleteInFlight = false;
 
   DownloadItem get item => widget.item;
-  double get progress => widget.progress;
-  TaskStatus get status => widget.status;
-  DownloadProgressData? get progressData => widget.progressData;
+
+  (String, Color)? _posterInputs;
+  Widget? _posterWidget;
+
+  Widget _posterFor(String url, Color errorColor) {
+    final inputs = (url, errorColor);
+    final previous = _posterWidget;
+    if (previous != null && _posterInputs == inputs) return previous;
+    _posterInputs = inputs;
+    // Keep stable art out of transfer ticks. The mounted ArtworkDecode still
+    // handles quality and device-scale changes itself.
+    return _posterWidget = ClipRRect(
+      borderRadius: BorderRadius.circular(LayoutConstants.radiusMd),
+      child: ArtworkDecode(
+        paintedWidth: 80,
+        sizeHighQualityToDisplay: true,
+        builder: (BuildContext context, int? decodeWidth) => CachedNetworkImage(
+          imageUrl: url,
+          width: 80,
+          height: 120,
+          fit: BoxFit.cover,
+          memCacheWidth: decodeWidth,
+          filterQuality: FilterQuality.medium,
+          errorWidget: (context, url, error) => Container(
+            width: 80,
+            height: 120,
+            color: errorColor,
+            child: const Icon(Icons.movie_outlined),
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context)!;
+    final logicalId = item.logicalId?.trim();
+    final progressKey = logicalId?.isNotEmpty == true
+        ? logicalId!
+        : item.task.metaData.isNotEmpty
+        ? item.task.metaData
+        : item.task.url;
+    final progressData = ref.watch(
+      downloadProgressProvider.select((rows) {
+        final data = rows[progressKey];
+        // The shared projection allocates the data object on every emission.
+        // Compare only what this row actually uses.
+        return data == null
+            ? null
+            : (
+                data.progress,
+                data.status,
+                data.totalSize,
+                data.completedPages,
+                data.totalPages,
+              );
+      }),
+    );
+    final progress = progressData?.$1 ?? item.progress;
+    final status = progressData?.$2 ?? item.status;
     final chunkProgress = ref.watch(
       downloadChunkProgressProvider,
     )[item.task.taskId];
     final isDone = status == TaskStatus.complete;
     final isQueued = status == TaskStatus.enqueued;
-    final isWorking =
-        status == TaskStatus.running ||
-        status == TaskStatus.enqueued ||
-        status == TaskStatus.waitingToRetry;
+    final isWorking = _canPauseDownload(status);
     final isPaused = status == TaskStatus.paused;
     final isFailed =
         status == TaskStatus.failed || status == TaskStatus.notFound;
@@ -1248,25 +1481,9 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
         ? item.chapter?.name
         : episodeLabel;
 
-    final poster = ClipRRect(
-      borderRadius: BorderRadius.circular(LayoutConstants.radiusMd),
-      child: ArtworkDecode(
-        paintedWidth: 80,
-        builder: (BuildContext context, int? decodeWidth) => CachedNetworkImage(
-          imageUrl: AppImageFallbacks.poster(item.item.posterUrl) ?? '',
-          width: 80,
-          height: 120,
-          fit: BoxFit.cover,
-          memCacheWidth: decodeWidth,
-          filterQuality: FilterQuality.medium,
-          errorWidget: (context, url, error) => Container(
-            width: 80,
-            height: 120,
-            color: theme.dividerColor,
-            child: const Icon(Icons.movie_outlined),
-          ),
-        ),
-      ),
+    final poster = _posterFor(
+      AppImageFallbacks.poster(item.item.posterUrl) ?? '',
+      theme.dividerColor,
     );
 
     final content = Row(
@@ -1337,7 +1554,13 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
                   children: [
                     Expanded(
                       child: Text(
-                        _downloadedSizeText(context),
+                        _downloadedSizeText(
+                          context,
+                          progress,
+                          progressData?.$3,
+                          progressData?.$4,
+                          progressData?.$5,
+                        ),
                         textDirection: TextDirection.ltr,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -1391,7 +1614,7 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
                         icon: const Icon(Icons.pause_rounded),
                         onPressed: _controlInFlight || _deleteInFlight
                             ? null
-                            : _controlDownload,
+                            : () => _controlDownload(status),
                         visualDensity: VisualDensity.compact,
                       ),
                     if (isPaused || isFailed)
@@ -1410,7 +1633,7 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
                         ),
                         onPressed: _controlInFlight || _deleteInFlight
                             ? null
-                            : _controlDownload,
+                            : () => _controlDownload(status),
                         visualDensity: VisualDensity.compact,
                       ),
                     if (isDone)
@@ -1470,7 +1693,7 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
     );
   }
 
-  Future<void> _controlDownload() async {
+  Future<void> _controlDownload(TaskStatus status) async {
     if (_controlInFlight || _deleteInFlight) return;
     setState(() => _controlInFlight = true);
     final notifications = ref.read(notificationServiceProvider);
@@ -1487,17 +1710,22 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
     }
   }
 
-  String _downloadedSizeText(BuildContext context) {
-    final data = progressData;
+  String _downloadedSizeText(
+    BuildContext context,
+    double progress,
+    int? totalBytes,
+    int? completedPages,
+    int? totalPages,
+  ) {
     if (item.mediaKind == DownloadMediaKind.mangaChapter) {
       return formatDownloadPageCount(
-        completedPages: data?.completedPages ?? item.completedPages,
-        totalPages: data?.totalPages ?? item.totalPages,
+        completedPages: completedPages ?? item.completedPages,
+        totalPages: totalPages ?? item.totalPages,
         pageLabel: appText(context, english: 'pages', arabic: 'صفحة'),
       );
     }
     return formatDownloadSizePair(
-      totalBytes: data?.totalSize ?? -1,
+      totalBytes: totalBytes ?? -1,
       progress: progress,
     );
   }
@@ -1534,19 +1762,22 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
     BuildContext context,
     WidgetRef ref,
     AppLocalizations l10n,
-  ) => ref
-      .read(playbackLauncherProvider)
-      .play(
-        context,
-        item.trackingUrl,
-        baseItem: _savedPlaybackItem(
-          item,
-          ref.read(downloadsProvider).value ?? [item],
-        ),
-        episode: item.episode,
-        resolveUrl: () => _resolveLocalPlaybackUrl(ref, item),
-        onMissingFile: () => _removeMissingDownload(context, ref, item, l10n),
-      );
+  ) {
+    final selected = item;
+    return ref
+        .read(playbackLauncherProvider)
+        .playDownloaded(
+          context,
+          selected.trackingUrl,
+          prepareBaseItem: () => _savedPlaybackItem(
+            selected,
+            ref.read(downloadsProvider).value ?? [selected],
+          ),
+          episode: selected.episode,
+          resolveUrl: () => _resolveLocalPlaybackUrl(ref, item),
+          onMissingFile: () => _removeMissingDownload(context, ref, item, l10n),
+        );
+  }
 
   Future<void> _confirmDelete() async {
     if (_deleteInFlight) return;

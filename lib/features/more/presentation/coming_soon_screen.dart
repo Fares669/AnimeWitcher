@@ -7,7 +7,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
+import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
+import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/utils/offset_pager.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
@@ -27,6 +29,8 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
   OffsetPager<MultimediaItem> _pager = OffsetPager<MultimediaItem>(
     keyOf: multimediaItemPageKey,
   );
+  bool? _hidesEcchiAtLoad;
+
   @override
   void initState() {
     super.initState();
@@ -38,14 +42,19 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
     if (_pager.shouldLoadMore(_controller)) _loadNext();
   }
 
+  AnimeWitcherProvider? _readCatalogProvider() {
+    final active = ref.read(activeProviderProvider);
+    return active?.supportsUpcoming == true ? active : ref.nativeProvider;
+  }
+
   Future<void> _loadNext() async {
     if (!mounted) return;
     final pager = _pager;
     if (pager.loading || !pager.hasMore) return;
-    final active = ref.read(activeProviderProvider);
-    final provider = active?.supportsUpcoming == true
-        ? active
-        : ref.nativeProvider;
+    final provider = _readCatalogProvider();
+    _hidesEcchiAtLoad ??=
+        provider is AnimeWitcherNativeProvider &&
+        provider.hidesEcchiInDiscovery;
     if (provider == null) {
       if (mounted) {
         setState(() => _pager.error = nativeProviderUnavailable());
@@ -69,6 +78,7 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
   }
 
   Future<void> _refresh() async {
+    _hidesEcchiAtLoad = null;
     setState(() {
       _pager = OffsetPager<MultimediaItem>(keyOf: multimediaItemPageKey);
     });
@@ -86,12 +96,20 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
   @override
   Widget build(BuildContext context) {
     ref.listen<int>(accountDataRevisionProvider, (previous, next) {
-      if (previous == next) return;
+      // The scheduled first page will read the latest filter itself.
+      if (previous == next || _hidesEcchiAtLoad == null) return;
+      final provider = _readCatalogProvider();
+      // Sign-in bookkeeping and sync do not change the public catalogue.
+      final hidesEcchi =
+          provider is AnimeWitcherNativeProvider &&
+          provider.hidesEcchiInDiscovery;
+      if (hidesEcchi == _hidesEcchiAtLoad) return;
       unawaited(_refresh());
     });
     ref.listen(activeProviderProvider, (previous, next) {
       if (previous?.packageName != next?.packageName &&
-          (previous?.supportsUpcoming == true || next?.supportsUpcoming == true)) {
+          (previous?.supportsUpcoming == true ||
+              next?.supportsUpcoming == true)) {
         unawaited(_refresh());
       }
     });
@@ -124,6 +142,7 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
               )
             : const AnimePosterShimmer(),
         itemCount: _pager.items.length,
+        itemsHaveRepaintBoundaries: true,
         itemBuilder: (context, index) {
           final item = _pager.items[index];
           return MultimediaCard.fromItem(

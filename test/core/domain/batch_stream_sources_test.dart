@@ -60,6 +60,27 @@ void main() {
     },
   );
 
+  test('the last episode can eliminate an option; the first match wins', () {
+    final first = [
+      source('ST', '720p', 'first-st'),
+      source('PD', 'HD', 'first-pd'),
+      source('PixelDrain', '720p', 'duplicate-pd'),
+      source('MF', 'HD', 'first-mf'),
+    ];
+    final episodes = [
+      first,
+      first.reversed.toList(),
+      [source('MediaFire', '720', 'last-mf'), source('PD', 'HD', 'last-pd')],
+    ];
+
+    for (final common in [
+      commonBatchStreamServers(episodes),
+      commonBatchStreamSources(episodes),
+    ]) {
+      expect(common, [same(first[1]), same(first[3])]);
+    }
+  });
+
   test('batch options exclude sources whose quality is missing', () {
     final common = commonBatchStreamSources([
       [

@@ -10,6 +10,37 @@ import '../storage/storage_service.dart';
 
 part 'artwork_fallback_service.g.dart';
 
+typedef _MangaArt = ({String? cover, String? banner});
+
+/// An entry remains joinable after a batch leaves the queue. Keep the
+/// provider alive only while an answer is in flight, not for cached hits.
+final class _ArtworkFlights<K, V> {
+  final _active = <K, ({Completer<V> completer, void Function()? release})>{};
+
+  Future<V>? pending(K key) => _active[key]?.completer.future;
+
+  Completer<V> start(K key, void Function() Function()? retain) {
+    final completer = Completer<V>();
+    _active[key] = (completer: completer, release: retain?.call());
+    return completer;
+  }
+
+  void complete(K key, V value) {
+    final request = _active.remove(key);
+    if (request == null) return;
+    request.completer.complete(value);
+    request.release?.call();
+  }
+
+  void dispose(V empty) {
+    // Riverpod clears this generation's keep-alive links itself.
+    for (final request in _active.values) {
+      request.completer.complete(empty);
+    }
+    _active.clear();
+  }
+}
+
 /// Finds a poster for an anime whose catalog artwork cannot be loaded.
 ///
 /// Most catalog artwork lives on MyAnimeList's CDN, which some networks block
@@ -22,9 +53,14 @@ class ArtworkFallbackService {
   final Dio _dio;
   final StorageService _storage;
 
-  ArtworkFallbackService(this._dio, this._storage) {
+  ArtworkFallbackService(Dio dio, StorageService storage)
+    : this._owned(dio, storage, null);
+
+  ArtworkFallbackService._owned(this._dio, this._storage, this._retainLookup) {
     _restore();
   }
+
+  final void Function() Function()? _retainLookup;
 
   /// A screen paints its cards over several frames, so lookups are collected
   /// briefly and sent together rather than one request per card. AniList
@@ -154,28 +190,46 @@ class ArtworkFallbackService {
 
   // --------------------------------------------------------------- batching
 
-  final Map<int, Completer<String?>> _pendingIds = <int, Completer<String?>>{};
-  final Map<int, Completer<String?>> _pendingBanners =
-      <int, Completer<String?>>{};
-  final Map<String, Completer<String?>> _pendingTitles =
-      <String, Completer<String?>>{};
-  final Map<String, String> _pendingTitleText = <String, String>{};
+  final _pendingIds = <int>{};
+  final _idFlights = _ArtworkFlights<int, String?>();
+  bool _disposed = false;
+  final _bannerFlights = _ArtworkFlights<int, String?>();
+  final _titleFlights = _ArtworkFlights<String, String?>();
+  final _mangaFlights = _ArtworkFlights<String, _MangaArt>();
+  final _pendingBanners = <int>{};
+  final _pendingTitleText = <String, String>{};
   Timer? _flushTimer;
 
   Future<String?> posterFor(int malId) {
-    if (malId <= 0) return Future<String?>.value();
+    if (malId <= 0 || _disposed) return Future<String?>.value();
     if (_cache.containsKey(malId)) {
       final value = _cache.remove(malId);
       _cache[malId] = value; // LRU touch
       return Future<String?>.value(value);
     }
-    final queued = _pendingIds[malId];
-    if (queued != null) return queued.future;
+    final pending = _idFlights.pending(malId);
+    if (pending != null) return pending;
 
-    final completer = Completer<String?>();
-    _pendingIds[malId] = completer;
+    final completer = _idFlights.start(malId, _retainLookup);
+    _pendingIds.add(malId);
     _scheduleFlush();
     return completer.future;
+  }
+
+  void _dispose() {
+    _disposed = true;
+    _pendingIds.clear();
+    _pendingBanners.clear();
+    _pendingTitleText.clear();
+    _pendingMangaQuery.clear();
+    _flushTimer?.cancel();
+    _flushTimer = null;
+    _mangaFlushTimer?.cancel();
+    _mangaFlushTimer = null;
+    _idFlights.dispose(null);
+    _bannerFlights.dispose(null);
+    _titleFlights.dispose(null);
+    _mangaFlights.dispose((cover: null, banner: null));
   }
 
   /// The wide artwork for [malId], the way Harbor resolves one: whatever
@@ -185,17 +239,17 @@ class ArtworkFallbackService {
   /// Rides the same batch the posters do, so a screen of cards asking for
   /// both costs one request rather than two.
   Future<String?> bannerFor(int malId) {
-    if (malId <= 0) return Future<String?>.value();
+    if (malId <= 0 || _disposed) return Future<String?>.value();
     if (_bannerCache.containsKey(malId)) {
       final value = _bannerCache.remove(malId);
       _bannerCache[malId] = value; // LRU touch
       return Future<String?>.value(value);
     }
-    final queued = _pendingBanners[malId];
-    if (queued != null) return queued.future;
+    final pending = _bannerFlights.pending(malId);
+    if (pending != null) return pending;
 
-    final completer = Completer<String?>();
-    _pendingBanners[malId] = completer;
+    final completer = _bannerFlights.start(malId, _retainLookup);
+    _pendingBanners.add(malId);
     _scheduleFlush();
     return completer.future;
   }
@@ -205,15 +259,14 @@ class ArtworkFallbackService {
   /// id to use.
   Future<String?> posterForTitle(String title) {
     final key = _titleKey(title);
-    if (key.isEmpty) return Future<String?>.value();
+    if (key.isEmpty || _disposed) return Future<String?>.value();
     if (_titleCache.containsKey(key)) {
       return Future<String?>.value(_titleCache[key]);
     }
-    final queued = _pendingTitles[key];
-    if (queued != null) return queued.future;
+    final pending = _titleFlights.pending(key);
+    if (pending != null) return pending;
 
-    final completer = Completer<String?>();
-    _pendingTitles[key] = completer;
+    final completer = _titleFlights.start(key, _retainLookup);
     _pendingTitleText[key] = title.trim();
     _scheduleFlush();
     return completer.future;
@@ -234,43 +287,40 @@ class ArtworkFallbackService {
       // waiting for a banner go out together, since AniList returns each
       // media's cover and banner in the same record.
       final ids = <int>{
-        ..._pendingIds.keys,
-        ..._pendingBanners.keys,
+        ..._pendingIds,
+        ..._pendingBanners,
       }.take(_idsPerQuery).toList();
-      final waiting = <int, Completer<String?>>{
+      final waiting = <int>{
         for (final id in ids)
-          if (_pendingIds.containsKey(id)) id: _pendingIds.remove(id)!,
+          if (_pendingIds.remove(id)) id,
       };
-      final bannerWaiting = <int, Completer<String?>>{
+      final bannerWaiting = <int>{
         for (final id in ids)
-          if (_pendingBanners.containsKey(id)) id: _pendingBanners.remove(id)!,
+          if (_pendingBanners.remove(id)) id,
       };
       unawaited(_runIdBatch(ids, waiting, bannerWaiting));
     }
 
-    if (_pendingTitles.isNotEmpty) {
-      final keys = _pendingTitles.keys.take(_titlesPerQuery).toList();
-      final waiting = <String, Completer<String?>>{
-        for (final key in keys) key: _pendingTitles.remove(key)!,
-      };
+    if (_pendingTitleText.isNotEmpty) {
+      final keys = _pendingTitleText.keys.take(_titlesPerQuery).toList();
       final texts = <String, String>{
         for (final key in keys) key: _pendingTitleText.remove(key) ?? key,
       };
-      unawaited(_runTitleBatch(keys, texts, waiting));
+      unawaited(_runTitleBatch(keys, texts));
     }
 
     // More than one query's worth arrived at once; the rest go out next tick.
     if (_pendingIds.isNotEmpty ||
         _pendingBanners.isNotEmpty ||
-        _pendingTitles.isNotEmpty) {
+        _pendingTitleText.isNotEmpty) {
       _scheduleFlush();
     }
   }
 
   Future<void> _runIdBatch(
     List<int> ids,
-    Map<int, Completer<String?>> waiting,
-    Map<int, Completer<String?>> bannerWaiting,
+    Set<int> waiting,
+    Set<int> bannerWaiting,
   ) async {
     Map<int, String> found;
     var banners = <int, String>{};
@@ -287,9 +337,11 @@ class ArtworkFallbackService {
       answered = false;
     }
 
+    if (_disposed) return;
+
     // AniList did not know these; AniZip and Kitsu are the last places worth
     // asking, and only for the handful that are still missing.
-    final missing = ids.where((id) => !found.containsKey(id)).toList();
+    final missing = waiting.where((id) => !found.containsKey(id)).toList();
     if (missing.isNotEmpty) {
       final extra = await Future.wait(
         missing.map((id) => _aniZipPoster(id).catchError((Object _) => null)),
@@ -300,9 +352,11 @@ class ArtworkFallbackService {
       }
     }
 
+    if (_disposed) return;
+
     // Anything still without a banner is worth one more ask: AniZip's
     // mapping carries TheTVDB's backgrounds, and Kitsu's cover behind that.
-    final needBanner = bannerWaiting.keys
+    final needBanner = bannerWaiting
         .where((id) => !banners.containsKey(id))
         .toList();
     if (needBanner.isNotEmpty) {
@@ -317,30 +371,27 @@ class ArtworkFallbackService {
       }
     }
 
+    if (_disposed) return;
     if (kDebugMode) {
       debugPrint('[Artwork] ids: ${ids.length} asked, ${found.length} found');
     }
     for (final id in ids) {
       final url = found[id];
-      if (waiting.containsKey(id)) {
-        // A miss is only worth remembering when something actually said no.
-        // Recording one after a failed request turns a moment without a
-        // connection into "this anime has no artwork" for the rest of the
-        // session — fifty titles at a time, since that is the batch — and
-        // nothing ever looks again.
+      if (waiting.contains(id)) {
+        // A transport failure is not a "no artwork" answer.
         if (url != null || answered) {
           _remember(id, url);
           _markDirty(url);
         }
-        waiting[id]?.complete(url);
+        _idFlights.complete(id, url);
       }
-      if (bannerWaiting.containsKey(id)) {
+      if (bannerWaiting.contains(id)) {
         final banner = banners[id];
         if (banner != null || answered) {
           _rememberBanner(id, banner);
           _markDirty(banner);
         }
-        bannerWaiting[id]?.complete(banner);
+        _bannerFlights.complete(id, banner);
       }
     }
     _schedulePersist();
@@ -349,7 +400,6 @@ class ArtworkFallbackService {
   Future<void> _runTitleBatch(
     List<String> keys,
     Map<String, String> texts,
-    Map<String, Completer<String?>> waiting,
   ) async {
     Map<String, String> found;
     var answered = true;
@@ -360,6 +410,7 @@ class ArtworkFallbackService {
       found = <String, String>{};
       answered = false;
     }
+    if (_disposed) return;
     if (kDebugMode) {
       debugPrint(
         '[Artwork] titles: ${keys.length} asked, ${found.length} found',
@@ -372,7 +423,7 @@ class ArtworkFallbackService {
         _rememberTitle(key, url);
         _markDirty(url);
       }
-      waiting[key]?.complete(url);
+      _titleFlights.complete(key, url);
     }
     _schedulePersist();
   }
@@ -385,8 +436,6 @@ class ArtworkFallbackService {
   /// and the banner, keyed `id:<malId>` or `t:<title>`.
   static final LinkedHashMap<String, ({String? cover, String? banner})>
   _mangaCache = LinkedHashMap<String, ({String? cover, String? banner})>();
-  final Map<String, Completer<({String? cover, String? banner})>>
-  _pendingManga = <String, Completer<({String? cover, String? banner})>>{};
   final Map<String, ({int? malId, String title})> _pendingMangaQuery =
       <String, ({int? malId, String title})>{};
   Timer? _mangaFlushTimer;
@@ -410,16 +459,15 @@ class ArtworkFallbackService {
     String title = '',
   }) {
     final key = _mangaKey(malId, title);
-    if (key == 't:') {
+    if (key == 't:' || _disposed) {
       return Future.value((cover: null, banner: null));
     }
     final cached = _mangaCache[key];
     if (cached != null) return Future.value(cached);
-    final queued = _pendingManga[key];
-    if (queued != null) return queued.future;
+    final pending = _mangaFlights.pending(key);
+    if (pending != null) return pending;
 
-    final completer = Completer<({String? cover, String? banner})>();
-    _pendingManga[key] = completer;
+    final completer = _mangaFlights.start(key, _retainLookup);
     _pendingMangaQuery[key] = (malId: malId, title: title.trim());
     _mangaFlushTimer ??= Timer(_batchWindow, _flushManga);
     return completer.future;
@@ -427,15 +475,12 @@ class ArtworkFallbackService {
 
   void _flushManga() {
     _mangaFlushTimer = null;
-    final keys = _pendingManga.keys.take(_titlesPerQuery).toList();
-    final waiting = <String, Completer<({String? cover, String? banner})>>{
-      for (final key in keys) key: _pendingManga.remove(key)!,
-    };
+    final keys = _pendingMangaQuery.keys.take(_titlesPerQuery).toList();
     final queries = <String, ({int? malId, String title})>{
       for (final key in keys) key: _pendingMangaQuery.remove(key)!,
     };
-    unawaited(_runMangaBatch(keys, queries, waiting));
-    if (_pendingManga.isNotEmpty) {
+    unawaited(_runMangaBatch(keys, queries));
+    if (_pendingMangaQuery.isNotEmpty) {
       _mangaFlushTimer = Timer(_batchWindow, _flushManga);
     }
   }
@@ -443,7 +488,6 @@ class ArtworkFallbackService {
   Future<void> _runMangaBatch(
     List<String> keys,
     Map<String, ({int? malId, String title})> queries,
-    Map<String, Completer<({String? cover, String? banner})>> waiting,
   ) async {
     final params = <String>[];
     final fields = <String>[];
@@ -474,8 +518,10 @@ class ArtworkFallbackService {
       answered = false;
     }
 
+    if (_disposed) return;
     for (var i = 0; i < keys.length; i++) {
-      final media = (data?['m$i'] as Map?)?['media'];
+      final page = data?['m$i'];
+      final media = page is Map ? page['media'] : null;
       final first = media is List && media.isNotEmpty ? media.first : null;
       final banner = first is Map ? '${first['bannerImage'] ?? ''}'.trim() : '';
       final art = (
@@ -491,7 +537,7 @@ class ArtworkFallbackService {
           _mangaCache.remove(_mangaCache.keys.first);
         }
       }
-      waiting[keys[i]]?.complete(art);
+      _mangaFlights.complete(keys[i], art);
     }
   }
 
@@ -696,8 +742,12 @@ class ArtworkFallbackService {
 
 @riverpod
 ArtworkFallbackService artworkFallbackService(Ref ref) {
-  return ArtworkFallbackService(
+  final service = ArtworkFallbackService._owned(
     ref.watch(dioClientProvider),
     ref.watch(storageServiceProvider),
+    // Cards use ref.read; hold the service only while this lookup is joinable.
+    () => ref.keepAlive().close,
   );
+  ref.onDispose(service._dispose);
+  return service;
 }

@@ -97,11 +97,21 @@ class MangaReadingRepository {
   final MangaCloudReadSync? _syncReadStates;
   final void Function()? _onChanged;
 
+  // Chapter lists and the reader repeatedly look up the same title.
+  // Keep only its key prefix, never stored progress or a map of title IDs.
+  String? _lastMangaId;
+  String _lastKeyPrefix = '';
+
   String _hash(String value) =>
       md5.convert(utf8.encode(value.trim())).toString();
 
-  String _key(String mangaId, String chapterId) =>
-      'manga_progress:' + _hash(mangaId) + ':' + _hash(chapterId);
+  String _key(String mangaId, String chapterId) {
+    if (_lastMangaId != mangaId) {
+      _lastKeyPrefix = 'manga_progress:${_hash(mangaId)}:';
+      _lastMangaId = mangaId;
+    }
+    return '$_lastKeyPrefix${_hash(chapterId)}';
+  }
 
   MangaReadingProgress? _local(String mangaId, String chapterId) {
     final raw = _storage.getString(_key(mangaId, chapterId));

@@ -159,17 +159,20 @@ class Library extends _$Library {
     kind,
   );
 
-  int? _cachedCategoryCount(LibraryMediaKind kind, LibraryCategory category) {
+  Map<String, int> _cachedCategoryCounts(LibraryMediaKind kind) {
     final owner = _accountUid;
-    if (owner == null || owner.isEmpty) return null;
+    if (owner == null || owner.isEmpty) return const <String, int>{};
     return ref
         .read(storageServiceProvider)
         .getCachedLibraryCounts(
           providerKey: 'native',
           accountKey: owner,
           mediaKindKey: kind.storageKey,
-        )[category.storageKey];
+        );
   }
+
+  int? _cachedCategoryCount(LibraryMediaKind kind, LibraryCategory category) =>
+      _cachedCategoryCounts(kind)[category.storageKey];
 
   Future<void> _saveCachedCategoryCounts(
     LibraryMediaKind kind,
@@ -264,12 +267,19 @@ class Library extends _$Library {
       page.cachedLocalCount = page.items.length;
       return page.items.take(page.visibleLimit).toList(growable: false);
     }
-    final local = _localItems(kind, category);
-    page.cachedLocalCount = local.length;
+    final local = ref
+        .read(libraryRepositoryProvider)
+        .getLocalShelf(
+          category: category,
+          manga: kind == LibraryMediaKind.manga,
+          limit: page.visibleLimit,
+        );
+    page.cachedLocalCount = local.total;
     // After a successful page, Firestore ordering is authoritative. Older
     // local caches can contain more cards than the requested server page.
-    final rows = page.receivedRemotePage ? page.items : local;
-    return rows.take(page.visibleLimit).toList(growable: false);
+    return page.receivedRemotePage
+        ? page.items.take(page.visibleLimit).toList(growable: false)
+        : local.items;
   }
 
   int? _knownTotal(LibraryMediaKind kind, LibraryCategory category) =>
@@ -314,26 +324,91 @@ class Library extends _$Library {
     );
   }
 
-  int? categoryCount(LibraryMediaKind kind, LibraryCategory category) {
+  int? categoryCount(LibraryMediaKind kind, LibraryCategory category) =>
+      _categoryCount(
+        kind,
+        category,
+        () => _localItems(kind, category).length,
+        () => _cachedCategoryCount(kind, category),
+      );
+
+  /// Batch badge counts for the requested phone tabs without opening shelves.
+  Map<LibraryCategory, int?> categoryCountsFor(
+    LibraryMediaKind kind,
+    Iterable<LibraryCategory> categories,
+  ) {
+    final count = _countProjection();
+    return {for (final category in categories) category: count(kind, category)};
+  }
+
+  /// A synchronous desktop sidebar projection.
+  Map<LibraryMediaKind, Map<LibraryCategory, int?>> categoryCounts({
+    required bool witanimeAnime,
+  }) {
+    final count = _countProjection();
+    return {
+      for (final kind in LibraryMediaKind.values)
+        kind: {
+          for (final category in LibraryCategory.valuesForCatalog(
+            witanimeAnime: witanimeAnime && kind == LibraryMediaKind.anime,
+          ))
+            category: count(kind, category),
+        },
+    };
+  }
+
+  // One local scan and at most one disk cache lookup per kind in a projection.
+  // Neither snapshot survives its caller, so writes and account switches stay
+  // visible the next time badges are requested.
+  int? Function(LibraryMediaKind, LibraryCategory) _countProjection() {
+    Map<String, ({int anime, int manga})>? local;
+    final cached = <LibraryMediaKind, Map<String, int>>{};
+    return (kind, category) => _categoryCount(
+      kind,
+      category,
+      () {
+        final counts = (local ??= ref
+            .read(storageServiceProvider)
+            .getLocalLibraryCounts())[category.storageKey];
+        return (kind == LibraryMediaKind.manga
+                ? counts?.manga
+                : counts?.anime) ??
+            0;
+      },
+      () => cached.putIfAbsent(
+        kind,
+        () => _cachedCategoryCounts(kind),
+      )[category.storageKey],
+    );
+  }
+
+  int? _categoryCount(
+    LibraryMediaKind kind,
+    LibraryCategory category,
+    int Function() getLocal,
+    int? Function() getCached,
+  ) {
     if (_useWitanimeShelf(kind) && isWitanimeSyncedCategory(category)) {
-      return ref.read(witanimeLibraryServiceProvider).countForCategory(category);
+      return ref
+          .read(witanimeLibraryServiceProvider)
+          .countForCategory(category);
     }
     if (_useAnime3rbShelf(kind)) {
-      return ref.read(anime3rbLibraryServiceProvider).countForCategory(category);
+      return ref
+          .read(anime3rbLibraryServiceProvider)
+          .countForCategory(category);
     }
     final confirmed = _knownTotal(kind, category);
     if (confirmed != null) return confirmed;
-    final localCount = _localItems(kind, category).length;
     if (!ref.read(animeWitcherAccountServiceProvider).isSignedIn) {
-      return localCount;
+      return getLocal();
     }
-    final cached = _cachedCategoryCount(kind, category);
-    if (cached != null) {
-      return cached == 0 && localCount > 0 ? localCount : cached;
-    }
-    if (localCount > 0) return localCount;
+    final cached = getCached();
+    if (cached != null && cached > 0) return cached;
+    final local = getLocal();
+    if (local > 0) return local;
     // Do not render an unqueried server shelf as a confirmed empty shelf.
-    return null;
+    return cached;
   }
 
   @override
@@ -380,6 +455,51 @@ class Library extends _$Library {
     LibraryMediaKind kind,
     LibraryCategory category,
   ) => _visibleItems(kind, category);
+
+  /// Load only the missing search shelves. Signed-in shelves retain their
+  /// existing provider/page authority; only shelves sourced from the local
+  /// library participate in the shared read.
+  Map<LibraryCategory, List<MultimediaItem>> itemsForSearchShelves(
+    LibraryMediaKind kind,
+    Iterable<LibraryCategory> categories,
+  ) {
+    final shelves = <LibraryCategory, List<MultimediaItem>>{};
+    final local = <LibraryCategory, _LibraryShelfCursorState>{};
+    final guest = _accountUid == null;
+    final witanime = _useWitanimeShelf(kind);
+    final anime3rb = _useAnime3rbShelf(kind);
+    for (final category in categories) {
+      final page = _page(kind, category);
+      if (guest &&
+          !anime3rb &&
+          !(witanime && isWitanimeSyncedCategory(category)) &&
+          !page.receivedRemotePage) {
+        local[category] = page;
+      } else {
+        shelves[category] = _visibleItems(kind, category);
+      }
+    }
+    if (local.length == 1) {
+      final category = local.keys.single;
+      shelves[category] = _visibleItems(kind, category);
+    } else if (local.isNotEmpty) {
+      final batch = ref
+          .read(libraryRepositoryProvider)
+          .getLocalShelves(
+            limits: {
+              for (final entry in local.entries)
+                entry.key.storageKey: entry.value.visibleLimit,
+            },
+            manga: kind == LibraryMediaKind.manga,
+          );
+      for (final entry in local.entries) {
+        final shelf = batch[entry.key.storageKey]!;
+        entry.value.cachedLocalCount = shelf.total;
+        shelves[entry.key] = shelf.items;
+      }
+    }
+    return shelves;
+  }
 
   LibraryCategory get selectedCategory => state.category;
   LibraryMediaKind get selectedMediaKind => state.mediaKind;

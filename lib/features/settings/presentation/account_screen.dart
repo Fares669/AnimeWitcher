@@ -6,6 +6,7 @@ import '../../../core/account/account_providers.dart';
 import '../../../core/account/animewitcher_account_config.dart';
 import '../../../core/account/animewitcher_account_models.dart';
 import '../../../core/services/notification_service.dart';
+import '../../../core/utils/account_profile_avatar.dart';
 import '../../../core/utils/localized_text.dart';
 import '../../../core/utils/artwork_quality.dart';
 import '../../../core/utils/layout_constants.dart';
@@ -50,17 +51,28 @@ class _AnimeWitcherAccountScreenState
 
   @override
   Widget build(BuildContext context) {
-    final account = ref.watch(animeWitcherAccountControllerProvider);
-    final snapshot = account.asData?.value;
-    final profile = snapshot?.profile;
-    final configured = AnimeWitcherAccountConfig.firebaseConfigured;
-    final busy = _submitting || account.isLoading || !configured;
-    final canPop = Navigator.of(context).canPop();
-    final asyncError = account.when<Object?>(
-      data: (_) => null,
-      error: (error, _) => error,
-      loading: () => null,
+    // A background sync can advance lastSyncAt without changing the account
+    // page. Keep the complete profile for editing and privacy actions, but
+    // only listen to the parts of the snapshot this page actually uses.
+    final account = ref.watch(
+      animeWitcherAccountControllerProvider.select(
+        (state) => (
+          profile: state.asData?.value.profile,
+          isLoading: state.isLoading,
+          error: state.when<Object?>(
+            data: (_) => null,
+            error: (error, _) => error,
+            loading: () => null,
+          ),
+        ),
+      ),
     );
+    final profile = account.profile;
+    final configured = AnimeWitcherAccountConfig.firebaseConfigured;
+    // Missing configuration disables auth, but it is not ongoing work.
+    final inProgress = _submitting || account.isLoading;
+    final busy = inProgress || !configured;
+    final canPop = Navigator.of(context).canPop();
 
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -95,7 +107,11 @@ class _AnimeWitcherAccountScreenState
                   if (profile != null)
                     _buildSignedIn(profile, busy)
                   else
-                    _buildSignedOut(busy, asyncError),
+                    _buildSignedOut(
+                      busy,
+                      account.error,
+                      inProgress: inProgress,
+                    ),
                   _anime3rbAccountTile(),
                   _witanimeAccountTile(),
                 ],
@@ -111,7 +127,11 @@ class _AnimeWitcherAccountScreenState
 
   Widget _witanimeAccountTile() => const WitanimeAccountSection();
 
-  Widget _buildSignedOut(bool busy, Object? asyncError) {
+  Widget _buildSignedOut(
+    bool busy,
+    Object? asyncError, {
+    required bool inProgress,
+  }) {
     final colors = Theme.of(context).colorScheme;
     final isCreate = _mode == _AccountFormMode.createAccount;
     return Column(
@@ -278,7 +298,7 @@ class _AnimeWitcherAccountScreenState
                   const SizedBox(height: LayoutConstants.spacingLg),
                   FilledButton.icon(
                     onPressed: busy ? null : _submitEmail,
-                    icon: busy
+                    icon: inProgress
                         ? const SizedBox.square(
                             dimension: 18,
                             child: CircularProgressIndicator(strokeWidth: 2),
@@ -447,7 +467,7 @@ class _AnimeWitcherAccountScreenState
                       backgroundColor: colors.primaryContainer,
                       foregroundImage: photoUrl.isEmpty
                           ? null
-                          : NetworkImage(photoUrl),
+                          : AccountProfileAvatar(NetworkImage(photoUrl)),
                       onForegroundImageError: photoUrl.isEmpty
                           ? null
                           : (_, _) {},

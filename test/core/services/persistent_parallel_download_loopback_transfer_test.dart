@@ -47,6 +47,69 @@ void main() {
     );
   }
 
+  test('multipart assembly preserves bytes past full read blocks', () async {
+    final harness = await _TransferHarness.create(
+      'exact206',
+      partSize: 256 * 1024 + 37,
+      maxActiveConnections: 3,
+    );
+    try {
+      expect(
+        await harness.coordinator.start(harness.parent, harness.bytes.length),
+        isTrue,
+      );
+      await harness.waitFor(TaskStatus.complete);
+      final digest = await sha256
+          .bind(File(await harness.parent.filePath()).openRead())
+          .first;
+      expect(digest, sha256.convert(harness.bytes));
+      expect(harness.requests, hasLength(3));
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a range shrinking after preflight parks without publishing', () async {
+    late final _TransferHarness harness;
+    var probes = 0;
+    harness = await _TransferHarness.create(
+      'exact206',
+      availableStorageBytes: (_) async {
+        // The first call preflights the assembly; the second occurs after
+        // checking range 0's length but before opening its read handle.
+        if (++probes == 2) {
+          final path = await harness.parent.filePath();
+          final input = await File('$path.parts/0.part')
+              .open(mode: FileMode.writeOnlyAppend);
+          try {
+            await input.truncate(harness.partSize - 1);
+          } finally {
+            await input.close();
+          }
+        }
+        return 1024 * 1024 * 1024;
+      },
+    );
+    try {
+      expect(
+        await harness.coordinator.start(harness.parent, harness.bytes.length),
+        isTrue,
+      );
+      await harness.waitFor(TaskStatus.paused);
+      final path = await harness.parent.filePath();
+      expect(probes, 2);
+      expect(await File(path).exists(), isFalse);
+      expect(await File('$path.parts/0.part').length(), harness.partSize - 1);
+      expect(
+        await File('$path.parts/1.part').readAsBytes(),
+        harness.bytes.sublist(harness.partSize, 2 * harness.partSize),
+      );
+      expect(harness.coordinator.activeConnectionCount, 0);
+    } finally {
+      await harness.close();
+    }
+  });
+
   for (final mode in ['exact206', 'interrupted206', 'ignoredRange200']) {
     test(
       'loopback $mode assembles the exact resource without refetching completed ranges',
@@ -140,7 +203,9 @@ class _TransferHarness {
     this.server,
     this.mode, {
     required this.chunks,
+    required this.partSize,
     required int maxActiveConnections,
+    Future<int?> Function(String path)? availableStorageBytes,
   }) {
     parent = ParallelDownloadTask(
       taskId: 'loopback-transfer',
@@ -179,6 +244,7 @@ class _TransferHarness {
       onSourceRefreshNeeded: (_) => renewals++,
       verifyPartSource: verifySavedRangeSourceV2,
       promoteFile: publishCompletedTestFile,
+      availableStorageBytes: availableStorageBytes,
       maxActiveConnections: maxActiveConnections,
       recoveryDelay: const Duration(milliseconds: 5),
       sourceVerificationRetryDelay: const Duration(milliseconds: 5),
@@ -192,13 +258,17 @@ class _TransferHarness {
   static Future<_TransferHarness> create(
     String mode, {
     int chunks = 3,
+    int partSize = 8192,
     int maxActiveConnections = 1,
+    Future<int?> Function(String path)? availableStorageBytes,
   }) async => _TransferHarness(
     await Directory.systemTemp.createTemp('loopback-transfer-'),
     await HttpServer.bind(InternetAddress.loopbackIPv4, 0),
     mode,
     chunks: chunks,
+    partSize: partSize,
     maxActiveConnections: maxActiveConnections,
+    availableStorageBytes: availableStorageBytes,
   );
 
   final Directory root;
@@ -207,7 +277,7 @@ class _TransferHarness {
   final int chunks;
   final allRequests = Completer<void>();
   int peakWorkers = 0;
-  final int partSize = 8192;
+  final int partSize;
   late final bytes = List<int>.generate(
     partSize * chunks,
     (index) => (index * 37 + index ~/ 251) & 255,

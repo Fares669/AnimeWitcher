@@ -44,7 +44,12 @@ class AnimeWitcherAccountController
   @override
   Future<AnimeWitcherAccountSnapshot> build() async {
     final startupGeneration = ++_operationGeneration;
-    final restored = await _service.restoreCachedSession();
+    final service = _service;
+    final restored = await service.restoreCachedSession();
+    // No session means refreshRestoredSession is a no-op. Publishing a data
+    // revision anyway restarts Home's in-flight catalogue/news fetches and
+    // invalidates local views even though a guest launch has changed no data.
+    if (!service.hasRestorableSession) return restored;
     if (restored.isSignedIn) {
       unawaited(
         Future<void>.delayed(Duration.zero, () {

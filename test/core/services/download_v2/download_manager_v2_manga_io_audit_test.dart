@@ -15,7 +15,7 @@ import '../../../support/manga_image_fixtures.dart';
 import 'download_v2_test_support.dart';
 
 void main() {
-  test('200-page completed manga verification lists once and hashes each selected file once', () async {
+  test('200-page completed manga verification lists once and opens each selected file once', () async {
     final directory = await Directory.systemTemp.createTemp('aw-manga-io-');
     addTearDown(() => directory.delete(recursive: true));
     final digest = sha256.convert(tinyMangaPng).toString();
@@ -41,12 +41,12 @@ void main() {
     ), isTrue);
     expect(<String, Object>{
       'directoryListings': io.listings,
-      'pageHashStreams': io.pageReads.values.fold<int>(0, (sum, count) => sum + count),
-      'distinctPagesHashed': io.pageReads.length,
-      'everyPageHashedOnce': io.pageReads.values.every((count) => count == 1),
+      'pageOpenCalls': io.pageOpens.values.fold<int>(0, (sum, count) => sum + count),
+      'distinctPagesOpened': io.pageOpens.length,
+      'everyPageOpenedOnce': io.pageOpens.values.every((count) => count == 1),
     }, <String, Object>{
-      'directoryListings': 1, 'pageHashStreams': 200,
-      'distinctPagesHashed': 200, 'everyPageHashedOnce': true,
+      'directoryListings': 1, 'pageOpenCalls': 200,
+      'distinctPagesOpened': 200, 'everyPageOpenedOnce': true,
     });
   });
 
@@ -151,7 +151,7 @@ final class _CountingIO extends IOOverrides {
   final String chapterPath;
   final int? listingLimit;
   int listings = 0;
-  final pageReads = <String, int>{};
+  final pageOpens = <String, int>{};
   @override
   Directory createDirectory(String path) => _CountedDirectory(super.createDirectory(path), this);
   @override
@@ -212,15 +212,23 @@ final class _CountedFile implements File {
   @override
   Future<int> length() => delegate.length();
   @override
+  Future<FileStat> stat() => delegate.stat();
+  @override
   Future<String> resolveSymbolicLinks() => delegate.resolveSymbolicLinks();
   @override
-  Future<RandomAccessFile> open({FileMode mode = FileMode.read}) => delegate.open(mode: mode);
+  Future<RandomAccessFile> open({FileMode mode = FileMode.read}) {
+    _recordOpen();
+    return delegate.open(mode: mode);
+  }
   @override
   Stream<List<int>> openRead([int? start, int? end]) {
-    if (RegExp(r'^\d+\.').hasMatch(p.basename(path))) {
-      io.pageReads.update(path, (count) => count + 1, ifAbsent: () => 1);
-    }
+    _recordOpen();
     return delegate.openRead(start, end);
+  }
+  void _recordOpen() {
+    if (RegExp(r'^\d+\.').hasMatch(p.basename(path))) {
+      io.pageOpens.update(path, (count) => count + 1, ifAbsent: () => 1);
+    }
   }
   @override
   Future<String> readAsString({Encoding encoding = utf8}) => delegate.readAsString(encoding: encoding);

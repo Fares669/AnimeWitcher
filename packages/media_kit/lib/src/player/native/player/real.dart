@@ -1376,11 +1376,17 @@ class NativePlayer extends PlatformPlayer {
   }
 
   Future<void> _handler(Pointer<generated.mpv_event> event) async {
-    if (event.ref.event_id ==
-        generated.mpv_event_id.MPV_EVENT_PROPERTY_CHANGE) {
-      final prop = event.ref.data.cast<generated.mpv_event_property>();
-      if (prop.ref.name.cast<Utf8>().toDartString() == 'idle-active' &&
-          prop.ref.format == generated.mpv_format.MPV_FORMAT_FLAG) {
+    final eventId = event.ref.event_id;
+    final prop = eventId == generated.mpv_event_id.MPV_EVENT_PROPERTY_CHANGE
+        ? event.ref.data.cast<generated.mpv_event_property>()
+        : null;
+    // Position and buffer updates are frequent. Decode the native name only
+    // once, including for the properties handled before initialization.
+    final propertyName = prop?.ref.name.cast<Utf8>().toDartString();
+    final propertyFormat = prop?.ref.format;
+    if (prop != null) {
+      if (propertyName == 'idle-active' &&
+          propertyFormat == generated.mpv_format.MPV_FORMAT_FLAG) {
         await future;
         // The [Player] has entered the idle state; initialization is complete.
         if (!completer.isCompleted) {
@@ -1389,8 +1395,8 @@ class NativePlayer extends PlatformPlayer {
       }
       // Following properties are unrelated to the playback lifecycle. Thus, these can be accessed before initialization is complete.
       // e.g. audio-device & audio-device-list seem to be emitted before idle-active.
-      if (prop.ref.name.cast<Utf8>().toDartString() == 'audio-device' &&
-          prop.ref.format == generated.mpv_format.MPV_FORMAT_NODE) {
+      if (propertyName == 'audio-device' &&
+          propertyFormat == generated.mpv_format.MPV_FORMAT_NODE) {
         final value = prop.ref.data.cast<generated.mpv_node>();
         if (value.ref.format == generated.mpv_format.MPV_FORMAT_STRING) {
           final name = value.ref.u.string.cast<Utf8>().toDartString();
@@ -1401,8 +1407,8 @@ class NativePlayer extends PlatformPlayer {
           }
         }
       }
-      if (prop.ref.name.cast<Utf8>().toDartString() == 'audio-device-list' &&
-          prop.ref.format == generated.mpv_format.MPV_FORMAT_NODE) {
+      if (propertyName == 'audio-device-list' &&
+          propertyFormat == generated.mpv_format.MPV_FORMAT_NODE) {
         final value = prop.ref.data.cast<generated.mpv_node>();
         final audioDevices = <AudioDevice>[];
         if (value.ref.format == generated.mpv_format.MPV_FORMAT_NODE_ARRAY) {
@@ -1438,8 +1444,7 @@ class NativePlayer extends PlatformPlayer {
         }
       }
     }
-    if (event.ref.event_id ==
-        generated.mpv_event_id.MPV_EVENT_SET_PROPERTY_REPLY) {
+    if (eventId == generated.mpv_event_id.MPV_EVENT_SET_PROPERTY_REPLY) {
       final completer = _setPropertyRequests.remove(event.ref.reply_userdata);
       if (completer == null) {
         print(
@@ -1448,7 +1453,7 @@ class NativePlayer extends PlatformPlayer {
         completer.complete(event.ref.error);
       }
     }
-    if (event.ref.event_id == generated.mpv_event_id.MPV_EVENT_COMMAND_REPLY) {
+    if (eventId == generated.mpv_event_id.MPV_EVENT_COMMAND_REPLY) {
       final completer = _commandRequests.remove(event.ref.reply_userdata);
       if (completer == null) {
         print(
@@ -1463,12 +1468,12 @@ class NativePlayer extends PlatformPlayer {
       return;
     }
 
-    _logError(
-      event.ref.error,
-      'event:${event.ref.event_id} ${event.ref.data.cast<Uint8>()}',
-    );
+    final error = event.ref.error;
+    if (error < 0 && !logController.isClosed) {
+      _logError(error, 'event:$eventId ${event.ref.data.cast<Uint8>()}');
+    }
 
-    if (event.ref.event_id == generated.mpv_event_id.MPV_EVENT_START_FILE) {
+    if (eventId == generated.mpv_event_id.MPV_EVENT_START_FILE) {
       if (isPlayingStateChangeAllowed) {
         state = state.copyWith(
           playing: true,
@@ -1487,7 +1492,7 @@ class NativePlayer extends PlatformPlayer {
       }
     }
     // NOTE: Now, --keep-open=yes is used. Thus, eof-reached property is used instead of this.
-    // if (event.ref.event_id == generated.mpv_event_id.MPV_EVENT_END_FILE) {
+    // if (eventId == generated.mpv_event_id.MPV_EVENT_END_FILE) {
     //   // Check for mpv_end_file_reason.MPV_END_FILE_REASON_EOF before modifying state.completed.
     //   if (event.ref.data.cast<generated.mpv_event_end_file>().ref.reason == generated.mpv_end_file_reason.MPV_END_FILE_REASON_EOF) {
     //     if (isPlayingStateChangeAllowed) {
@@ -1504,11 +1509,9 @@ class NativePlayer extends PlatformPlayer {
     //     }
     //   }
     // }
-    if (event.ref.event_id ==
-        generated.mpv_event_id.MPV_EVENT_PROPERTY_CHANGE) {
-      final prop = event.ref.data.cast<generated.mpv_event_property>();
-      if (prop.ref.name.cast<Utf8>().toDartString() == 'pause' &&
-          prop.ref.format == generated.mpv_format.MPV_FORMAT_FLAG) {
+    if (prop != null) {
+      if (propertyName == 'pause' &&
+          propertyFormat == generated.mpv_format.MPV_FORMAT_FLAG) {
         final playing = prop.ref.data.cast<Int8>().value == 0;
         if (isPlayingStateChangeAllowed) {
           state = state.copyWith(playing: playing);
@@ -1517,8 +1520,8 @@ class NativePlayer extends PlatformPlayer {
           }
         }
       }
-      if (prop.ref.name.cast<Utf8>().toDartString() == 'core-idle' &&
-          prop.ref.format == generated.mpv_format.MPV_FORMAT_FLAG) {
+      if (propertyName == 'core-idle' &&
+          propertyFormat == generated.mpv_format.MPV_FORMAT_FLAG) {
         // Check for [isBufferingStateChangeAllowed] because `pause` causes `core-idle` to be fired.
         final buffering = prop.ref.data.cast<Int8>().value == 1;
         if (buffering) {
@@ -1536,16 +1539,16 @@ class NativePlayer extends PlatformPlayer {
         }
         isBufferingStateChangeAllowed = true;
       }
-      if (prop.ref.name.cast<Utf8>().toDartString() == 'paused-for-cache' &&
-          prop.ref.format == generated.mpv_format.MPV_FORMAT_FLAG) {
+      if (propertyName == 'paused-for-cache' &&
+          propertyFormat == generated.mpv_format.MPV_FORMAT_FLAG) {
         final buffering = prop.ref.data.cast<Int8>().value == 1;
         state = state.copyWith(buffering: buffering);
         if (!bufferingController.isClosed) {
           bufferingController.add(buffering);
         }
       }
-      if (prop.ref.name.cast<Utf8>().toDartString() == 'demuxer-cache-time' &&
-          prop.ref.format == generated.mpv_format.MPV_FORMAT_DOUBLE) {
+      if (propertyName == 'demuxer-cache-time' &&
+          propertyFormat == generated.mpv_format.MPV_FORMAT_DOUBLE) {
         final buffer = Duration(
           microseconds: prop.ref.data.cast<Double>().value * 1e6 ~/ 1,
         );
@@ -1554,9 +1557,8 @@ class NativePlayer extends PlatformPlayer {
           bufferController.add(buffer);
         }
       }
-      if (prop.ref.name.cast<Utf8>().toDartString() ==
-              'cache-buffering-state' &&
-          prop.ref.format == generated.mpv_format.MPV_FORMAT_DOUBLE) {
+      if (propertyName == 'cache-buffering-state' &&
+          propertyFormat == generated.mpv_format.MPV_FORMAT_DOUBLE) {
         final bufferingPercentage = prop.ref.data.cast<Double>().value;
 
         state = state.copyWith(bufferingPercentage: bufferingPercentage);
@@ -1564,8 +1566,8 @@ class NativePlayer extends PlatformPlayer {
           bufferingPercentageController.add(bufferingPercentage);
         }
       }
-      if (prop.ref.name.cast<Utf8>().toDartString() == 'time-pos' &&
-          prop.ref.format == generated.mpv_format.MPV_FORMAT_DOUBLE) {
+      if (propertyName == 'time-pos' &&
+          propertyFormat == generated.mpv_format.MPV_FORMAT_DOUBLE) {
         final position = Duration(
           microseconds: prop.ref.data.cast<Double>().value * 1e6 ~/ 1,
         );
@@ -1574,8 +1576,8 @@ class NativePlayer extends PlatformPlayer {
           positionController.add(position);
         }
       }
-      if (prop.ref.name.cast<Utf8>().toDartString() == 'duration' &&
-          prop.ref.format == generated.mpv_format.MPV_FORMAT_DOUBLE) {
+      if (propertyName == 'duration' &&
+          propertyFormat == generated.mpv_format.MPV_FORMAT_DOUBLE) {
         final duration = Duration(
           microseconds: prop.ref.data.cast<Double>().value * 1e6 ~/ 1,
         );
@@ -1604,8 +1606,8 @@ class NativePlayer extends PlatformPlayer {
           }
         }
       }
-      if (prop.ref.name.cast<Utf8>().toDartString() == 'playlist-playing-pos' &&
-          prop.ref.format == generated.mpv_format.MPV_FORMAT_INT64 &&
+      if (propertyName == 'playlist-playing-pos' &&
+          propertyFormat == generated.mpv_format.MPV_FORMAT_INT64 &&
           prop.ref.data != nullptr &&
           isPlaylistStateChangeAllowed) {
         final index = prop.ref.data.cast<Int64>().value;
@@ -1619,16 +1621,16 @@ class NativePlayer extends PlatformPlayer {
           }
         }
       }
-      if (prop.ref.name.cast<Utf8>().toDartString() == 'volume' &&
-          prop.ref.format == generated.mpv_format.MPV_FORMAT_DOUBLE) {
+      if (propertyName == 'volume' &&
+          propertyFormat == generated.mpv_format.MPV_FORMAT_DOUBLE) {
         final volume = prop.ref.data.cast<Double>().value;
         state = state.copyWith(volume: volume);
         if (!volumeController.isClosed) {
           volumeController.add(volume);
         }
       }
-      if (prop.ref.name.cast<Utf8>().toDartString() == 'audio-params' &&
-          prop.ref.format == generated.mpv_format.MPV_FORMAT_NODE) {
+      if (propertyName == 'audio-params' &&
+          propertyFormat == generated.mpv_format.MPV_FORMAT_NODE) {
         final data = prop.ref.data.cast<generated.mpv_node>();
         final list = data.ref.u.list.ref;
         final params = <String, dynamic>{};
@@ -1683,8 +1685,8 @@ class NativePlayer extends PlatformPlayer {
           audioParamsController.add(state.audioParams);
         }
       }
-      if (prop.ref.name.cast<Utf8>().toDartString() == 'audio-bitrate' &&
-          prop.ref.format == generated.mpv_format.MPV_FORMAT_DOUBLE) {
+      if (propertyName == 'audio-bitrate' &&
+          propertyFormat == generated.mpv_format.MPV_FORMAT_DOUBLE) {
         if (state.playlist.index < state.playlist.medias.length &&
             state.playlist.index >= 0) {
           final data = prop.ref.data.cast<Double>().value;
@@ -1707,8 +1709,8 @@ class NativePlayer extends PlatformPlayer {
           }
         }
       }
-      if (prop.ref.name.cast<Utf8>().toDartString() == 'track-list' &&
-          prop.ref.format == generated.mpv_format.MPV_FORMAT_NODE) {
+      if (propertyName == 'track-list' &&
+          propertyFormat == generated.mpv_format.MPV_FORMAT_NODE) {
         final value = prop.ref.data.cast<generated.mpv_node>();
         if (value.ref.format == generated.mpv_format.MPV_FORMAT_NODE_ARRAY) {
           final video = [VideoTrack.auto(), VideoTrack.no()];
@@ -1911,8 +1913,8 @@ class NativePlayer extends PlatformPlayer {
           }
         }
       }
-      if (prop.ref.name.cast<Utf8>().toDartString() == 'sub-text' &&
-          prop.ref.format == generated.mpv_format.MPV_FORMAT_NODE) {
+      if (propertyName == 'sub-text' &&
+          propertyFormat == generated.mpv_format.MPV_FORMAT_NODE) {
         final value = prop.ref.data.cast<generated.mpv_node>();
         if (value.ref.format == generated.mpv_format.MPV_FORMAT_STRING) {
           final text = value.ref.u.string.cast<Utf8>().toDartString();
@@ -1927,8 +1929,8 @@ class NativePlayer extends PlatformPlayer {
           }
         }
       }
-      if (prop.ref.name.cast<Utf8>().toDartString() == 'secondary-sub-text' &&
-          prop.ref.format == generated.mpv_format.MPV_FORMAT_NODE) {
+      if (propertyName == 'secondary-sub-text' &&
+          propertyFormat == generated.mpv_format.MPV_FORMAT_NODE) {
         final value = prop.ref.data.cast<generated.mpv_node>();
         if (value.ref.format == generated.mpv_format.MPV_FORMAT_STRING) {
           final text = value.ref.u.string.cast<Utf8>().toDartString();
@@ -1943,8 +1945,8 @@ class NativePlayer extends PlatformPlayer {
           }
         }
       }
-      if (prop.ref.name.cast<Utf8>().toDartString() == 'eof-reached' &&
-          prop.ref.format == generated.mpv_format.MPV_FORMAT_FLAG) {
+      if (propertyName == 'eof-reached' &&
+          propertyFormat == generated.mpv_format.MPV_FORMAT_FLAG) {
         final value = prop.ref.data.cast<Bool>().value;
         if (value) {
           if (isPlayingStateChangeAllowed) {
@@ -1976,8 +1978,8 @@ class NativePlayer extends PlatformPlayer {
           }
         }
       }
-      if (prop.ref.name.cast<Utf8>().toDartString() == 'video-params' &&
-          prop.ref.format == generated.mpv_format.MPV_FORMAT_NODE) {
+      if (propertyName == 'video-params' &&
+          propertyFormat == generated.mpv_format.MPV_FORMAT_NODE) {
         final node = prop.ref.data.cast<generated.mpv_node>().ref;
         final data = <String, dynamic>{};
         for (int i = 0; i < node.u.list.ref.num; i++) {
@@ -2051,25 +2053,23 @@ class NativePlayer extends PlatformPlayer {
           }
         }
       }
-      if (observed.containsKey(prop.ref.name.cast<Utf8>().toDartString())) {
-        if (prop.ref.format == generated.mpv_format.MPV_FORMAT_NONE) {
-          final fn = observed[prop.ref.name.cast<Utf8>().toDartString()];
-          if (fn != null) {
-            final data = mpv.mpv_get_property_string(ctx, prop.ref.name);
-            if (data != nullptr) {
-              try {
-                await fn.call(data.cast<Utf8>().toDartString());
-              } catch (exception, stacktrace) {
-                print(exception);
-                print(stacktrace);
-              }
-              mpv.mpv_free(data.cast());
+      if (propertyFormat == generated.mpv_format.MPV_FORMAT_NONE) {
+        final fn = observed[propertyName];
+        if (fn != null) {
+          final data = mpv.mpv_get_property_string(ctx, prop.ref.name);
+          if (data != nullptr) {
+            try {
+              await fn.call(data.cast<Utf8>().toDartString());
+            } catch (exception, stacktrace) {
+              print(exception);
+              print(stacktrace);
             }
+            mpv.mpv_free(data.cast());
           }
         }
       }
     }
-    if (event.ref.event_id == generated.mpv_event_id.MPV_EVENT_LOG_MESSAGE) {
+    if (eventId == generated.mpv_event_id.MPV_EVENT_LOG_MESSAGE) {
       final eventLogMessage =
           event.ref.data.cast<generated.mpv_event_log_message>().ref;
       final prefix = eventLogMessage.prefix.cast<Utf8>().toDartString().trim();
@@ -2124,7 +2124,7 @@ class NativePlayer extends PlatformPlayer {
         // --------------------------------------------------
       }
     }
-    if (event.ref.event_id == generated.mpv_event_id.MPV_EVENT_HOOK) {
+    if (eventId == generated.mpv_event_id.MPV_EVENT_HOOK) {
       final prop = event.ref.data.cast<generated.mpv_event_hook>();
       if (prop.ref.name.cast<Utf8>().toDartString() == 'on_load') {
         // --------------------------------------------------

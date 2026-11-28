@@ -95,6 +95,8 @@ final class _History extends WatchHistory {
   Future<void> refreshFromServer() async {
     serverRefreshes++;
   }
+
+  void replace(List<HistoryItem> rows) => state = List.unmodifiable(rows);
 }
 
 Future<_LibraryStorage> _pump(
@@ -105,6 +107,7 @@ Future<_LibraryStorage> _pump(
   Map<String, String> strings = const <String, String>{},
   bool? showPageMenuButtons,
   int extraAnime = 0,
+  Map<String, List<MultimediaItem>> extraLists = const {},
 }) async {
   final storage =
       _LibraryStorage({
@@ -118,6 +121,9 @@ Future<_LibraryStorage> _pump(
         })
         ..strings['library_media_kind'] = kind
         ..strings.addAll(strings);
+  for (final entry in extraLists.entries) {
+    storage.lists.putIfAbsent(entry.key, () => []).addAll(entry.value);
+  }
   final account = AnimeWitcherAccountService(
     storage: storage,
     secureStorage: SecureTokenStorage(storage),
@@ -743,5 +749,191 @@ void main() {
     expect(storage.reads, firstSearchReads);
     expect(storage.dateLookups, 0);
     await tester.pump(const Duration(milliseconds: 100));
+  });
+
+  testWidgets('phone: exact Arabic search during refinements and widening', (
+    tester,
+  ) async {
+    final alpha = _item('أفق Alpha');
+    final alphaFilm = _item(
+      'أفق ALPHA Film',
+      type: MultimediaContentType.movie,
+    );
+    final beta = _item('أفق Beta');
+    final horizon = _item('أفق History');
+    final history = <HistoryItem>[
+      for (var i = 0; i < 320; i++)
+        HistoryItem(
+          item: _item('Recently watched $i'),
+          timestamp: i + 1,
+          position: 0,
+          duration: 1,
+        ),
+      HistoryItem(item: alpha, timestamp: 1000, position: 0, duration: 1),
+      HistoryItem(item: horizon, timestamp: 999, position: 0, duration: 1),
+    ];
+    await _pump(
+      tester,
+      size: const Size(390, 780),
+      kind: 'anime',
+      history: history,
+      extraLists: {
+        for (final category in LibraryCategory.values)
+          category.storageKey: [
+            if (category == LibraryCategory.favorite) alpha,
+            if (category == LibraryCategory.watching) ...[beta, alpha],
+            if (category == LibraryCategory.completed) alphaFilm,
+            for (var i = 0; i < 24; i++)
+              _item('Archived ${category.storageKey} $i'),
+          ],
+      },
+    );
+    final field = find.byKey(const ValueKey('library-search'));
+    final grid = find.byKey(const ValueKey('library-grid-anime-search'));
+    expect(Directionality.of(tester.element(field)), TextDirection.rtl);
+
+    Future<void> search(String query, List<MultimediaItem> expected) async {
+      await tester.enterText(field, query);
+      await tester.pump(const Duration(milliseconds: 501));
+      await tester.pump();
+      if (expected.isEmpty) {
+        expect(
+          find.byKey(const ValueKey('library-search-empty')),
+          findsOneWidget,
+        );
+      } else {
+        expect(tester.widget<LibraryItemsGrid>(grid).items, expected);
+        expect(
+          find
+              .descendant(
+                of: grid,
+                matching: find.byKey(ValueKey(expected.first.url)),
+              )
+              .hitTestable(),
+          findsOneWidget,
+        );
+      }
+      expect(
+        tester
+            .widget<EditableText>(
+              find.descendant(of: field, matching: find.byType(EditableText)),
+            )
+            .focusNode
+            .hasFocus,
+        isTrue,
+      );
+    }
+
+    await search('أف', [alpha, beta, alphaFilm, horizon]);
+    await search(' أفق  AL ', [alpha, alphaFilm]);
+    await search('أفق alp', [alpha, alphaFilm]);
+    await search(' أفق\tALPHA ', [alpha, alphaFilm]);
+    await search('   أفق  alpha ', [alpha, alphaFilm]);
+    await search('أفق', [alpha, beta, alphaFilm, horizon]);
+    await search('أفق BETA', [beta]);
+    await search('غير موجود', []);
+    await search('غير موجودة', []);
+
+    await tester.tap(find.byTooltip('مسح'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TabBarView), findsOneWidget);
+    expect(find.byKey(const ValueKey('library-search-empty')), findsNothing);
+  });
+
+  testWidgets('phone: active search follows changed shelf sources and kind', (
+    tester,
+  ) async {
+    final once = _item('أفق One', year: 1995);
+    final duplicate = once.copyWith(title: 'أفق Duplicate');
+    final second = _item('أفق Two', year: 2025);
+    final manga = _item('أفق Manga', type: MultimediaContentType.manga);
+    final historical = _item('أفق History');
+    final storage = await _pump(
+      tester,
+      size: const Size(390, 780),
+      kind: 'anime',
+      extraLists: {
+        'favorite': [once, second],
+        'watching': [duplicate, manga],
+      },
+      history: [
+        HistoryItem(item: historical, timestamp: 2, position: 0, duration: 1),
+      ],
+    );
+    final field = find.byKey(const ValueKey('library-search'));
+    final filter = find.byKey(const ValueKey('library-filter'));
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(LibraryPhoneShelves)),
+    );
+    final history = container.read(watchHistoryProvider.notifier) as _History;
+
+    List<MultimediaItem> shown(String kind) => tester
+        .widget<LibraryItemsGrid>(
+          find.byKey(ValueKey('library-grid-$kind-search')),
+        )
+        .items;
+    Future<void> search(String text) async {
+      await tester.enterText(field, text);
+      await tester.pump(const Duration(milliseconds: 501));
+      await tester.pump();
+    }
+
+    Future<void> openFilters() async {
+      await tester.tap(filter);
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> closeFilters() async {
+      await tester.tapAt(const Offset(200, 40));
+      await tester.pumpAndSettle();
+    }
+
+    await search('أفق');
+    expect(shown('anime'), [once, second, historical]);
+
+    final freshHistory = historical.copyWith(title: 'أفق Refreshed');
+    history.replace([
+      HistoryItem(item: freshHistory, timestamp: 3, position: 0, duration: 1),
+    ]);
+    await tester.pump();
+    expect(shown('anime'), [once, second, freshHistory]);
+
+    final freshSecond = second.copyWith(title: 'أفق Renamed');
+    final favorites = storage.lists['favorite']!;
+    favorites[favorites.indexOf(second)] = freshSecond;
+    container.read(libraryProvider.notifier).refresh();
+    await tester.pump();
+    expect(shown('anime'), [once, freshSecond, freshHistory]);
+
+    await openFilters();
+    await tester.tap(find.widgetWithText(ChoiceChip, 'السنة'));
+    await tester.pumpAndSettle();
+    await closeFilters();
+    expect(shown('anime'), [freshSecond, once, freshHistory]);
+    expect(storage.strings['library_shelves_sort'], 'year');
+
+    await openFilters();
+    await tester.tap(find.byKey(const ValueKey('library-filter-favorite')));
+    await tester.pumpAndSettle();
+    await closeFilters();
+    expect(shown('anime'), [duplicate, freshHistory]);
+
+    await openFilters();
+    await tester.tap(find.byKey(const ValueKey('library-filter-recent')));
+    await tester.pumpAndSettle();
+    await closeFilters();
+    expect(shown('anime'), [duplicate]);
+
+    await openFilters();
+    await tester.tap(find.byKey(const ValueKey('library-section-manga')));
+    await tester.pumpAndSettle();
+    await closeFilters();
+    expect(tester.widget<TextField>(field).controller!.text, isEmpty);
+    expect(
+      find.byKey(const ValueKey('library-grid-anime-search')),
+      findsNothing,
+    );
+    await search('أفق');
+    expect(shown('manga'), [manga]);
   });
 }

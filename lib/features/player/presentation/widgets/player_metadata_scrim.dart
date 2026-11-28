@@ -95,6 +95,16 @@ class PlayerMetadataScrimState extends State<PlayerMetadataScrim>
 
   Timer? _scheduleTimer;
 
+  ({
+    MultimediaItem item,
+    Episode? episode,
+    bool isSeries,
+    bool isTv,
+    List<String> tags,
+    Widget child,
+  })?
+  _visibleContent;
+
   @override
   void initState() {
     super.initState();
@@ -162,9 +172,14 @@ class PlayerMetadataScrimState extends State<PlayerMetadataScrim>
   }
 
   void _onFadeStatus(AnimationStatus status) {
-    // When the hide animation completes, fully remove from the tree.
-    if (status == AnimationStatus.dismissed && _isVisible == false) {
-      if (mounted) setState(() {});
+    // animateTo(0) reports completed, not dismissed. Remove the content
+    // only at zero opacity, without changing the existing fade timing.
+    if (mounted &&
+        !_isVisible &&
+        (status == AnimationStatus.completed ||
+            status == AnimationStatus.dismissed) &&
+        _fadeController.value == _fadeController.lowerBound) {
+      setState(() {});
     }
   }
 
@@ -234,17 +249,14 @@ class PlayerMetadataScrimState extends State<PlayerMetadataScrim>
     // Don't show on phones — only TV and desktop.
     final isDesktop =
         Platform.isMacOS || Platform.isWindows || Platform.isLinux;
-    if (!widget.isTv && !isDesktop) return const SizedBox.shrink();
-
-    // Nothing to show if there's no item data.
-    if (widget.item == null) return const SizedBox.shrink();
-
-    // Not visible and animation fully dismissed → remove from tree.
-    if (!_isVisible && !_fadeController.isAnimating) {
+    final item = widget.item;
+    if ((!widget.isTv && !isDesktop) ||
+        item == null ||
+        (!_isVisible && !_fadeController.isAnimating)) {
+      // Don't retain artwork or text after the fade is fully dismissed.
+      _visibleContent = null;
       return const SizedBox.shrink();
     }
-
-    final item = widget.item!;
     final screenWidth = MediaQuery.sizeOf(context).width;
     // Fixed width: ~40% of screen on desktop, ~45% on TV, clamped.
     final panelWidth = (screenWidth * (widget.isTv ? 0.45 : 0.40)).clamp(
@@ -268,52 +280,106 @@ class PlayerMetadataScrimState extends State<PlayerMetadataScrim>
             ),
           );
         },
-        child: IgnorePointer(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
-                colors: [
-                  Colors.black.withValues(alpha: 0.85),
-                  Colors.black.withValues(alpha: 0.65),
-                  Colors.black.withValues(alpha: 0.30),
-                  Colors.transparent,
-                ],
-                stops: const [0.0, 0.45, 0.75, 1.0],
-              ),
+        child: _contentFor(item),
+      ),
+    );
+  }
+
+  Widget _contentFor(MultimediaItem item) {
+    final cached = _visibleContent;
+    final episode = widget.episode;
+    final isSeries = widget.isSeries;
+    final isTv = widget.isTv;
+    final tags = item.tags;
+    final totalTags = tags?.length ?? 0;
+    final tagCount = totalTags > 6 ? 6 : totalTags;
+
+    // HUD settings and backend state can update without changing anything
+    // painted by the scrim. Keep AnimatedBuilder's static child identical.
+    // Item and episode fields are final, but providers can expose mutable tags.
+    if (cached != null &&
+        identical(cached.item, item) &&
+        identical(cached.episode, episode) &&
+        cached.isSeries == isSeries &&
+        cached.isTv == isTv &&
+        _sameTags(cached.tags, tags, tagCount)) {
+      return cached.child;
+    }
+
+    final shownTags = tagCount == 0
+        ? const <String>[]
+        : tags!.sublist(0, tagCount);
+    final child = _buildContent(item, episode, isSeries, isTv, shownTags);
+    _visibleContent = (
+      item: item,
+      episode: episode,
+      isSeries: isSeries,
+      isTv: isTv,
+      tags: shownTags,
+      child: child,
+    );
+    return child;
+  }
+
+  bool _sameTags(List<String> before, List<String>? after, int count) {
+    if (before.length != count) return false;
+    for (var index = 0; index < count; index++) {
+      if (before[index] != after![index]) return false;
+    }
+    return true;
+  }
+
+  Widget _buildContent(
+    MultimediaItem item,
+    Episode? episode,
+    bool isSeries,
+    bool isTv,
+    List<String> tags,
+  ) {
+    return IgnorePointer(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+            colors: [
+              Colors.black.withValues(alpha: 0.85),
+              Colors.black.withValues(alpha: 0.65),
+              Colors.black.withValues(alpha: 0.30),
+              Colors.transparent,
+            ],
+            stops: const [0.0, 0.45, 0.75, 1.0],
+          ),
+        ),
+        child: SafeArea(
+          right: false,
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              isTv
+                  ? HotstarPlayerStyle.tvEdgeInset
+                  : HotstarPlayerStyle.edgeInset + 8,
+              isTv ? 80 : 60,
+              40,
+              isTv ? 80 : 60,
             ),
-            child: SafeArea(
-              right: false,
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(
-                  widget.isTv
-                      ? HotstarPlayerStyle.tvEdgeInset
-                      : HotstarPlayerStyle.edgeInset + 8,
-                  widget.isTv ? 80 : 60,
-                  40,
-                  widget.isTv ? 80 : 60,
-                ),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // --- Logo / Title (mutually exclusive) ---
-                    _buildLogoOrTitle(item),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // --- Logo / Title (mutually exclusive) ---
+                _buildLogoOrTitle(item.title, item.logoUrl, isTv),
 
-                    const SizedBox(height: 20),
+                const SizedBox(height: 20),
 
-                    // --- Meta line ---
-                    _buildMetaLine(item),
+                // --- Meta line ---
+                _buildMetaLine(item, episode, isSeries, isTv, tags),
 
-                    const SizedBox(height: 16),
+                const SizedBox(height: 16),
 
-                    // --- Description ---
-                    _buildDescription(item),
-                  ],
-                ),
-              ),
+                // --- Description ---
+                _buildDescription(item.description, isTv),
+              ],
             ),
           ),
         ),
@@ -325,13 +391,10 @@ class PlayerMetadataScrimState extends State<PlayerMetadataScrim>
   /// or fails to load, the title text is shown instead.
   /// Sizing matches the details desktop hero pattern (height: 200) but scaled
   /// proportionally for the narrower scrim panel.
-  Widget _buildLogoOrTitle(MultimediaItem item) {
-    final logoUrl = item.logoUrl;
-    final hasLogo = logoUrl != null && logoUrl.isNotEmpty;
+  Widget _buildLogoOrTitle(String title, String? logoUrl, bool isTv) {
+    if (logoUrl == null || logoUrl.isEmpty) return _titleText(title, isTv);
 
-    if (!hasLogo) return _titleText(item.title);
-
-    final double logoHeight = widget.isTv ? 120 : 100;
+    final double logoHeight = isTv ? 120 : 100;
 
     return ConstrainedBox(
       constraints: BoxConstraints(
@@ -346,21 +409,21 @@ class PlayerMetadataScrimState extends State<PlayerMetadataScrim>
           alignment: Alignment.centerLeft,
           fit: BoxFit.contain,
           memCacheWidth: decodeWidth,
-          placeholder: (_, _) => _titleText(item.title),
-          errorWidget: (_, _, _) => _titleText(item.title),
+          placeholder: (_, _) => _titleText(title, isTv),
+          errorWidget: (_, _, _) => _titleText(title, isTv),
         ),
       ),
     );
   }
 
-  Widget _titleText(String title) {
+  Widget _titleText(String title, bool isTv) {
     return Text(
       title,
       textDirection: TextDirection.ltr,
       textAlign: TextAlign.start,
       style: TextStyle(
         color: HotstarPlayerStyle.primaryText,
-        fontSize: widget.isTv ? 32 : 28,
+        fontSize: isTv ? 32 : 28,
         fontWeight: FontWeight.w800,
         height: 1.15,
         letterSpacing: -0.3,
@@ -371,14 +434,17 @@ class PlayerMetadataScrimState extends State<PlayerMetadataScrim>
   }
 
   /// Meta line: tags • year • S1:E3 • ⭐ 8.5
-  Widget _buildMetaLine(MultimediaItem item) {
+  Widget _buildMetaLine(
+    MultimediaItem item,
+    Episode? ep,
+    bool isSeries,
+    bool isTv,
+    List<String> tags,
+  ) {
     final parts = <String>[];
 
     // Tags / genres (first 6).
-    final tags = item.tags;
-    if (tags != null && tags.isNotEmpty) {
-      parts.add(tags.take(6).join(', '));
-    }
+    if (tags.isNotEmpty) parts.add(tags.join(', '));
 
     // Year.
     if (item.year != null) {
@@ -387,9 +453,8 @@ class PlayerMetadataScrimState extends State<PlayerMetadataScrim>
 
     // Season/Episode for series. Numberless rows (specials, OVAs, مترجم /
     // مدبلج) have no S/E pair, so show their name instead of "E0".
-    final ep = widget.episode;
     if (ep != null) {
-      if (widget.isSeries && ep.episode > 0) {
+      if (isSeries && ep.episode > 0) {
         parts.add('S${ep.season}:E${ep.episode}');
       } else {
         final label = formatEpisodeLabel(
@@ -413,7 +478,7 @@ class PlayerMetadataScrimState extends State<PlayerMetadataScrim>
       parts.join('  •  '),
       style: TextStyle(
         color: HotstarPlayerStyle.secondaryText,
-        fontSize: widget.isTv ? 16 : 14,
+        fontSize: isTv ? 16 : 14,
         fontWeight: FontWeight.w500,
         height: 1.4,
       ),
@@ -423,15 +488,15 @@ class PlayerMetadataScrimState extends State<PlayerMetadataScrim>
   }
 
   /// Synopsis / description, max 5 lines.
-  Widget _buildDescription(MultimediaItem item) {
-    final plot = item.description;
-    if (plot == null || plot.trim().isEmpty) return const SizedBox.shrink();
+  Widget _buildDescription(String? description, bool isTv) {
+    final plot = description?.trim();
+    if (plot == null || plot.isEmpty) return const SizedBox.shrink();
 
     return Text(
-      plot.trim(),
+      plot,
       style: TextStyle(
         color: HotstarPlayerStyle.mutedText,
-        fontSize: widget.isTv ? 15 : 13,
+        fontSize: isTv ? 15 : 13,
         fontWeight: FontWeight.w400,
         height: 1.55,
       ),

@@ -19,8 +19,6 @@ import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
 import 'core/storage/storage_service.dart';
 
-import 'package:dynamic_color/dynamic_color.dart';
-
 import 'core/utils/app_utils.dart';
 import 'core/utils/artwork_host_fallback.dart';
 import 'core/utils/window_controls_visibility.dart';
@@ -194,7 +192,22 @@ class _IosKeyboardEdgeSwipeDismissState
 }
 
 class AppRoot extends StatefulWidget {
-  const AppRoot({super.key});
+  const AppRoot({super.key})
+    : _storage = null,
+      _probeArtwork = probeMalArtworkUnreachable,
+      _application = const MyApp();
+
+  @visibleForTesting
+  const AppRoot.test(
+    this._storage,
+    this._probeArtwork,
+    this._application, {
+    super.key,
+  });
+
+  final StorageService? _storage;
+  final Future<bool?> Function({required Duration timeout}) _probeArtwork;
+  final Widget _application;
 
   @override
   State<AppRoot> createState() => _AppRootState();
@@ -213,7 +226,7 @@ class _AppRootState extends State<AppRoot> {
   }
 
   Future<void> _init() async {
-    _storageService = StorageService();
+    _storageService = widget._storage ?? StorageService();
     final started = Stopwatch()..start();
     appDiagnostics.record('app.storage.init.start');
     try {
@@ -224,6 +237,7 @@ class _AppRootState extends State<AppRoot> {
             if (kDebugMode) debugPrint("Error setting high refresh rate: $e");
           }),
       ]);
+      if (!mounted) return;
 
       // Image widgets read the artwork quality switch directly, so publish it
       // (and the matching image cache budget) before the first screen paints.
@@ -234,22 +248,20 @@ class _AppRootState extends State<AppRoot> {
       // times out. Whether it is blocked here is always checked, whatever
       // the fallback setting: the catalog stores an AniList copy of each
       // poster, and using it costs nothing. Last run's answer drives the
-      // first screen; the very first run waits briefly for the check, which
-      // is a DNS answer and so usually takes milliseconds.
+      // first screen; on a fresh install the entire network probe gets one
+      // short deadline so a slow connection cannot hold startup indefinitely.
       final artworkFallback = _storageService.isArtworkFallbackEnabled();
       applyArtworkFallbackEnabled(artworkFallback);
       seedMalArtworkReachability(_storageService.isMalArtworkUnreachable());
       if (_storageService.malArtworkProbedAt() == null) {
-        try {
-          final unreachable = await probeMalArtworkUnreachable(
-            timeout: const Duration(milliseconds: 1500),
-          );
-          seedMalArtworkReachability(unreachable);
-          await _storageService.setMalArtworkUnreachable(unreachable);
-        } catch (_) {}
+        await _refreshArtworkHostReachability(
+          timeout: const Duration(milliseconds: 1500),
+          preferFallbackOnTimeout: true,
+        );
       } else {
         unawaited(_refreshArtworkHostReachability());
       }
+      if (!mounted) return;
 
       if (Platform.isMacOS || Platform.isWindows) {
         final alwaysOnTop = _storageService.isAlwaysOnTop();
@@ -275,10 +287,12 @@ class _AppRootState extends State<AppRoot> {
     }
   }
 
-  /// Re-checks whether the MyAnimeList CDN answers, and remembers it. Runs off
-  /// the critical path: the seeded value already drives the first frame, and a
-  /// changed answer only needs to apply from the next screen onwards.
-  Future<void> _refreshArtworkHostReachability() async {
+  /// Re-checks whether the MyAnimeList CDN answers. Only first launch waits
+  /// (briefly) for the probe; no launch needs to wait for persistence.
+  Future<void> _refreshArtworkHostReachability({
+    Duration timeout = const Duration(seconds: 3),
+    bool preferFallbackOnTimeout = false,
+  }) async {
     final probedAt = _storageService.malArtworkProbedAt();
     if (probedAt != null &&
         DateTime.now().difference(probedAt) < probeTtl &&
@@ -287,10 +301,26 @@ class _AppRootState extends State<AppRoot> {
       // "unreachable" is always re-probed so the app recovers on its own.
       return;
     }
-    final unreachable = await probeMalArtworkUnreachable();
-    if (!mounted) return;
-    seedMalArtworkReachability(unreachable);
-    await _storageService.setMalArtworkUnreachable(unreachable);
+    try {
+      final unreachable = await widget._probeArtwork(timeout: timeout);
+      if (!mounted) return;
+      if (unreachable == null) {
+        // On a fresh launch, use the catalog's alternate now rather than
+        // leaving every card pointed at a possibly blackholed CDN. This is
+        // only a preference for this session, not a cached block diagnosis.
+        if (preferFallbackOnTimeout) seedMalArtworkReachability(true);
+        return;
+      }
+      seedMalArtworkReachability(unreachable);
+      unawaited(
+        _storageService
+            .setMalArtworkUnreachable(unreachable)
+            .catchError((Object _) {}),
+      );
+    } catch (error) {
+      // This optional probe must not fail app startup.
+      appDiagnostics.recordException('artworkProbe', error);
+    }
   }
 
   @override
@@ -304,23 +334,20 @@ class _AppRootState extends State<AppRoot> {
     }
 
     if (!_initialized) {
-      return Directionality(
+      return const Directionality(
         textDirection: TextDirection.rtl,
-        child: DynamicColorBuilder(
-          builder: (lightDynamic, darkDynamic) {
-            const color = AppTheme.animeWitcherAccent;
-            return ColoredBox(
-              color: Colors.black,
-              child: Center(child: AppLoadingIndicator(color: color)),
-            );
-          },
+        child: ColoredBox(
+          color: Colors.black,
+          child: Center(
+            child: AppLoadingIndicator(color: AppTheme.animeWitcherAccent),
+          ),
         ),
       );
     }
 
     return ProviderScope(
       overrides: [storageServiceProvider.overrideWithValue(_storageService)],
-      child: const MyApp(),
+      child: widget._application,
     );
   }
 }
@@ -335,6 +362,10 @@ class MyApp extends ConsumerStatefulWidget {
 class _MyAppState extends ConsumerState<MyApp>
     with WindowListener, WidgetsBindingObserver {
   DateTime? _lastForegroundAccountSyncAt;
+  TargetPlatform? _themePlatform;
+  AppThemeStyle? _darkThemeStyle;
+  late ThemeData _lightTheme;
+  late ThemeData _darkTheme;
 
   @override
   void initState() {
@@ -490,11 +521,16 @@ class _MyAppState extends ConsumerState<MyApp>
     // Restore the AnimeWitcher session and reconcile account data without
     // blocking the first frame. Local library/history remain immediately
     // available while the async provider performs its merge in the background.
-    ref.watch(animeWitcherAccountControllerProvider);
+    // Keep the controller active, not the whole app reactive to its state.
+    ref.watch(animeWitcherAccountControllerProvider.notifier);
     final themeStyle = ref.watch(appThemeStyleProvider);
     final appRouter = ref.watch(appRouterProvider);
     final locale = ref.watch(localeProvider);
-    final profileAsync = ref.watch(deviceProfileProvider);
+    final isTv = ref.watch(
+      deviceProfileProvider.select(
+        (profile) => profile.asData?.value.isTv == true,
+      ),
+    );
 
     // Reactive Listener: Keeps UpdateController alive and handles the UI side-effect
     ref.listen<UpdateState>(updateControllerProvider, (previous, next) {
@@ -517,201 +553,208 @@ class _MyAppState extends ConsumerState<MyApp>
       }
     });
 
-    return DynamicColorBuilder(
-      builder: (_, _) {
-        final materialApp = MaterialApp.router(
-          scaffoldMessengerKey: ref
-              .read(notificationServiceProvider)
-              .messengerKey,
-          title: 'AnimeWitcher',
-          debugShowCheckedModeBanner: false,
-          scrollBehavior: const MaterialScrollBehavior().copyWith(
-            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-          ),
-          // The chosen theme decides both the mode and which dark theme is
-          // drawn; there is no longer a system-following choice.
-          themeMode: themeStyle.themeMode,
-          theme: AppTheme.createLightTheme(null),
-          darkTheme: AppTheme.darkThemeFor(themeStyle, null),
-          routerConfig: appRouter,
-          locale: locale,
-          localizationsDelegates: const [
-            AppLocalizations.delegate,
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
-          ],
-          supportedLocales: AppLocalizations.supportedLocales,
-          builder: (context, child) {
-            final mq = MediaQuery.of(context);
-            Widget result = child!;
+    // ThemeData's defaults depend on the platform, not on the router,
+    // locale or late device profile. Keep both slots available without
+    // rebuilding their color, font and component graphs on those updates.
+    final platform = defaultTargetPlatform;
+    if (_themePlatform != platform) {
+      _lightTheme = AppTheme.createLightTheme(null);
+      _themePlatform = platform;
+      _darkThemeStyle = null;
+    }
+    if (_darkThemeStyle != themeStyle) {
+      _darkTheme = AppTheme.darkThemeFor(themeStyle, null);
+      _darkThemeStyle = themeStyle;
+    }
 
-            // Phase 1: Density override for TV devices
-            // Android TV often reports inflated pixel density; we clamp to 1.0 for standard scaling.
-            final profile = profileAsync.asData?.value;
-            if (profile?.isTv == true) {
-              result = MediaQuery(
-                data: mq.copyWith(
-                  devicePixelRatio: 1.0,
-                  textScaler: TextScaler.noScaling,
-                ),
-                child: result,
-              );
-            }
+    final materialApp = MaterialApp.router(
+      scaffoldMessengerKey: ref.read(notificationServiceProvider).messengerKey,
+      title: 'AnimeWitcher',
+      debugShowCheckedModeBanner: false,
+      scrollBehavior: const MaterialScrollBehavior().copyWith(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      ),
+      // The chosen theme decides both the mode and which dark theme is
+      // drawn; there is no longer a system-following choice.
+      themeMode: themeStyle.themeMode,
+      theme: _lightTheme,
+      darkTheme: _darkTheme,
+      routerConfig: appRouter,
+      locale: locale,
+      localizationsDelegates: const [
+        AppLocalizations.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: AppLocalizations.supportedLocales,
+      builder: (context, child) {
+        final mq = MediaQuery.of(context);
+        Widget result = child!;
 
-            if (!kIsWeb && (Platform.isWindows || Platform.isMacOS)) {
-              final isMac = Platform.isMacOS;
-              if (!isMac) {
-                result = Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    Positioned.fill(child: result),
-                    const Positioned(
-                      top: 0,
-                      left: 0,
-                      right: 0,
-                      child: CustomTitleBar(),
-                    ),
-                  ],
-                );
-              }
-            }
-
-            result = ApplePersistentGlassHeaderOverlay(child: result);
-            if (!kIsWeb && Platform.isIOS) {
-              result = _IosKeyboardEdgeSwipeDismiss(child: result);
-            }
-            return M3ToastOverlay(child: result);
-          },
-        );
-
-        Widget rootWidget = Focus(
-          autofocus: true,
-          onKeyEvent: (node, event) {
-            if (event is KeyDownEvent &&
-                event.logicalKey == LogicalKeyboardKey.f11) {
-              _toggleFullscreen();
-              return KeyEventResult.handled;
-            }
-            return KeyEventResult.ignored;
-          },
-          child: materialApp,
-        );
-
-        if (Platform.isMacOS) {
-          final alwaysOnTop = ref.watch(
-            generalSettingsProvider.select((s) => s.alwaysOnTop),
+        // Phase 1: Density override for TV devices
+        // Android TV often reports inflated pixel density; we clamp to 1.0 for standard scaling.
+        if (isTv) {
+          result = MediaQuery(
+            data: mq.copyWith(
+              devicePixelRatio: 1.0,
+              textScaler: TextScaler.noScaling,
+            ),
+            child: result,
           );
-          rootWidget = PlatformMenuBar(
+        }
+
+        if (!kIsWeb && (Platform.isWindows || Platform.isMacOS)) {
+          final isMac = Platform.isMacOS;
+          if (!isMac) {
+            result = Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Positioned.fill(child: result),
+                const Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: CustomTitleBar(),
+                ),
+              ],
+            );
+          }
+        }
+
+        result = ApplePersistentGlassHeaderOverlay(child: result);
+        if (!kIsWeb && Platform.isIOS) {
+          result = _IosKeyboardEdgeSwipeDismiss(child: result);
+        }
+        return M3ToastOverlay(child: result);
+      },
+    );
+
+    Widget rootWidget = Focus(
+      autofocus: true,
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent &&
+            event.logicalKey == LogicalKeyboardKey.f11) {
+          _toggleFullscreen();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: materialApp,
+    );
+
+    if (Platform.isMacOS) {
+      final alwaysOnTop = ref.watch(
+        generalSettingsProvider.select((s) => s.alwaysOnTop),
+      );
+      rootWidget = PlatformMenuBar(
+        menus: <PlatformMenuItem>[
+          PlatformMenu(
+            label: 'AnimeWitcher',
             menus: <PlatformMenuItem>[
-              PlatformMenu(
-                label: 'AnimeWitcher',
-                menus: <PlatformMenuItem>[
-                  if (PlatformProvidedMenuItem.hasMenu(
-                    PlatformProvidedMenuItemType.about,
-                  ))
-                    const PlatformProvidedMenuItem(
-                      type: PlatformProvidedMenuItemType.about,
-                    ),
-                  const PlatformProvidedMenuItem(
-                    type: PlatformProvidedMenuItemType.quit,
-                  ),
-                ],
+              if (PlatformProvidedMenuItem.hasMenu(
+                PlatformProvidedMenuItemType.about,
+              ))
+                const PlatformProvidedMenuItem(
+                  type: PlatformProvidedMenuItemType.about,
+                ),
+              const PlatformProvidedMenuItem(
+                type: PlatformProvidedMenuItemType.quit,
               ),
-              PlatformMenu(
-                label: 'تحرير',
-                menus: <PlatformMenuItem>[
-                  PlatformMenuItem(
-                    label: 'تراجع',
-                    shortcut: const SingleActivator(
-                      LogicalKeyboardKey.keyZ,
-                      meta: true,
-                    ),
-                    onSelected: () {},
-                  ),
-                  PlatformMenuItem(
-                    label: 'إعادة',
-                    shortcut: const SingleActivator(
-                      LogicalKeyboardKey.keyZ,
-                      meta: true,
-                      shift: true,
-                    ),
-                    onSelected: () {},
-                  ),
-                  PlatformMenuItemGroup(
-                    members: <PlatformMenuItem>[
-                      PlatformMenuItem(
-                        label: 'قص',
-                        shortcut: SingleActivator(
-                          LogicalKeyboardKey.keyX,
-                          meta: true,
-                        ),
-                        onSelected: null,
-                      ),
-                      PlatformMenuItem(
-                        label: 'نسخ',
-                        shortcut: SingleActivator(
-                          LogicalKeyboardKey.keyC,
-                          meta: true,
-                        ),
-                        onSelected: null,
-                      ),
-                      PlatformMenuItem(
-                        label: 'لصق',
-                        shortcut: SingleActivator(
-                          LogicalKeyboardKey.keyV,
-                          meta: true,
-                        ),
-                        onSelected: null,
-                      ),
-                      PlatformMenuItem(
-                        label: 'تحديد الكل',
-                        shortcut: SingleActivator(
-                          LogicalKeyboardKey.keyA,
-                          meta: true,
-                        ),
-                        onSelected: null,
-                      ),
-                    ],
-                  ),
-                ],
+            ],
+          ),
+          PlatformMenu(
+            label: 'تحرير',
+            menus: <PlatformMenuItem>[
+              PlatformMenuItem(
+                label: 'تراجع',
+                shortcut: const SingleActivator(
+                  LogicalKeyboardKey.keyZ,
+                  meta: true,
+                ),
+                onSelected: () {},
               ),
-              PlatformMenu(
-                label: 'نافذة',
-                menus: <PlatformMenuItem>[
-                  const PlatformProvidedMenuItem(
-                    type: PlatformProvidedMenuItemType.minimizeWindow,
-                  ),
-                  const PlatformProvidedMenuItem(
-                    type: PlatformProvidedMenuItemType.zoomWindow,
+              PlatformMenuItem(
+                label: 'إعادة',
+                shortcut: const SingleActivator(
+                  LogicalKeyboardKey.keyZ,
+                  meta: true,
+                  shift: true,
+                ),
+                onSelected: () {},
+              ),
+              PlatformMenuItemGroup(
+                members: <PlatformMenuItem>[
+                  PlatformMenuItem(
+                    label: 'قص',
+                    shortcut: SingleActivator(
+                      LogicalKeyboardKey.keyX,
+                      meta: true,
+                    ),
+                    onSelected: null,
                   ),
                   PlatformMenuItem(
-                    label: alwaysOnTop
-                        ? 'إلغاء البقاء في المقدمة'
-                        : 'البقاء في المقدمة',
-                    shortcut: const SingleActivator(
-                      LogicalKeyboardKey.keyT,
+                    label: 'نسخ',
+                    shortcut: SingleActivator(
+                      LogicalKeyboardKey.keyC,
                       meta: true,
-                      control: true,
                     ),
-                    onSelected: () async {
-                      final nextVal = !alwaysOnTop;
-                      await ref
-                          .read(generalSettingsProvider.notifier)
-                          .setAlwaysOnTop(nextVal);
-                      await windowManager.setAlwaysOnTop(nextVal);
-                    },
+                    onSelected: null,
+                  ),
+                  PlatformMenuItem(
+                    label: 'لصق',
+                    shortcut: SingleActivator(
+                      LogicalKeyboardKey.keyV,
+                      meta: true,
+                    ),
+                    onSelected: null,
+                  ),
+                  PlatformMenuItem(
+                    label: 'تحديد الكل',
+                    shortcut: SingleActivator(
+                      LogicalKeyboardKey.keyA,
+                      meta: true,
+                    ),
+                    onSelected: null,
                   ),
                 ],
               ),
             ],
-            child: rootWidget,
-          );
-        }
+          ),
+          PlatformMenu(
+            label: 'نافذة',
+            menus: <PlatformMenuItem>[
+              const PlatformProvidedMenuItem(
+                type: PlatformProvidedMenuItemType.minimizeWindow,
+              ),
+              const PlatformProvidedMenuItem(
+                type: PlatformProvidedMenuItemType.zoomWindow,
+              ),
+              PlatformMenuItem(
+                label: alwaysOnTop
+                    ? 'إلغاء البقاء في المقدمة'
+                    : 'البقاء في المقدمة',
+                shortcut: const SingleActivator(
+                  LogicalKeyboardKey.keyT,
+                  meta: true,
+                  control: true,
+                ),
+                onSelected: () async {
+                  final nextVal = !alwaysOnTop;
+                  await ref
+                      .read(generalSettingsProvider.notifier)
+                      .setAlwaysOnTop(nextVal);
+                  await windowManager.setAlwaysOnTop(nextVal);
+                },
+              ),
+            ],
+          ),
+        ],
+        child: rootWidget,
+      );
+    }
 
-        return rootWidget;
-      },
-    );
+    return rootWidget;
   }
 }
 

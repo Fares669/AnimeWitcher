@@ -10,9 +10,11 @@ import '../storage/library_category.dart';
 import '../storage/secure_token_storage.dart';
 import '../storage/storage_service.dart';
 import '../utils/artwork_host_fallback.dart';
+import '../utils/digit_normalization.dart';
 import '../utils/episode_label.dart';
 import 'animewitcher_account_config.dart';
 import 'animewitcher_account_models.dart';
+import 'animewitcher_account_payload.dart';
 import 'animewitcher_character_models.dart';
 import 'animewitcher_comment_models.dart';
 import 'animewitcher_notification_models.dart';
@@ -102,7 +104,7 @@ class AnimeWitcherAccountService {
   AnimeWitcherProfile? _profile;
   DateTime? _lastSyncAt;
   int _sessionGeneration = 0;
-  Future<AnimeWitcherSession>? _refreshInFlight;
+  ({int generation, Future<AnimeWitcherSession> operation})? _refreshInFlight;
   Future<void>? _syncInFlight;
   final Map<String, Future<void>> _displayLibraryInFlight = {};
   DateTime? _lastVerificationEmailSentAt;
@@ -135,6 +137,11 @@ class AnimeWitcherAccountService {
       AnimeWitcherAccountSnapshot(profile: _profile, lastSyncAt: _lastSyncAt);
 
   bool get isSignedIn => _session != null && _profile != null;
+
+  /// Read after cached restore. A session without a cached profile still
+  /// needs verification and can recover its profile on this launch.
+  bool get hasRestorableSession => _session != null;
+
   String? get accountUid => _profile?.uid;
 
   /// Whether [comment] belongs to the active AnimeWitcher account.
@@ -238,7 +245,7 @@ class AnimeWitcherAccountService {
         email: _optionalString(user['email']),
         displayName: _optionalString(user['displayName']),
         photoUrl: _optionalString(user['photoUrl']),
-        providerIds: _providerIdsFromUser(user['providerUserInfo']),
+        providerIds: readFirebaseProviderIds(user['providerUserInfo']),
       );
       final resolvedProfile = await _resolveProfile(
         refreshedSession,
@@ -867,7 +874,7 @@ class AnimeWitcherAccountService {
         'users/${profile.documentId}/notifications/_',
         profile,
       );
-      final document = await _firestore.getDocument(
+      final document = await _firestore.getNotificationCountDocument(
         'users/${profile.documentId}',
         token,
       );
@@ -1783,9 +1790,13 @@ class AnimeWitcherAccountService {
   Future<void> syncRecentWatched() async {
     if (!isSignedIn) return;
     final profile = _profile!;
+    final generation = _sessionGeneration;
+    bool isCurrent() =>
+        generation == _sessionGeneration && _isCurrentProfile(profile);
     await _pendingStorageWrite;
+    if (!isCurrent()) return;
     await _flushPendingLastWatchedDeletes(profile);
-    if (!_isCurrentProfile(profile)) return;
+    if (!isCurrent()) return;
 
     // AnimeWitcher keeps last_watched as its own collection. It is the only
     // server source for Recently Watched; removing a continue_watching document
@@ -1796,7 +1807,7 @@ class AnimeWitcherAccountService {
         token,
       ),
     );
-    if (!_isCurrentProfile(profile)) return;
+    if (!isCurrent()) return;
     recentDocs.sort((a, b) {
       final aDate = _dateValue(a.fields['date'])?.millisecondsSinceEpoch ?? 0;
       final bDate = _dateValue(b.fields['date'])?.millisecondsSinceEpoch ?? 0;
@@ -1811,8 +1822,19 @@ class AnimeWitcherAccountService {
       if (animeId != null) localByAnime[animeId] = raw;
     }
 
+    final known = <RecentHistoryUpdate>[];
+    Future<void> applyKnown() async {
+      if (known.isEmpty) return;
+      await _storage.syncKnownRecentHistoryRows(
+        known,
+        accountUid: profile.uid,
+        isCurrent: isCurrent,
+      );
+      known.clear();
+    }
+
     for (final recent in recentDocs) {
-      if (!_isCurrentProfile(profile)) return;
+      if (!isCurrent()) return;
       final animeId = _optionalString(recent.fields['anime_id']) ?? recent.id;
       if (animeId.isEmpty) continue;
       final watchedAt =
@@ -1823,23 +1845,21 @@ class AnimeWitcherAccountService {
       if (local != null) {
         final url = _optionalString(local['url']);
         if (url != null && timestamp > 0) {
-          await _storage.updateHistoryItemTimestampAndPosition(
-            url,
-            _optionalString(local['lastEpisodeUrl']),
-            timestamp,
-            _intValue(local['position']),
-          );
-          await _storage.markHistoryItemSynced(
-            url,
-            accountUid: profile.uid,
-            syncedAt: timestamp,
-          );
+          known.add((
+            url: url,
+            episodeUrl: _optionalString(local['lastEpisodeUrl']),
+            timestamp: timestamp,
+            position: _intValue(local['position']),
+          ));
         }
         continue;
       }
 
+      // Don't move local writes across a missing item's awaited catalog fetch.
+      await applyKnown();
+      if (!isCurrent()) return;
       final item = await _itemForAnimeId(animeId);
-      if (item == null || !_isCurrentProfile(profile)) continue;
+      if (item == null || !isCurrent()) continue;
       await _storage.saveProgress(
         item,
         0,
@@ -1853,6 +1873,7 @@ class AnimeWitcherAccountService {
             : DateTime.now().millisecondsSinceEpoch,
       );
     }
+    await applyKnown();
   }
 
   Future<void> recordLastWatched({required MultimediaItem item}) async {
@@ -2660,55 +2681,65 @@ class AnimeWitcherAccountService {
     return _refreshSession(current, generation);
   }
 
+  AnimeWitcherSession _requireCurrentSession(
+    AnimeWitcherSession expected,
+    int generation,
+  ) {
+    if (!_isCurrentSession(expected, generation)) {
+      throw const AnimeWitcherAccountException(
+        'session-changed',
+        'The active account changed while synchronizing.',
+      );
+    }
+    return _session!;
+  }
+
   Future<AnimeWitcherSession> _refreshSession(
-    AnimeWitcherSession current,
+    AnimeWitcherSession expected,
     int generation, {
     bool force = false,
   }) async {
-    if (!force && !current.needsRefresh) return current;
+    final current = _requireCurrentSession(expected, generation);
     final active = _refreshInFlight;
-    if (active != null) return active;
+    if (active != null && active.generation == generation) {
+      final refreshed = await active.operation;
+      _requireCurrentSession(expected, generation);
+      return refreshed;
+    }
+    // Multi-stage sync can deliver several 401s for the same old ID token
+    // after an earlier stage has already rotated it. Retry with the active
+    // token instead of sending another request with the old refresh token.
+    if (!current.needsRefresh &&
+        (!force || current.idToken != expected.idToken)) {
+      return current;
+    }
     final operation = _auth.refresh(current);
-    _refreshInFlight = operation;
+    _refreshInFlight = (generation: generation, operation: operation);
     try {
       final refreshed = await operation;
-      if (!_isCurrentSession(current, generation)) {
-        throw const AnimeWitcherAccountException(
-          'session-changed',
-          'The active account changed while synchronizing.',
-        );
-      }
+      _requireCurrentSession(current, generation);
       _session = refreshed;
       await _persistSession();
       return refreshed;
     } finally {
-      if (identical(_refreshInFlight, operation)) _refreshInFlight = null;
+      if (identical(_refreshInFlight?.operation, operation)) {
+        _refreshInFlight = null;
+      }
     }
   }
 
   Future<T> _authenticated<T>(
     Future<T> Function(String idToken) operation,
   ) async {
-    var session = await _authorizedSession();
     final generation = _sessionGeneration;
-    if (!_isCurrentSession(session, generation)) {
-      throw const AnimeWitcherAccountException(
-        'session-changed',
-        'The active account changed while synchronizing.',
-      );
-    }
+    final session = await _authorizedSession();
+    _requireCurrentSession(session, generation);
     try {
       return await operation(session.idToken);
     } on AnimeWitcherAccountException catch (error) {
       if (error.code != 'invalid-session') rethrow;
       final refreshed = await _refreshSession(session, generation, force: true);
-      if (!_isCurrentSession(session, generation)) {
-        throw const AnimeWitcherAccountException(
-          'session-changed',
-          'The active account changed while synchronizing.',
-        );
-      }
-      session = refreshed;
+      _requireCurrentSession(session, generation);
       return operation(refreshed.idToken);
     }
   }
@@ -2845,6 +2876,12 @@ class AnimeWitcherAccountService {
       await _flushPendingMangaLibraryDeletes(profile);
     } else {
       await _flushPendingLibraryDeletes(profile);
+    }
+    if (_storage.canSkipPendingLibraryUpload(
+      accountUid: profile.uid,
+      manga: manga,
+    )) {
+      return;
     }
     for (final item in _storage.getLibraryItems()) {
       if (!_isCurrentProfile(profile)) return;
@@ -3605,27 +3642,57 @@ class AnimeWitcherAccountService {
   // Watched episodes and resume positions
   // -------------------------------------------------------------------------
 
+  // A successful full refresh remains authoritative, including its deletions.
+  // Most lists are unchanged, so reuse their ordered ID sets instead of
+  // allocating a new hash table for every watched series on foreground sync.
+  static Set<String> _watchedIds(Object? raw, Set<String>? previous) {
+    if (raw is! List<Object?> || raw.isEmpty) return const <String>{};
+    if (previous != null && previous.length == raw.length) {
+      var index = 0;
+      var matches = true;
+      for (final id in previous) {
+        if (raw[index++].toString() != id) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) return previous;
+    }
+    return raw.map((value) => value.toString()).toSet();
+  }
+
   Future<void> _syncWatchedMangaChapters() async {
     final profile = _profile!;
+    final generation = _sessionGeneration;
     final docs = await _authenticated(
       (token) => _firestore.listDocuments(
         'users/${profile.documentId}/chapters_watched',
         token,
       ),
     );
-    if (!_isCurrentProfile(profile)) return;
+    if (generation != _sessionGeneration || !_isCurrentProfile(profile)) {
+      return;
+    }
 
-    _watchedMangaChapterCache.clear();
     _loadedWatchedManga.clear();
     for (final document in docs) {
-      final raw = document.fields['chapters_watched'];
-      _watchedMangaChapterCache[document.id] = raw is List
-          ? raw.map((value) => value.toString()).toSet()
-          : <String>{};
-      _loadedWatchedManga.add(document.id);
+      final id = document.id;
+      _watchedMangaChapterCache[id] = _watchedIds(
+        document.fields['chapters_watched'],
+        _watchedMangaChapterCache[id],
+      );
+      _loadedWatchedManga.add(id);
+    }
+    if (_watchedMangaChapterCache.length != _loadedWatchedManga.length) {
+      _watchedMangaChapterCache.removeWhere(
+        (id, _) => !_loadedWatchedManga.contains(id),
+      );
     }
 
     await _pendingStorageWrite;
+    if (generation != _sessionGeneration || !_isCurrentProfile(profile)) {
+      return;
+    }
     await _flushPendingMangaWatched(profile);
   }
 
@@ -3803,34 +3870,40 @@ class AnimeWitcherAccountService {
 
   Future<void> _syncWatchedEpisodes() async {
     final profile = _profile!;
-    await _primeWatchedEpisodeCache();
-    if (!_isCurrentProfile(profile)) return;
-    await _pendingStorageWrite;
-    await _flushPendingWatched(profile);
-  }
-
-  Future<void> _primeWatchedEpisodeCache() async {
-    final profile = _profile!;
+    final generation = _sessionGeneration;
     final docs = await _authenticated(
       (token) => _firestore.listDocuments(
         'users/${profile.documentId}/episodes_watched',
         token,
       ),
     );
-    if (!_isCurrentProfile(profile)) return;
-    _watchedEpisodeCache.clear();
+    if (generation != _sessionGeneration || !_isCurrentProfile(profile)) {
+      return;
+    }
     _allEpisodesWatchedAnime.clear();
     _loadedWatchedAnime.clear();
     for (final document in docs) {
-      final values = document.fields['episodes_watched'];
-      _watchedEpisodeCache[document.id] = values is List
-          ? values.map((value) => value.toString()).toSet()
-          : <String>{};
+      final id = document.id;
+      _watchedEpisodeCache[id] = _watchedIds(
+        document.fields['episodes_watched'],
+        _watchedEpisodeCache[id],
+      );
       if (document.fields['all_eps_watched'] == true) {
-        _allEpisodesWatchedAnime.add(document.id);
+        _allEpisodesWatchedAnime.add(id);
       }
-      _loadedWatchedAnime.add(document.id);
+      _loadedWatchedAnime.add(id);
     }
+    if (_watchedEpisodeCache.length != _loadedWatchedAnime.length) {
+      _watchedEpisodeCache.removeWhere(
+        (id, _) => !_loadedWatchedAnime.contains(id),
+      );
+    }
+
+    await _pendingStorageWrite;
+    if (generation != _sessionGeneration || !_isCurrentProfile(profile)) {
+      return;
+    }
+    await _flushPendingWatched(profile);
   }
 
   Future<Set<String>> watchedEpisodeIds(
@@ -5074,17 +5147,6 @@ String? _optionalString(dynamic raw) {
   return value.isEmpty ? null : value;
 }
 
-List<String> _providerIdsFromUser(dynamic raw) {
-  if (raw is! Iterable) return const <String>[];
-  final providers = <String>{};
-  for (final entry in raw) {
-    if (entry is! Map) continue;
-    final provider = _optionalString(entry['providerId']);
-    if (provider != null) providers.add(provider);
-  }
-  return providers.toList(growable: false);
-}
-
 String _firstString(Iterable<dynamic> values) {
   for (final value in values) {
     final string = _optionalString(value);
@@ -5149,15 +5211,7 @@ int? _cloudEpisodeNumber(Map<String, dynamic> fields) {
   for (final raw in <dynamic>[fields['episode_id'], fields['episode_name']]) {
     final label = _optionalString(raw);
     if (label == null) continue;
-    final normalized = label
-        .replaceAllMapped(
-          RegExp(r'[٠-٩]'),
-          (match) => '${'٠١٢٣٤٥٦٧٨٩'.indexOf(match.group(0)!)}',
-        )
-        .replaceAllMapped(
-          RegExp(r'[۰-۹]'),
-          (match) => '${'۰۱۲۳۴۵۶۷۸۹'.indexOf(match.group(0)!)}',
-        );
+    final normalized = normalizeLocalizedDigits(label);
     final match = RegExp(r'\d+').firstMatch(normalized);
     final value = match == null ? null : int.tryParse(match.group(0)!);
     if (value != null && value > 0) return value;

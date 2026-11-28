@@ -17,65 +17,28 @@ Future<void> showSeasonsBarStylePicker(
 }) {
   var selected = ref.read(seasonsBarStyleProvider);
 
-  return showGlassDialog<void>(
+  return showGlassPreferencePicker(
     context: context,
-    barrierDismissible: !firstRun,
-    builder: (dialogContext) => PopScope(
-      canPop: !firstRun,
-      child: StatefulBuilder(
-        builder: (context, setState) {
-          final width = (MediaQuery.sizeOf(context).width - 64)
-              .clamp(280.0, 620.0)
-              .toDouble();
-          return AlertDialog(
-            surfaceTintColor: Colors.transparent,
-            title: Text('شكل شريط المواسم'),
-            content: SizedBox(
-              width: width,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    'يظهر فوق الحلقات للتنقل بين المواسم والأفلام. يمكنك تغييره لاحقًا من الإعدادات.',
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                  const SizedBox(height: 16),
-                  Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
-                    children: [
-                      for (final style in SeasonsBarStyle.values)
-                        SizedBox(
-                          width: width >= 440 ? (width - 12) / 2 : width,
-                          child: _StyleCard(
-                            style: style,
-                            selected: style == selected,
-                            onTap: () => setState(() => selected = style),
-                          ),
-                        ),
-                    ],
-                  ),
-                ],
-              ),
+    firstRun: firstRun,
+    maxWidth: 620,
+    title: 'شكل شريط المواسم',
+    description: 'يظهر فوق الحلقات للتنقل بين المواسم والأفلام. يمكنك تغييره لاحقًا من الإعدادات.',
+    onConfirm: () =>
+        ref.read(seasonsBarStyleProvider.notifier).select(selected),
+    buildChoices: (setState, width) => Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      children: [
+        for (final style in SeasonsBarStyle.values)
+          SizedBox(
+            width: width >= 440 ? (width - 12) / 2 : width,
+            child: _StyleCard(
+              style: style,
+              selected: style == selected,
+              onTap: () => setState(() => selected = style),
             ),
-            actions: [
-              if (!firstRun)
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: Text('إلغاء'),
-                ),
-              FilledButton(
-                onPressed: () {
-                  ref.read(seasonsBarStyleProvider.notifier).select(selected);
-                  Navigator.of(dialogContext).pop();
-                },
-                child: Text('تطبيق'),
-              ),
-            ],
-          );
-        },
-      ),
+          ),
+      ],
     ),
   );
 }

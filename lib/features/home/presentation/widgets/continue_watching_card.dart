@@ -132,6 +132,7 @@ class _ContinueWatchingCardState extends ConsumerState<ContinueWatchingCard> {
       }
       return ArtworkDecode(
         paintedWidth: widget.width,
+        sizeHighQualityToDisplay: true,
         builder: (BuildContext context, int? decodeWidth) => CachedNetworkImage(
           imageUrl: imageCandidates[index],
           fit: BoxFit.cover,

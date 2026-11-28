@@ -1,12 +1,10 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 
 import '../../../../core/domain/entity/manga.dart';
 import '../manga_reader_settings.dart';
 import 'manga_chapter_transition_page.dart';
 import 'manga_page_image.dart';
-import 'manga_reader_load_scheduler.dart';
+import 'manga_paged_preloader.dart';
 import 'manga_zoomable_page.dart';
 
 class MangaPagedReader extends StatefulWidget {
@@ -57,9 +55,50 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
   late int _currentSpreadIndex;
   bool _onTrailingPage = false;
   bool _trailingAdvanceRequested = false;
-  int _preloadGeneration = 0;
+  final _preloader = MangaPagedPreloader();
+  bool _preloadScheduled = false;
 
-  List<List<_MangaPageUnit>> get _spreads {
+  ({
+    int pageCount,
+    bool doublePage,
+    bool rtl,
+    bool singleFirst,
+    bool splitWidePages,
+    bool invertWidePages,
+    int widePageCount,
+  })?
+  _spreadLayoutKey;
+  List<List<_MangaPageUnit>>? _cachedSpreads;
+
+  List<List<_MangaPageUnit>>? get _mappedSpreads {
+    // Ordinary single pages map directly to their PageView index. In
+    // this mode only mounted pages need a widget, not a chapter-sized
+    // table of single-element spreads.
+    if (!widget.doublePage && !widget.settings.splitWidePages) {
+      _spreadLayoutKey = null;
+      _cachedSpreads = null;
+      return null;
+    }
+    // Navigation repaints the reader without changing how pages are grouped.
+    // Only the layout settings, page count or newly split pages can do that.
+    final key = (
+      pageCount: widget.pages.length,
+      doublePage: widget.doublePage,
+      rtl: widget.rtl,
+      singleFirst: widget.settings.doublePageSingleFirstPage,
+      splitWidePages: widget.settings.splitWidePages,
+      invertWidePages: widget.settings.dualPageInvert,
+      // _widePages only grows, so its count also records revisions.
+      widePageCount: _widePages.length,
+    );
+    if (_spreadLayoutKey != key) {
+      _cachedSpreads = _buildSpreads();
+      _spreadLayoutKey = key;
+    }
+    return _cachedSpreads;
+  }
+
+  List<List<_MangaPageUnit>> _buildSpreads() {
     if (!widget.doublePage) {
       final result = <List<_MangaPageUnit>>[];
       for (var index = 0; index < widget.pages.length; index++) {
@@ -94,7 +133,10 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
       : widget.initialPage.clamp(0, widget.pages.length - 1).toInt();
 
   int _spreadForPage(int page) {
-    final spreads = _spreads;
+    final spreads = _mappedSpreads;
+    if (spreads == null) {
+      return page >= 0 && page < widget.pages.length ? page : 0;
+    }
     for (var i = 0; i < spreads.length; i++) {
       if (spreads[i].any((unit) => unit.pageIndex == page)) return i;
     }
@@ -107,65 +149,54 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
     _lastActualPage = _safeInitialPage;
     _currentSpreadIndex = _spreadForPage(_safeInitialPage);
     _controller = PageController(initialPage: _currentSpreadIndex);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(_preloadInOrderedBatches());
-    });
+    _schedulePreload();
   }
 
   @override
   void dispose() {
-    _preloadGeneration++;
+    _preloader.dispose();
     _controller.dispose();
     super.dispose();
   }
 
-  Future<void> _preloadInOrderedBatches() async {
-    if (widget.pageBuilder != null || widget.pages.isEmpty) return;
-    final generation = ++_preloadGeneration;
-    final batches = mangaReaderOrderedPreloadBatches(
-      pageCount: widget.pages.length,
-      initialPage: _safeInitialPage,
-      batchSize: widget.settings.pagePreloadAmount,
-    );
-    // The next page and the previous page must not block each other:
-    // a late forward request must not delay backing up from a saved position.
-    final backwardStart = batches.indexWhere(
-      (batch) => batch.last < _safeInitialPage,
-    );
-    final directions = backwardStart < 0
-        ? <List<List<int>>>[batches]
-        : <List<List<int>>>[
-            batches.sublist(0, backwardStart),
-            batches.sublist(backwardStart),
-          ];
-    await Future.wait(directions.map((direction) async {
-      for (final batch in direction) {
-        if (!mounted || generation != _preloadGeneration) return;
-        await Future.wait(
-          batch.map((index) async {
-            final page = widget.pages[index];
-            final uri = Uri.tryParse(page.imageUrl);
-            if (uri?.scheme == 'file') return;
-            try {
-              await precacheImage(mangaPageImageProvider(page), context);
-            } catch (_) {}
-          }),
+  void _schedulePreload() {
+    if (_preloadScheduled) return;
+    _preloadScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _preloadScheduled = false;
+      if (!mounted) return;
+      final spreads = _mappedSpreads;
+      final spreadCount = spreads?.length ?? widget.pages.length;
+      if (widget.pageBuilder != null ||
+          _onTrailingPage ||
+          _currentSpreadIndex >= spreadCount) {
+        _preloader.update(
+          const [],
+          firstVisible: 0,
+          lastVisible: 0,
+          distance: 0,
         );
+        return;
       }
-    }));
+      final units = spreads?[_currentSpreadIndex];
+      _preloader.update(
+        widget.pages,
+        firstVisible: units?.first.pageIndex ?? _currentSpreadIndex,
+        lastVisible: units?.last.pageIndex ?? _currentSpreadIndex,
+        distance: widget.settings.pagePreloadAmount,
+      );
+    });
   }
 
   @override
   void didUpdateWidget(covariant MangaPagedReader oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.pages.length != widget.pages.length ||
-        oldWidget.initialPage != widget.initialPage ||
+    if (!identical(oldWidget.pages, widget.pages) ||
+        oldWidget.pageBuilder != widget.pageBuilder ||
+        oldWidget.doublePage != widget.doublePage ||
         oldWidget.settings.pagePreloadAmount !=
             widget.settings.pagePreloadAmount) {
-      _preloadGeneration++;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) unawaited(_preloadInOrderedBatches());
-      });
+      _schedulePreload();
     }
   }
 
@@ -188,19 +219,20 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
 
   Widget _page(
     BuildContext context,
-    _MangaPageUnit unit, {
+    int pageIndex,
+    MangaReaderPageSlice slice, {
     bool zoomable = true,
     MangaZoomNavigationController? navigationController,
   }) {
-    final page = widget.pages[unit.pageIndex];
+    final page = widget.pages[pageIndex];
     final custom = widget.pageBuilder;
     if (custom != null) return custom(context, page);
     return _MangaPagedImage(
       page: page,
       settings: widget.settings,
       rtl: widget.rtl,
-      slice: unit.slice,
-      onImageSize: (size) => _handleImageSize(unit.pageIndex, size),
+      slice: slice,
+      onImageSize: (size) => _handleImageSize(pageIndex, size),
       zoomable: zoomable,
       navigationController: navigationController,
       onDoubleTap: widget.onDoubleTap,
@@ -219,7 +251,8 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
     if (units.length == 1) {
       return _page(
         context,
-        units.first,
+        units.first.pageIndex,
+        units.first.slice,
         navigationController: navigationController,
       );
     }
@@ -233,7 +266,14 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
         textDirection: widget.rtl ? TextDirection.rtl : TextDirection.ltr,
         children: <Widget>[
           for (final unit in units)
-            Expanded(child: _page(context, unit, zoomable: false)),
+            Expanded(
+              child: _page(
+                context,
+                unit.pageIndex,
+                unit.slice,
+                zoomable: false,
+              ),
+            ),
         ],
       ),
     );
@@ -270,7 +310,8 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
 
   @override
   Widget build(BuildContext context) {
-    final spreads = _spreads;
+    final spreads = _mappedSpreads;
+    final spreadCount = spreads?.length ?? widget.pages.length;
     return NotificationListener<OverscrollNotification>(
       onNotification: _handleOverscroll,
       child: PageView.builder(
@@ -281,25 +322,39 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
         physics: widget.settings.animatePageTransitions
             ? null
             : const PageScrollPhysics(),
-        itemCount: spreads.length + (widget.trailingPage == null ? 0 : 1),
+        itemCount: spreadCount + (widget.trailingPage == null ? 0 : 1),
         onPageChanged: (spreadIndex) {
-          if (spreadIndex >= spreads.length) {
+          if (spreadIndex >= spreadCount) {
             setState(() => _onTrailingPage = true);
+            _schedulePreload();
             return;
           }
-          final units = spreads[spreadIndex];
-          final actual = units.isEmpty ? 0 : units.first.pageIndex;
+          final units = spreads?[spreadIndex];
+          final actual = units == null
+              ? spreadIndex
+              : units.isEmpty
+              ? 0
+              : units.first.pageIndex;
           setState(() {
             _currentSpreadIndex = spreadIndex;
             _onTrailingPage = false;
             _trailingAdvanceRequested = false;
           });
           _lastActualPage = actual;
+          _schedulePreload();
           widget.onPageChanged(actual);
         },
         itemBuilder: (context, index) {
-          if (index >= spreads.length) return widget.trailingPage!;
-          return _spread(context, spreads[index], index);
+          if (index >= spreadCount) return widget.trailingPage!;
+          if (spreads != null) return _spread(context, spreads[index], index);
+          return _page(
+            context,
+            index,
+            MangaReaderPageSlice.full,
+            navigationController: index == _currentSpreadIndex
+                ? widget.navigationController
+                : null,
+          );
         },
       ),
     );

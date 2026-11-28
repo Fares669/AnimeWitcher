@@ -6,9 +6,6 @@ library;
 import 'package:flutter/material.dart';
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
-import 'package:animewitcher/core/storage/episode_watch_repository.dart';
-
-import '../../../library/presentation/downloads_provider.dart';
 
 /// Which episodes the list shows.
 enum EpisodeListFilter { all, unwatched, downloaded }
@@ -56,30 +53,39 @@ String episodeRangeLabel(List<Episode> range) {
   return first == last ? '$first' : '$first–$last';
 }
 
+/// The rows of [ordered] whose URLs appear in [block], in display order.
+Iterable<Episode> episodeRowsInRange(
+  List<Episode> ordered,
+  List<Episode> block,
+) {
+  final urls = {for (final episode in block) episode.url};
+  return ordered.where((episode) => urls.contains(episode.url));
+}
+
 /// [ordered] cut to the block at [rangeIndex] and to [filter], its order
 /// kept. A block past the end, as after a season change, means every one.
 List<Episode> browseEpisodes({
   required List<Episode> ordered,
   required int? rangeIndex,
+  List<List<Episode>>? ranges,
   required EpisodeListFilter filter,
   required bool Function(Episode) isWatched,
   required bool Function(Episode) isDownloaded,
 }) {
-  Set<String>? inRange;
+  Iterable<Episode> candidates = ordered;
   if (rangeIndex != null && episodeRangesApply(ordered.length)) {
-    final ranges = episodeRanges(ordered);
-    if (rangeIndex >= 0 && rangeIndex < ranges.length) {
-      inRange = {for (final episode in ranges[rangeIndex]) episode.url};
+    final blocks = ranges ?? episodeRanges(ordered);
+    if (rangeIndex >= 0 && rangeIndex < blocks.length) {
+      candidates = episodeRowsInRange(ordered, blocks[rangeIndex]);
     }
   }
   return <Episode>[
-    for (final episode in ordered)
-      if ((inRange == null || inRange.contains(episode.url)) &&
-          switch (filter) {
-            EpisodeListFilter.all => true,
-            EpisodeListFilter.unwatched => !isWatched(episode),
-            EpisodeListFilter.downloaded => isDownloaded(episode),
-          })
+    for (final episode in candidates)
+      if (switch (filter) {
+        EpisodeListFilter.all => true,
+        EpisodeListFilter.unwatched => !isWatched(episode),
+        EpisodeListFilter.downloaded => isDownloaded(episode),
+      })
         episode,
   ];
 }
@@ -90,39 +96,20 @@ final Listenable episodeBrowseListenable = Listenable.merge(<Listenable>[
   episodeListFilter,
 ]);
 
-/// [ordered] as the list shows it, reading watched and downloaded the way
-/// the episode cards do.
-List<Episode> browseEpisodesFor({
-  required MultimediaItem parentItem,
-  required List<Episode> ordered,
-  required EpisodeWatchRepository watchRepository,
-  required List<DownloadItem> downloads,
-}) {
-  final filter = episodeListFilter.value;
-  final rangeIndex = episodeRangeIndex.value;
-  if (filter == EpisodeListFilter.all && rangeIndex == null) return ordered;
-  return browseEpisodes(
-    ordered: ordered,
-    rangeIndex: rangeIndex,
-    filter: filter,
-    isWatched: (episode) => episodeIsWatchedFor(watchRepository, parentItem, episode),
-    isDownloaded: (episode) =>
-        completedEpisodeDownload(downloads, parentItem, episode) != null,
-  );
-}
-
 /// The block menu, when the series runs past one block, and the filter
 /// chips beside it.
 class EpisodeBrowseBar extends StatelessWidget {
   const EpisodeBrowseBar({
     super.key,
     required this.episodes,
+    this.ranges,
     this.leading,
     this.trailing,
   });
 
   /// Every episode of the season, before any block or filter.
   final List<Episode> episodes;
+  final List<List<Episode>>? ranges;
   final Widget? leading;
   final Widget? trailing;
 
@@ -130,9 +117,11 @@ class EpisodeBrowseBar extends StatelessWidget {
   Widget build(BuildContext context) {
     String t(String en, String ar) => ar;
     final colors = Theme.of(context).colorScheme;
-    final ranges = episodeRangesApply(episodes.length)
-        ? episodeRanges(episodes)
-        : const <List<Episode>>[];
+    final ranges =
+        this.ranges ??
+        (episodeRangesApply(episodes.length)
+            ? episodeRanges(episodes)
+            : const <List<Episode>>[]);
 
     return ListenableBuilder(
       listenable: episodeBrowseListenable,

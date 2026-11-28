@@ -1,14 +1,14 @@
 import 'dart:async';
-import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as p;
-import 'package:google_fonts/google_fonts.dart';
 import 'package:dpad/dpad.dart';
 import '../../../settings/presentation/player_settings_provider.dart';
 import '../player_controller.dart';
+import '../subtitle_typography.dart';
 import 'hotstar_player_style.dart';
 import 'player_ltr.dart';
 
@@ -417,6 +417,11 @@ class SubtitleAppearanceDialog extends ConsumerStatefulWidget {
 
 class _SubtitleAppearanceDialogState
     extends ConsumerState<SubtitleAppearanceDialog> {
+  // The bundled preview background is 2560×1706.
+  static const _previewImageWidth = 2560;
+  static const _previewImageAspect = _previewImageWidth / 1706;
+  static const _previewDecodeStep = 512;
+
   late PlayerSettings _localSettings;
   bool _customFontLoading = false;
   bool _customFontLoaded = false;
@@ -441,38 +446,6 @@ class _SubtitleAppearanceDialogState
     0xFF1A1A1A, // Very Dark Grey
     0xFF001F3F, // Navy
   ];
-
-  final List<String> _builtInFonts = const [
-    'Normal (system sans-serif)',
-    'Trebuchet MS',
-    'Netflix Sans',
-    'Google Sans',
-    'Open Sans',
-    'Futura',
-    'Consola',
-    'Gotham',
-    'Lucida Grande',
-    'STIX General',
-    'Times New Roman',
-    'Verdana',
-    'Ubuntu',
-    'Comic Sans',
-    'Poppins',
-  ];
-
-  TextStyle _getSubtitleTextStyle(String? fontFamily, TextStyle baseStyle) {
-    if (fontFamily == null) return baseStyle;
-    switch (fontFamily.toLowerCase()) {
-      case 'open sans':
-        return GoogleFonts.openSans(textStyle: baseStyle);
-      case 'poppins':
-        return GoogleFonts.poppins(textStyle: baseStyle);
-      case 'ubuntu':
-        return GoogleFonts.ubuntu(textStyle: baseStyle);
-      default:
-        return baseStyle.copyWith(fontFamily: fontFamily);
-    }
-  }
 
   @override
   void initState() {
@@ -501,20 +474,12 @@ class _SubtitleAppearanceDialogState
     if (path != null && path.isNotEmpty) {
       setState(() => _customFontLoading = true);
       try {
-        final file = File(path);
-        if (await file.exists()) {
-          final bytes = await file.readAsBytes();
-          final fontLoader = FontLoader('CustomSubtitleFont');
-          fontLoader.addFont(Future.value(ByteData.sublistView(bytes)));
-          await fontLoader.load();
-          if (mounted) {
-            setState(() {
-              _customFontLoaded = true;
-              _customFontLoading = false;
-            });
-          }
-        } else {
-          if (mounted) setState(() => _customFontLoading = false);
+        final loaded = await loadCustomSubtitleFont(path);
+        if (mounted) {
+          setState(() {
+            if (loaded) _customFontLoaded = true;
+            _customFontLoading = false;
+          });
         }
       } catch (e) {
         debugPrint("Failed to load custom font: $e");
@@ -608,10 +573,25 @@ class _SubtitleAppearanceDialogState
           final previewHeight = constraints.maxHeight < 600
               ? 100.0
               : (constraints.maxHeight < 900 ? 130.0 : 160.0);
+          // Cover is limited by either dimension. Decode enough physical
+          // pixels for both, with a few stable cache sizes while resizing.
+          final coverWidth = math.max(
+            constraints.maxWidth,
+            previewHeight * _previewImageAspect,
+          );
+          final requiredWidth =
+              coverWidth * MediaQuery.devicePixelRatioOf(context);
+          final cacheWidth =
+              requiredWidth <= _previewImageWidth - _previewDecodeStep
+              ? (requiredWidth / _previewDecodeStep).ceil() * _previewDecodeStep
+              : null;
 
           return Column(
             children: [
-              SizedBox(height: previewHeight, child: _buildPreviewPane()),
+              SizedBox(
+                height: previewHeight,
+                child: _buildPreviewPane(cacheWidth),
+              ),
               const Divider(color: HotstarPlayerStyle.divider, height: 1),
               Expanded(
                 child: SingleChildScrollView(
@@ -711,30 +691,11 @@ class _SubtitleAppearanceDialogState
     );
   }
 
-  Widget _buildPreviewPane() {
-    String? fontFamily;
-    if (_localSettings.subTypefaceFilePath != null && _customFontLoaded) {
-      fontFamily = 'CustomSubtitleFont';
-    } else if (_localSettings.subTypeface != null &&
-        _localSettings.subTypeface! >= 0 &&
-        _localSettings.subTypeface! < _builtInFonts.length) {
-      if (_localSettings.subTypeface == 0) {
-        fontFamily = null;
-      } else {
-        fontFamily = _builtInFonts[_localSettings.subTypeface!];
-      }
-    }
-
-    final fontSize = _localSettings.subFixedTextSize ?? 22.0;
-
-    final baseStyle = TextStyle(
-      fontSize: fontSize,
-      fontWeight: _localSettings.subBold ? FontWeight.bold : FontWeight.normal,
-      fontStyle: _localSettings.subItalic ? FontStyle.italic : FontStyle.normal,
-      color: Color(_localSettings.subForegroundColor),
+  Widget _buildPreviewPane(int? cacheWidth) {
+    final textStyle = subtitleTextStyle(
+      _localSettings,
+      customFontLoaded: _customFontLoaded,
     );
-
-    final textStyle = _getSubtitleTextStyle(fontFamily, baseStyle);
     final edgeColor = Color(_localSettings.subEdgeColor);
 
     final sampleText = _localSettings.subUpperCase
@@ -862,6 +823,8 @@ class _SubtitleAppearanceDialogState
         Image.asset(
           'assets/images/subtitles_preview_background.jpg',
           fit: BoxFit.cover,
+          cacheWidth: cacheWidth,
+          gaplessPlayback: true,
           width: double.infinity,
           height: double.infinity,
           errorBuilder: (context, error, stackTrace) {
@@ -992,7 +955,7 @@ class _SubtitleAppearanceDialogState
         arabic: 'عادي (خط النظام)',
       );
     }
-    return _builtInFonts[index];
+    return subtitleBuiltInFonts[index];
   }
 
   void _showFontSizePicker() {
@@ -1109,7 +1072,7 @@ class _SubtitleAppearanceDialogState
             height: _pickerListHeight(context, 400.0),
             child: ListView(
               children: [
-                ...List.generate(_builtInFonts.length, (idx) {
+                ...List.generate(subtitleBuiltInFonts.length, (idx) {
                   final isSelected =
                       _localSettings.subTypefaceFilePath == null &&
                       _localSettings.subTypeface == idx;

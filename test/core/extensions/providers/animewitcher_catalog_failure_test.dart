@@ -14,7 +14,11 @@ class _TestStorageService extends StorageService {
 }
 
 AnimeWitcherNativeProvider _provider(Dio dio) =>
-    AnimeWitcherNativeProvider(dio, SettingsRepository(_TestStorageService()));
+    AnimeWitcherNativeProvider(
+      dio,
+      SettingsRepository(_TestStorageService()),
+      algoliaSearchApiKey: 'synthetic-catalog-failure-fixture',
+    );
 
 Dio _catalogDio({
   required int Function() homeSectionStatus,

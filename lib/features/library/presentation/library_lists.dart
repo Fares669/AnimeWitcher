@@ -2,11 +2,11 @@
 /// navigation is configured, shared by desktop and phone.
 library;
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/storage/library_category.dart';
-import '../../../core/storage/library_repository.dart';
 import '../../../core/storage/storage_service.dart';
 import 'history_provider.dart';
 import 'library_media_kind.dart';
@@ -66,25 +66,13 @@ String libraryKindLabel(BuildContext context, LibraryMediaKind kind) =>
 bool libraryKindHasRecent(LibraryMediaKind kind) =>
     kind == LibraryMediaKind.anime;
 
-/// The titles in [category] for [kind], as the repository keeps them.
-List<MultimediaItem> libraryItemsFor(
-  LibraryRepository repository,
-  LibraryCategory category,
-  LibraryMediaKind kind,
-) => filterLibraryItemsByKind(
-  repository.getLibraryItems(category: category),
-  kind,
-);
-
-/// The watch history, latest first, for [kind].
-List<HistoryItem> libraryRecentFor(
+/// Matching watch history without copying or sorting it just to count a tab.
+Iterable<HistoryItem> libraryRecentEntries(
   List<HistoryItem> history,
   LibraryMediaKind kind,
-) {
-  if (!libraryKindHasRecent(kind)) return const <HistoryItem>[];
-  return history.where((entry) => kind.accepts(entry.item)).toList()
-    ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
-}
+) => libraryKindHasRecent(kind)
+    ? history.where((entry) => kind.accepts(entry.item))
+    : const <HistoryItem>[];
 
 /// How a shelf orders its titles.
 enum LibrarySort { added, name, year }
@@ -131,13 +119,34 @@ List<HistoryItem> sortLibraryHistory(
   return sorted;
 }
 
-/// Whether [item] answers [query]: every word of it, anywhere in the title.
-bool libraryItemMatches(MultimediaItem item, String query) {
-  final words = query.toLowerCase().split(RegExp(r'\s+'))
-    ..removeWhere((word) => word.isEmpty);
-  if (words.isEmpty) return true;
-  final title = item.title.toLowerCase();
-  return words.every(title.contains);
+/// Search all shelf titles with the same case-insensitive query words.
+List<MultimediaItem> filterLibraryTitles(
+  Iterable<MultimediaItem> items,
+  String query,
+) => LibraryTitleQuery(query).filter(items);
+
+class LibraryTitleQuery {
+  LibraryTitleQuery(String query)
+    : _words = query.toLowerCase().split(_wordSeparator)
+        ..removeWhere((word) => word.isEmpty);
+
+  static final _wordSeparator = RegExp(r'\s+');
+  final List<String> _words;
+
+  bool sameWordsAs(LibraryTitleQuery other) => listEquals(_words, other._words);
+
+  /// If each old word occurs inside a new word, every new match must have
+  /// been an old match. Widening or replacing a term may restore other titles.
+  bool narrows(LibraryTitleQuery previous) =>
+      previous._words.every((old) => _words.any((word) => word.contains(old)));
+
+  List<MultimediaItem> filter(Iterable<MultimediaItem> items) {
+    if (_words.isEmpty) return items.toList();
+    return items.where((item) {
+      final title = item.title.toLowerCase();
+      return _words.every(title.contains);
+    }).toList();
+  }
 }
 
 /// The phone shelves' settings from the filter sheet, kept between visits.

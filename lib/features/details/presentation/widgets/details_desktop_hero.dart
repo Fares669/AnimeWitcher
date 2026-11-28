@@ -1,10 +1,12 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' show Bidi;
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:octo_image/octo_image.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/utils/artwork_quality.dart';
@@ -137,6 +139,7 @@ class DetailsDesktopHero extends ConsumerWidget {
 
     final providedBannerUrl = AppImageFallbacks.optional(displayItem.bannerUrl);
     final posterUrl = AppImageFallbacks.poster(displayItem.posterUrl);
+    final logoUrl = AppImageFallbacks.optional(displayItem.logoUrl);
     // Asked for at its stored size; the catalog's own URL requests a
     // thumbnail-sized copy of it.
     final backdropUrl =
@@ -192,44 +195,68 @@ class DetailsDesktopHero extends ConsumerWidget {
             ? 150.0
             : 200.0;
 
+        final artworkMalId = displayItem.artworkLookupMalId;
+        final artworkTitle = displayItem.artworkLookupTitle;
+        final artworkLabel = displayItem.title;
+        final artworkIsManga = manga;
+        final artworkWidth = viewport.width;
+        final artworkPlaceholder = theme.colorScheme.surfaceContainerHighest;
+        final artworkErrorPoster =
+            (providedBannerUrl != null || artworkIsManga) &&
+                providedBannerUrl != posterUrl
+            ? posterUrl
+            : null;
+
         Widget backdropArtwork() => ArtworkDecode(
-          paintedWidth: MediaQuery.sizeOf(context).width,
+          paintedWidth: artworkWidth,
+          sizeHighQualityToDisplay: true,
           builder: (BuildContext context, int? decodeWidth) =>
               FallbackPosterImage(
                 imageUrl: backdrop,
                 preferBanner: true,
-                manga: manga,
-                malId: displayItem.artworkLookupMalId,
-                title: displayItem.artworkLookupTitle,
+                manga: artworkIsManga,
+                malId: artworkMalId,
+                title: artworkTitle,
                 fit: BoxFit.cover,
                 alignment: Alignment.topCenter,
                 memCacheWidth: decodeWidth,
                 filterQuality: FilterQuality.medium,
-                placeholder: (_) => ColoredBox(
-                  color: theme.colorScheme.surfaceContainerHighest,
-                ),
+                placeholder: (_) => ColoredBox(color: artworkPlaceholder),
                 errorWidget: (_) {
-                  if ((providedBannerUrl != null || manga) &&
-                      posterUrl != null &&
-                      providedBannerUrl != posterUrl) {
+                  if (artworkErrorPoster != null) {
                     return CachedNetworkImage(
-                      imageUrl: posterUrl,
+                      imageUrl: artworkErrorPoster,
                       fit: BoxFit.cover,
                       alignment: Alignment.topCenter,
                       memCacheWidth: decodeWidth,
                       filterQuality: FilterQuality.medium,
                       errorWidget: (_, _, _) => ThumbnailErrorPlaceholder(
-                        label: displayItem.title,
+                        label: artworkLabel,
                         isBackdrop: true,
                       ),
                     );
                   }
                   return ThumbnailErrorPlaceholder(
-                    label: displayItem.title,
+                    label: artworkLabel,
                     isBackdrop: true,
                   );
                 },
               ),
+        );
+
+        // Library state, selection and synopsis changes can rebuild the hero
+        // without changing either layout's artwork.
+        final stableBackdrop = HookBuilder(
+          builder: (_) => useMemoized(backdropArtwork, [
+            backdrop,
+            artworkMalId,
+            artworkTitle,
+            artworkLabel,
+            artworkIsManga,
+            artworkWidth,
+            artworkPlaceholder,
+            artworkErrorPoster,
+          ]),
         );
 
         final lazy = slivers;
@@ -266,7 +293,7 @@ class DetailsDesktopHero extends ConsumerWidget {
                       key: const ValueKey<String>(
                         'details-hero-portrait-banner',
                       ),
-                      child: backdropArtwork(),
+                      child: stableBackdrop,
                     ),
                   ),
                 ] else
@@ -275,7 +302,7 @@ class DetailsDesktopHero extends ConsumerWidget {
                     top: 0,
                     right: 0,
                     bottom: 3 - pictureRunOn,
-                    child: backdropArtwork(),
+                    child: stableBackdrop,
                   ),
 
                 // The picture goes to ground before the page's own
@@ -355,46 +382,9 @@ class DetailsDesktopHero extends ConsumerWidget {
                               GestureDetector(
                                 behavior: HitTestBehavior.opaque,
                                 onLongPress: () => _copyAnimeTitle(context),
-                                child: displayItem.logoUrl != null
-                                    ? ArtworkDecode(
-                                        paintedWidth: compact ? 240 : 420,
-                                        builder:
-                                            (
-                                              BuildContext context,
-                                              int? decodeWidth,
-                                            ) => CachedNetworkImage(
-                                              imageUrl: displayItem.logoUrl!,
-                                              memCacheWidth: decodeWidth,
-                                              // Only the logo is held to its
-                                              // height. The name standing in
-                                              // for it, while it loads or when
-                                              // it fails, was held to it too,
-                                              // and a name of three lines lost
-                                              // its last one under the details.
-                                              imageBuilder: (context, image) =>
-                                                  Image(
-                                                    image: image,
-                                                    height: compact ? 56 : 96,
-                                                    // This widget takes a
-                                                    // resolved alignment, so
-                                                    // the start edge is worked
-                                                    // out here.
-                                                    alignment:
-                                                        Directionality.of(
-                                                              context,
-                                                            ) ==
-                                                            TextDirection.rtl
-                                                        ? Alignment.centerRight
-                                                        : Alignment.centerLeft,
-                                                    fit: BoxFit.contain,
-                                                  ),
-                                              placeholder: (_, _) =>
-                                                  _buildTitle(textColor),
-                                              errorWidget: (_, _, _) =>
-                                                  _buildTitle(textColor),
-                                            ),
-                                      )
-                                    : _buildTitle(textColor),
+                                child: logoUrl == null
+                                    ? _buildTitle(textColor)
+                                    : _buildLogo(context, logoUrl, textColor),
                               ),
                               SizedBox(height: compact ? 8 : 16),
                               // The scores ride with the metadata, in the same
@@ -496,6 +486,12 @@ class DetailsDesktopHero extends ConsumerWidget {
     final isPortraitPhone = compact && size.height > size.width;
     final posterWidth = _posterWidthFor(context);
     final posterHeight = _posterHeightFor(context);
+    final artworkUrl = posterUrl ?? '';
+    final artworkMalId = displayItem.artworkLookupMalId;
+    final artworkTitle = displayItem.artworkLookupTitle;
+    final artworkLabel = displayItem.title;
+    final artworkIsManga = manga;
+    final artworkPlaceholder = colors.surfaceContainerHighest;
     final poster = GestureDetector(
       key: const ValueKey<String>('details-hero-poster'),
       behavior: HitTestBehavior.opaque,
@@ -516,21 +512,36 @@ class DetailsDesktopHero extends ConsumerWidget {
             ),
           ],
         ),
-        child: ArtworkDecode(
-          paintedWidth: posterWidth,
-          builder: (BuildContext context, int? decodeWidth) =>
-              FallbackPosterImage(
-                imageUrl: posterUrl ?? '',
-                malId: displayItem.artworkLookupMalId,
-                title: displayItem.artworkLookupTitle,
-                manga: manga,
-                fit: BoxFit.cover,
-                memCacheWidth: decodeWidth,
-                placeholder: (_) =>
-                    ColoredBox(color: colors.surfaceContainerHighest),
-                errorWidget: (_) =>
-                    ThumbnailErrorPlaceholder(label: displayItem.title),
-              ),
+        // Keep the tap handler current but retain the image subtree while
+        // its inputs stay unchanged. ArtworkDecode still watches DPR and quality.
+        child: HookBuilder(
+          builder: (_) => useMemoized(
+            () => ArtworkDecode(
+              paintedWidth: posterWidth,
+              sizeHighQualityToDisplay: true,
+              builder: (BuildContext context, int? decodeWidth) =>
+                  FallbackPosterImage(
+                    imageUrl: artworkUrl,
+                    malId: artworkMalId,
+                    title: artworkTitle,
+                    manga: artworkIsManga,
+                    fit: BoxFit.cover,
+                    memCacheWidth: decodeWidth,
+                    placeholder: (_) => ColoredBox(color: artworkPlaceholder),
+                    errorWidget: (_) =>
+                        ThumbnailErrorPlaceholder(label: artworkLabel),
+                  ),
+            ),
+            [
+              artworkUrl,
+              artworkMalId,
+              artworkTitle,
+              artworkLabel,
+              artworkIsManga,
+              artworkPlaceholder,
+              posterWidth,
+            ],
+          ),
         ),
       ),
     );
@@ -557,6 +568,28 @@ class DetailsDesktopHero extends ConsumerWidget {
 
     notificationServiceOf(context).showSuccess(
       appText(context, english: 'Title copied', arabic: 'تم نسخ العنوان'),
+    );
+  }
+
+  Widget _buildLogo(BuildContext context, String url, Color textColor) {
+    final height = compact ? 56.0 : 96.0;
+    final decodeHeight =
+        (height * MediaQuery.devicePixelRatioOf(context) * 1.25).ceil();
+    return OctoImage(
+      image: CachedNetworkImageProvider(url),
+      // A contain-fit logo cannot paint taller than this. Keep 25% physical
+      // pixel headroom and its aspect ratio, including unusually wide logos.
+      height: height,
+      memCacheHeight: decodeHeight,
+      alignment: AlignmentDirectional.centerStart,
+      fit: BoxFit.contain,
+      fadeInDuration: const Duration(milliseconds: 500),
+      fadeOutDuration: const Duration(milliseconds: 1000),
+      // The fallback remains unconstrained by the logo's height so a long
+      // title never loses its last line. Do not use CachedNetworkImage's
+      // imageBuilder: it hands back the original, not the resized image.
+      placeholderBuilder: (_) => _buildTitle(textColor),
+      errorBuilder: (_, _, _) => _buildTitle(textColor),
     );
   }
 

@@ -65,8 +65,19 @@ class SettingsChoices<T> extends StatelessWidget {
     required this.label,
     required this.onSelected,
     this.swatch,
-  });
+  }) : _onboarding = false;
 
+  /// The same selector with the higher-contrast palette of first-run setup.
+  const SettingsChoices.onboarding({
+    super.key,
+    required this.values,
+    required this.selected,
+    required this.label,
+    required this.onSelected,
+    this.swatch,
+  }) : _onboarding = true;
+
+  final bool _onboarding;
   final List<T> values;
   final T selected;
   final String Function(T value) label;
@@ -78,6 +89,17 @@ class SettingsChoices<T> extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    final swatchBorder = _onboarding
+        ? Colors.white38
+        : colors.onSurface.withValues(alpha: 0.35);
+    final background = _onboarding
+        ? const Color(0xFF232322)
+        : colors.onSurface.withValues(alpha: 0.08);
+    final selectedLabel = _onboarding ? Colors.black : colors.onPrimary;
+    final labelColor = _onboarding ? Colors.white : colors.onSurface;
+    final padding = _onboarding
+        ? const EdgeInsets.symmetric(horizontal: 8, vertical: 6)
+        : const EdgeInsets.symmetric(horizontal: 6, vertical: 4);
     return Wrap(
       spacing: 8,
       runSpacing: 8,
@@ -86,44 +108,34 @@ class SettingsChoices<T> extends StatelessWidget {
           ChoiceChip(
             avatar: swatch == null
                 ? null
-                : _SwatchDot(color: swatch!(value), ring: colors.onSurface),
+                : Container(
+                    width: 16,
+                    height: 16,
+                    decoration: BoxDecoration(
+                      color: swatch!(value),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: swatchBorder),
+                    ),
+                  ),
             label: Text(label(value)),
             selected: value == selected,
             onSelected: (_) => onSelected(value),
             showCheckmark: false,
-            backgroundColor: colors.onSurface.withValues(alpha: 0.08),
+            backgroundColor: background,
             selectedColor: colors.primary,
             labelStyle: TextStyle(
-              color: value == selected ? colors.onPrimary : colors.onSurface,
+              color: value == selected ? selectedLabel : labelColor,
               fontWeight: FontWeight.w700,
             ),
             side: BorderSide.none,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(99),
             ),
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            padding: padding,
           ),
       ],
     );
   }
-}
-
-class _SwatchDot extends StatelessWidget {
-  const _SwatchDot({required this.color, required this.ring});
-
-  final Color color;
-  final Color ring;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    width: 16,
-    height: 16,
-    decoration: BoxDecoration(
-      color: color,
-      shape: BoxShape.circle,
-      border: Border.all(color: ring.withValues(alpha: 0.35)),
-    ),
-  );
 }
 
 class SettingsTile extends StatefulWidget {

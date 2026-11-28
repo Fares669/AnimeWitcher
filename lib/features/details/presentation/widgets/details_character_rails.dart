@@ -212,6 +212,7 @@ class _CharacterRoleRailState extends State<_CharacterRoleRail> {
     );
     const cardWidth = detailsCharacterRailCardWidth;
     const rowHeight = detailsCharacterRailRowHeight;
+    const cardStride = cardWidth + 12;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -239,7 +240,10 @@ class _CharacterRoleRailState extends State<_CharacterRoleRail> {
               physics: _acceptScroll
                   ? const BouncingScrollPhysics()
                   : const NeverScrollableScrollPhysics(),
-              itemExtent: cardWidth + 12,
+              itemExtent: cardStride,
+              // A character tab has two short rails. Keep the next three
+              // cards warm instead of decoding both complete rails on open.
+              cacheExtent: 3 * cardStride,
               padding: EdgeInsets.zero,
               separatorBuilder: (_, _) => const SizedBox(width: 12),
               itemCount: visibleCount + (showMore ? 1 : 0),

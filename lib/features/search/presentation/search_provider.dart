@@ -1,10 +1,9 @@
 import 'dart:async';
-import 'dart:io' as io;
 
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
-import 'package:dio/dio.dart';
 
 import '../../../../core/account/account_providers.dart';
 import '../../../../core/extensions/extension_manager.dart';
@@ -14,8 +13,6 @@ import '../../../../core/domain/entity/multimedia_item.dart';
 import 'search_domain.dart';
 
 part 'search_provider.g.dart';
-
-enum SearchFilter { content, live }
 
 /// Non-anime tabs use their own catalog, independently of the selected anime
 /// provider and of extension registration order.
@@ -91,13 +88,11 @@ class ProviderSearchResult {
   final String providerId;
   final String providerName;
   final List<MultimediaItem> results;
-  final String? error;
 
   ProviderSearchResult({
     required this.providerId,
     required this.providerName,
     required this.results,
-    this.error,
   });
 }
 
@@ -142,320 +137,12 @@ class SearchAggregateState {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Background isolate helper — runs title filtering off the main thread.
-// ---------------------------------------------------------------------------
-class _FilterParams {
-  final List<MultimediaItem> items;
-  final List<String> queryParts;
-  const _FilterParams(this.items, this.queryParts);
-}
-
-List<MultimediaItem> _filterItems(_FilterParams params) {
-  return params.items.where((item) {
-    final titleLower = item.title.toLowerCase();
-    final titleParts = titleLower
-        .split(' ')
-        .where((s) => s.isNotEmpty)
-        .toList();
-    for (final qPart in params.queryParts) {
-      bool foundPrefix = false;
-      for (final tPart in titleParts) {
-        if (tPart.startsWith(qPart)) {
-          foundPrefix = true;
-          break;
-        }
-      }
-      if (!foundPrefix) return false;
-    }
-    return true;
-  }).toList();
-}
-
-Stream<SearchAggregateState> searchAllProviders(
-  Ref ref,
-  String query,
-  ExtensionManager manager, {
-  required SearchFilter filter,
-  required ProviderSearchFilters providerFilters,
-  required bool Function() isCancelled,
-}) async* {
-  final allProviders = manager.getAllProviders();
-  final providers = allProviders.where((p) {
-    final isLiveOnly =
-        p.supportedTypes.isNotEmpty &&
-        p.supportedTypes.every((t) => t == ProviderType.livestream);
-    return filter == SearchFilter.live ? isLiveOnly : !isLiveOnly;
-  }).toList();
-  debugPrint(
-    '[SEARCH DBG] searchAllProviders called: queryLength=${query.runes.length}, providers=${providers.length}, cancelled=${isCancelled()}',
-  );
-
-  if (providers.isEmpty) {
-    yield const SearchAggregateState(results: [], isLoading: false);
-    return;
-  }
-
-  yield const SearchAggregateState(results: [], isLoading: true);
-
-  final results = <ProviderSearchResult>[];
-  final queryLower = query.toLowerCase();
-  final queryParts = queryLower.split(' ').where((s) => s.isNotEmpty).toList();
-
-  final controller = StreamController<SearchAggregateState>();
-
-  // Semaphore sizing based on hardware
-  int getSemaphoreSize() {
-    int maxSlots = 8;
-    try {
-      final cores = io.Platform.numberOfProcessors;
-      if (io.Platform.isMacOS || io.Platform.isWindows || io.Platform.isLinux) {
-        // Keep provider fan-out bounded so large desktop searches don't saturate
-        // CPU/network callbacks and starve Flutter's UI isolate.
-        maxSlots = 16;
-      } else {
-        // Mobile: eval burst queue serializes HTTP callbacks, but CF bypass
-        // WebView GPU init is still expensive — cap at 8 to avoid triggering
-        // too many concurrent CF solves while the spawn semaphore queues them.
-        maxSlots = cores.clamp(3, 6);
-      }
-    } catch (_) {}
-    return maxSlots;
-  }
-
-  final maxSlots = getSemaphoreSize();
-  int activeJobs = 0;
-
-  // Livestream-only providers (large M3U playlists) are deprioritized to the
-  // back of the queue. They still run and IPTV channel searches work; we just
-  // let movie/series providers finish their burst first to reduce peak jank.
-  final sortedProviders = List<AnimeWitcherProvider>.from(providers)
-    ..sort((a, b) {
-      final aLiveOnly =
-          a.supportedTypes.isNotEmpty &&
-          a.supportedTypes.every((t) => t == ProviderType.livestream);
-      final bLiveOnly =
-          b.supportedTypes.isNotEmpty &&
-          b.supportedTypes.every((t) => t == ProviderType.livestream);
-      if (aLiveOnly == bLiveOnly) return 0;
-      return aLiveOnly ? 1 : -1;
-    });
-  final queue = List<AnimeWitcherProvider>.from(sortedProviders);
-  final List<CancelToken> activeTokens = [];
-  final List<AnimeWitcherProvider> activeProviders = [];
-  bool isCompleted = false;
-
-  Timer? throttleTimer;
-  bool pendingEmit = false;
-  // Track what was last emitted so we skip rebuilds when nothing new arrived.
-  int lastEmittedResultCount = 0;
-
-  void doEmit({bool force = false}) {
-    if (controller.isClosed || isCancelled()) {
-      return;
-    }
-    final stillLoading = queue.isNotEmpty || activeJobs > 0;
-    // Skip the rebuild if no new results have arrived since the last emit
-    // (e.g. a batch of providers all returned empty). Always emit on the
-    // final event so isLoading flips to false.
-    if (!force && stillLoading && results.length == lastEmittedResultCount) {
-      pendingEmit = false;
-      return;
-    }
-    lastEmittedResultCount = results.length;
-    final totalItems = results.fold<int>(0, (sum, r) => sum + r.results.length);
-    debugPrint(
-      '[SEARCH DBG] doEmit — ${results.length} providers, $totalItems items, loading=$stillLoading',
-    );
-    controller.add(
-      SearchAggregateState(
-        results: List.from(results),
-        isLoading: stillLoading,
-      ),
-    );
-    pendingEmit = false;
-  }
-
-  void scheduleEmit({bool force = false}) {
-    if (isCancelled() || controller.isClosed) return;
-
-    if (force) {
-      throttleTimer?.cancel();
-      throttleTimer = null;
-      doEmit(force: true);
-      return;
-    }
-
-    pendingEmit = true;
-    // Mobile gets a wider throttle window to reduce rebuild frequency
-    // during high-concurrency search phases (70 providers).
-    final throttleDuration = (io.Platform.isAndroid || io.Platform.isIOS)
-        ? const Duration(milliseconds: 500)
-        : const Duration(milliseconds: 150);
-    throttleTimer ??= Timer(throttleDuration, () {
-      throttleTimer = null;
-      if (pendingEmit) doEmit();
-    });
-  }
-
-  void processNext() {
-    if (isCancelled()) {
-      for (final t in activeTokens) {
-        if (!t.isCancelled) t.cancel('Search cancelled');
-      }
-      activeTokens.clear();
-      // Drop any IIFE evals still waiting in the JS queue for active providers.
-      for (final p in activeProviders) {
-        p.cancelInit();
-      }
-      activeProviders.clear();
-      return;
-    }
-
-    // Fill up to max slots
-    while (activeJobs < maxSlots && queue.isNotEmpty) {
-      final provider = queue.removeAt(0);
-      activeJobs++;
-      final token = CancelToken();
-      activeTokens.add(token);
-      activeProviders.add(provider);
-
-      Future(() async {
-        if (isCancelled() || token.isCancelled) {
-          debugPrint(
-            '[SEARCH DBG] SKIP ${provider.packageName} — cancelled before start',
-          );
-          return;
-        }
-
-        try {
-          debugPrint('[SEARCH DBG] START ${provider.packageName}');
-          final rawResults = await provider.searchWithFilters(
-            query,
-            providerFilters,
-            cancelToken: token,
-          );
-          debugPrint(
-            '[SEARCH DBG] DONE ${provider.packageName} — rawResults=${rawResults.length}',
-          );
-          if (isCancelled() || token.isCancelled) {
-            debugPrint(
-              '[SEARCH DBG] CANCELLED after search ${provider.packageName}',
-            );
-            return;
-          }
-
-          final providerItems = rawResults
-              .map(
-                (item) => MultimediaItem(
-                  title: item.title,
-                  url: item.url,
-                  posterUrl: item.posterUrl,
-                  fullPosterUrl: item.fullPosterUrl,
-                  bannerUrl: item.bannerUrl,
-                  description: item.description,
-                  contentType: item.contentType,
-                  episodes: item.episodes,
-                  provider: provider.packageName,
-                ),
-              )
-              .toList();
-
-          // For small result sets, skip the compute() isolate overhead
-          // (spawn + serialize + deserialize costs more than the filter work).
-          final filtered = providerItems.length < 30
-              ? _filterItems(_FilterParams(providerItems, queryParts))
-              : await compute(
-                  _filterItems,
-                  _FilterParams(providerItems, queryParts),
-                );
-          debugPrint(
-            '[SEARCH DBG] FILTERED ${provider.packageName} — ${filtered.length}/${providerItems.length} items',
-          );
-
-          if (isCancelled() || token.isCancelled) {
-            debugPrint(
-              '[SEARCH DBG] CANCELLED after filter ${provider.packageName}',
-            );
-            return;
-          }
-
-          // Only add to state when there are actual results — empty entries
-          // grow the list, force larger List.from() copies in doEmit, and
-          // cause needless ListView rebuilds for no visual change.
-          if (filtered.isNotEmpty) {
-            results.add(
-              ProviderSearchResult(
-                providerId: provider.packageName,
-                providerName: provider.name,
-                results: filtered,
-              ),
-            );
-            debugPrint(
-              '[SEARCH DBG] ADDED ${provider.packageName} — total results sets=${results.length}',
-            );
-          }
-        } catch (e) {
-          debugPrint('[SEARCH DBG] ERROR ${provider.packageName}: $e');
-          if (isCancelled() || token.isCancelled) {
-            debugPrint(
-              '[SEARCH DBG] CANCELLED during error ${provider.packageName}',
-            );
-            return;
-          }
-          if (e is DioException && e.type == DioExceptionType.cancel) return;
-          // Don't add error entries with empty results — they add state size
-          // with no user-visible benefit.
-        } finally {
-          activeJobs--;
-          activeTokens.remove(token);
-          activeProviders.remove(provider);
-
-          final isLast = activeJobs == 0 && queue.isEmpty;
-          debugPrint(
-            '[SEARCH DBG] FINALLY ${provider.packageName} — activeJobs=$activeJobs, queueLeft=${queue.length}, isLast=$isLast, cancelled=${isCancelled()}, controllerClosed=${controller.isClosed}',
-          );
-          scheduleEmit(force: isLast);
-
-          if (isLast && !isCompleted) {
-            isCompleted = true;
-            debugPrint(
-              '[SEARCH DBG] ALL DONE — total result sets=${results.length}',
-            );
-            if (!controller.isClosed) {
-              unawaited(
-                Future.microtask(() {
-                  if (!controller.isClosed) controller.close();
-                }),
-              );
-            }
-          } else if (!isCancelled()) {
-            processNext();
-          }
-        }
-      });
-    }
-  }
-
-  processNext();
-
-  yield* controller.stream;
-}
-
 @Riverpod(keepAlive: true)
 class SearchQuery extends _$SearchQuery {
   @override
   String build() => '';
 
   void set(String query) => state = query;
-}
-
-@Riverpod(keepAlive: true)
-class SearchFilterNotifier extends _$SearchFilterNotifier {
-  @override
-  SearchFilter build() => SearchFilter.content;
-
-  void set(SearchFilter filter) => state = filter;
 }
 
 class SearchProviderFiltersNotifier extends Notifier<ProviderSearchFilters> {
@@ -497,47 +184,124 @@ final searchClearRequestProvider =
       SearchClearRequestNotifier.new,
     );
 
+// A published list remains an independent snapshot. The identity index only
+// belongs to the latest list and is discarded on reload or at the last page.
+class _SearchPageIndex<T> {
+  List<T>? _rows;
+  Set<String>? _keys;
+
+  void reset() {
+    _rows = null;
+    _keys = null;
+  }
+
+  List<T> append(
+    List<T> current,
+    List<T> incoming,
+    String Function(T) keyOf, {
+    required bool hasMore,
+  }) {
+    final saved = identical(_rows, current) ? _keys : null;
+    late final List<T> merged;
+    late final Set<String> keys;
+    if (saved == null) {
+      // The initial page is rendered as received. On the first append, keep
+      // its first occurrence of each key, exactly like later pages.
+      keys = <String>{};
+      merged = <T>[];
+      void collect(List<T> items) {
+        for (final item in items) {
+          if (keys.add(keyOf(item))) merged.add(item);
+        }
+      }
+
+      collect(current);
+      collect(incoming);
+    } else {
+      final additions = <T>[];
+      final addedKeys = <String>{};
+      for (final item in incoming) {
+        final key = keyOf(item);
+        if (!saved.contains(key) && addedKeys.add(key)) additions.add(item);
+      }
+      // Keep the old list intact for readers holding a previous state.
+      merged = additions.isEmpty ? current : <T>[...current, ...additions];
+      keys = saved;
+      if (hasMore) keys.addAll(addedKeys);
+    }
+
+    if (hasMore) {
+      _rows = merged;
+      _keys = keys;
+    } else {
+      reset();
+    }
+    return merged;
+  }
+}
+
+String _mediaPageKey(MultimediaItem item) {
+  final url = item.url.trim();
+  return url.isNotEmpty
+      ? url
+      : '${item.provider ?? ''}|${item.title.trim().toLowerCase()}|${item.year ?? ''}';
+}
+
+String _characterPageKey(Actor item) {
+  final id = item.id?.trim() ?? '';
+  return id.isNotEmpty
+      ? id
+      : '${item.name.trim().toLowerCase()}|${item.image ?? ''}';
+}
+
 class PagedSearchNotifier extends Notifier<SearchAggregateState> {
+  final _mediaIndex = _SearchPageIndex<MultimediaItem>();
+  final _characterIndex = _SearchPageIndex<Actor>();
   int _generation = 0;
   String _query = '';
   SearchDomain _domain = SearchDomain.anime;
   ProviderSearchFilters _filters = const ProviderSearchFilters();
+  Future<void>? _scheduledReload;
+  CancelToken? _nativePage;
 
   @override
   SearchAggregateState build() {
+    ref.onDispose(() {
+      _generation++;
+      _cancelNativePage();
+      _scheduledReload = null;
+      _mediaIndex.reset();
+      _characterIndex.reset();
+    });
     ref.listen(searchQueryProvider, (previous, next) {
       _query = next;
       // A new search drops what was shown — the catalogue an empty search
       // browses, or the last search — so it is not on screen as if it were
       // the answer while the new one loads.
-      _reload(clearExisting: previous?.trim() != next.trim());
+      _scheduleReload(clearExisting: previous?.trim() != next.trim());
     });
-    ref.listen(searchProviderFiltersProvider, (_, next) {
-      _filters = next;
-      _reload();
-    });
+    ref.listen(searchProviderFiltersProvider, (_, _) => _scheduleReload());
     ref.listen(searchDomainProvider, (_, next) {
       _domain = next;
-      _reload(clearExisting: true);
+      _scheduleReload(clearExisting: true);
     });
     // An account switch must immediately hide the previous account's items.
     // A failed replacement request must never reveal its cached results.
     ref.listen(
       accountDataRevisionProvider,
-      (_, _) => _reload(clearExisting: true),
+      (_, _) => _scheduleReload(clearExisting: true),
     );
     ref.listen(activeProviderProvider, (previous, next) {
       if (previous?.packageName == next?.packageName) return;
       if (_domain == SearchDomain.anime ||
           _domain == SearchDomain.characters ||
           _domain == SearchDomain.all) {
-        _reload(clearExisting: true);
+        _scheduleReload(clearExisting: true);
       }
     });
     _query = ref.read(searchQueryProvider);
     _domain = ref.read(searchDomainProvider);
-    _filters = ref.read(searchProviderFiltersProvider);
-    Future.microtask(_reload);
+    _scheduleReload(initial: true);
     return const SearchAggregateState(isLoading: true);
   }
 
@@ -556,8 +320,9 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
   Future<ProviderMediaPage> _loadPage(
     AnimeWitcherProvider provider,
     int offset,
-    SearchDomain domain,
-  ) {
+    SearchDomain domain, {
+    CancelToken? cancelToken,
+  }) {
     final pageSize = provider.searchPageSize;
     return switch (domain) {
       SearchDomain.anime => provider.searchPage(
@@ -565,12 +330,14 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
         _filters,
         offset: offset,
         limit: pageSize,
+        cancelToken: cancelToken,
       ),
       SearchDomain.animation => provider.searchAnimationPage(
         _query,
         _filters,
         offset: offset,
         limit: pageSize,
+        cancelToken: cancelToken,
       ),
       SearchDomain.manga => provider.searchMangaPage(
         _query,
@@ -589,6 +356,33 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
         ),
       ),
     };
+  }
+
+  Future<ProviderMediaPage> _loadCommittedPage(
+    AnimeWitcherProvider provider,
+    int offset,
+    SearchDomain domain,
+  ) async {
+    // The committed Manga filter path shares pending catalog requests only
+    // without a token. Leave it, aggregate results and other providers alone.
+    if (provider is! AnimeWitcherNativeProvider ||
+        (domain != SearchDomain.anime && domain != SearchDomain.animation)) {
+      return _loadPage(provider, offset, domain);
+    }
+
+    final token = CancelToken();
+    _nativePage = token;
+    try {
+      return await _loadPage(provider, offset, domain, cancelToken: token);
+    } finally {
+      if (identical(_nativePage, token)) _nativePage = null;
+    }
+  }
+
+  void _cancelNativePage() {
+    final token = _nativePage;
+    _nativePage = null;
+    token?.cancel('Committed search superseded');
   }
 
   Future<ProviderCharacterPage> _loadCharacterPage(
@@ -659,21 +453,55 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     );
   }
 
-  Future<void> _reload({bool clearExisting = false}) async {
+  Future<void> _scheduleReload({
+    bool clearExisting = false,
+    bool initial = false,
+  }) {
+    const cleared = SearchAggregateState(isLoading: true);
+    final scheduled = _scheduledReload;
+    if (scheduled != null) {
+      if (clearExisting) state = cleared;
+      return scheduled;
+    }
+
+    // The filter sheet may change the category, reset its filters and apply
+    // the selected ones in the same turn. Invalidate old results immediately
+    // but start the first page only after those inputs have settled.
     final generation = ++_generation;
+    _cancelNativePage();
+    _mediaIndex.reset();
+    _characterIndex.reset();
+    final reload = Future<void>.microtask(() async {
+      if (!ref.mounted || generation != _generation) return;
+      // Reading also flushes the domain-dependent defaults when no widget has
+      // read them yet. Keep the scheduled reload visible to that listener.
+      _filters = ref.read(searchProviderFiltersProvider);
+      _scheduledReload = null;
+      await _loadFirstPage(generation);
+    });
+    _scheduledReload = reload;
+    if (!initial) {
+      state = clearExisting
+          ? cleared
+          : state.copyWith(
+              isLoading: true,
+              isLoadingMore: false,
+              hasMore: false,
+              nextOffset: 0,
+              clearError: true,
+            );
+    }
+    return reload;
+  }
+
+  bool _isCurrent(int generation, SearchDomain domain) =>
+      ref.mounted && generation == _generation && domain == _domain;
+
+  Future<void> _loadFirstPage(int generation) async {
     final requestDomain = _domain;
-    state = clearExisting
-        ? const SearchAggregateState(isLoading: true)
-        : state.copyWith(
-            isLoading: true,
-            isLoadingMore: false,
-            hasMore: false,
-            nextOffset: 0,
-            clearError: true,
-          );
     final provider = _provider();
     if (provider == null) {
-      if (generation == _generation) {
+      if (_isCurrent(generation, requestDomain)) {
         state = const SearchAggregateState();
       }
       return;
@@ -682,14 +510,14 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     try {
       if (requestDomain == SearchDomain.all) {
         final everything = await _loadEverything(provider);
-        if (generation != _generation || requestDomain != _domain) return;
+        if (!_isCurrent(generation, requestDomain)) return;
         state = everything;
         return;
       }
 
       if (requestDomain == SearchDomain.characters) {
         final page = await _loadCharacterPage(provider, 0);
-        if (generation != _generation || requestDomain != _domain) return;
+        if (!_isCurrent(generation, requestDomain)) return;
         state = SearchAggregateState(
           characters: page.items,
           isLoading: false,
@@ -699,8 +527,8 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
         return;
       }
 
-      final page = await _loadPage(provider, 0, requestDomain);
-      if (generation != _generation || requestDomain != _domain) return;
+      final page = await _loadCommittedPage(provider, 0, requestDomain);
+      if (!_isCurrent(generation, requestDomain)) return;
       state = SearchAggregateState(
         results: page.items.isEmpty
             ? const <ProviderSearchResult>[]
@@ -716,8 +544,8 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
         nextOffset: page.nextOffset,
       );
     } catch (e) {
-      debugPrint('[SEARCH PAGE] initial load failed: $e');
-      if (generation == _generation && requestDomain == _domain) {
+      if (_isCurrent(generation, requestDomain)) {
+        debugPrint('[SEARCH PAGE] initial load failed: $e');
         // Keep the last rendered cards on transient network failures. Show the
         // recoverable empty state only when there is nothing left to display.
         final hasCards =
@@ -745,16 +573,13 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     try {
       if (requestDomain == SearchDomain.characters) {
         final page = await _loadCharacterPage(provider, state.nextOffset);
-        if (generation != _generation || requestDomain != _domain) return;
-        final seen = <String>{};
-        final merged = <Actor>[];
-        for (final item in <Actor>[...state.characters, ...page.items]) {
-          final id = item.id?.trim() ?? '';
-          final key = id.isNotEmpty
-              ? id
-              : '${item.name.trim().toLowerCase()}|${item.image ?? ''}';
-          if (seen.add(key)) merged.add(item);
-        }
+        if (!_isCurrent(generation, requestDomain)) return;
+        final merged = _characterIndex.append(
+          state.characters,
+          page.items,
+          _characterPageKey,
+          hasMore: page.hasMore,
+        );
         state = SearchAggregateState(
           characters: merged,
           isLoading: false,
@@ -765,19 +590,21 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
         return;
       }
 
-      final page = await _loadPage(provider, state.nextOffset, requestDomain);
-      if (generation != _generation || requestDomain != _domain) return;
+      final page = await _loadCommittedPage(
+        provider,
+        state.nextOffset,
+        requestDomain,
+      );
+      if (!_isCurrent(generation, requestDomain)) return;
       final current = state.results.isEmpty
           ? const <MultimediaItem>[]
           : state.results.first.results;
-      final seen = <String>{};
-      final merged = <MultimediaItem>[];
-      for (final item in <MultimediaItem>[...current, ...page.items]) {
-        final key = item.url.trim().isNotEmpty
-            ? item.url.trim()
-            : '${item.provider ?? ''}|${item.title.trim().toLowerCase()}|${item.year ?? ''}';
-        if (seen.add(key)) merged.add(item);
-      }
+      final merged = _mediaIndex.append(
+        current,
+        page.items,
+        _mediaPageKey,
+        hasMore: page.hasMore,
+      );
       state = SearchAggregateState(
         results: merged.isEmpty
             ? const <ProviderSearchResult>[]
@@ -794,8 +621,8 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
         nextOffset: page.nextOffset,
       );
     } catch (e) {
-      debugPrint('[SEARCH PAGE] load more failed: $e');
-      if (generation == _generation && requestDomain == _domain) {
+      if (_isCurrent(generation, requestDomain)) {
+        debugPrint('[SEARCH PAGE] load more failed: $e');
         state = state.copyWith(isLoadingMore: false);
       }
     }
@@ -803,7 +630,7 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
 
   Future<void> retry() {
     _provider()?.prepareForNetworkRetry();
-    return _reload();
+    return _scheduleReload();
   }
 }
 
@@ -811,36 +638,6 @@ final searchPagedResultsProvider =
     NotifierProvider<PagedSearchNotifier, SearchAggregateState>(
       PagedSearchNotifier.new,
     );
-
-@Riverpod(keepAlive: true)
-Stream<SearchAggregateState> searchResults(Ref ref) {
-  ref.watch(accountDataRevisionProvider);
-  final query = ref.watch(searchQueryProvider);
-  final filter = ref.watch(searchFilterProvider);
-  final providerFilters = ref.watch(searchProviderFiltersProvider);
-  final manager = ref.read(extensionManagerProvider.notifier);
-
-  debugPrint(
-    '[SEARCH DBG] searchResults PROVIDER BUILT — queryLength=${query.runes.length}',
-  );
-
-  var cancelled = false;
-  ref.onDispose(() {
-    debugPrint(
-      '[SEARCH DBG] searchResults DISPOSED — queryLength=${query.runes.length}',
-    );
-    cancelled = true;
-  });
-
-  return searchAllProviders(
-    ref,
-    query,
-    manager,
-    filter: filter,
-    providerFilters: providerFilters,
-    isCancelled: () => cancelled,
-  );
-}
 
 class SearchSuggestionState {
   final List<String> suggestions;
@@ -896,6 +693,7 @@ class SearchSuggestionState {
 @riverpod
 class SearchSuggestionController extends _$SearchSuggestionController {
   Timer? _debounce;
+  CancelToken? _inFlight;
   int _generation = 0;
 
   @override
@@ -916,10 +714,16 @@ class SearchSuggestionController extends _$SearchSuggestionController {
       _restartForCatalogChange();
     });
     ref.listen(searchDomainProvider, (_, _) => _restartForCatalogChange());
-    ref.onDispose(() {
-      _debounce?.cancel();
-    });
+    ref.onDispose(_cancelPendingWork);
     return const SearchSuggestionState();
+  }
+
+  void _cancelPendingWork() {
+    _debounce?.cancel();
+    _debounce = null;
+    final inFlight = _inFlight;
+    _inFlight = null;
+    inFlight?.cancel();
   }
 
   void _restartForCatalogChange() {
@@ -932,9 +736,9 @@ class SearchSuggestionController extends _$SearchSuggestionController {
     if (query == state.query) return;
 
     final generation = ++_generation;
+    _cancelPendingWork();
     final trimmed = query.trim();
     if (trimmed.length < 2) {
-      _debounce?.cancel();
       state = state.copyWith(
         query: query,
         suggestions: const [],
@@ -949,8 +753,13 @@ class SearchSuggestionController extends _$SearchSuggestionController {
 
     state = SearchSuggestionState(query: query, isLoading: true);
 
-    _debounce?.cancel();
+    if (!ref.mounted || generation != _generation) return;
     _debounce = Timer(const Duration(milliseconds: 350), () async {
+      _debounce = null;
+      // Only instant suggestions share this token; a submitted result is
+      // owned separately by PagedSearchNotifier.
+      final token = CancelToken();
+      _inFlight = token;
       try {
         final manager = ref.read(extensionManagerProvider.notifier);
         final providers = manager.getAllProviders();
@@ -987,6 +796,7 @@ class SearchSuggestionController extends _$SearchSuggestionController {
                   none,
                   offset: 0,
                   limit: 20,
+                  cancelToken: token,
                 ),
               )
             : Future.value(const <MultimediaItem>[]);
@@ -999,6 +809,7 @@ class SearchSuggestionController extends _$SearchSuggestionController {
                   none,
                   offset: 0,
                   limit: 20,
+                  cancelToken: token,
                 ),
               )
             : Future.value(const <MultimediaItem>[]);
@@ -1014,33 +825,45 @@ class SearchSuggestionController extends _$SearchSuggestionController {
             animeProvider != null &&
                 (everything || domain == SearchDomain.anime)
             ? animeProvider
-                  .search(query)
+                  .search(query, cancelToken: token)
                   .catchError((Object _) => const <MultimediaItem>[])
             : Future.value(const <MultimediaItem>[]);
         final anime = await animeFuture;
         final animation = await animationFuture;
         final mangaItems = await mangaFuture;
         final characters = await charactersFuture;
+        // A committed search or newer query may have invalidated this reply.
+        // Do not walk either suggestion projection for an abandoned result.
+        if (!ref.mounted || generation != _generation || state.query != query) {
+          return;
+        }
         final results = switch (domain) {
           SearchDomain.animation => animation,
           SearchDomain.manga => mangaItems,
           _ => anime,
         };
-        final suggestions = results
-            .map((item) => item.title.trim())
-            .where((title) => title.isNotEmpty)
-            .toSet()
-            .take(10)
-            .toList(growable: false);
-        final seen = <String>{};
-        final items = results
-            .where((item) => item.title.trim().isNotEmpty && seen.add(item.url))
-            .take(30)
-            .toList(growable: false);
+        const suggestionLimit = 10;
+        const itemLimit = 30;
+        final titles = <String>{};
+        final seenUrls = <String>{};
+        final items = <MultimediaItem>[];
+        // The labels and cards have independent first winners. Read each
+        // title once and stop only after both visible quotas are filled.
+        for (final item in results) {
+          final title = item.title.trim();
+          if (title.isEmpty) continue;
+          if (titles.length < suggestionLimit) titles.add(title);
+          if (items.length < itemLimit && seenUrls.add(item.url)) {
+            items.add(item);
+          }
+          if (titles.length == suggestionLimit && items.length == itemLimit) {
+            break;
+          }
+        }
         if (ref.mounted && generation == _generation && state.query == query) {
           state = state.copyWith(
-            suggestions: suggestions,
-            items: items,
+            suggestions: titles.toList(growable: false),
+            items: items.toList(growable: false),
             animation: everything ? animation : const [],
             manga: everything ? mangaItems : const [],
             characters: characters.take(12).toList(growable: false),
@@ -1058,13 +881,15 @@ class SearchSuggestionController extends _$SearchSuggestionController {
             isLoading: false,
           );
         }
+      } finally {
+        if (identical(_inFlight, token)) _inFlight = null;
       }
     });
   }
 
   void clear() {
     _generation++;
-    _debounce?.cancel();
+    _cancelPendingWork();
     state = const SearchSuggestionState();
   }
 }

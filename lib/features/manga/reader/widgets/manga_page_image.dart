@@ -76,8 +76,9 @@ class MangaPageImage extends StatefulWidget {
   State<MangaPageImage> createState() => _MangaPageImageState();
 }
 
-class _MangaPageImageState extends State<MangaPageImage>
-    with AutomaticKeepAliveClientMixin<MangaPageImage> {
+// The reader viewport already keeps neighbouring pages ready. Retaining
+// every visited image here also pins its native decoder and decoded tiles.
+class _MangaPageImageState extends State<MangaPageImage> {
   ImageStream? _sizeStream;
   ImageStreamListener? _sizeListener;
   Size? _imageSize;
@@ -145,18 +146,30 @@ class _MangaPageImageState extends State<MangaPageImage>
     final oldListener = _sizeListener;
     if (oldListener != null) _sizeStream?.removeListener(oldListener);
 
-    if (_useSubsampling) {
+    // Animated pages read dimensions from the first frame. A local GIF
+    // keeps the same logical canvas even while its pixels change.
+    final localAnimation = _imageProvider is FileImage;
+    if (_useSubsampling || (localAnimation && _imageSize != null)) {
       _sizeStream = null;
       _sizeListener = null;
       return;
     }
     final ImageProvider<Object> provider = _imageProvider;
     final stream = provider.resolve(createLocalImageConfiguration(context));
-    final listener = ImageStreamListener((info, _) {
-      final size = Size(
-        info.image.width.toDouble(),
-        info.image.height.toDouble(),
-      );
+    late final ImageStreamListener listener;
+    listener = ImageStreamListener((info, _) {
+      final Size size;
+      try {
+        size = Size(info.image.width.toDouble(), info.image.height.toDouble());
+      } finally {
+        // Only dimensions are needed, not this cloned frame handle.
+        info.dispose();
+      }
+      if (localAnimation && identical(_sizeListener, listener)) {
+        stream.removeListener(listener);
+        _sizeListener = null;
+        _sizeStream = null;
+      }
       if (!mounted || size == _imageSize) return;
       setState(() => _imageSize = size);
       widget.onImageSize?.call(size);
@@ -222,11 +235,7 @@ class _MangaPageImageState extends State<MangaPageImage>
   }
 
   @override
-  bool get wantKeepAlive => true;
-
-  @override
   Widget build(BuildContext context) {
-    super.build(context);
     final uri = Uri.tryParse(widget.page.imageUrl);
     final localFile = uri != null && uri.scheme == 'file'
         ? File.fromUri(uri)

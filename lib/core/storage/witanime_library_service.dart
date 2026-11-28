@@ -11,6 +11,7 @@ import '../domain/entity/multimedia_item.dart';
 import '../extensions/providers/witanime_provider.dart';
 import '../extensions/providers/witanime_transport.dart';
 import 'library_category.dart';
+import 'library_mutation_epochs.dart';
 import 'storage_service.dart';
 
 bool isWitanimeSyncedCategory(LibraryCategory category) => switch (category) {
@@ -728,7 +729,7 @@ class WitanimeLibraryService extends ChangeNotifier {
   final WitanimeLibraryBackend _backend;
   final DateTime Function() _now;
 
-  final Map<String, int> _mutationEpochs = <String, int>{};
+  final _epochs = LibraryMutationEpochs(canonicalWorkUrl);
   bool _isSyncing = false;
   String? _lastError;
 
@@ -737,19 +738,6 @@ class WitanimeLibraryService extends ChangeNotifier {
   String _scopeHash(String accountId) => base64Url.encode(utf8.encode(accountId));
   String _entriesKey(String accountId) => 'witanime_lib_v1:${_scopeHash(accountId)}';
   String _pendingKey(String accountId) => 'witanime_pending_v1:${_scopeHash(accountId)}';
-
-  String _mutationKey(String accountId, String workUrl) =>
-      '$accountId|${canonicalWorkUrl(workUrl)}';
-
-  int _bumpEpoch(String accountId, String workUrl) {
-    final key = _mutationKey(accountId, workUrl);
-    final next = (_mutationEpochs[key] ?? 0) + 1;
-    _mutationEpochs[key] = next;
-    return next;
-  }
-
-  int _epochFor(String accountId, String workUrl) =>
-      _mutationEpochs[_mutationKey(accountId, workUrl)] ?? 0;
 
   static String canonicalWorkUrl(String url) =>
       WitanimeProvider.parseCatalogLink(url)?.work.toString() ?? url.trim();
@@ -875,7 +863,7 @@ class WitanimeLibraryService extends ChangeNotifier {
     if (session == null) return null;
     final accountId = session.accountId;
     final key = canonicalWorkUrl(item.url);
-    final requestEpoch = _epochFor(accountId, key);
+    final requestEpoch = _epochs.current(accountId, key);
 
     try {
       final remote = await _backend.fetchMembership(
@@ -883,7 +871,7 @@ class WitanimeLibraryService extends ChangeNotifier {
         workUrl: key,
       );
       if (_accountService.accountId != accountId ||
-          _epochFor(accountId, key) != requestEpoch) {
+          _epochs.current(accountId, key) != requestEpoch) {
         return null;
       }
       if (remote == null) return cachedMembership(key);
@@ -937,7 +925,7 @@ class WitanimeLibraryService extends ChangeNotifier {
     }
     final accountId = session.accountId;
     final key = canonicalWorkUrl(item.url);
-    _bumpEpoch(accountId, key);
+    _epochs.bump(accountId, key);
     final entries = _readEntries(accountId);
     final existing = entries[key];
     final previousConfirmed =
@@ -1028,7 +1016,7 @@ class WitanimeLibraryService extends ChangeNotifier {
     }
     final accountId = session.accountId;
     final key = canonicalWorkUrl(item.url);
-    _bumpEpoch(accountId, key);
+    _epochs.bump(accountId, key);
     final entries = _readEntries(accountId);
     final existing = entries[key];
     final previousConfirmed =
@@ -1107,7 +1095,7 @@ class WitanimeLibraryService extends ChangeNotifier {
     final session = _accountService.session;
     if (session == null) return;
     final accountId = session.accountId;
-    final epochBefore = Map<String, int>.from(_mutationEpochs);
+    final changedSinceStart = _epochs.snapshotGuard();
     final fetched = await _backend.fetchLists(
       sessionCookie: session.sessionCookie,
     );
@@ -1120,9 +1108,7 @@ class WitanimeLibraryService extends ChangeNotifier {
     };
 
     for (final key in fetchedByUrl.keys) {
-      final mutationKey = _mutationKey(accountId, key);
-      if ((_mutationEpochs[mutationKey] ?? 0) !=
-          (epochBefore[mutationKey] ?? 0)) {
+      if (changedSinceStart(accountId, key)) {
         continue;
       }
       final remote = fetchedByUrl[key]!;
@@ -1145,9 +1131,7 @@ class WitanimeLibraryService extends ChangeNotifier {
 
     for (final key in entries.keys.toList(growable: false)) {
       if (fetchedByUrl.containsKey(key)) continue;
-      final mutationKey = _mutationKey(accountId, key);
-      if ((_mutationEpochs[mutationKey] ?? 0) !=
-          (epochBefore[mutationKey] ?? 0)) {
+      if (changedSinceStart(accountId, key)) {
         continue;
       }
       final hasPendingCat = pending.any(

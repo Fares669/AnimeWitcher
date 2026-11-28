@@ -13,6 +13,7 @@ import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 import 'package:video_view/video_view.dart' as vv;
 
 import '../../../../l10n/generated/app_localizations.dart';
+import '../episode_navigation.dart';
 import '../player_controller.dart';
 import '../player_shortcuts.dart';
 import '../../../details/presentation/playback_launcher.dart';
@@ -50,7 +51,6 @@ class AnimeWitcherPlayerControls extends ConsumerStatefulWidget {
   final List<StreamResult>? streams;
   final StreamResult? currentStream;
 
-  final List<SubtitleFile>? externalSubtitles;
   final void Function(StreamResult)? onStreamSelected;
   final void Function(BoxFit)? onResize;
   final void Function(bool)? onVisibilityChanged;
@@ -72,7 +72,6 @@ class AnimeWitcherPlayerControls extends ConsumerStatefulWidget {
     this.onBackPointer,
     this.streams,
     this.currentStream,
-    this.externalSubtitles,
     this.onStreamSelected,
     this.onResize,
     this.onVisibilityChanged,
@@ -107,7 +106,9 @@ class AnimeWitcherPlayerControlsState
   bool _isLocked = false;
 
   // Seek animation state
-  late AnimationController _seekAnimController;
+  late final AnimationController _seekAnimController;
+  late final Animation<double> _seekFade;
+  late final Animation<double> _seekScale;
   Timer? _seekOverlayTimer;
   bool _seekOverlayVisible = false;
   int _seekAccumulatedSeconds = 0;
@@ -137,15 +138,16 @@ class AnimeWitcherPlayerControlsState
   };
   bool _touchHeldForSpeed = false;
   double? _speedBeforeTouchHold;
+  PlayerController? _touchSpeedController;
 
   late bool _isPlaying;
-  late Duration _position;
   late Duration _duration;
 
   final List<StreamSubscription<dynamic>> _subscriptions = [];
 
   late final PlayerPlatformService _platformService;
   late final int _deviceControlSession;
+  late final PlayerGestureHandler _deviceGestureHandler;
   Offset? _tapPosition;
 
   /// Double taps are told apart by hand. A double-tap recognizer holds every
@@ -197,15 +199,15 @@ class AnimeWitcherPlayerControlsState
     _isIpad = Platform.isIOS && (deviceProfile?.isTablet ?? false);
 
     _platformService = widget.platformService;
-    _deviceControlSession = ref
-        .read(playerGestureHandlerProvider.notifier)
+    _deviceGestureHandler = ref.read(playerGestureHandlerProvider.notifier);
+    _deviceControlSession = _deviceGestureHandler
         .init(
           getSettings: () async =>
               await ref.read(playerSettingsProvider.future),
           isTv: _isTv,
           isDesktop: Platform.isMacOS || Platform.isWindows || Platform.isLinux,
           getDuration: () => _duration,
-          getPosition: () => _position,
+          getPosition: _positionAtSwipeStart,
           canSeek: () => ref.read(playerControllerProvider).canSeek,
           getMaxVolumeLevel: () =>
               ref.read(playerControllerProvider).supportsVolumeBoost
@@ -286,7 +288,6 @@ class AnimeWitcherPlayerControlsState
       );
     }
     _isPlaying = widget.player.state.playing;
-    _position = widget.player.state.position;
     _duration = widget.player.state.duration;
 
     // OPTIMIZATION: Removed setState calls for position/buffering - now using StreamBuilder widgets
@@ -315,10 +316,6 @@ class AnimeWitcherPlayerControlsState
         }
         _syncPipSession();
       }),
-      // Position: No setState needed - StreamBuilder in PlayerProgressBar handles UI
-      widget.player.stream.position.listen((val) {
-        _position = val; // Update local cache for seek calculations
-      }),
       // Duration: Only setState when transitioning from zero (to show controls)
       widget.player.stream.duration.listen((val) {
         final oldDuration = _duration;
@@ -343,12 +340,17 @@ class AnimeWitcherPlayerControlsState
       vsync: this,
       duration: const Duration(milliseconds: 180),
     );
+    // Curves stay attached to the same controller for the entire session.
+    // These are forward-only transforms and need no status listeners.
+    _seekFade = _seekAnimController.drive(CurveTween(curve: Curves.easeOutCubic));
+    _seekScale = _seekAnimController
+        .drive(CurveTween(curve: Curves.easeOut))
+        .drive(Tween<double>(begin: 0.94, end: 1.0));
     // The short controller animates the entrance; a separate one-second timer
     // keeps the cumulative seek value visible between repeated seeks.
 
-    // Bridge video_view state into local cache so seek calculations and
-    // the loading guard stay correct when ExoPlayer is active.
-    widget.videoViewController?.position.addListener(_onVvPosition);
+    // Observe native playback/metadata for the hide timer, load state and
+    // orientation. Clock position is read on demand for seek swipes.
     widget.videoViewController?.playbackState.addListener(_onVvPlaybackState);
     widget.videoViewController?.mediaInfo.addListener(_onVvMediaInfo);
     widget.videoViewController?.videoSize.addListener(_updateOrientation);
@@ -436,19 +438,24 @@ class AnimeWitcherPlayerControlsState
 
   @override
   void dispose() {
-    widget.videoViewController?.position.removeListener(_onVvPosition);
     widget.videoViewController?.playbackState.removeListener(
       _onVvPlaybackState,
     );
     widget.videoViewController?.mediaInfo.removeListener(_onVvMediaInfo);
     widget.videoViewController?.videoSize.removeListener(_updateOrientation);
     widget.videoViewController?.orientation.removeListener(_updateOrientation);
-    if (_touchHeldForSpeed) {
-      final previousSpeed = _speedBeforeTouchHold ?? 1.0;
+    final touchSpeedController = _touchSpeedController;
+    if (_touchHeldForSpeed &&
+        touchSpeedController != null &&
+        !touchSpeedController.isDisposed) {
       unawaited(
-        ref
-            .read(playerControllerProvider.notifier)
-            .setPlaybackSpeed(previousSpeed),
+        touchSpeedController
+            .setPlaybackSpeed(_speedBeforeTouchHold ?? 1.0)
+            .catchError((Object error) {
+              if (kDebugMode) {
+                debugPrint('Failed to restore playback speed: $error');
+              }
+            }),
       );
     }
     FocusManager.instance.removeListener(_onFocusChange);
@@ -456,10 +463,8 @@ class AnimeWitcherPlayerControlsState
       s.cancel();
     }
     _subscriptions.clear();
-    ref
-        .read(playerGestureHandlerProvider.notifier)
-        .detachDeviceControls(session: _deviceControlSession);
-    _syncPipSession(active: false);
+    // Use the handler that owns this session: WidgetRef is already unmounted.
+    _deviceGestureHandler.detachDeviceControls(session: _deviceControlSession);
     _pipSettingsSub?.close();
     _revertMessageSub?.close();
     _playFocusNode.dispose();
@@ -538,16 +543,16 @@ class AnimeWitcherPlayerControlsState
     return null;
   }
 
-  void _syncPipSession({bool active = true}) {
+  void _syncPipSession() {
     if (!Platform.isAndroid || _isTv) return;
     try {
       final settings =
           ref.read(playerSettingsProvider).asData?.value ??
           const PlayerSettings();
-      final size = active ? _videoSize() : null;
+      final size = _videoSize();
       unawaited(
         _platformService.updatePipSession(
-          active: active,
+          active: true,
           enabled: settings.showPip,
           isPlaying: _isPlaying,
           width: size?.$1,
@@ -673,9 +678,9 @@ class AnimeWitcherPlayerControlsState
     if (_touchHeldForSpeed) return;
     _touchHeldForSpeed = true;
     _speedBeforeTouchHold = ref.read(playerControllerProvider).playbackSpeed;
-    unawaited(
-      ref.read(playerControllerProvider.notifier).setPlaybackSpeed(2.0),
-    );
+    final controller = ref.read(playerControllerProvider.notifier);
+    _touchSpeedController = controller;
+    unawaited(controller.setPlaybackSpeed(2.0));
     ref
         .read(playerGestureHandlerProvider.notifier)
         .showToast("2.0x", LucideIcons200.fastForward);
@@ -686,6 +691,7 @@ class AnimeWitcherPlayerControlsState
     final previousSpeed = _speedBeforeTouchHold ?? 1.0;
     _touchHeldForSpeed = false;
     _speedBeforeTouchHold = null;
+    _touchSpeedController = null;
     unawaited(
       ref
           .read(playerControllerProvider.notifier)
@@ -849,11 +855,6 @@ class AnimeWitcherPlayerControlsState
   }
 
   // --- video_view bridge listeners ---
-  void _onVvPosition() {
-    final ms = widget.videoViewController?.position.value ?? 0;
-    _position = Duration(milliseconds: ms);
-  }
-
   void _onVvPlaybackState() {
     final state = widget.videoViewController?.playbackState.value;
     final playing = state == vv.VideoControllerPlaybackState.playing;
@@ -899,6 +900,16 @@ class AnimeWitcherPlayerControlsState
 
   void _togglePlay() {
     unawaited(ref.read(playerControllerProvider.notifier).togglePlayPause());
+  }
+
+  // Seek swipes only need one position at gesture start. Read the active
+  // engine then rather than subscribing to every backend clock event.
+  Duration _positionAtSwipeStart() {
+    final controller = widget.videoViewController;
+    if (controller != null && ref.read(playerControllerProvider).useExoPlayer) {
+      return Duration(milliseconds: controller.position.value);
+    }
+    return widget.player.state.position;
   }
 
   void _seekRelative(Duration amount) {
@@ -1044,9 +1055,18 @@ class AnimeWitcherPlayerControlsState
     required double maxPlaybackSpeed,
   }) {
     final l10n = AppLocalizations.of(context)!;
-    final playerSettings =
-        ref.watch(playerSettingsProvider).asData?.value ??
-        const PlayerSettings();
+    final playerSettings = ref.watch(
+      playerSettingsProvider.select((snapshot) {
+        final settings = snapshot.asData?.value ?? const PlayerSettings();
+        return (
+          anime4kEnabled: settings.anime4kEnabled,
+          showAnime4kButton: settings.showAnime4kButton,
+          anime4kMode: settings.anime4kMode,
+          showResize: settings.showResize,
+          showPlaybackSpeed: settings.showPlaybackSpeed,
+        );
+      }),
+    );
     return PlayerSettingsPanel(
       showAnime4k:
           playerSettings.anime4kEnabled &&
@@ -1299,16 +1319,7 @@ class AnimeWitcherPlayerControlsState
         .handleHorizontalDragEnd(details);
   }
 
-  String _formatDuration(Duration duration) {
-    String twoDigits(int n) => n.toString().padLeft(2, '0');
-    final hours = duration.inHours;
-    final minutes = duration.inMinutes.remainder(60);
-    final seconds = duration.inSeconds.remainder(60);
-    if (hours > 0) {
-      return "$hours:${twoDigits(minutes)}:${twoDigits(seconds)}";
-    }
-    return "$minutes:${twoDigits(seconds)}";
-  }
+  String _formatDuration(Duration duration) => formatPlayerDuration(duration);
 
   Widget _buildKickAnimation() {
     final absoluteSeconds = _seekAccumulatedSeconds.abs();
@@ -1319,16 +1330,9 @@ class AnimeWitcherPlayerControlsState
         : '0';
 
     return FadeTransition(
-      opacity: Tween<double>(begin: 0.0, end: 1.0).animate(
-        CurvedAnimation(
-          parent: _seekAnimController,
-          curve: Curves.easeOutCubic,
-        ),
-      ),
+      opacity: _seekFade,
       child: ScaleTransition(
-        scale: Tween<double>(begin: 0.94, end: 1.0).animate(
-          CurvedAnimation(parent: _seekAnimController, curve: Curves.easeOut),
-        ),
+        scale: _seekScale,
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1381,9 +1385,6 @@ class AnimeWitcherPlayerControlsState
     final currentStream = ref.watch(
       playerControllerProvider.select((s) => s.currentStream),
     );
-    final externalSubtitles = ref.watch(
-      playerControllerProvider.select((s) => s.externalSubtitles),
-    );
     final showNextEpOverlay = ref.watch(
       playerControllerProvider.select((s) => s.showNextEpisodeOverlay),
     );
@@ -1427,27 +1428,37 @@ class AnimeWitcherPlayerControlsState
       playerControllerProvider.select((s) => s.maxPlaybackSpeed),
     );
     final isSeries = playerNotifier.isSeries;
-    final previousEpisode = playerNotifier.previousEpisode;
-    final nextEpisode = playerNotifier.nextEpisode;
+    final episode = playerNotifier.currentEpisode;
     // The note is the viewer's to act on; the setting decides whether they
     // are told at all, and "skip" has already stepped past it by the time
     // the card is built.
-    final fillerBehaviour =
-        ref.watch(playerSettingsProvider).asData?.value.fillerBehaviour ??
-        FillerBehaviour.note;
+    final fillerBehaviour = ref.watch(
+      playerSettingsProvider.select(
+        (snapshot) =>
+            snapshot.asData?.value.fillerBehaviour ?? FillerBehaviour.note,
+      ),
+    );
+    final showFillerNote =
+        showNextEpOverlay &&
+        nextEpTitle != null &&
+        fillerBehaviour == FillerBehaviour.note;
+    final navigation = isSeries
+        ? episodeChromeNavigation(
+            episodes: playerNotifier.multimediaItem?.episodes,
+            currentEpisode: episode,
+            currentEpisodeUrl: playerNotifier.currentEpisodeUrl ?? '',
+            includeFillerStory: showFillerNote,
+          )
+        : (previous: null, next: null, story: null);
     final showsFillerNote =
-        fillerBehaviour == FillerBehaviour.note &&
-        (nextEpisode?.isFiller ?? false);
-    final storyEpisode = showsFillerNote
-        ? playerNotifier.nextStoryEpisodeOrNull
-        : null;
+        showFillerNote && (navigation.next?.isFiller ?? false);
+    final storyEpisode = navigation.story;
     final storyEpisodeLabel = storyEpisode == null
         ? null
         : storyEpisode.serverName.trim().isNotEmpty
         ? storyEpisode.serverName
         : 'الحلقة ${storyEpisode.episode}';
     final hasEpisodePicker = playerNotifier.hasEpisodePicker;
-    final episode = playerNotifier.currentEpisode;
     final episodeLabel = episode == null
         ? null
         : formatPlayerEpisodeLabel(
@@ -1459,8 +1470,12 @@ class AnimeWitcherPlayerControlsState
     final skipSegments = ref.watch(
       playerControllerProvider.select((s) => s.skipSegments),
     );
-    final uiPhase = ref.watch(
-      playerControllerProvider.select((s) => s.uiPhase),
+    // Keep each blocking startup/error update, but let the buffering
+    // indicator own nonblocking phase updates without rebuilding all chrome.
+    final blockingPhase = ref.watch(
+      playerControllerProvider.select(
+        (s) => s.uiPhase.fullscreenBlocking ? s.uiPhase : null,
+      ),
     );
     final showSeekButtons =
         ref.watch(
@@ -1478,7 +1493,7 @@ class AnimeWitcherPlayerControlsState
 
     if (_isInPip || isSmallWindow) return const SizedBox.shrink();
 
-    if (uiPhase.fullscreenBlocking) {
+    if (blockingPhase != null) {
       return _buildLoadingUI(title: title, episodeLabel: episodeLabel);
     }
 
@@ -1563,11 +1578,10 @@ class AnimeWitcherPlayerControlsState
                     episodeLabel: episodeLabel,
                     streams: streams,
                     currentStream: currentStream,
-                    externalSubtitles: externalSubtitles,
                     showEpisodeList: showEpisodeList,
                     isSeries: isSeries,
-                    hasPreviousEpisode: previousEpisode != null,
-                    hasNextEpisode: nextEpisode != null,
+                    hasPreviousEpisode: navigation.previous != null,
+                    hasNextEpisode: navigation.next != null,
                     hasEpisodePicker: hasEpisodePicker,
                     supportsPlaybackSpeed: supportsPlaybackSpeed,
                     playbackSpeed: playbackSpeed,
@@ -1641,18 +1655,15 @@ class AnimeWitcherPlayerControlsState
 
                 // Seek kick animation â a single Align (no nested Stack):
                 // ~8% in from the seeking edge, ~45% down from the top.
-                AnimatedBuilder(
-                  animation: _seekAnimController,
-                  builder: (context, _) {
-                    if (!_seekOverlayVisible) {
-                      return const SizedBox.shrink();
-                    }
-                    return Align(
-                      alignment: Alignment(_isSeekingLeft ? -0.84 : 0.84, 0.0),
-                      child: _buildKickAnimation(),
-                    );
-                  },
-                ),
+                // The transitions update themselves on each tick. Keep
+                // their label and layout from rebuilding until the seek
+                // feedback changes or its timer clears it.
+                _seekOverlayVisible
+                    ? Align(
+                        alignment: Alignment(_isSeekingLeft ? -0.84 : 0.84, 0.0),
+                        child: _buildKickAnimation(),
+                      )
+                    : const SizedBox.shrink(),
 
                 // OSD and volume overlay â only this subtree rebuilds on handler changes
                 PlayerOSDVolumeOverlay(
@@ -1850,7 +1861,6 @@ class AnimeWitcherPlayerControlsState
     String? episodeLabel,
     List<StreamResult>? streams,
     StreamResult? currentStream,
-    List<SubtitleFile>? externalSubtitles,
     required bool showEpisodeList,
     required bool isSeries,
     required bool hasPreviousEpisode,
@@ -1864,9 +1874,29 @@ class AnimeWitcherPlayerControlsState
     final isTouch = !_isTv && (Platform.isAndroid || Platform.isIOS);
     final isDesktop =
         Platform.isMacOS || Platform.isWindows || Platform.isLinux;
-    final playerSettings =
-        ref.watch(playerSettingsProvider).asData?.value ??
-        const PlayerSettings();
+    // Subtitle appearance, buffering and other preferences are owned by
+    // their own consumers. Only preferences that draw this chrome belong here.
+    final playerSettings = ref.watch(
+      playerSettingsProvider.select((snapshot) {
+        final settings = snapshot.asData?.value ?? const PlayerSettings();
+        return (
+          showLock: settings.showLock,
+          showEpisodeNav: settings.showEpisodeNav,
+          showSeekButtons: settings.showSeekButtons,
+          seekDuration: settings.seekDuration,
+          showPlaybackSpeed: settings.showPlaybackSpeed,
+          showPip: settings.showPip,
+          showRotate: settings.showRotate,
+          showEpisodes: settings.showEpisodes,
+          showResize: settings.showResize,
+          showFullscreen: settings.showFullscreen,
+          anime4kEnabled: settings.anime4kEnabled,
+          showAnime4kButton: settings.showAnime4kButton,
+          anime4kMode: settings.anime4kMode,
+          anime4kQuality: settings.anime4kQuality,
+        );
+      }),
+    );
 
     // Playback placement: touch keeps the big thumb-reach triplet centered;
     // TV and desktop fold compact playback into the start of the controls row
@@ -2163,8 +2193,8 @@ class AnimeWitcherPlayerControlsState
         excluding: !chromeVisible,
         child: IgnorePointer(
           ignoring: !chromeVisible,
-          child: AnimatedOpacity(
-            opacity: chromeVisible ? 1.0 : 0.0,
+          child: PlayerChromeFade(
+            visible: chromeVisible,
             duration: _animDuration,
             child: Column(
               children: [

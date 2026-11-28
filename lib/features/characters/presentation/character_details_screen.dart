@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,17 +12,15 @@ import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/services/notification_service.dart';
-import '../../../core/utils/artwork_quality.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
 import '../../../shared/widgets/app_page_header.dart';
 import '../../../shared/widgets/loading_indicator.dart';
-import '../../../shared/widgets/shimmer_placeholder.dart';
-import '../../../shared/widgets/thumbnail_error_placeholder.dart';
 import '../../comments/presentation/animewitcher_comments_screen.dart';
 import '../../../core/router/app_router.dart';
 import '../../settings/presentation/account_screen.dart';
 import 'character_animes_grid.dart';
+import 'character_portrait_image.dart';
 
 class CharacterDetailsScreen extends ConsumerStatefulWidget {
   const CharacterDetailsScreen({
@@ -45,7 +42,7 @@ class CharacterDetailsScreen extends ConsumerStatefulWidget {
 class _CharacterDetailsScreenState
     extends ConsumerState<CharacterDetailsScreen> {
   AnimeWitcherCharacterDocument? _document;
-  List<AnimeWitcherCharacterShow> _animes = const <AnimeWitcherCharacterShow>[];
+  CharacterAnimesGrid? _animesGrid;
   Object? _error;
   Object? _animesError;
   bool _loading = true;
@@ -99,7 +96,7 @@ class _CharacterDetailsScreenState
         _document = document;
         _favorite = favorite;
         _loading = false;
-        _animes = const <AnimeWitcherCharacterShow>[];
+        _animesGrid = null;
         _animesError = null;
         _animesLoading = true;
       });
@@ -120,8 +117,21 @@ class _CharacterDetailsScreenState
     try {
       final animes = await provider.getCharacterAnimes(document);
       if (!mounted) return;
+      // This grid depends on the fetched shows, not on favorite or header
+      // state. Keep its role-labelled items and widget while that page is
+      // current so unrelated updates do not rebuild every poster.
+      final grid = animes.isEmpty
+          ? null
+          : CharacterAnimesGrid(
+              title: 'الأنميات',
+              items: [
+                for (final show in animes)
+                  show.item.copyWith(relationLabel: show.roleLabel),
+              ],
+              onItemTap: _openAnime,
+            );
       setState(() {
-        _animes = animes;
+        _animesGrid = grid;
         _animesError = null;
         _animesLoading = false;
       });
@@ -338,23 +348,11 @@ class _CharacterDetailsScreenState
                         tag: 'character-${widget.characterId}',
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(18),
-                          child: ArtworkDecode(
-                            paintedWidth: 240,
-                            builder: (context, decodeWidth) {
-                              final url = imageUrl ?? '';
-                              if (url.isEmpty) {
-                                return ThumbnailErrorPlaceholder(label: name);
-                              }
-                              return CachedNetworkImage(
-                                imageUrl: url,
-                                fit: BoxFit.cover,
-                                memCacheWidth: decodeWidth,
-                                placeholder: (_, _) =>
-                                    ShimmerPlaceholder(borderRadius: 18),
-                                errorWidget: (_, _, _) =>
-                                    ThumbnailErrorPlaceholder(label: name),
-                              );
-                            },
+                          child: CharacterPortraitImage(
+                            url: imageUrl ?? '',
+                            name: name,
+                            radius: 18,
+                            standardWidth: 240,
                           ),
                         ),
                       ),
@@ -431,7 +429,7 @@ class _CharacterDetailsScreenState
                         ),
                       ],
                     )
-                  else if (_animes.isEmpty)
+                  else if (_animesGrid == null)
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -453,14 +451,7 @@ class _CharacterDetailsScreenState
                       ],
                     )
                   else
-                    CharacterAnimesGrid(
-                      title: 'الأنميات',
-                      items: [
-                        for (final show in _animes)
-                          show.item.copyWith(relationLabel: show.roleLabel),
-                      ],
-                      onItemTap: _openAnime,
-                    ),
+                    _animesGrid!,
                 ],
               ),
             ),

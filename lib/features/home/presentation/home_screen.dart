@@ -23,6 +23,7 @@ import 'package:animewitcher/features/library/presentation/history_provider.dart
 
 import 'widgets/home_hero_carousel.dart';
 import 'widgets/home_hero_layout.dart';
+import 'widgets/home_poster_rail_layout.dart';
 import 'widgets/latest_manga_chapters_section.dart';
 import 'widgets/media_horizontal_list.dart';
 import 'view_all_screen.dart';
@@ -38,7 +39,6 @@ import 'package:animewitcher/core/router/app_router.dart';
 
 import '../../../shared/widgets/shimmer_placeholder.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
-import '../../../shared/widgets/multimedia_card.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
 import '../../../shared/widgets/recoverable_network_state.dart';
 import '../../../../core/utils/layout_constants.dart';
@@ -53,7 +53,6 @@ import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/features/search/data/mal_rankings.dart';
 import 'package:animewitcher/features/manga/presentation/manga_home_prefetch.dart';
-import 'package:animewitcher/core/network/poster_cache.dart';
 import 'package:animewitcher/core/utils/localized_text.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -82,8 +81,56 @@ class _NoScrollbarBehavior extends ScrollBehavior {
   }
 }
 
+// Section rules depend on ordered titles, not on the cards or late News
+// and manga payloads. Keep only title metadata; read row items from the
+// current catalogue even when a provider reuses the same keys.
+class _HomeCatalogueLayout {
+  _HomeCatalogueLayout(Iterable<String> keys) : keys = keys.toList() {
+    for (final title in this.keys) {
+      if (isHiddenHomeRailTitle(title)) continue;
+      final index = rails.length;
+      final isLatestAdded = isLatestAddedSectionTitle(title);
+      if (latestEpisodesIndex < 0 && isLatestEpisodesSectionTitle(title)) {
+        latestEpisodesIndex = index;
+      }
+      if (mostWatchedIndex < 0 && isMostWatchedAnimationSectionTitle(title)) {
+        mostWatchedIndex = index;
+      }
+      if (latestAddedIndex < 0 && isLatestAdded) latestAddedIndex = index;
+      rails.add((title, isLatestAdded));
+    }
+  }
+
+  final List<String> keys;
+  final rails = <(String, bool)>[];
+  int latestEpisodesIndex = -1;
+  int mostWatchedIndex = -1;
+  int latestAddedIndex = -1;
+
+  int get newsAfterIndex => mostWatchedIndex >= 0
+      ? mostWatchedIndex
+      : latestAddedIndex >= 0
+      ? latestAddedIndex
+      : rails.length - 1;
+
+  bool matches(Map<String, List<MultimediaItem>> data) {
+    if (data.length != keys.length) return false;
+    var index = 0;
+    for (final title in data.keys) {
+      if (title != keys[index++]) return false;
+    }
+    return true;
+  }
+}
+
 class _HomeScreenState extends ConsumerState<HomeScreen>
     with AutomaticKeepAliveClientMixin, SingleTickerProviderStateMixin {
+  static const _rankingRails = <(MalRanking, String, String)>[
+    (MalRanking.airing, 'Trending now', 'رائج الآن'),
+    (MalRanking.top, 'Top rated', 'الأفضل'),
+    (MalRanking.popular, 'Most watched', 'الأكثر مشاهدة'),
+  ];
+
   final ScrollController _scrollController = ScrollController();
   final ValueNotifier<bool> _showBottomFade = ValueNotifier(false);
   final _refreshIndicatorKey = GlobalKey<RefreshIndicatorState>();
@@ -91,6 +138,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   Future<void>? _homeReselectionFuture;
   Future<void>? _refreshIndicatorDismissal;
   late final AnimationController _refreshDismissalController;
+  _HomeCatalogueLayout? _catalogueLayout;
 
   @override
   bool get wantKeepAlive => true;
@@ -103,16 +151,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       duration: kThemeAnimationDuration,
     );
     _scrollController.addListener(_onScroll);
-    // The search page's MyAnimeList rows take seconds to gather; started
-    // here, they are usually ready by the time search is opened.
-    for (final ranking in MalRanking.values) {
-      ref.read(malRankingProvider(ranking).future).ignore();
+    // Preload only the rankings Home can display, directly in the provider
+    // each rail watches. Hidden rankings don't need to run at startup.
+    for (final (ranking, _, _) in _rankingRails) {
+      ref.read(homeMalRankingPageProvider(ranking).future).ignore();
     }
     // Once home has had the network to itself for a while, the manga tab's
     // first page is fetched too, so the tab opens already filled.
     _prefetchTimer = Timer(const Duration(seconds: 6), () {
       if (!mounted || !ref.read(mangaHasOwnTabProvider)) return;
-      ref.read(mangaHomeFirstPageProvider.future).ignore();
+      ref
+          .read(mangaHomeWarmupProvider)
+          .prefetch(() => mangaCatalogueOf(ref.read(extensionManagerProvider)));
     });
   }
 
@@ -143,7 +193,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   Future<void> _refresh() {
     if (_refreshFuture != null) return _refreshFuture!;
     ref.invalidate(secondaryLatestEpisodesProvider);
-    for (final ranking in MalRanking.values) {
+    for (final (ranking, _, _) in _rankingRails) {
       ref.invalidate(homeMalRankingPageProvider(ranking));
     }
     return _refreshFuture =
@@ -235,12 +285,33 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     );
   }
 
+  HomeState _watchHomeWithoutNews() {
+    ref.watch(
+      homeDataProvider.select(
+        (state) => switch (state) {
+          HomeSuccess(:final data, :final latestManga) => (data, latestManga),
+          _ => state,
+        },
+      ),
+    );
+    return ref.read(homeDataProvider);
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
     ref.listen(homeTabReselectionProvider, (_, _) => _onHomeTabReselected());
-    final homeDataAsync = ref.watch(homeDataProvider);
-    final continueWatching = ref.watch(continueWatchingProvider);
+    // On a desktop or tablet the shell has its own News button, which reads
+    // the latest articles on tap. Only phones render the News rail here.
+    final showNewsOnHome = !appLayoutsAvailable(context);
+    final homeDataAsync = showNewsOnHome
+        ? ref.watch(homeDataProvider)
+        : _watchHomeWithoutNews();
+    // Keep history subscribed from startup, but only rearrange Home when
+    // the shelf appears or disappears. Progress updates belong to its cards.
+    final hasContinueWatching = ref.watch(
+      continueWatchingProvider.select((items) => items.isNotEmpty),
+    );
     final profile = ref.watch(deviceProfileProvider).asData?.value;
     final isWidescreen =
         profile?.isTv == true ||
@@ -259,7 +330,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               child: _buildBody(
                 context,
                 homeDataAsync,
-                continueWatching,
+                hasContinueWatching: hasContinueWatching,
+                showNewsOnHome: showNewsOnHome,
                 isWidescreen: isWidescreen,
               ),
             ),
@@ -290,23 +362,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     List<MangaLatestChapter> latestManga,
     AnimeWitcherProvider provider,
     List<Widget> secondaryEpisodeRails,
+    _HomeCatalogueLayout layout,
   ) {
-    final entries = visibleHomeRailEntries(data).toList(growable: false);
-    final latestEpisodesIndex = entries.indexWhere(
-      (entry) => isLatestEpisodesSectionTitle(entry.key),
-    );
+    final entries = layout.rails;
+    final latestEpisodesIndex = layout.latestEpisodesIndex;
+    final newsAfterIndex = layout.newsAfterIndex;
     final mangaHasOwnTab = ref.watch(mangaHasOwnTabProvider);
-    var newsAfterIndex = entries.indexWhere(
-      (entry) => isMostWatchedAnimationSectionTitle(entry.key),
-    );
-    if (newsAfterIndex < 0) {
-      newsAfterIndex = entries.indexWhere(
-        (entry) => isLatestAddedSectionTitle(entry.key),
-      );
-    }
-    if (newsAfterIndex < 0 && entries.isNotEmpty) {
-      newsAfterIndex = entries.length - 1;
-    }
 
     Widget buildNewsSection() {
       return NewsSection(
@@ -327,8 +388,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     }
 
     for (var index = 0; index < entries.length; index++) {
-      final entry = entries[index];
-      sections.add(_buildMediaSection(context, provider, entry));
+      final (title, forcePortrait) = entries[index];
+      sections.add(
+        _buildMediaSection(
+          context,
+          provider,
+          title,
+          data[title]!,
+          forcePortrait: forcePortrait,
+        ),
+      );
       if (index == latestEpisodesIndex) sections.addAll(secondaryEpisodeRails);
       // With manga on a tab of its own, its new chapters live there.
       if (latestManga.isNotEmpty &&
@@ -360,23 +429,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   Widget _buildMediaSection(
     BuildContext context,
     AnimeWitcherProvider provider,
-    MapEntry<String, List<MultimediaItem>> entry, {
+    String sectionTitle,
+    List<MultimediaItem> mediaList, {
     String? title,
+    required bool forcePortrait,
   }) {
-    warmPosters(entry.value.take(12).map((item) => item.posterUrl));
     return MediaHorizontalList(
-      key: ValueKey((provider.packageName, entry.key)),
-      title: title ?? entry.key,
-      mediaList: entry.value,
+      key: ValueKey((provider.packageName, sectionTitle)),
+      title: title ?? sectionTitle,
+      mediaList: mediaList,
+      warmProviderPosters: true,
       category: ViewAllCategory.providerContent,
       loadViewAllPage: (offset) => provider.getHomeSectionPage(
-        entry.key,
+        sectionTitle,
         offset: offset,
         limit: provider.viewAllPageSize,
       ),
       onTap: (item) => item.openDetails(context),
       heroTagPrefix: title == null ? 'home' : 'home_${provider.packageName}',
-      forcePortrait: isLatestAddedSectionTitle(entry.key),
+      forcePortrait: forcePortrait,
     );
   }
 
@@ -389,21 +460,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     }
     final load = ref.watch(malRankingLoaderProvider);
     final rails = <Widget>[];
-    for (final (ranking, english, arabic)
-        in const <(MalRanking, String, String)>[
-          (MalRanking.airing, 'Trending now', 'رائج الآن'),
-          (MalRanking.top, 'Top rated', 'الأفضل'),
-          (MalRanking.popular, 'Most watched', 'الأكثر مشاهدة'),
-        ]) {
+    for (final (ranking, english, arabic) in _rankingRails) {
       final page = ref.watch(homeMalRankingPageProvider(ranking)).value;
       if (page == null || (page.items.isEmpty && !page.hasMore)) continue;
       final items = page.items;
-      warmPosters(items.take(12).map((item) => item.posterUrl));
       rails.add(
         MediaHorizontalList(
           key: ValueKey<String>('home-mal-${ranking.name}'),
           title: appText(context, english: english, arabic: arabic),
           mediaList: items.take(malRankingPageSize).toList(growable: false),
+          // Keep ranking data ready, but leave encoded poster warming to the
+          // mounted rail's post-frame path, behind the visible cards.
+          warmProviderPosters: true,
           category: ViewAllCategory.providerContent,
           showViewAll: true,
           loadViewAllPage: (offset) => load(ranking, offset),
@@ -423,8 +491,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   Widget _buildBody(
     BuildContext context,
-    HomeState state,
-    List<HistoryItem> continueWatching, {
+    HomeState state, {
+    required bool hasContinueWatching,
+    required bool showNewsOnHome,
     bool isWidescreen = false,
   }) {
     final l10n = AppLocalizations.of(context)!;
@@ -437,13 +506,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         ),
       );
     }
-
-    // On a desktop every layout — dock, side rail, top bar — carries a news
-    // button of its own, so home leaves the news row out rather than showing
-    // it twice. Phones keep the row.
-    final newsHasItsOwnButton = appLayoutsAvailable(context);
-    List<NewsItem> newsFor(List<NewsItem> news) =>
-        newsHasItsOwnButton ? const <NewsItem>[] : news;
 
     final activeProvider = ref.watch(activeProviderProvider);
     if (activeProvider == null) {
@@ -466,8 +528,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
             _buildMediaSection(
               context,
               source,
-              entry,
+              entry.key,
+              entry.value,
               title: 'أحدث الحلقات (${source.name})',
+              forcePortrait: isLatestAddedSectionTitle(entry.key),
             ),
     ];
 
@@ -490,60 +554,92 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       ),
       HomeOffline() => _buildErrorState(context, ref),
       HomeError() => _buildErrorState(context, ref),
-      HomeSuccess(:final data, news: final homeNews, :final latestManga) =>
-        _withGradientEdgeHint(
-          MouseDragRefreshIndicator(
-            indicatorKey: _refreshIndicatorKey,
-            onRefresh: _refresh,
-            child: CustomScrollView(
-              controller: _scrollController,
-              slivers: [
-                if (homeHeroMovies(data) != null)
-                  SliverToBoxAdapter(
-                    child: HomeHeroCarousel(
-                      movies: homeHeroMovies(data)!,
-                      scrollController: _scrollController,
-                      onTap: (item) {
-                        item.openDetails(context);
-                      },
-                    ),
-                  )
-                else if (!isWidescreen)
-                  // Keep content below the status area when no banner is present.
-                  SliverPadding(
-                    padding: EdgeInsets.only(
-                      top: MediaQuery.viewPaddingOf(context).top,
-                    ),
-                  ),
+      HomeSuccess() => _buildSuccessBody(
+        context,
+        l10n,
+        state,
+        activeProvider,
+        secondaryEpisodeRails,
+        hasContinueWatching: hasContinueWatching,
+        showNewsOnHome: showNewsOnHome,
+        isWidescreen: isWidescreen,
+      ),
+    };
+  }
 
-                if (continueWatching.isNotEmpty)
-                  SliverToBoxAdapter(
-                    child: ContinueWatchingSection(
-                      title: l10n.continueWatching,
-                      items: continueWatching,
-                      topPadding: isWidescreen ? 0 : null,
-                    ),
-                  ),
+  Widget _buildSuccessBody(
+    BuildContext context,
+    AppLocalizations l10n,
+    HomeSuccess state,
+    AnimeWitcherProvider activeProvider,
+    List<Widget> secondaryEpisodeRails, {
+    required bool hasContinueWatching,
+    required bool showNewsOnHome,
+    required bool isWidescreen,
+  }) {
+    final HomeSuccess(:data, news: homeNews, :latestManga) = state;
+    var layout = _catalogueLayout;
+    if (layout == null || !layout.matches(data)) {
+      _catalogueLayout = layout = _HomeCatalogueLayout(data.keys);
+    }
+    final heroMovies =
+        data['Trending'] ??
+        (layout.rails.isEmpty ? null : data[layout.rails.first.$1]);
+    return _withGradientEdgeHint(
+      MouseDragRefreshIndicator(
+        indicatorKey: _refreshIndicatorKey,
+        onRefresh: _refresh,
+        child: CustomScrollView(
+          controller: _scrollController,
+          slivers: [
+            if (heroMovies != null)
+              SliverToBoxAdapter(
+                child: HomeHeroCarousel(
+                  movies: heroMovies,
+                  scrollController: _scrollController,
+                  onTap: (item) {
+                    item.openDetails(context);
+                  },
+                ),
+              )
+            else if (!isWidescreen)
+              // Keep content below the status area when no banner is present.
+              SliverPadding(
+                padding: EdgeInsets.only(
+                  top: MediaQuery.viewPaddingOf(context).top,
+                ),
+              ),
 
-                SliverList(
-                  delegate: SliverChildListDelegate(
-                    _buildProviderSectionsWithNews(
-                      context,
-                      data,
-                      newsFor(homeNews),
-                      latestManga,
-                      activeProvider,
-                      secondaryEpisodeRails,
-                    ),
+            if (hasContinueWatching)
+              SliverToBoxAdapter(
+                child: Consumer(
+                  builder: (context, ref, _) => ContinueWatchingSection(
+                    title: l10n.continueWatching,
+                    items: ref.watch(continueWatchingProvider),
+                    topPadding: isWidescreen ? 0 : null,
                   ),
                 ),
+              ),
 
-                const SliverPadding(padding: EdgeInsets.only(bottom: 100)),
-              ],
+            SliverList(
+              delegate: SliverChildListDelegate(
+                _buildProviderSectionsWithNews(
+                  context,
+                  data,
+                  showNewsOnHome ? homeNews : const <NewsItem>[],
+                  latestManga,
+                  activeProvider,
+                  secondaryEpisodeRails,
+                  layout,
+                ),
+              ),
             ),
-          ),
+
+            const SliverPadding(padding: EdgeInsets.only(bottom: 100)),
+          ],
         ),
-    };
+      ),
+    );
   }
 
   Widget _withGradientEdgeHint(Widget scrollView) {
@@ -651,28 +747,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   }
 
   Widget _buildListShimmer(BuildContext context) {
-    final isDesktop = context.isDesktop;
-    final isHandsetLandscape = context.isHandsetLandscape;
-    final spacing = isDesktop
-        ? LayoutConstants.spacingLg
-        : isHandsetLandscape
-        ? ResponsiveBreakpoints.handsetLandscapeGridMaxSpacing
-        : LayoutConstants.spacingSm;
-    // Must match MediaHorizontalList exactly, otherwise the rail visibly
-    // resizes when the shimmer is replaced by the real cards.
-    final cardWidth = MultimediaCardLayout.cardWidth(
-      context,
-      isPortrait: true,
-      horizontalPadding: isDesktop
-          ? LayoutConstants.dashboardContentPadding
-          : LayoutConstants.spacingMd,
-      spacing: spacing,
-    );
-    final listHeight = MultimediaCardLayout.listHeight(
-      cardWidth,
-      isPortrait: true,
-      isDesktop: isDesktop,
-    );
+    final (:cardWidth, :listHeight, :spacing, :horizontalPadding) =
+        homePosterRailLayout(context, isPortrait: true);
 
     return Directionality(
       textDirection: TextDirection.rtl,
@@ -681,13 +757,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         children: [
           Padding(
             padding: EdgeInsets.fromLTRB(
-              isDesktop
-                  ? LayoutConstants.dashboardContentPadding
-                  : LayoutConstants.spacingMd,
+              horizontalPadding,
               LayoutConstants.spacingLg,
-              isDesktop
-                  ? LayoutConstants.dashboardContentPadding
-                  : LayoutConstants.spacingMd,
+              horizontalPadding,
               LayoutConstants.spacingSm,
             ),
             child: Row(
@@ -715,11 +787,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           SizedBox(
             height: listHeight,
             child: ListView.separated(
-              padding: EdgeInsets.symmetric(
-                horizontal: isDesktop
-                    ? LayoutConstants.dashboardContentPadding
-                    : LayoutConstants.spacingMd,
-              ),
+              padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
               scrollDirection: Axis.horizontal,
               itemCount: 10,
               separatorBuilder: (_, _) => SizedBox(width: spacing),

@@ -199,12 +199,38 @@ class _ProviderSearchFilterDialogState
     );
   }
 
+  // Painting the controls only needs a count. Keep the independent sets
+  // in _value for Apply, not for every dialog build.
+  int get _selectedCount {
+    final options = _shownOptions;
+    int countOffered(Set<String> chosen, List<String>? offered) {
+      if (offered == null) return chosen.length;
+      if (offered.isEmpty) return 0;
+      var count = 0;
+      for (final value in chosen) {
+        if (offered.contains(value)) count++;
+      }
+      return count;
+    }
+
+    return countOffered(_statuses, options?.statuses) +
+        countOffered(_types, options?.types) +
+        countOffered(_ageRatings, options?.ageRatings) +
+        countOffered(_countries, options?.countries) +
+        countOffered(_years, options?.years) +
+        countOffered(_seasons, options?.seasons) +
+        countOffered(_genres, options?.genres) +
+        countOffered(_tags, options?.tags) +
+        countOffered(_studios, options?.studios) +
+        countOffered(_sources, options?.sources) +
+        countOffered(_versions, options?.versions);
+  }
+
   /// Back on the left, the title between, reset on the right — in either
   /// reading direction.
-  Widget _header(BuildContext context) {
+  Widget _header(BuildContext context, int count) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final count = _value.count;
     return Directionality(
       textDirection: TextDirection.ltr,
       child: Padding(
@@ -262,7 +288,7 @@ class _ProviderSearchFilterDialogState
                 const Spacer(),
                 TextButton(
                   key: const ValueKey<String>('filterReset'),
-                  onPressed: _value.isEmpty ? null : _clearAll,
+                  onPressed: count == 0 ? null : _clearAll,
                   style: TextButton.styleFrom(
                     foregroundColor: colors.error,
                     padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -636,9 +662,8 @@ class _ProviderSearchFilterDialogState
   }
 
   /// The big Apply bar along the bottom.
-  Widget _applyBar(BuildContext context) {
+  Widget _applyBar(BuildContext context, int count) {
     final colors = Theme.of(context).colorScheme;
-    final count = _value.count;
     return SafeArea(
       top: false,
       child: Padding(
@@ -690,6 +715,7 @@ class _ProviderSearchFilterDialogState
         builder: (context, snapshot) {
           final options = snapshot.data;
           if (options != null) _shownOptions = options;
+          final count = _selectedCount;
           final loading =
               options == null &&
               snapshot.connectionState != ConnectionState.done;
@@ -698,7 +724,7 @@ class _ProviderSearchFilterDialogState
             bottom: false,
             child: Column(
               children: [
-                _header(context),
+                _header(context, count),
                 if (widget.categories.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 6),
@@ -711,7 +737,7 @@ class _ProviderSearchFilterDialogState
                       ? _cards(context, options)
                       : _noFiltersNote(context),
                 ),
-                _applyBar(context),
+                _applyBar(context, count),
               ],
             ),
           );
@@ -882,57 +908,65 @@ class _ChipWrap extends StatelessWidget {
 
   static const double _gap = 6;
 
-  Widget _chip(BuildContext context, String value) {
-    final colors = Theme.of(context).colorScheme;
-    final on = selected.contains(value);
-    final label = Text(
-      value,
-      maxLines: 1,
-      textAlign: TextAlign.center,
-      overflow: TextOverflow.ellipsis,
-      style: TextStyle(
-        fontSize: 12.5,
-        color: on ? colors.primary : colors.onSurface,
-        fontWeight: on ? FontWeight.w700 : FontWeight.w500,
-      ),
-    );
-    final compact = columns != null && columns! >= 10;
-    return Material(
-      key: ValueKey<String>('filterChip-$value'),
-      color: on
-          ? colors.primary.withValues(alpha: 0.18)
-          : colors.surfaceContainerHighest,
-      shape: StadiumBorder(
-        side: BorderSide(
-          color: on
-              ? colors.primary.withValues(alpha: 0.6)
-              : Colors.transparent,
-        ),
-      ),
-      child: InkWell(
-        customBorder: const StadiumBorder(),
-        onTap: () => onToggle(value),
-        child: Padding(
-          padding: EdgeInsets.symmetric(
-            horizontal: compact ? 4 : 11,
-            vertical: 6,
-          ),
-          child: compact
-              ? FittedBox(fit: BoxFit.scaleDown, child: label)
-              : label,
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final perRow = columns;
+    final compact = (perRow ?? 0) >= 10;
+    final insets = compact
+        ? const EdgeInsets.symmetric(horizontal: 4, vertical: 6)
+        : const EdgeInsets.symmetric(horizontal: 11, vertical: 6);
+    final colors = Theme.of(context).colorScheme;
+    // The expanded studio list can contain hundreds of pills with an
+    // identical appearance. Allocate styles and outlines once per state.
+    late final inactiveLabel = TextStyle(
+      fontSize: 12.5,
+      color: colors.onSurface,
+      fontWeight: FontWeight.w500,
+    );
+    late final activeLabel = TextStyle(
+      fontSize: 12.5,
+      color: colors.primary,
+      fontWeight: FontWeight.w700,
+    );
+    late final activeFill = colors.primary.withValues(alpha: 0.18);
+    late final activeShape = StadiumBorder(
+      side: BorderSide(color: colors.primary.withValues(alpha: 0.6)),
+    );
+
+    Widget chip(String value) {
+      final on = selected.contains(value);
+      final label = Text(
+        value,
+        maxLines: 1,
+        textAlign: TextAlign.center,
+        overflow: TextOverflow.ellipsis,
+        style: on ? activeLabel : inactiveLabel,
+      );
+
+      return Material(
+        key: ValueKey<String>('filterChip-$value'),
+        color: on ? activeFill : colors.surfaceContainerHighest,
+        shape: on
+            ? activeShape
+            : const StadiumBorder(side: BorderSide(color: Colors.transparent)),
+        child: InkWell(
+          customBorder: const StadiumBorder(),
+          onTap: () => onToggle(value),
+          child: Padding(
+            padding: insets,
+            child: compact
+                ? FittedBox(fit: BoxFit.scaleDown, child: label)
+                : label,
+          ),
+        ),
+      );
+    }
+
     if (perRow == null) {
       return Wrap(
         spacing: _gap,
         runSpacing: _gap,
-        children: [for (final value in values) _chip(context, value)],
+        children: [for (final value in values) chip(value)],
       );
     }
     return Column(
@@ -946,7 +980,7 @@ class _ChipWrap extends StatelessWidget {
                   if (j > i) const SizedBox(width: _gap),
                   Expanded(
                     child: j < values.length
-                        ? _chip(context, values[j])
+                        ? chip(values[j])
                         : const SizedBox.shrink(),
                   ),
                 ],

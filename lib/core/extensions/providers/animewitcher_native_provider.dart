@@ -108,8 +108,13 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     this._settings, {
     AnimeWitcherMalIdResolver? resolveAnimeByMalIds,
     bool Function()? isEcchiHidden,
+    String algoliaSearchApiKey = const String.fromEnvironment(
+      'ANIMEWITCHER_ALGOLIA_SEARCH_API_KEY',
+    ),
   }) : _resolveAnimeByMalIds = resolveAnimeByMalIds,
-       _isEcchiHidden = isEcchiHidden ?? _ecchiIsVisible;
+       _isEcchiHidden = isEcchiHidden ?? _ecchiIsVisible,
+       _configuredAlgoliaSearchKey = algoliaSearchApiKey.trim(),
+       _algoliaApiKey = algoliaSearchApiKey.trim();
 
   final Dio _dio;
   final SettingsRepository _settings;
@@ -117,16 +122,27 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   final bool Function() _isEcchiHidden;
   final HtmlUnescape _unescape = HtmlUnescape();
 
+  /// The account preference that can change native discovery pages.
+  bool get hidesEcchiInDiscovery => _isEcchiHidden();
+
+  /// Local inputs that can change a broadcast page after account storage moves.
+  ({bool hideEcchi, bool highQualityPosters}) get broadcastScheduleInputs => (
+    hideEcchi: hidesEcchiInDiscovery,
+    highQualityPosters: _useHighQualityPosters,
+  );
+
   static const String _baseUrl = 'https://animewitcher.com';
   static const String _firestoreProjectId = 'animewitcher-1c66d';
   static const String _defaultAlgoliaAppId = '5UIU27G8CZ';
-  static const String _defaultAlgoliaApiKey =
-      'ef06c5ee4a0d213c011694f18861805c';
   static const String _aniZipUrl = 'https://api.ani.zip/mappings';
 
   String _algoliaAppId = _defaultAlgoliaAppId;
-  String _algoliaApiKey = _defaultAlgoliaApiKey;
+  final String _configuredAlgoliaSearchKey;
+  String _algoliaApiKey;
+  bool _usingConfiguredAlgoliaSearchKey = true;
   String _algoliaBrowseApiKey = '';
+  bool _loadedSavedCatalogSettings = false;
+  static final _validAlgoliaAppId = RegExp(r'^[A-Za-z0-9]+$');
 
   /// From `Settings/constants.search_settings.is_search_active`. Defaults to
   /// true so a missing field keeps the production Algolia catalogs working.
@@ -300,6 +316,13 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     );
   }
 
+  // JSON projections only inspect these maps. Keep [_map] for output that
+  // needs ownership, and for normalizing legacy strings/non-JSON maps.
+  Map<String, dynamic> _readHitMap(dynamic raw) {
+    if (raw is Map<String, dynamic>) return raw;
+    return _map(raw);
+  }
+
   List<dynamic> _list(dynamic raw) {
     raw = _decodeData(raw);
     return raw is List ? raw : const <dynamic>[];
@@ -387,8 +410,10 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         : '$base/${_encodeFirestorePath(cleanParent)}:runQuery';
   }
 
+  // These transport wrappers are only read synchronously. Arrays, field maps
+  // and geo points still get their own decoded containers before caching.
   dynamic _firestoreValue(dynamic raw) {
-    final value = _map(raw);
+    final value = _readHitMap(raw);
     if (value.isEmpty) return null;
     if (value.containsKey('stringValue')) {
       return value['stringValue']?.toString() ?? '';
@@ -413,19 +438,19 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       return value['bytesValue']?.toString() ?? '';
     if (value.containsKey('geoPointValue')) return _map(value['geoPointValue']);
 
-    final arrayValue = _map(value['arrayValue']);
+    final arrayValue = _readHitMap(value['arrayValue']);
     if (arrayValue.isNotEmpty) {
       return _list(arrayValue['values'])
           .map<dynamic>(_firestoreValue)
           .toList(growable: false);
     }
-    final mapValue = _map(value['mapValue']);
+    final mapValue = _readHitMap(value['mapValue']);
     if (mapValue.isNotEmpty) return _firestoreFields(mapValue['fields']);
     return null;
   }
 
   Map<String, dynamic> _firestoreFields(dynamic raw) {
-    final fields = _map(raw);
+    final fields = _readHitMap(raw);
     final output = <String, dynamic>{};
     for (final entry in fields.entries) {
       output[entry.key] = _firestoreValue(entry.value);
@@ -434,7 +459,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   }
 
   Map<String, dynamic> _firestoreDocumentHit(dynamic raw) {
-    final document = _map(raw);
+    final document = _readHitMap(raw);
     if (document.isEmpty) return <String, dynamic>{};
     final hit = _firestoreFields(document['fields']);
     final name = _text(document['name']);
@@ -530,7 +555,10 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       if (fields.isEmpty) {
         fields = await _loadConstantsFromAlgoliaFallback();
       }
-      if (fields.isEmpty) return;
+      if (fields.isEmpty) {
+        _restoreSavedCatalogSettings();
+        return;
+      }
       await _applyRemoteConstants(fields);
       _remoteConstantsExpiresAt = DateTime.now().add(_remoteConstantsTtl);
     }();
@@ -570,23 +598,68 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     return payload;
   }
 
-  Future<void> _applyRemoteConstants(Map<String, dynamic> fields) async {
-    final settings = _map(fields['search_settings']);
-    final settings2 = _map(fields['search_settings2']);
-    final appId = _text(
-      settings['app_id_v3'] ?? settings['app_id'] ?? settings['application_id'],
-    );
-    final apiKey = _text(settings['api_key'] ?? settings['search_api_key']);
+  String _catalogSettingsAppId(Map<String, dynamic> settings) => _text(
+    settings['app_id_v3'] ?? settings['app_id'] ?? settings['application_id'],
+  );
+
+  String _catalogSettingsSearchKey(Map<String, dynamic> settings) =>
+      _text(settings['api_key'] ?? settings['search_api_key']);
+
+  void _restoreSavedCatalogSettings() {
+    if (_loadedSavedCatalogSettings) return;
+    _loadedSavedCatalogSettings = true;
+    final saved = _settings.getAnimeWitcherSearchSettings();
+    // A cached key needs an explicit matching application.
+    if (_validAlgoliaAppId.hasMatch(_catalogSettingsAppId(saved)) &&
+        _catalogSettingsSearchKey(saved).isNotEmpty) {
+      _applyCatalogSearchSettings(saved);
+    }
+  }
+
+  void _applyCatalogSearchSettings(Map<String, dynamic> settings) {
+    final appId = _catalogSettingsAppId(settings);
+    final apiKey = _catalogSettingsSearchKey(settings);
     final browseKey = _text(
       settings['browse_api_key'] ?? settings['browseApiKey'],
     );
-    if (appId.isNotEmpty) _algoliaAppId = appId;
-    if (apiKey.isNotEmpty) _algoliaApiKey = apiKey;
+    final previousAppId = _algoliaAppId;
+    final previousApiKey = _algoliaApiKey;
+    final wasSearchActive = _isSearchActive;
+    if (appId.isNotEmpty && appId != _algoliaAppId) {
+      _algoliaAppId = appId;
+      // Neither the previous app's key nor the configured default-app key
+      // can be sent to a different Algolia application.
+      _algoliaApiKey = appId == _defaultAlgoliaAppId
+          ? _configuredAlgoliaSearchKey
+          : '';
+      _usingConfiguredAlgoliaSearchKey = true;
+      _algoliaBrowseApiKey = '';
+    }
+    if (apiKey.isNotEmpty) {
+      _algoliaApiKey = apiKey;
+      _usingConfiguredAlgoliaSearchKey = false;
+    }
     if (browseKey.isNotEmpty) _algoliaBrowseApiKey = browseKey;
     final searchActive =
         settings['is_search_active'] ?? settings['isSearchActive'];
     if (searchActive != null) {
       _isSearchActive = _flag(searchActive, fallback: true);
+    }
+    if (_algoliaAppId != previousAppId ||
+        _algoliaApiKey != previousApiKey ||
+        _isSearchActive != wasSearchActive) {
+      invalidateMangaCatalog();
+    }
+  }
+
+  Future<void> _applyRemoteConstants(Map<String, dynamic> fields) async {
+    final settings = _map(fields['search_settings']);
+    final settings2 = _map(fields['search_settings2']);
+    if (settings.isEmpty) {
+      _restoreSavedCatalogSettings();
+    } else {
+      _loadedSavedCatalogSettings = true;
+      _applyCatalogSearchSettings(settings);
     }
     if (settings2.isNotEmpty) {
       _searchSettings2 = Map<String, dynamic>.from(settings2);
@@ -682,6 +755,9 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     required String path,
     Map<String, dynamic>? queryParameters,
   }) async {
+    if (!_validAlgoliaAppId.hasMatch(appId) || apiKey.trim().isEmpty) {
+      return null;
+    }
     final headers = _algoliaAuthHeaders(appId, apiKey);
     for (final host in _algoliaHosts(appId)) {
       try {
@@ -711,6 +787,9 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     required Map<String, dynamic> body,
     CancelToken? cancelToken,
   }) async {
+    if (!_validAlgoliaAppId.hasMatch(appId) || apiKey.trim().isEmpty) {
+      return null;
+    }
     final headers = _algoliaAuthHeaders(appId, apiKey);
     for (final host in _algoliaHosts(appId)) {
       try {
@@ -928,17 +1007,31 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     if (!_isSearchActive) {
       throw const AnimeWitcherSearchDisabledException('لا يوجد بيانات');
     }
-    final payload = await _algoliaBrowseGet(
-      index: animeWitcherCharactersAlgoliaIndex,
-      appId: _algoliaAppId,
-      apiKey: _algoliaApiKey,
-      query: text,
-      page: 0,
-      hitsPerPage: animeWitcherCharacterSearchHitsPerPage,
-      maxHitsPerPage: animeWitcherCharacterSearchHitsPerPage,
-      attributes: animeWitcherCharacterAlgoliaAttributes,
-      throwOnFailure: true,
-    );
+    // A configured fallback key needs the search ACL only. Keep the legacy
+    // browse operation for service-supplied credentials.
+    final payload = _usingConfiguredAlgoliaSearchKey
+        ? await _algoliaIndexRequest(
+            index: animeWitcherCharactersAlgoliaIndex,
+            operation: 'query',
+            appId: _algoliaAppId,
+            apiKey: _algoliaApiKey,
+            query: text,
+            hitsPerPage: animeWitcherCharacterSearchHitsPerPage,
+            maxHitsPerPage: animeWitcherCharacterSearchHitsPerPage,
+            attributes: animeWitcherCharacterAlgoliaAttributes,
+            throwOnFailure: true,
+          )
+        : await _algoliaBrowseGet(
+            index: animeWitcherCharactersAlgoliaIndex,
+            appId: _algoliaAppId,
+            apiKey: _algoliaApiKey,
+            query: text,
+            page: 0,
+            hitsPerPage: animeWitcherCharacterSearchHitsPerPage,
+            maxHitsPerPage: animeWitcherCharacterSearchHitsPerPage,
+            attributes: animeWitcherCharacterAlgoliaAttributes,
+            throwOnFailure: true,
+          );
     return _characterPageFromAlgolia(payload, requestedPage: 0, isSearch: true);
   }
 
@@ -1283,8 +1376,10 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     return '';
   }
 
+  // The News feed only reads its decoded records and timestamps. Reuse typed
+  // JSON maps while preserving normalization for legacy payloads.
   DateTime? _newsDate(dynamic raw) {
-    final source = _map(raw);
+    final source = _readHitMap(raw);
     dynamic value = source.isEmpty
         ? raw
         : source['_seconds'] ??
@@ -1292,7 +1387,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
               source['timestamp'] ??
               source['value'];
     if (value is Map) {
-      final nested = _map(value);
+      final nested = _readHitMap(value);
       value =
           nested['_seconds'] ??
           nested['seconds'] ??
@@ -1317,7 +1412,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   }
 
   NewsItem? _newsItem(dynamic raw) {
-    final source = _map(raw);
+    final source = _readHitMap(raw);
     final id = _firstText(source, const <String>[
       'objectID',
       'docId',
@@ -1396,51 +1491,56 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         normalized == 'فلر';
   }
 
+  static final _htmlTag = RegExp(r'<[^>]+>');
+
   String _decodeHtml(dynamic value) {
     final text = _unescape.convert(_text(value));
-    return text.replaceAll(RegExp(r'<[^>]+>'), '').trim();
+    return (text.contains('<') ? text.replaceAll(_htmlTag, '') : text).trim();
   }
 
   String _lastPathSegment(String value) {
-    final parts = value.split('/').where((part) => part.isNotEmpty).toList();
-    return parts.isEmpty ? '' : parts.last;
+    var end = value.length;
+    while (end > 0 && value.codeUnitAt(end - 1) == 47) {
+      end--;
+    }
+    if (end == 0) return '';
+    final start = value.lastIndexOf('/', end - 1) + 1;
+    return value.substring(start, end);
   }
 
   String _animeIdFromHit(Map<String, dynamic> source) {
-    final anime = _map(source['anime']);
-    final series = _map(source['series']);
+    final primary = _firstText(source, const <String>[
+      'anime_id',
+      'animeId',
+      'parent_anime_id',
+      'parentAnimeId',
+      'series_id',
+      'seriesId',
+    ]);
+    if (primary.isNotEmpty) return primary;
+
+    final anime = _firstText(_readHitMap(source['anime']), const <String>[
+      'anime_id',
+      'animeId',
+      'id',
+      'name',
+    ]);
+    if (anime.isNotEmpty) return anime;
+    final series = _firstText(_readHitMap(source['series']), const <String>[
+      'anime_id',
+      'id',
+      'name',
+    ]);
+    if (series.isNotEmpty) return series;
+
     final docRef = _text(source['doc_ref'] ?? source['docRef']);
-    final docId = docRef.isEmpty ? '' : _lastPathSegment(docRef);
-    final candidates = <dynamic>[
-      source['anime_id'],
-      source['animeId'],
-      source['parent_anime_id'],
-      source['parentAnimeId'],
-      source['series_id'],
-      source['seriesId'],
-      anime['anime_id'],
-      anime['animeId'],
-      anime['id'],
-      anime['name'],
-      series['anime_id'],
-      series['id'],
-      series['name'],
-      docId,
-      source['objectID'],
-      source['id'],
-      source['path'],
-    ];
-    for (final candidate in candidates) {
-      final value = _text(candidate);
-      if (value.isNotEmpty) return value;
-    }
-    return '';
+    final docId = _lastPathSegment(docRef).trim();
+    if (docId.isNotEmpty) return docId;
+    return _firstText(source, const <String>['objectID', 'id', 'path']);
   }
 
   String _makeAnimeUrl(Map<String, dynamic> hit) {
-    // Keep one stable URL for an anime regardless of which Algolia index it
-    // came from (recent episodes, search, season lists, etc.). Embedded hit
-    // payloads made the same anime look like different items throughout the app.
+    // Keep one stable URL for an anime regardless of its Algolia index.
     final animeId = _animeIdFromHit(hit);
     return '$_baseUrl/watch/${safeEncodeUriComponent(animeId)}';
   }
@@ -1493,36 +1593,58 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     List<dynamic> candidates, {
     List<dynamic> lastResort = const <dynamic>[],
   }) {
-    final urls = preferReachableArtwork(candidates.map(_text));
-    if (urls.isNotEmpty) return urls.first;
-    final fallback = preferReachableArtwork(lastResort.map(_text));
-    return fallback.isEmpty ? '' : fallback.first;
+    final preferAlternate = malArtworkUnreachable.value;
+    String first(Iterable<dynamic> alternatives) {
+      var firstMal = '';
+      for (final raw in alternatives) {
+        final url = _text(raw);
+        if (url.isEmpty) continue;
+        if (!preferAlternate || !isMalArtworkUrl(url)) return url;
+        if (firstMal.isEmpty) firstMal = url;
+      }
+      return firstMal;
+    }
+
+    final url = first(candidates);
+    return url.isEmpty ? first(lastResort) : url;
   }
 
-  String _highestQualityPosterFromHit(Map<String, dynamic> source) {
-    final poster = _map(source['poster']);
-    final candidates = <dynamic>[
-      for (final key in _largePosterKeys) poster[key],
-      _aniListPosterFromHit(source),
-      source['poster_uri'],
-      poster['medium'],
-    ];
-    return _pickArtwork(candidates, lastResort: <dynamic>[source['cover_uri']]);
+  String _highestQualityPosterFromHit(
+    Map<String, dynamic> source, {
+    Map<String, dynamic>? poster,
+  }) {
+    final fields = poster ?? _readHitMap(source['poster']);
+    return _pickArtwork(
+      <dynamic>[
+        for (final key in _largePosterKeys) fields[key],
+        _aniListPosterFromHit(source),
+        source['poster_uri'],
+        fields['medium'],
+      ],
+      lastResort: <dynamic>[source['cover_uri']],
+    );
   }
 
   String _posterFromHit(Map<String, dynamic> source) {
     if (_useHighQualityPosters) return _highestQualityPosterFromHit(source);
-    final poster = _map(source['poster']);
+    return _standardPosterFromHit(source, _readHitMap(source['poster']));
+  }
+
+  String _standardPosterFromHit(
+    Map<String, dynamic> source,
+    Map<String, dynamic> poster,
+  ) {
     // Catalog cards keep the lighter artwork when the setting is off.
-    // `poster_url_aniList` sits below `poster.large` so it cannot replace a
-    // stored large URL, and it never precedes `poster_uri`.
-    final candidates = <dynamic>[
-      source['poster_uri'],
-      poster['medium'],
-      poster['large'],
-      _aniListPosterFromHit(source),
-    ];
-    return _pickArtwork(candidates, lastResort: <dynamic>[source['cover_uri']]);
+    // AniList sits below poster.large and never precedes poster_uri.
+    return _pickArtwork(
+      <dynamic>[
+        source['poster_uri'],
+        poster['medium'],
+        poster['large'],
+        _aniListPosterFromHit(source),
+      ],
+      lastResort: <dynamic>[source['cover_uri']],
+    );
   }
 
   /// The wide cover art, and nothing else. [_coverFromHit] falls back to a
@@ -1533,10 +1655,10 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     // The hero draws this the full width of the window, so it asks the CDN
     // for the size the image was uploaded at rather than the thumbnail-sized
     // rendition the catalog's own URL requests.
-    return storyblokAtStoredWidth(
-      _pickArtwork(<dynamic>[source['cover_uri']]),
-      maxWidth: storyblokBannerWidth,
-    );
+    final cover = _text(source['cover_uri']);
+    return cover.isEmpty
+        ? cover
+        : storyblokAtStoredWidth(cover, maxWidth: storyblokBannerWidth);
   }
 
   String _coverFromHit(Map<String, dynamic> source) {
@@ -1557,14 +1679,20 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         value.contains('movie');
   }
 
-  String? _catalogTypeFromHit(Map<String, dynamic> source) {
-    final details = _map(source['details']);
+  String? _catalogTypeFromHit(
+    Map<String, dynamic> source, [
+    Map<String, dynamic>? hitDetails,
+  ]) {
+    final details = hitDetails ?? _readHitMap(source['details']);
     final raw = _text(source['type'] ?? details['type']);
     return raw.isEmpty ? null : raw;
   }
 
-  bool _isDubbedHit(Map<String, dynamic> source) {
-    final details = _map(source['details']);
+  bool _isDubbedHit(
+    Map<String, dynamic> source, [
+    Map<String, dynamic>? hitDetails,
+  ]) {
+    final details = hitDetails ?? _readHitMap(source['details']);
     final raw = source['dubbed'] ?? details['dubbed'];
     if (raw == true || raw == 1) return true;
     final value = _text(raw).toLowerCase();
@@ -1574,46 +1702,58 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         value.contains('dub');
   }
 
-  ShowStatus _statusFromHit(Map<String, dynamic> source) {
-    final details = _map(source['details']);
+  static final _finishedStatus = RegExp(
+    r'مكتمل|منتهي|finished|completed',
+    caseSensitive: false,
+  );
+  static final _upcomingStatus = RegExp(
+    r'قادم|لم يعرض|لم يتم عرضه|لم يتم بثه بعد|لم يبث|upcoming|not yet',
+    caseSensitive: false,
+  );
+
+  ShowStatus _statusFromHit(
+    Map<String, dynamic> source, [
+    Map<String, dynamic>? hitDetails,
+  ]) {
+    final details = hitDetails ?? _readHitMap(source['details']);
     final raw = _text(
       details['state'] ??
           details['status'] ??
           source['state'] ??
           source['status'],
     ).toLowerCase();
-    if (RegExp(
-      r'مكتمل|منتهي|finished|completed',
-      caseSensitive: false,
-    ).hasMatch(raw)) {
-      return ShowStatus.completed;
-    }
-    if (RegExp(
-      r'قادم|لم يعرض|لم يتم عرضه|لم يتم بثه بعد|لم يبث|upcoming|not yet',
-      caseSensitive: false,
-    ).hasMatch(raw)) {
-      return ShowStatus.upcoming;
-    }
+    if (_finishedStatus.hasMatch(raw)) return ShowStatus.completed;
+    if (_upcomingStatus.hasMatch(raw)) return ShowStatus.upcoming;
     return ShowStatus.ongoing;
   }
 
-  int? _yearFromHit(Map<String, dynamic> source) {
-    final details = _map(source['details']);
-    final match = RegExp(r'\b(19|20)\d{2}\b')
-        .firstMatch(_text(details['year'] ?? source['year']));
+  static final _catalogYear = RegExp(r'\b(19|20)\d{2}\b');
+  static final _catalogDigits = RegExp(r'\d+');
+
+  int? _yearFromHit(
+    Map<String, dynamic> source, [
+    Map<String, dynamic>? hitDetails,
+  ]) {
+    final details = hitDetails ?? _readHitMap(source['details']);
+    final match = _catalogYear.firstMatch(
+      _text(details['year'] ?? source['year']),
+    );
     return match == null ? null : int.tryParse(match.group(0)!);
   }
 
   List<String> _stringList(dynamic raw) {
-    return _list(raw)
-        .map<String>((value) => _text(value))
-        .where((value) => value.isNotEmpty)
-        .toSet()
-        .toList(growable: false);
+    final values = _list(raw);
+    if (values.isEmpty) return const <String>[];
+    final textValues = <String>{};
+    for (final value in values) {
+      final text = _text(value);
+      if (text.isNotEmpty) textValues.add(text);
+    }
+    return textValues.toList(growable: false);
   }
 
-  int _malId(Map<String, dynamic> source) {
-    final details = _map(source['details']);
+  int _malId(Map<String, dynamic> source, [Map<String, dynamic>? hitDetails]) {
+    final details = hitDetails ?? _readHitMap(source['details']);
     final raw =
         source['mal_id'] ??
         source['malId'] ??
@@ -1621,11 +1761,16 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         details['mal_id'] ??
         details['malId'] ??
         details['malID'];
-    final match = RegExp(r'\d+').firstMatch(_text(raw));
+    final match = _catalogDigits.firstMatch(_text(raw));
     return match == null ? 0 : (int.tryParse(match.group(0)!) ?? 0);
   }
 
-  MultimediaItem _mapHit(Map<String, dynamic> source, {bool recent = false}) {
+  MultimediaItem _mapHit(
+    Map<String, dynamic> source, {
+    bool recent = false,
+    String? url,
+    List<String>? tags,
+  }) {
     final title = _text(
       source['name'] ?? source['english_title'] ?? source['objectID'],
     );
@@ -1649,8 +1794,8 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     // a list reached the player and the artwork layer without a MyAnimeList
     // id to look anything up with.
     final hitSync = <String, String>{};
-    final hitDetails = _map(source['details']);
-    final hitRating = _map(source['rating']);
+    final hitDetails = _readHitMap(source['details']);
+    final hitRating = _readHitMap(source['rating']);
     void putHitSync(String key, dynamic raw) {
       final value = _text(raw);
       if (value.isNotEmpty) hitSync[key] = value;
@@ -1676,7 +1821,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     );
     putHitSync('awScore', hitRating['rate']);
 
-    final hitMalId = _malId(source);
+    final hitMalId = _malId(source, hitDetails);
     if (hitMalId > 0) {
       hitSync['malId'] = '$hitMalId';
       hitSync['mal_id'] = '$hitMalId';
@@ -1685,7 +1830,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     // from it has only a name to identify the anime by. The Arabic name is a
     // transliteration and matches poorly; the English one the catalog stores
     // alongside it is what other services actually know the anime as.
-    final hitEnglishTitle = _firstText(_map(source['details']), const <String>[
+    final hitEnglishTitle = _firstText(hitDetails, const <String>[
       'english_title',
       'englishTitle',
       'en_title',
@@ -1705,12 +1850,16 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       hitSync['anilist_id'] = hitAniListId;
     }
 
+    final poster = _readHitMap(source['poster']);
+    final fullPoster = _highestQualityPosterFromHit(source, poster: poster);
     return MultimediaItem(
       title: title.isEmpty ? 'AnimeWitcher' : title,
-      url: _makeAnimeUrl(source),
+      url: url ?? _makeAnimeUrl(source),
       syncData: hitSync.isEmpty ? null : hitSync,
-      posterUrl: _posterFromHit(source),
-      fullPosterUrl: _highestQualityPosterFromHit(source),
+      posterUrl: _useHighQualityPosters
+          ? fullPoster
+          : _standardPosterFromHit(source, poster),
+      fullPosterUrl: fullPoster,
       // The hero shows this wide, and a poster stretched to that shape is
       // both cropped to a sliver and blown up past its resolution. The
       // catalog's cover art is the banner-shaped image meant for it.
@@ -1720,16 +1869,16 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
           ? MultimediaContentType.movie
           : MultimediaContentType.anime,
       provider: packageName,
-      year: _yearFromHit(source),
-      status: _statusFromHit(source),
-      tags: _stringList(source['tags']),
+      year: _yearFromHit(source, hitDetails),
+      status: _statusFromHit(source, hitDetails),
+      tags: tags ?? _stringList(source['tags']),
       source: 'AnimeWitcher Native',
       episodeBadge: episodeBadge,
-      catalogType: _catalogTypeFromHit(source),
+      catalogType: _catalogTypeFromHit(source, hitDetails),
       publishedAt: recent
           ? _newsDate(source['date'] ?? source['created_at'])
           : null,
-      isDubbed: _isDubbedHit(source),
+      isDubbed: _isDubbedHit(source, hitDetails),
     );
   }
 
@@ -1907,19 +2056,30 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     bool recent = false,
     bool applyEcchiFilter = true,
   }) async {
-    final maps = hits.map(_map).where((hit) => hit.isNotEmpty).toList();
+    final Iterable<Map<String, dynamic>> maps;
     if (recent && _useHighQualityPosters) {
-      await _fillLargePosters(maps);
+      // Enrichment writes fresh poster fields. Don't mutate transport or
+      // cached rows that may be reused under another artwork setting.
+      final editable = hits.map(_map).where((hit) => hit.isNotEmpty).toList();
+      await _fillLargePosters(editable);
+      maps = editable;
+    } else {
+      maps = hits.map(_readHitMap);
     }
+    final hideEcchi = applyEcchiFilter && hidesEcchiInDiscovery;
     final seen = <String>{};
     final output = <MultimediaItem>[];
     for (final hit in maps) {
-      final item = _mapHit(hit, recent: recent);
-      if (item.title.trim().isEmpty || item.url.trim().isEmpty) continue;
-      if (!seen.add(item.url)) continue;
-      output.add(item);
+      if (hit.isEmpty) continue;
+      final url = _makeAnimeUrl(hit);
+      if (!seen.add(url)) continue;
+      // Keep the first row for each stable URL, even if it is filtered out.
+      // A later incomplete duplicate must not bypass the privacy preference.
+      final tags = _stringList(hit['tags']);
+      if (hideEcchi && _containsEcchiTag(tags)) continue;
+      output.add(_mapHit(hit, recent: recent, url: url, tags: tags));
     }
-    return applyEcchiFilter ? _filterEcchiItems(output) : output;
+    return applyEcchiFilter ? output.toList(growable: false) : output;
   }
 
   /// Applies the account-level content preference only to discovery results.
@@ -1927,15 +2087,19 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   /// hide unrelated anime and `isAdult` is broader than AnimeWitcher's ecchi
   /// category.
   List<MultimediaItem> _filterEcchiItems(Iterable<MultimediaItem> items) {
-    if (!_isEcchiHidden()) return items.toList(growable: false);
+    if (!hidesEcchiInDiscovery) return items.toList(growable: false);
     return items
         .where((item) => !_containsEcchiTag(item.tags ?? const <String>[]))
         .toList(growable: false);
   }
 
+  static final _catalogTagSeparator = RegExp(r'[,|/]+');
+  static final _arabicDiacritics = RegExp(r'[\u064B-\u065F\u0670]');
+  static final _tagWhitespace = RegExp(r'[\s_-]+');
+
   bool _containsEcchiTag(Iterable<String> tags) {
     for (final tag in tags) {
-      for (final part in tag.split(RegExp(r'[,|/]+'))) {
+      for (final part in tag.split(_catalogTagSeparator)) {
         if (_isEcchiTag(part)) return true;
       }
     }
@@ -1946,12 +2110,12 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     final normalized = value
         .trim()
         .toLowerCase()
-        .replaceAll(RegExp(r'[\u064B-\u065F\u0670]'), '')
+        .replaceAll(_arabicDiacritics, '')
         .replaceAll('إ', 'ا')
         .replaceAll('أ', 'ا')
         .replaceAll('آ', 'ا')
         .replaceAll('ى', 'ي')
-        .replaceAll(RegExp(r'[\s_-]+'), '');
+        .replaceAll(_tagWhitespace, '');
     return normalized == 'ecchi' || normalized == 'ايتشي';
   }
 
@@ -2272,9 +2436,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     }
     final hits = <Map<String, dynamic>>[];
     for (final rowRaw in raw) {
-      final document = _map(_map(rowRaw)['document']);
-      if (document.isEmpty) continue;
-      final hit = _firestoreDocumentHit(document);
+      final hit = _firestoreDocumentHit(_readHitMap(rowRaw)['document']);
       if (hit.isNotEmpty) hits.add(hit);
     }
     final items = await _dedupeHits(hits);
@@ -2734,54 +2896,36 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     );
   }
 
-  /// Spelling the catalog is not consistent about (ى for ي), so a genre
-  /// matches however it was typed in.
-  static String _looseArabic(String value) => value
-      .trim()
-      .replaceAll('ى', 'ي')
-      .replaceAll('أ', 'ا')
-      .replaceAll('إ', 'ا');
-
   /// Whether one raw manga record passes [filters]: any chosen status, type
   /// and year, and every chosen genre, as the anime filters combine them.
   @visibleForTesting
   static bool mangaHitMatchesFilters(
     Map<String, Object?> hit,
     ProviderSearchFilters filters,
-  ) {
-    final details = hit['details'] is Map
-        ? Map<String, Object?>.from(hit['details']! as Map)
-        : const <String, Object?>{};
-    bool anyOf(Set<String> wanted, Object? value) {
-      if (wanted.isEmpty) return true;
-      final have = _looseArabic('${value ?? ''}');
-      return wanted.any((w) => _looseArabic(w) == have);
-    }
-
-    if (!anyOf(filters.statuses, details['status'] ?? details['state'])) {
-      return false;
-    }
-    if (!anyOf(filters.types, hit['type'])) return false;
-    if (!anyOf(filters.years, details['year'])) return false;
-    if (filters.genres.isNotEmpty) {
-      final tags = hit['tags'] is List
-          ? (hit['tags']! as List).map((t) => _looseArabic('$t')).toSet()
-          : const <String>{};
-      for (final genre in filters.genres) {
-        if (!tags.contains(_looseArabic(genre))) return false;
-      }
-    }
-    return true;
-  }
+  ) => _MangaCatalogFilter(filters).matches(hit);
 
   /// Whole-catalog reads of the manga index, per search text, for the
   /// searches it cannot answer itself: a filter, or an order other than its
   /// own. Kept a few minutes, so paging through the results reads nothing.
-  final Map<String, ({DateTime at, List<Map<String, Object?>> hits})>
-  _mangaCatalogCache =
-      <String, ({DateTime at, List<Map<String, Object?>> hits})>{};
+  final _mangaCatalogCache = <String, _MangaCatalog>{};
+  final _mangaCatalogRequests =
+      <(String query, String index), Future<_MangaCatalog>>{};
+  int _mangaCatalogGeneration = 0;
 
   static const Duration _mangaCatalogTtl = Duration(minutes: 10);
+  static const int _maxSharedMangaCatalogRequests = 4;
+
+  /// Do not keep an account's catalog or share its pending requests after a
+  /// change of account or search configuration.
+  void invalidateMangaCatalog() {
+    _mangaCatalogCache.clear();
+    _invalidateMangaCatalogRequests();
+  }
+
+  void _invalidateMangaCatalogRequests() {
+    _mangaCatalogGeneration++;
+    _mangaCatalogRequests.clear();
+  }
 
   /// Only what a card, a filter and a sort read. The whole record, story and
   /// all, is about seven times the size, and opening a manga fetches its full
@@ -2808,23 +2952,57 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     'mangalek_page_url',
   ];
 
-  Future<List<Map<String, Object?>>> _mangaCatalog(
+  Future<_MangaCatalog> _mangaCatalog(
     String query,
     String sort, {
     CancelToken? cancelToken,
   }) async {
     final key = query.trim().toLowerCase();
     final cached = _mangaCatalogCache[key];
-    if (cached != null &&
-        DateTime.now().difference(cached.at) < _mangaCatalogTtl) {
-      return cached.hits;
+    if (cached != null) {
+      if (DateTime.now().difference(cached.at) < _mangaCatalogTtl) {
+        return cached;
+      }
+      cached._prepared = null;
     }
+
+    final index = _mangaSearchIndexForSort(sort);
+    final generation = _mangaCatalogGeneration;
+    if (cancelToken != null) {
+      return _fetchMangaCatalog(query, index, key, generation, cancelToken);
+    }
+    // Pending calls must use exactly the same transport plan, including the
+    // query's case. Sort/filter affect the view, not this index request.
+    final requestKey = (query, index);
+    final inFlight = _mangaCatalogRequests[requestKey];
+    if (inFlight != null) return inFlight;
+    final request = _fetchMangaCatalog(query, index, key, generation, null);
+    if (_mangaCatalogRequests.length >= _maxSharedMangaCatalogRequests) {
+      return request;
+    }
+    _mangaCatalogRequests[requestKey] = request;
+    try {
+      return await request;
+    } finally {
+      if (identical(_mangaCatalogRequests[requestKey], request)) {
+        final _ = _mangaCatalogRequests.remove(requestKey);
+      }
+    }
+  }
+
+  Future<_MangaCatalog> _fetchMangaCatalog(
+    String query,
+    String index,
+    String key,
+    int generation,
+    CancelToken? cancelToken,
+  ) async {
     const batch = 1000;
     const maxPages = 5;
     final hits = <Map<String, Object?>>[];
     for (var page = 0; page < maxPages; page++) {
       final payload = await _algoliaQuery(
-        _mangaSearchIndexForSort(sort),
+        index,
         query: query,
         page: page,
         hitsPerPage: batch,
@@ -2842,11 +3020,14 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       final nbPages = int.tryParse(_text(payload['nbPages'])) ?? 0;
       if (raw.length < batch || (nbPages > 0 && page + 1 >= nbPages)) break;
     }
-    if (_mangaCatalogCache.length >= 4) {
-      _mangaCatalogCache.remove(_mangaCatalogCache.keys.first);
+    final catalog = _MangaCatalog(DateTime.now(), hits);
+    if (generation == _mangaCatalogGeneration) {
+      if (_mangaCatalogCache.length >= 4) {
+        _mangaCatalogCache.remove(_mangaCatalogCache.keys.first);
+      }
+      _mangaCatalogCache[key] = catalog;
     }
-    _mangaCatalogCache[key] = (at: DateTime.now(), hits: hits);
-    return hits;
+    return catalog;
   }
 
   /// Orders raw manga records by one of the search sorts. The index's own
@@ -2869,25 +3050,47 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
             .trim()
             .toLowerCase();
 
-    final sorted = List<Map<String, Object?>>.of(hits);
+    List<Map<String, Object?>> sortedBy<Key>(
+      Key Function(Map<String, Object?>) selectKey,
+      int Function(Key, Key) compare,
+    ) {
+      // Keep the same comparisons and tie order without hashing raw rows.
+      final order = List<int>.generate(
+        hits.length,
+        (index) => index,
+        growable: false,
+      );
+      final keys = List<Key>.generate(
+        hits.length,
+        (index) => selectKey(hits[index]),
+        growable: false,
+      );
+      order.sort((a, b) => compare(keys[a], keys[b]));
+      return List<Map<String, Object?>>.generate(
+        hits.length,
+        (index) => hits[order[index]],
+      );
+    }
+
+    if (hits.length < 2) return List<Map<String, Object?>>.of(hits);
     switch (sort) {
-      case 'name_asc':
-        sorted.sort((a, b) => nameOf(a).compareTo(nameOf(b)));
-      case 'name_desc':
-        sorted.sort((a, b) => nameOf(b).compareTo(nameOf(a)));
+      case 'name_asc' || 'name_desc':
+        final ascending = sort == 'name_asc';
+        return sortedBy(
+          nameOf,
+          (a, b) => ascending ? a.compareTo(b) : b.compareTo(a),
+        );
       case 'year_asc' || 'year_desc':
         final ascending = sort == 'year_asc';
-        sorted.sort((a, b) {
-          final ya = yearOf(a), yb = yearOf(b);
+        return sortedBy(yearOf, (ya, yb) {
           if (ya == null && yb == null) return 0;
           if (ya == null) return 1;
           if (yb == null) return -1;
           return ascending ? ya.compareTo(yb) : yb.compareTo(ya);
         });
       default:
-        break;
+        return List<Map<String, Object?>>.of(hits);
     }
-    return sorted;
   }
 
   /// A manga search the index cannot run itself, run here over the whole
@@ -2904,12 +3107,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       filters.sort,
       cancelToken: cancelToken,
     );
-    final matching = sortMangaHits(
-      catalog
-          .where((hit) => mangaHitMatchesFilters(hit, filters))
-          .toList(growable: false),
-      filters.sort,
-    );
+    final matching = catalog.matching(filters);
     final items = <MultimediaItem>[];
     final seen = <String>{};
     var position = consumed;
@@ -4089,9 +4287,12 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     final result = <String, dynamic>{...base};
     for (final entry in overlay.entries) {
       final value = entry.value;
+      // Only scalars need the blank check. Stringifying a collection here
+      // walks its nested metadata even though we keep the collection as-is.
       if (value == null ||
-          _text(value).isEmpty && value is! Map && value is! List)
+          (value is! Map && value is! List && _text(value).isEmpty)) {
         continue;
+      }
       if (entry.key == 'details' && value is Map) {
         result['details'] = <String, dynamic>{
           ..._map(result['details']),
@@ -4216,6 +4417,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     _remoteConstantsExpiresAt = DateTime.fromMillisecondsSinceEpoch(0);
     _remoteConstantsRequest = null;
     _officialHomeSectionsRequest = null;
+    _invalidateMangaCatalogRequests();
     resetStaleHttpClient(_dio);
   }
 
@@ -5234,6 +5436,54 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     return output;
   }
 
+  // Only these remote fields feed _episodeRecord for a collection document.
+  // Skip recursive decoding for maps and lists that the catalog never uses.
+  static const _episodeCollectionFieldNames = <String>{
+    'doc_id',
+    'id',
+    'episode_id',
+    'name',
+    'episode_name',
+    'episodeName',
+    'episode_number',
+    'episodeNumber',
+    'episode',
+    'ep',
+    'number',
+    'sortOrder',
+    'sort_order',
+    'sort',
+    'title_translated',
+    'titleTranslated',
+    'title_ar',
+    'titleAr',
+    'arabic_title',
+    'arabicTitle',
+    'title_en',
+    'titleEn',
+    'title_english',
+    'titleEnglish',
+    'english_title',
+    'englishTitle',
+    'episode_title',
+    'episodeTitle',
+    'title',
+    'thumb_uri',
+    'image',
+    'image_url',
+    'poster',
+    'filler',
+    'is_filler',
+    'isFiller',
+  };
+
+  Map<String, dynamic> _episodeCollectionFields(dynamic raw) =>
+      <String, dynamic>{
+        for (final entry in _readHitMap(raw).entries)
+          if (_episodeCollectionFieldNames.contains(entry.key))
+            entry.key: _firestoreValue(entry.value),
+      };
+
   Future<({List<_EpisodeRecord> records, bool reachedServer})>
   _fetchEpisodeCollection(String animeId) async {
     final output = <_EpisodeRecord>[];
@@ -5252,7 +5502,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       final documents = _list(result.json['documents']);
       for (final rawDocument in documents) {
         final document = _map(rawDocument);
-        final fields = _firestoreFields(document['fields']);
+        final fields = _episodeCollectionFields(document['fields']);
         var id = _text(fields['doc_id']);
         if (id.isEmpty) {
           final name = _text(document['name']);
@@ -5361,22 +5611,48 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         .toList(growable: false);
   }
 
-  Map<String, dynamic> _aniZipEpisodeFor(
-    Map<String, dynamic> payload,
-    int number,
+  Object? _aniZipArtworkValue(Map<String, dynamic> item) =>
+      item['image'] ??
+      item['imageUrl'] ??
+      item['image_url'] ??
+      item['thumbnail'];
+
+  Object? Function(int) _aniZipEpisodeArtworkLookup(
+    Map<String, dynamic> episodes,
   ) {
-    if (number <= 0) return <String, dynamic>{};
-    final episodes = _map(payload['episodes']);
-    final direct = _map(episodes['$number']);
-    if (direct.isNotEmpty) return direct;
-    for (final raw in episodes.values) {
-      final item = _map(raw);
-      final absolute = _positiveInt(
-        item['absoluteEpisodeNumber'] ?? item['absolute_episode_number'],
-      );
-      if (absolute == number) return item;
-    }
-    return <String, dynamic>{};
+    Map<int, Object?>? byAbsolute;
+    Iterator<dynamic>? remaining;
+
+    return (number) {
+      if (number <= 0) return null;
+      final direct = _map(episodes['$number']);
+      // A nonempty exact key wins even if it has no usable artwork.
+      if (direct.isNotEmpty) return _aniZipArtworkValue(direct);
+
+      // All-hit payloads never allocate the index or scan absolute numbers.
+      // Resume a scan only as far as a miss needs, keeping the first entry
+      // for each number (including a first entry with no image).
+      if (byAbsolute == null) {
+        byAbsolute = <int, Object?>{};
+        remaining = episodes.values.iterator;
+      }
+      final index = byAbsolute!;
+      if (index.containsKey(number)) return index[number];
+
+      final entries = remaining;
+      if (entries == null) return null;
+      while (entries.moveNext()) {
+        final item = _map(entries.current);
+        final absolute = _positiveInt(
+          item['absoluteEpisodeNumber'] ?? item['absolute_episode_number'],
+        );
+        if (absolute <= 0 || index.containsKey(absolute)) continue;
+        final image = index[absolute] = _aniZipArtworkValue(item);
+        if (absolute == number) return image;
+      }
+      remaining = null;
+      return null;
+    };
   }
 
   List<Episode> _animeWitcherEpisodeMetadata(
@@ -5426,18 +5702,17 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         _aniZipUrl + '?mal_id=' + Uri.encodeQueryComponent('$malId'),
         timeout: _aniZipTimeout,
       );
-      if (payload == null || _map(payload['episodes']).isEmpty) {
+      if (payload == null) {
         return _animeWitcherEpisodeMetadata(route, resolvedRecords);
       }
+      final episodes = _map(payload['episodes']);
+      if (episodes.isEmpty) {
+        return _animeWitcherEpisodeMetadata(route, resolvedRecords);
+      }
+      final artworkFor = _aniZipEpisodeArtworkLookup(episodes);
       final output = <Episode>[];
       for (final record in resolvedRecords) {
-        final aniZip = _aniZipEpisodeFor(payload, record.number);
-        final image = _text(
-          aniZip['image'] ??
-              aniZip['imageUrl'] ??
-              aniZip['image_url'] ??
-              aniZip['thumbnail'],
-        );
+        final image = _text(artworkFor(record.number));
         output.add(
           Episode(
             name: record.title,
@@ -6281,6 +6556,91 @@ class _EpisodeRecord {
   final bool isFiller;
   final bool isFinal;
   final DubStatus dubStatus;
+}
+
+class _MangaCatalog {
+  _MangaCatalog(this.at, this._hits);
+
+  final DateTime at;
+  final List<Map<String, Object?>> _hits;
+  ({_MangaCatalogFilter filter, List<Map<String, Object?>> hits})? _prepared;
+
+  List<Map<String, Object?>> matching(ProviderSearchFilters filters) {
+    final filter = _MangaCatalogFilter(filters);
+    final previous = _prepared;
+    if (previous != null && previous.filter.sameAs(filter)) {
+      return previous.hits;
+    }
+    final hits = AnimeWitcherNativeProvider.sortMangaHits(
+      _hits.where(filter.matches).toList(growable: false),
+      filter.sort,
+    );
+    // Keep just the last view with its raw catalog, never a cache per filter.
+    _prepared = (filter: filter, hits: hits);
+    return hits;
+  }
+}
+
+class _MangaCatalogFilter {
+  _MangaCatalogFilter(ProviderSearchFilters filters)
+    : sort = filters.sort,
+      _statuses = filters.statuses.map(_looseArabic).toSet(),
+      _types = filters.types.map(_looseArabic).toSet(),
+      _years = filters.years.map(_looseArabic).toSet(),
+      _genres = filters.genres.map(_looseArabic).toSet();
+
+  final String sort;
+  final Set<String> _statuses;
+  final Set<String> _types;
+  final Set<String> _years;
+  final Set<String> _genres;
+  late final String? _singleGenre = _genres.length == 1 ? _genres.single : null;
+
+  // Spelling in the catalog is not consistent (e.g. ى for ي).
+  static String _looseArabic(String value) => value
+      .trim()
+      .replaceAll('ى', 'ي')
+      .replaceAll('أ', 'ا')
+      .replaceAll('إ', 'ا');
+
+  bool sameAs(_MangaCatalogFilter other) =>
+      sort == other.sort &&
+      setEquals(_statuses, other._statuses) &&
+      setEquals(_types, other._types) &&
+      setEquals(_years, other._years) &&
+      setEquals(_genres, other._genres);
+
+  static bool _accepts(Set<String> wanted, Object? value) =>
+      wanted.isEmpty || wanted.contains(_looseArabic('${value ?? ''}'));
+
+  bool matches(Map<String, Object?> hit) {
+    final rawDetails = hit['details'];
+    final details = switch (rawDetails) {
+      Map<String, Object?> value => value,
+      Map<Object?, Object?> value => Map<String, Object?>.from(value),
+      _ => const <String, Object?>{},
+    };
+    if (!_accepts(_statuses, details['status'] ?? details['state']) ||
+        !_accepts(_types, hit['type']) ||
+        !_accepts(_years, details['year'])) {
+      return false;
+    }
+    if (_genres.isEmpty) return true;
+    final rawTags = hit['tags'];
+    final wanted = _singleGenre;
+    if (wanted != null && rawTags is List<Object?>) {
+      // Keep normalizing every tag, without allocating a Set for one choice.
+      var found = false;
+      for (final tag in rawTags) {
+        if (_looseArabic('$tag') == wanted) found = true;
+      }
+      return found;
+    }
+    final tags = rawTags is List
+        ? rawTags.map((tag) => _looseArabic('$tag')).toSet()
+        : const <String>{};
+    return _genres.every(tags.contains);
+  }
 }
 
 class _AnimeWitcherCharacterRef {

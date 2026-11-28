@@ -34,6 +34,7 @@ class _MangaHomeScreenState extends ConsumerState<MangaHomeScreen> {
   List<MultimediaItem> _popular = const <MultimediaItem>[];
   bool _loading = false;
   bool _failed = false;
+  int _loadGeneration = 0;
 
   /// Rows of the most read shown here; "عرض الكل" has the rest.
   static const int _popularRows = 2;
@@ -41,50 +42,64 @@ class _MangaHomeScreenState extends ConsumerState<MangaHomeScreen> {
   @override
   void initState() {
     super.initState();
-    // Fetched ahead of time while home was open: shown at once, then
-    // refreshed like any other visit.
-    // Only looked at when it was started: reading it would start it, a
-    // second request beside the tab's own.
-    final ready = ref.exists(mangaHomeFirstPageProvider)
-        ? ref.read(mangaHomeFirstPageProvider).value
-        : null;
-    if (ready != null) {
-      _latest = ready.latest;
-      _popular = ready.popular;
-    }
-    WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_reload()));
+    final prefetched = ref.read(mangaHomeWarmupProvider).open();
+    final provider = prefetched == null ? null : _provider();
+    final warm = identical(prefetched?.source, provider) ? prefetched : null;
+    _latest = warm?.cachedLatest ?? _latest;
+    _popular = warm?.cachedPopular ?? _popular;
+    // An in-flight request belongs to the first entry. A settled prefetch
+    // still seeds the screen and then gets the usual background refresh.
+    final latest = warm?.pendingLatest;
+    final popular = warm?.pendingPopular;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(
+        _reload(warmSource: provider, warmLatest: latest, warmPopular: popular),
+      );
+    });
   }
 
-  AnimeWitcherProvider? _provider() => mangaCatalogueOf(
-    ref.read(extensionManagerProvider.notifier).getAllProviders(),
-  );
+  AnimeWitcherProvider? _provider() =>
+      mangaCatalogueOf(ref.read(extensionManagerProvider));
 
-  Future<void> _reload() async {
-    setState(() => _failed = false);
+  Future<void> _reload({
+    AnimeWitcherProvider? warmSource,
+    Future<List<MangaLatestChapter>?>? warmLatest,
+    Future<List<MultimediaItem>?>? warmPopular,
+  }) async {
+    final generation = ++_loadGeneration;
     final provider = _provider();
+    setState(() {
+      _failed = false;
+      _loading = provider != null && _popular.isEmpty;
+    });
     if (provider == null) return;
-    unawaited(
-      provider
-          .getLatestMangaPage(limit: 30)
-          .then((page) {
-            if (mounted) setState(() => _latest = page.items);
-          })
-          .catchError((Object _) {}),
-    );
+    final useWarmup = identical(provider, warmSource);
+    bool isCurrent() => mounted && generation == _loadGeneration;
+    Future<void> loadLatest() async {
+      try {
+        final prefetched = useWarmup && warmLatest != null
+            ? await warmLatest
+            : null;
+        if (!isCurrent()) return;
+        final items = prefetched ?? await loadMangaHomeLatest(provider);
+        if (isCurrent()) setState(() => _latest = items);
+      } catch (_) {}
+    }
+
+    unawaited(loadLatest());
     // Rows already on screen stay there while the fresh ones load.
-    if (_popular.isEmpty) setState(() => _loading = true);
     try {
-      final page = await provider.searchMangaPage(
-        '',
-        const ProviderSearchFilters(),
-        offset: 0,
-        limit: provider.searchPageSize,
-      );
-      if (mounted) setState(() => _popular = page.items);
+      final prefetched = useWarmup && warmPopular != null
+          ? await warmPopular
+          : null;
+      if (!isCurrent()) return;
+      final items = prefetched ?? await loadMangaHomePopular(provider);
+      if (isCurrent()) setState(() => _popular = items);
     } catch (_) {
-      if (mounted) setState(() => _failed = true);
+      if (isCurrent()) setState(() => _failed = true);
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (isCurrent()) setState(() => _loading = false);
     }
   }
 

@@ -3,6 +3,9 @@ import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/providers/anime3rb_provider.dart';
 import '../../../core/extensions/providers/witanime_provider.dart';
 import '../../../core/utils/digit_normalization.dart';
+import '../../../core/utils/rating_score.dart';
+
+export '../../../core/utils/rating_score.dart' show formatRatingScore;
 
 enum ExternalRatingSource { mal, imdb }
 
@@ -58,6 +61,10 @@ class AnimeDetailsRatings {
     return null;
   }
 
+  /// Whether the compact metadata summary has a visible score.
+  bool get hasSummary =>
+      witcherScore != null || (externalSource != null && externalScore != null);
+
   bool get showExternalColumn => externalSource != null;
   bool get showMalColumn => externalSource == ExternalRatingSource.mal;
   bool get showImdbColumn => externalSource == ExternalRatingSource.imdb;
@@ -79,8 +86,7 @@ class AnimeDetailsRatings {
   int? get displayedExternalScoringUsers =>
       showMalColumn ? displayedMalScoringUsers : null;
 
-  bool get canRate =>
-      !isUnaired && (isAnime3rb || animeId.isNotEmpty);
+  bool get canRate => !isUnaired && (isAnime3rb || animeId.isNotEmpty);
 
   factory AnimeDetailsRatings.fromItem(MultimediaItem item) {
     final data = item.syncData ?? const <String, String>{};
@@ -103,33 +109,24 @@ class AnimeDetailsRatings {
       isAnime3rb: isAnime3rb,
       isWitanime: isWitanime,
       witcherScore: isWitcherItem
-          ? _positiveScore(data['awScore'])
-          : ((isAnime3rb || isWitanime) &&
-                    item.score != null &&
-                    item.score! > 0
+          ? parsePositiveRatingScore(data['awScore'])
+          : ((isAnime3rb || isWitanime) && item.score != null && item.score! > 0
                 ? item.score
                 : null),
       witcherVoteCount: isWitcherItem
           ? _positiveInt(data['awScoreCount'])
           : null,
-      malMean: _positiveScore(data['awMalScore']),
+      malMean: parsePositiveRatingScore(data['awMalScore']),
       malScoringUsers: _nonNegativeInt(data['awMalScoringUsers']),
       malId: malId,
       imdbId: imdbId,
-      imdbScore: _positiveScore(
+      imdbScore: parsePositiveRatingScore(
         data['awImdbScore'] ?? data['imdbRate'] ?? data['imdb_rate'],
       ),
       isUnaired: _isUnaired(item, data),
       reviewsClosed: isWitcherItem && _isTruthy(data['awReviewsClosed']),
     );
   }
-}
-
-String formatRatingScore(double score) {
-  return score
-      .toStringAsFixed(2)
-      .replaceFirst(RegExp(r'0+$'), '')
-      .replaceFirst(RegExp(r'[.]$'), '');
 }
 
 bool _hasId(String? value) {
@@ -147,15 +144,6 @@ bool _isUnaired(MultimediaItem item, Map<String, String> data) {
 bool _isTruthy(String? raw) {
   final value = (raw ?? '').trim().toLowerCase();
   return value == 'true' || value == '1' || value == 'yes';
-}
-
-double? _positiveScore(String? raw) {
-  final normalized = normalizeLocalizedDigits((raw ?? '').trim());
-  if (normalized.isEmpty) return null;
-  final match = RegExp(r'[0-9]+(?:[.][0-9]+)?').firstMatch(normalized);
-  final score = match == null ? null : double.tryParse(match.group(0)!);
-  if (score == null || score <= 0) return null;
-  return score;
 }
 
 int? _positiveInt(String? raw) {

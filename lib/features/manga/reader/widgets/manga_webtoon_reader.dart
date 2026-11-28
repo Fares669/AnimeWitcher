@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase;
 import 'package:visibility_detector/visibility_detector.dart';
 
 import '../../../../core/domain/entity/manga.dart';
 import '../manga_reader_settings.dart';
-import 'manga_chapter_transition_page.dart';
 import 'manga_page_image.dart';
 import 'manga_reader_load_scheduler.dart';
 import 'manga_reader_page_loading.dart';
+import 'manga_reader_trailing_advance.dart';
+import 'manga_reader_visible_pages.dart';
 import 'manga_continuous_zoom_surface.dart';
 
 /// One row of the webtoon stream: a page spread, or a between-chapters
@@ -57,11 +59,10 @@ class MangaWebtoonReader extends StatefulWidget {
   State<MangaWebtoonReader> createState() => _MangaWebtoonReaderState();
 }
 
-class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
+class _MangaWebtoonReaderState extends State<MangaWebtoonReader>
+    with MangaReaderTrailingAdvance<MangaWebtoonReader> {
   final GlobalKey _centerKey = GlobalKey();
-  final Map<int, double> _visibleFractions = <int, double>{};
-  final Map<int, int> _visibleRounds = <int, int>{};
-  int _visibilityRound = 0;
+  final _visiblePages = MangaReaderVisiblePages();
   bool _visibilityUpdateScheduled = false;
   late int _lastReported;
   late final int _sessionInitialPage;
@@ -69,29 +70,72 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
   late final ScrollController _controller =
       widget.controller ?? ScrollController();
   late final bool _ownsController = widget.controller == null;
-  bool _trailingAdvanceRequested = false;
   MangaReaderLoadBatchController? _loadBatches;
+  MangaReaderLoadBatchController? _deferredLoadBatchUpdate;
+  bool _replayingSettledLoads = false;
 
-  List<List<int>> get _spreads => widget.doublePage
-      ? mangaReaderPageSpreads(
-          pageCount: widget.pages.length,
-          singleFirst: widget.settings.doublePageSingleFirstPage,
-          sectionStarts: widget.sectionDividers.keys,
-        )
-      : <List<int>>[
-          for (var index = 0; index < widget.pages.length; index++)
-            <int>[index],
-        ];
+  @override
+  ScrollController get trailingScrollController => _controller;
 
-  /// Spreads with the section dividers woven in, in stream order.
-  List<_WebtoonItem> get _items {
+  @override
+  bool get hasTrailingChapterPage => widget.trailingPage != null;
+
+  @override
+  VoidCallback? get trailingAdvanceCallback => widget.onTrailingAdvance;
+
+  /// Double-page spreads must honor the first page and chapter boundaries.
+  List<_WebtoonItem> get _doublePageItems {
     final items = <_WebtoonItem>[];
-    for (final spread in _spreads) {
+    for (final spread in mangaReaderPageSpreads(
+      pageCount: widget.pages.length,
+      singleFirst: widget.settings.doublePageSingleFirstPage,
+      sectionStarts: widget.sectionDividers.keys,
+    )) {
       final divider = widget.sectionDividers[spread.first];
       if (divider != null) items.add(_WebtoonItem.dividerItem(divider));
       items.add(_WebtoonItem.spread(spread));
     }
     return items;
+  }
+
+  /// Only chapter dividers need entries in single-page mode. Each seam's
+  /// row is its page index plus the number of earlier dividers.
+  List<int> _singlePageDividerRows(Map<int, Widget> dividers) {
+    if (dividers.isEmpty) return const <int>[];
+    final rows =
+        dividers.keys
+            .where((page) => page >= 0 && page < widget.pages.length)
+            .toList()
+          ..sort();
+    for (var index = 0; index < rows.length; index++) {
+      rows[index] += index;
+    }
+    return rows;
+  }
+
+  int _singlePageStartRow(List<int> dividerRows) {
+    var row = _startPage;
+    for (final divider in dividerRows) {
+      if (divider > row) break;
+      row++;
+    }
+    return row;
+  }
+
+  // Find how many dividers precede the row, which is its displacement
+  // from the original page index.
+  int _dividersBeforeRow(List<int> dividerRows, int row) {
+    var lo = 0;
+    var hi = dividerRows.length;
+    while (lo < hi) {
+      final mid = (lo + hi) ~/ 2;
+      if (dividerRows[mid] < row) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo;
   }
 
   /// The item the session starts on: the spread holding the start page.
@@ -116,10 +160,11 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
         : widget.initialPage.clamp(0, widget.pages.length - 1).toInt();
     _lastReported = _startPage;
     _resetLoadBatches();
-    _checkTrailingProximitySoon();
+    checkTrailingProximitySoon();
   }
 
   void _resetLoadBatches() {
+    _deferredLoadBatchUpdate = null;
     _loadBatches?.removeListener(_onLoadBatchChanged);
     _loadBatches?.dispose();
     _loadBatches = MangaReaderLoadBatchController(
@@ -131,16 +176,48 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
     // Re-seed a rebuilt scheduler with pages already completed in this reader
     // session so a settings rebuild can never relock or stall them.
     final settled = _settledPages.toList()..sort();
-    for (final pageIndex in settled) {
-      _loadBatches?.markSettled(pageIndex);
+    _replayingSettledLoads = true;
+    try {
+      for (final pageIndex in settled) {
+        _loadBatches?.markSettled(pageIndex);
+      }
+    } finally {
+      _replayingSettledLoads = false;
     }
   }
 
   void _onLoadBatchChanged() {
-    if (mounted) setState(() {});
-    // Page extents settle as images arrive; the end may have come into
-    // reach without any scrolling.
-    _checkTrailingProximitySoon();
+    if (!mounted) return;
+    // A reset already has a build pending. Keep checking the tail as
+    // settled pages are replayed, without scheduling another rebuild.
+    if (_replayingSettledLoads) {
+      checkTrailingProximitySoon();
+      return;
+    }
+    if (SchedulerBinding.instance.schedulerPhase !=
+        SchedulerPhase.persistentCallbacks) {
+      setState(() {});
+      checkTrailingProximitySoon();
+      return;
+    }
+
+    // A cached image can settle synchronously while a sliver child is
+    // being laid out. Keep its admission immediate, but invalidate this
+    // ancestor once after the frame, while the same scheduler is active.
+    final batches = _loadBatches;
+    if (batches == null || identical(_deferredLoadBatchUpdate, batches)) {
+      return;
+    }
+    _deferredLoadBatchUpdate = batches;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!identical(_deferredLoadBatchUpdate, batches)) return;
+      _deferredLoadBatchUpdate = null;
+      if (!mounted || !identical(_loadBatches, batches)) return;
+      setState(() {});
+      if (_controller.hasClients) {
+        checkTrailingProximity(_controller.position);
+      }
+    });
   }
 
   @override
@@ -155,6 +232,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
 
   @override
   void dispose() {
+    _deferredLoadBatchUpdate = null;
     _loadBatches?.removeListener(_onLoadBatchChanged);
     _loadBatches?.dispose();
     if (_ownsController) _controller.dispose();
@@ -162,32 +240,15 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
   }
 
   void _visibilityChanged(int pageIndex, VisibilityInfo info) {
-    _visibleFractions[pageIndex] = info.visibleFraction;
-    _visibleRounds[pageIndex] = _visibilityRound + 1;
+    _visiblePages.record(pageIndex, info.visibleFraction);
     if (_visibilityUpdateScheduled) return;
     _visibilityUpdateScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _visibilityUpdateScheduled = false;
-      if (!mounted || _visibleFractions.isEmpty) return;
-      _visibilityRound++;
-      // A page whose detector stopped reporting — scrolled away under
-      // keep-alive, recycled by the list — keeps its last fraction in
-      // the map. Trusted forever, that stale fraction outvotes every
-      // tall page that follows (none can ever be fully visible) and
-      // the reported page sticks on a chapter already finished.
-      // Entries not heard from in the last two rounds are dead.
-      _visibleFractions.removeWhere(
-        (index, _) => (_visibleRounds[index] ?? -1) < _visibilityRound - 1,
-      );
-      var bestIndex = _lastReported;
-      var bestFraction = -1.0;
-      for (final entry in _visibleFractions.entries) {
-        if (entry.value > bestFraction) {
-          bestFraction = entry.value;
-          bestIndex = entry.key;
-        }
-      }
-      if (bestFraction <= 0 || bestIndex == _lastReported) return;
+      if (!mounted || _visiblePages.isEmpty) return;
+      _visiblePages.advanceRound();
+      final bestIndex = _visiblePages.mostVisiblePage;
+      if (bestIndex == null || bestIndex == _lastReported) return;
       _lastReported = bestIndex;
       widget.onPageChanged(bestIndex);
     });
@@ -249,71 +310,32 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
     return _spread(context, item.indices!);
   }
 
-  void _requestTrailingAdvance() {
-    final callback = widget.onTrailingAdvance;
-    if (_trailingAdvanceRequested ||
-        widget.trailingPage == null ||
-        callback == null) {
-      return;
-    }
-    _trailingAdvanceRequested = true;
-    callback();
-  }
-
-  bool _handleOverscroll(OverscrollNotification notification) {
-    if (!mangaReaderShouldAdvancePastTransition(
-      extentAfter: notification.metrics.extentAfter,
-      overscroll: notification.overscroll,
-    )) {
-      return false;
-    }
-    _requestTrailingAdvance();
-    return true;
-  }
-
-  bool _handleScrollNotification(ScrollNotification notification) {
-    if (notification is OverscrollNotification) {
-      return _handleOverscroll(notification);
-    }
-    if (notification is ScrollUpdateNotification ||
-        notification is ScrollEndNotification) {
-      _checkTrailingProximity(notification.metrics);
-    }
-    return false;
-  }
-
-  /// The trailing divider is the end of the chapter: once less than a
-  /// quarter of the viewport is left below the fold, the reader moves on
-  /// by itself — no tap, no extra fling, and no dependence on a visibility
-  /// report for the divider. Scrolling clearly away from the end re-arms
-  /// the advance, so one that was dropped (a chapter navigation already
-  /// in flight, a chapter list not ready yet) is retried on the next
-  /// approach instead of never.
-  void _checkTrailingProximity(ScrollMetrics metrics) {
-    if (widget.trailingPage == null || widget.onTrailingAdvance == null) {
-      return;
-    }
-    final threshold = metrics.viewportDimension * 0.25;
-    if (metrics.extentAfter <= threshold) {
-      _requestTrailingAdvance();
-    } else if (metrics.extentAfter > threshold * 2) {
-      _trailingAdvanceRequested = false;
-    }
-  }
-
-  void _checkTrailingProximitySoon() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_controller.hasClients) return;
-      _checkTrailingProximity(_controller.position);
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     if (widget.pages.isEmpty) return const SizedBox.shrink();
 
-    final items = _items;
-    final start = _startItemIndex(items);
+    // A single-page stream stays lazy after another chapter joins it:
+    // a seam adds one row, not a descriptor for every page in the stream.
+    final items = widget.doublePage ? _doublePageItems : null;
+    final dividers = widget.sectionDividers;
+    final dividerRows = items == null
+        ? _singlePageDividerRows(dividers)
+        : const <int>[];
+    final start = items == null
+        ? _singlePageStartRow(dividerRows)
+        : _startItemIndex(items);
+    final itemCount = items?.length ?? widget.pages.length + dividerRows.length;
+
+    Widget buildRow(BuildContext context, int index) {
+      if (items != null) return _item(context, items[index]);
+      final offset = _dividersBeforeRow(dividerRows, index);
+      final page = index - offset;
+      if (offset < dividerRows.length && dividerRows[offset] == index) {
+        return dividers[page]!;
+      }
+      return _spread(context, <int>[page]);
+    }
+
     final viewport = MediaQuery.sizeOf(context);
     final cacheExtent = mangaReaderPreloadCacheExtent(
       settings: widget.settings,
@@ -334,7 +356,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
           if (start > 0)
             SliverList(
               delegate: SliverChildBuilderDelegate(
-                (context, index) => _item(context, items[index]),
+                buildRow,
                 childCount: start,
                 addAutomaticKeepAlives: false,
                 addRepaintBoundaries: false,
@@ -346,9 +368,9 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
             delegate: SliverChildBuilderDelegate(
               (context, localIndex) {
                 final index = start + localIndex;
-                return _item(context, items[index]);
+                return buildRow(context, index);
               },
-              childCount: items.length - start,
+              childCount: itemCount - start,
               addAutomaticKeepAlives: false,
               addRepaintBoundaries: false,
               addSemanticIndexes: false,
@@ -365,7 +387,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
       settings: widget.settings,
       onDoubleTap: widget.onDoubleTap,
       child: NotificationListener<ScrollNotification>(
-        onNotification: _handleScrollNotification,
+        onNotification: handleTrailingScrollNotification,
         child: scrollable,
       ),
     );

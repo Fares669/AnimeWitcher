@@ -1,14 +1,26 @@
 import '../domain/entity/multimedia_item.dart';
 import '../utils/episode_label.dart';
 import '../utils/safe_uri.dart';
+import 'animewitcher_model_fields.dart' as decode;
 import 'firestore_rest_client.dart';
 
 const String animeWitcherNativeProviderId = 'com.fares669.animewitcher.native';
 
 enum AnimeWitcherCommentSort {
+  // Declaration order matches the order in the sort menu.
   newest,
   oldest,
   mostLiked;
+
+  static AnimeWitcherCommentSort fromNameOr(
+    String name,
+    AnimeWitcherCommentSort fallback,
+  ) {
+    for (final sort in values) {
+      if (sort.name == name) return sort;
+    }
+    return fallback;
+  }
 
   String get orderField =>
       this == AnimeWitcherCommentSort.mostLiked ? 'likes' : 'date';
@@ -200,17 +212,17 @@ class AnimeWitcherComment {
     String? fallbackUserPhotoUrl,
   }) {
     final fields = document.fields;
-    final user = _stringMap(fields['user']);
+    final user = decode.stringMap(fields['user']);
     final isReview = animeWitcherIsReviewPath(document.path);
     return AnimeWitcherComment(
       id: document.id,
       path: document.path,
-      text: _text(
+      text: decode.text(
         isReview
             ? (fields['review_text'] ?? fields['comment'])
             : fields['comment'],
       ),
-      userId: _text(fields['user_id']),
+      userId: decode.text(fields['user_id']),
       userName: _firstNonEmpty(<dynamic>[
         user['name'],
         user['user_name'],
@@ -218,20 +230,20 @@ class AnimeWitcherComment {
         'AnimeWitcher User',
       ]),
       userPhotoUrl:
-          _optionalText(user['pic'] ?? user['pic_uri']) ??
-          _optionalText(fallbackUserPhotoUrl),
+          decode.optionalText(user['pic'] ?? user['pic_uri']) ??
+          decode.optionalText(fallbackUserPhotoUrl),
       likes: _intValue(fields['likes']),
       replies: fields.containsKey('replies')
           ? _intValue(fields['replies'])
           : _intValue(fields['comments']),
       spoiler: isReview ? false : fields['spoiler'] == true,
-      date: _dateValue(fields['date']),
-      animeId: _optionalText(fields['anime_id']),
-      episodeId: _optionalText(fields['episode_id']),
-      episodeName: _optionalText(fields['episode_name']),
-      characterId: _optionalText(fields['character_id']),
-      characterName: _optionalText(fields['character_name']),
-      newsId: _optionalText(fields['new_id']),
+      date: decode.localDate(fields['date']),
+      animeId: decode.optionalText(fields['anime_id']),
+      episodeId: decode.optionalText(fields['episode_id']),
+      episodeName: decode.optionalText(fields['episode_name']),
+      characterId: decode.optionalText(fields['character_id']),
+      characterName: decode.optionalText(fields['character_name']),
+      newsId: decode.optionalText(fields['new_id']),
       repliesClosed: fields['replies_closed'] == true,
       likedByMe: likedByMe,
       published: fields['published'] != false,
@@ -374,23 +386,9 @@ String _decode(String value) {
   }
 }
 
-Map<String, dynamic> _stringMap(dynamic raw) {
-  if (raw is! Map) return const <String, dynamic>{};
-  return raw.map<String, dynamic>(
-    (key, value) => MapEntry(key.toString(), value),
-  );
-}
-
-String _text(dynamic raw) => raw?.toString().trim() ?? '';
-
-String? _optionalText(dynamic raw) {
-  final value = _text(raw);
-  return value.isEmpty ? null : value;
-}
-
 String _firstNonEmpty(Iterable<dynamic> values) {
   for (final raw in values) {
-    final value = _text(raw);
+    final value = decode.text(raw);
     if (value.isNotEmpty) return value;
   }
   return '';
@@ -399,10 +397,4 @@ String _firstNonEmpty(Iterable<dynamic> values) {
 int _intValue(dynamic raw) {
   if (raw is num) return raw.toInt();
   return int.tryParse(raw?.toString() ?? '') ?? 0;
-}
-
-DateTime? _dateValue(dynamic raw) {
-  if (raw is DateTime) return raw.toLocal();
-  final parsed = DateTime.tryParse(raw?.toString() ?? '');
-  return parsed?.toLocal();
 }

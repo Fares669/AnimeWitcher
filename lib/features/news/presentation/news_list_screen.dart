@@ -25,12 +25,21 @@ class NewsListScreen extends StatefulWidget {
   State<NewsListScreen> createState() => _NewsListScreenState();
 }
 
+class _PendingFirstNewsPage {
+  _PendingFirstNewsPage(this.loadPage, this.future);
+
+  final Future<ProviderNewsPage> Function(int offset, int limit) loadPage;
+  final Future<ProviderNewsPage> future;
+}
+
 class _NewsListScreenState extends State<NewsListScreen> {
   late final ScrollController _scrollController;
   late List<NewsItem> _items;
+  bool _canAppendInPlace = false;
   bool _hasMore = true;
   bool _isLoading = false;
   int _nextOffset = 0;
+  _PendingFirstNewsPage? _pendingFirstPage;
 
   @override
   void initState() {
@@ -43,7 +52,16 @@ class _NewsListScreenState extends State<NewsListScreen> {
   }
 
   @override
+  void didUpdateWidget(NewsListScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.loadPage, widget.loadPage)) {
+      _pendingFirstPage = null;
+    }
+  }
+
+  @override
   void dispose() {
+    _pendingFirstPage = null;
     _scrollController
       ..removeListener(_onScroll)
       ..dispose();
@@ -57,18 +75,34 @@ class _NewsListScreenState extends State<NewsListScreen> {
     }
   }
 
+  Future<ProviderNewsPage> _requestPage(int offset) async {
+    final loadPage = widget.loadPage;
+    if (offset != 0) return loadPage(offset, 20);
+
+    // An initial load and a pull can request the same first page. Share only
+    // the pending fetch; each caller still decides how to apply the result.
+    final pending = _pendingFirstPage;
+    if (pending != null && identical(pending.loadPage, loadPage)) {
+      return pending.future;
+    }
+
+    final request = _PendingFirstNewsPage(loadPage, loadPage(0, 20));
+    _pendingFirstPage = request;
+    try {
+      return await request.future;
+    } finally {
+      if (identical(_pendingFirstPage, request)) _pendingFirstPage = null;
+    }
+  }
+
   Future<void> _loadMore() async {
     if (_isLoading || !_hasMore) return;
     setState(() => _isLoading = true);
     try {
-      final page = await widget.loadPage(_nextOffset, 20);
+      final page = await _requestPage(_nextOffset);
       if (!mounted) return;
-      final merged = <String, NewsItem>{
-        for (final item in _items) item.id: item,
-        for (final item in page.items) item.id: item,
-      };
       setState(() {
-        _items = merged.values.toList(growable: false);
+        _appendItems(page.items);
         _nextOffset = page.nextOffset;
         _hasMore = page.hasMore;
       });
@@ -79,12 +113,46 @@ class _NewsListScreenState extends State<NewsListScreen> {
     }
   }
 
+  void _appendItems(List<NewsItem> incoming) {
+    if (!_canAppendInPlace) {
+      // A Home seed or refresh result may contain duplicate IDs. Keep it
+      // visible as delivered until pagination, then keep the first position
+      // and latest payload, just as for duplicates in subsequent pages.
+      final merged = <String, NewsItem>{
+        for (final item in _items) item.id: item,
+        for (final item in incoming) item.id: item,
+      };
+      _items = merged.values.toList();
+      _canAppendInPlace = true;
+      return;
+    }
+
+    if (incoming.isEmpty) return;
+    // Index only the new page. Keep the owned list across appends rather than
+    // temporarily indexing and copying the entire accumulated feed.
+    final pending = <String, NewsItem>{
+      for (final item in incoming) item.id: item,
+    };
+    List<(int, NewsItem)>? replacements;
+    for (var i = 0; i < _items.length && pending.isNotEmpty; i++) {
+      final item = pending.remove(_items[i].id);
+      if (item != null) (replacements ??= []).add((i, item));
+    }
+    if (replacements != null) {
+      for (final (index, item) in replacements) {
+        _items[index] = item;
+      }
+    }
+    _items.addAll(pending.values);
+  }
+
   Future<void> _refresh() async {
     try {
-      final page = await widget.loadPage(0, 20);
+      final page = await _requestPage(0);
       if (!mounted) return;
       setState(() {
         _items = page.items;
+        _canAppendInPlace = false;
         _nextOffset = page.nextOffset;
         _hasMore = page.hasMore;
       });

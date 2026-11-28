@@ -7,6 +7,7 @@ from pathlib import Path
 KEYS = (
     'MAL_CLIENT_ID', 'MAL_CLIENT_SECRET', 'ANILIST_CLIENT_ID',
     'ANIMEWITCHER_FIREBASE_PROJECT_ID', 'ANIMEWITCHER_FIREBASE_API_KEY',
+    'ANIMEWITCHER_ALGOLIA_SEARCH_API_KEY',
 )
 
 def write_defines(path: Path) -> None:

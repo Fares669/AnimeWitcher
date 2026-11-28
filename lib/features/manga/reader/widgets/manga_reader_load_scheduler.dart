@@ -29,26 +29,26 @@ class MangaReaderLoadBatchController extends ChangeNotifier {
     required int pageCount,
     required int initialPage,
     required int batchSize,
-  }) : _batches = mangaReaderOrderedPreloadBatches(
-         pageCount: pageCount,
-         initialPage: initialPage,
-         batchSize: batchSize,
-       ) {
-    if (_batches.isNotEmpty) {
-      _unlocked.addAll(_batches.first);
-      final start = initialPage.clamp(0, pageCount - 1).toInt();
-      _backwardStart = _batches.indexWhere((batch) => batch.last < start);
-      _backwardIndex = _backwardStart;
-      if (_backwardIndex >= 0) _unlocked.addAll(_batches[_backwardIndex]);
-    }
+  }) : _pageCount = pageCount,
+       _width = batchSize.clamp(1, 20).toInt() {
+    if (_pageCount <= 0) return;
+
+    final start = initialPage.clamp(0, _pageCount - 1).toInt();
+    _forwardStart = start;
+    _backwardEnd = start;
+    _unlockRange(_forwardStart, _forwardRangeEnd(_forwardStart));
+    _unlockRange(_backwardRangeStart(_backwardEnd), _backwardEnd);
   }
 
-  final List<List<int>> _batches;
+  final int _pageCount;
+  final int _width;
   final Set<int> _unlocked = <int>{};
   final Set<int> _settled = <int>{};
-  int _forwardIndex = 0;
-  int _backwardStart = -1;
-  int _backwardIndex = -1;
+
+  // The active batches are contiguous ranges. Keep only their frontiers
+  // instead of materializing every batch in the chapter when the reader opens.
+  int _forwardStart = 0;
+  int _backwardEnd = 0;
 
   bool canLoad(int pageIndex) => _unlocked.contains(pageIndex);
 
@@ -56,30 +56,46 @@ class MangaReaderLoadBatchController extends ChangeNotifier {
   Set<int> get unlockedPages => Set<int>.unmodifiable(_unlocked);
 
   void markSettled(int pageIndex) {
-    if (_batches.isEmpty || !_settled.add(pageIndex)) return;
+    if (_pageCount <= 0 || !_settled.add(pageIndex)) return;
     final previousCount = _unlocked.length;
     _advanceBackward();
     _advanceForward();
     if (_unlocked.length != previousCount) notifyListeners();
   }
 
+  int _forwardRangeEnd(int start) =>
+      _pageCount - start < _width ? _pageCount : start + _width;
+
+  int _backwardRangeStart(int end) => end < _width ? 0 : end - _width;
+
+  bool _isRangeSettled(int start, int end) {
+    for (var index = start; index < end; index++) {
+      if (!_settled.contains(index)) return false;
+    }
+    return true;
+  }
+
+  void _unlockRange(int start, int end) {
+    for (var index = start; index < end; index++) {
+      _unlocked.add(index);
+    }
+  }
+
   void _advanceForward() {
-    final end = _backwardStart < 0 ? _batches.length : _backwardStart;
-    while (_forwardIndex < end &&
-        _batches[_forwardIndex].every(_settled.contains)) {
-      _forwardIndex++;
-      if (_forwardIndex < end) _unlocked.addAll(_batches[_forwardIndex]);
+    while (_forwardStart < _pageCount) {
+      final end = _forwardRangeEnd(_forwardStart);
+      if (!_isRangeSettled(_forwardStart, end)) return;
+      _forwardStart = end;
+      _unlockRange(end, _forwardRangeEnd(end));
     }
   }
 
   void _advanceBackward() {
-    while (_backwardIndex >= 0 &&
-        _backwardIndex < _batches.length &&
-        _batches[_backwardIndex].every(_settled.contains)) {
-      _backwardIndex++;
-      if (_backwardIndex < _batches.length) {
-        _unlocked.addAll(_batches[_backwardIndex]);
-      }
+    while (_backwardEnd > 0) {
+      final start = _backwardRangeStart(_backwardEnd);
+      if (!_isRangeSettled(start, _backwardEnd)) return;
+      _backwardEnd = start;
+      _unlockRange(_backwardRangeStart(start), start);
     }
   }
 }

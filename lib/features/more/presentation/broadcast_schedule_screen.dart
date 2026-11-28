@@ -4,8 +4,6 @@ import 'more_sidebar_shell.dart';
 
 import 'dart:async';
 
-import 'package:animewitcher/shared/widgets/app_page_header.dart';
-import 'package:animewitcher/shared/widgets/underline_segment_tabs.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
@@ -13,14 +11,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
+import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../../core/extensions/native_provider_resolution.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
-import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../../core/router/app_router.dart';
+import 'more_catalog_grid_layout.dart';
 
 class BroadcastScheduleScreen extends ConsumerStatefulWidget {
   const BroadcastScheduleScreen({super.key});
@@ -48,6 +47,11 @@ class _BroadcastScheduleDayState {
   final Object? error;
 }
 
+typedef _NativeScheduleInputs = ({
+  AnimeWitcherNativeProvider provider,
+  ({bool hideEcchi, bool highQualityPosters}) preferences,
+});
+
 class _BroadcastScheduleScreenState
     extends ConsumerState<BroadcastScheduleScreen>
     with SingleTickerProviderStateMixin {
@@ -55,9 +59,13 @@ class _BroadcastScheduleScreenState
 
   late final TabController _tabController;
   late int _selectedDay;
-  final Map<String, _BroadcastScheduleDayState> _dayStates =
-      <String, _BroadcastScheduleDayState>{};
+  final _dayStates = {
+    for (final day in animeWitcherBroadcastDays)
+      day: ValueNotifier(const _BroadcastScheduleDayState()),
+  };
   final Map<String, CancelToken> _requestTokens = <String, CancelToken>{};
+  _NativeScheduleInputs? _nativeInputsAtLoad;
+  bool _hasMixedOrUnknownInputs = false;
 
   @override
   void initState() {
@@ -77,6 +85,9 @@ class _BroadcastScheduleScreenState
       token.cancel('Broadcast schedule screen disposed');
     }
     _requestTokens.clear();
+    for (final state in _dayStates.values) {
+      state.dispose();
+    }
     _tabController
       ..removeListener(_handleTabTick)
       ..dispose();
@@ -87,9 +98,9 @@ class _BroadcastScheduleScreenState
     if (_tabController.indexIsChanging) return;
     final value = _tabController.index;
     if (value == _selectedDay) return;
-    setState(() => _selectedDay = value);
+    _selectedDay = value;
     final day = animeWitcherBroadcastDays[value];
-    final state = _dayStates[day] ?? const _BroadcastScheduleDayState();
+    final state = _dayStates[day]!.value;
     if (!state.loaded && !state.loading && state.error == null) {
       unawaited(_loadDay(day, refresh: true));
     }
@@ -108,23 +119,61 @@ class _BroadcastScheduleScreenState
     };
   }
 
-  Future<void> _loadDay(String day, {required bool refresh}) async {
-    final previous = _dayStates[day] ?? const _BroadcastScheduleDayState();
-    if (!refresh && (previous.loading || !previous.hasMore)) return;
+  AnimeWitcherProvider? _readCatalogProvider() {
     final active = ref.read(activeProviderProvider);
-    final provider = active?.supportsBroadcastSchedule == true
+    return active?.supportsBroadcastSchedule == true
         ? active
         : ref.nativeProvider;
+  }
+
+  _NativeScheduleInputs? _nativeInputs(AnimeWitcherProvider? provider) {
+    // The shipped native implementation has known local inputs. Other
+    // implementations or overrides may depend on broader account changes.
+    if (provider is! AnimeWitcherNativeProvider ||
+        provider.runtimeType != AnimeWitcherNativeProvider) {
+      return null;
+    }
+    return (provider: provider, preferences: provider.broadcastScheduleInputs);
+  }
+
+  void _rememberInputs(AnimeWitcherProvider? provider) {
+    if (_hasMixedOrUnknownInputs) return;
+    final native = _nativeInputs(provider);
+    _nativeInputsAtLoad ??= native;
+    if (native == null || native != _nativeInputsAtLoad) {
+      _hasMixedOrUnknownInputs = true;
+    }
+  }
+
+  void _onAccountRevision() {
+    final native = _nativeInputs(_readCatalogProvider());
+    if (!_hasMixedOrUnknownInputs &&
+        native != null &&
+        native == _nativeInputsAtLoad &&
+        !_dayStates.values.any(
+          (day) => day.value.loading || day.value.error != null,
+        )) {
+      // A background sync does not change settled native pages. If a request
+      // is running or failed, keep the existing cancellation and retry path.
+      return;
+    }
+    _resetSchedule();
+  }
+
+  Future<void> _loadDay(String day, {required bool refresh}) async {
+    final state = _dayStates[day]!;
+    final previous = state.value;
+    if (!refresh && (previous.loading || !previous.hasMore)) return;
+    final provider = _readCatalogProvider();
+    _rememberInputs(provider);
     if (provider == null) {
       if (!mounted) return;
-      setState(() {
-        _dayStates[day] = _BroadcastScheduleDayState(
-          items: previous.items,
-          nextOffset: previous.nextOffset,
-          hasMore: previous.hasMore,
-          error: StateError('Broadcast schedule provider is unavailable'),
-        );
-      });
+      state.value = _BroadcastScheduleDayState(
+        items: previous.items,
+        nextOffset: previous.nextOffset,
+        hasMore: previous.hasMore,
+        error: StateError('Broadcast schedule provider is unavailable'),
+      );
       return;
     }
 
@@ -133,15 +182,13 @@ class _BroadcastScheduleScreenState
     _requestTokens[day] = token;
     final offset = refresh ? 0 : previous.nextOffset;
     if (mounted) {
-      setState(() {
-        _dayStates[day] = _BroadcastScheduleDayState(
-          items: previous.items,
-          nextOffset: offset,
-          hasMore: refresh ? true : previous.hasMore,
-          loading: true,
-          loaded: previous.loaded,
-        );
-      });
+      state.value = _BroadcastScheduleDayState(
+        items: previous.items,
+        nextOffset: offset,
+        hasMore: refresh ? true : previous.hasMore,
+        loading: true,
+        loaded: previous.loaded,
+      );
     }
 
     try {
@@ -159,40 +206,34 @@ class _BroadcastScheduleScreenState
       final deduped = <String, MultimediaItem>{
         for (final item in merged) item.url: item,
       }.values.toList(growable: false);
-      setState(() {
-        _dayStates[day] = _BroadcastScheduleDayState(
-          items: deduped,
-          nextOffset: page.nextOffset,
-          hasMore: page.hasMore,
-          loaded: true,
-        );
-      });
+      state.value = _BroadcastScheduleDayState(
+        items: deduped,
+        nextOffset: page.nextOffset,
+        hasMore: page.hasMore,
+        loaded: true,
+      );
     } on DioException catch (error) {
       if (CancelToken.isCancel(error) ||
           !mounted ||
           !identical(_requestTokens[day], token)) {
         return;
       }
-      setState(() {
-        _dayStates[day] = _BroadcastScheduleDayState(
-          items: previous.items,
-          nextOffset: previous.nextOffset,
-          hasMore: previous.hasMore,
-          loaded: previous.loaded,
-          error: error,
-        );
-      });
+      state.value = _BroadcastScheduleDayState(
+        items: previous.items,
+        nextOffset: previous.nextOffset,
+        hasMore: previous.hasMore,
+        loaded: previous.loaded,
+        error: error,
+      );
     } catch (error) {
       if (!mounted || !identical(_requestTokens[day], token)) return;
-      setState(() {
-        _dayStates[day] = _BroadcastScheduleDayState(
-          items: previous.items,
-          nextOffset: previous.nextOffset,
-          hasMore: previous.hasMore,
-          loaded: previous.loaded,
-          error: error,
-        );
-      });
+      state.value = _BroadcastScheduleDayState(
+        items: previous.items,
+        nextOffset: previous.nextOffset,
+        hasMore: previous.hasMore,
+        loaded: previous.loaded,
+        error: error,
+      );
     } finally {
       if (identical(_requestTokens[day], token)) {
         _requestTokens.remove(day);
@@ -201,18 +242,22 @@ class _BroadcastScheduleScreenState
   }
 
   void _resetSchedule() {
+    _nativeInputsAtLoad = null;
+    _hasMixedOrUnknownInputs = false;
     for (final token in _requestTokens.values) {
       token.cancel('Broadcast schedule source or preferences changed');
     }
     _requestTokens.clear();
-    setState(() => _dayStates.clear());
+    for (final state in _dayStates.values) {
+      state.value = const _BroadcastScheduleDayState();
+    }
     unawaited(_loadDay(animeWitcherBroadcastDays[_selectedDay], refresh: true));
   }
 
   @override
   Widget build(BuildContext context) {
     ref.listen(accountDataRevisionProvider, (previous, next) {
-      if (previous != next) _resetSchedule();
+      if (previous != next) _onAccountRevision();
     });
     ref.listen(activeProviderProvider, (previous, next) {
       if (previous?.packageName != next?.packageName &&
@@ -222,54 +267,24 @@ class _BroadcastScheduleScreenState
       }
     });
 
-    final embedded = MorePaneScope.of(context);
-    final headerTop = appPageHeaderContentTopInset(context);
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppPageAppBar(
-        title: 'جدول البث',
-        canPop: !embedded && Navigator.of(context).canPop(),
-        onBack: () => Navigator.of(context).pop(),
-      ),
-      body: Padding(
-        padding: EdgeInsets.only(top: headerTop),
-        child: Column(
-          children: [
-            _DayTabs(controller: _tabController),
-            Expanded(
-              child: TabBarView(
-                controller: _tabController,
-                children: [
-                  for (final day in animeWitcherBroadcastDays)
-                    _ScheduleDayBody(
-                      day: day,
-                      state:
-                          _dayStates[day] ?? const _BroadcastScheduleDayState(),
-                      onRefresh: () => _loadDay(day, refresh: true),
-                      onLoadMore: () => _loadDay(day, refresh: false),
-                    ),
-                ],
-              ),
+    return buildMoreCatalogTabs(
+      context,
+      title: 'جدول البث',
+      controller: _tabController,
+      tabLabels: animeWitcherBroadcastDays,
+      tabChildren: () => [
+        for (final day in animeWitcherBroadcastDays)
+          // A hidden request may finish while another day is in
+          // view. Update only its pane, not the visible grid/cards.
+          ValueListenableBuilder<_BroadcastScheduleDayState>(
+            valueListenable: _dayStates[day]!,
+            builder: (context, state, _) => _ScheduleDayBody(
+              day: day,
+              state: state,
+              onRefresh: () => _loadDay(day, refresh: true),
+              onLoadMore: () => _loadDay(day, refresh: false),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _DayTabs extends StatelessWidget {
-  const _DayTabs({required this.controller});
-
-  final TabController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    return FilterStyleTabBar(
-      controller: controller,
-      tabs: [
-        for (var i = 0; i < animeWitcherBroadcastDays.length; i++)
-          FilterStyleTab(label: animeWitcherBroadcastDays[i]),
+          ),
       ],
     );
   }
@@ -359,7 +374,7 @@ class _ScheduleGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDesktop = context.isDesktop;
+    final grid = moreCatalogGridLayout(context);
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
         if (notification.depth == 0 &&
@@ -374,50 +389,97 @@ class _ScheduleGrid extends StatelessWidget {
         child: GridView.builder(
           key: PageStorageKey<String>('broadcast-$day'),
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.fromLTRB(
-            MultimediaCardLayout.catalogGridHorizontalPadding(context),
-            16,
-            MultimediaCardLayout.catalogGridHorizontalPadding(context),
-            110,
-          ),
-          gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
-            context,
-            maxCrossAxisExtent: isDesktop ? 240 : 150,
-            childAspectRatio: MultimediaCardLayout.gridAspectRatio(
-              isPortrait: true,
-              isDesktop: isDesktop,
-            ),
-            crossAxisSpacing: MultimediaCardLayout.catalogGridCrossAxisSpacing(
-              context,
-            ),
-            mainAxisSpacing: MultimediaCardLayout.catalogGridMainAxisSpacing(
-              context,
-            ),
-            handsetPortraitCrossAxisCount:
-                MultimediaCardLayout.handsetPortraitGridColumns,
-            horizontalPadding:
-                MultimediaCardLayout.catalogGridHorizontalPadding(context),
-          ),
+          padding: grid.padding,
+          gridDelegate: grid.delegate,
           itemCount: items.length + (isLoadingMore ? 1 : 0),
           itemBuilder: (context, index) {
             if (index >= items.length) {
               return const Center(child: CircularProgressIndicator.adaptive());
             }
             final item = items[index];
-            return MultimediaCard.fromItem(
-              key: ValueKey('broadcast-$day-${item.url}'),
+            return _ScheduleCard(
+              key: ValueKey((day, item.url)),
+              day: day,
               item: item,
-              heroTag: heroTagWithId(
-                'broadcast-$day',
-                item,
-                index,
-                dashed: true,
-              ),
-              onTap: () => item.openDetails(context),
+              index: index,
             );
           },
         ),
       ),
+    );
+  }
+}
+
+// A pending page changes the grid's footer, not the existing rows. Keep each
+// immutable row's card configuration in its own lazy viewport lifetime rather
+// than rebuilding its artwork and title subtree or caching the entire day.
+class _ScheduleCard extends StatefulWidget {
+  const _ScheduleCard({
+    required super.key,
+    required this.day,
+    required this.item,
+    required this.index,
+  });
+
+  final String day;
+  final MultimediaItem item;
+  final int index;
+
+  @override
+  State<_ScheduleCard> createState() => _ScheduleCardState();
+}
+
+class _ScheduleCardState extends State<_ScheduleCard> {
+  MultimediaCard? _card;
+  (String?, String?, String?, String?, String?)? _artAndRatingInputs;
+
+  @override
+  void didUpdateWidget(covariant _ScheduleCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.item, widget.item) ||
+        oldWidget.day != widget.day ||
+        oldWidget.index != widget.index) {
+      _card = null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final item = widget.item;
+    // Subtypes may override getters, and an episode caption uses wall time.
+    if (item.runtimeType != MultimediaItem ||
+        item.episodeBadge?.trim().isNotEmpty == true) {
+      return _buildCard(item);
+    }
+    // These are the artwork lookup and rating inputs read by fromItem.
+    // syncData can be provider-owned and mutable, even on a plain item.
+    final data = item.syncData;
+    final inputs = data == null
+        ? null
+        : (
+            data['malId'] ?? data['mal_id'],
+            data['englishTitle'],
+            data['awMalScore'],
+            data['awImdbScore'] ?? data['imdbRate'] ?? data['imdb_rate'],
+            data['awScore'],
+          );
+    if (_card case final card? when _artAndRatingInputs == inputs) return card;
+    _artAndRatingInputs = inputs;
+    return _card = _buildCard(item);
+  }
+
+  MultimediaCard _buildCard(MultimediaItem item) {
+    final day = widget.day;
+    return MultimediaCard.fromItem(
+      key: ValueKey('broadcast-$day-${item.url}'),
+      item: item,
+      heroTag: heroTagWithId(
+        'broadcast-$day',
+        item,
+        widget.index,
+        dashed: true,
+      ),
+      onTap: () => item.openDetails(context),
     );
   }
 }

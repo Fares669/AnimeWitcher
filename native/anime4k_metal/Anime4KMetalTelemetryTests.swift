@@ -4,6 +4,7 @@ import Foundation
 struct Anime4KMetalTelemetryTests {
     static func main() {
         testRollingTelemetry()
+        testRollingWindowWraps()
         testSourceFrameCadence(sourceFrames: 24, displayRefreshFramesPerSourceFrame: 5)
         testSourceFrameCadence(sourceFrames: 30, displayRefreshFramesPerSourceFrame: 4)
         testRuntimeIsolationAndReset()
@@ -53,6 +54,25 @@ struct Anime4KMetalTelemetryTests {
         snapshot = telemetry.snapshot
         precondition(snapshot.skippedDuplicateFrames == 3)
         precondition(snapshot.lateOrDroppedFrames == 2)
+    }
+
+    private static func testRollingWindowWraps() {
+        for capacity in [1, 4, 20] {
+            var telemetry = Anime4KMetalTelemetryAccumulator(windowCapacity: capacity)
+            var samples: [Double] = []
+            for index in 0..<80 {
+                let value = index.isMultiple(of: 7) ? 1e16 : Double(index)
+                telemetry.recordCompletedFrame(milliseconds: value)
+                telemetry.recordCompletedFrame(milliseconds: .nan)
+                samples.append(value)
+                let window = samples.suffix(capacity)
+                let snapshot = telemetry.snapshot
+                precondition(snapshot.processedFrames == samples.count)
+                precondition(snapshot.averageFrameTimeMs == window.reduce(0, +) / Double(window.count))
+                let rank = Int(ceil(Double(window.count) * 0.95)) - 1
+                precondition(snapshot.p95FrameTimeMs == window.sorted()[rank])
+            }
+        }
     }
 
     private static func testSourceFrameCadence(

@@ -415,7 +415,9 @@ void main() {
     await tester.pumpWidget(
       _app(
         service: _FakeAccountService(),
-        child: DetailsRatingsSummary(item: _item(syncData: _ratedSync())),
+        child: DetailsRatingsSummary(
+          ratings: AnimeDetailsRatings.fromItem(_item(syncData: _ratedSync())),
+        ),
       ),
     );
 
@@ -466,13 +468,15 @@ void main() {
       _app(
         service: _FakeAccountService(),
         child: DetailsRatingsSummary(
-          item: _item(
-            imdbId: 'tt0283754',
-            syncData: const <String, String>{
-              'awScore': '8.37',
-              'awImdbId': 'tt0283754',
-              'awImdbScore': '7.4',
-            },
+          ratings: AnimeDetailsRatings.fromItem(
+            _item(
+              imdbId: 'tt0283754',
+              syncData: const <String, String>{
+                'awScore': '8.37',
+                'awImdbId': 'tt0283754',
+                'awImdbScore': '7.4',
+              },
+            ),
           ),
         ),
       ),

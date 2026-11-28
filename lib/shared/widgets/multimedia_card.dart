@@ -280,6 +280,7 @@ class MultimediaCard extends StatelessWidget {
         // a missing poster up and repaint when that switch is flipped.
         child: ArtworkDecode(
           paintedWidth: cardWidth,
+          sizeHighQualityToDisplay: true,
           builder: (BuildContext context, int? decodeWidth) => _buildPoster(
             context,
             normalizedImageUrl ?? '',
@@ -372,6 +373,7 @@ class MultimediaCard extends StatelessWidget {
       memCacheWidth: decodeWidth,
       queueStaticPosterDecode: !kIsWeb &&
           ResponsiveBreakpoints.isDesktopPlatform() &&
+          !highQualityArtwork.value &&
           decodeWidth != null,
       filterQuality: FilterQuality.medium,
       // Harbor's plate: the card's own colour, from its title, until the

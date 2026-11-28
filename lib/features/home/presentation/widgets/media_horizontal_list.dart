@@ -1,17 +1,18 @@
+import 'dart:async';
 import 'dart:collection';
 
 import 'package:flutter/material.dart';
 
+import '../../../../core/network/poster_cache.dart';
 import '../../../../core/router/app_router.dart';
-import '../../../../core/utils/layout_constants.dart';
 import '../../../../shared/widgets/paged_rail.dart';
 
-import '../../../../core/utils/responsive_breakpoints.dart';
 import '../../../../shared/widgets/multimedia_card.dart';
 import '../view_all_screen.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/extensions/base_provider.dart';
 import '../../../../core/utils/image_utils.dart';
+import 'home_poster_rail_layout.dart';
 import 'home_section_header.dart';
 
 class MediaHorizontalList extends StatefulWidget {
@@ -26,6 +27,7 @@ class MediaHorizontalList extends StatefulWidget {
   final bool initialViewAllHasMore;
   final bool showWhenEmpty;
   final bool forcePortrait;
+  final bool warmProviderPosters;
 
   const MediaHorizontalList({
     super.key,
@@ -40,6 +42,7 @@ class MediaHorizontalList extends StatefulWidget {
     this.initialViewAllHasMore = true,
     this.showWhenEmpty = false,
     this.forcePortrait = false,
+    this.warmProviderPosters = false,
   });
 
   @override
@@ -49,6 +52,9 @@ class MediaHorizontalList extends StatefulWidget {
 class _MediaHorizontalListState extends State<MediaHorizontalList> {
   late ScrollController _scrollController;
   bool _isPortrait = true;
+  String? _aspectProbeUrl;
+  int _aspectProbeGeneration = 0;
+  bool _posterWarmScheduled = false;
 
   // Cache the aspect ratio for a given URL to prevent layout shifts
   // when the widget is destroyed and recreated during scrolling. Bounded
@@ -83,49 +89,62 @@ class _MediaHorizontalListState extends State<MediaHorizontalList> {
   void initState() {
     super.initState();
     _scrollController = ScrollController();
-
-    if (_shouldProbeAspectRatio) {
-      final url = widget.mediaList.first.posterImageUrl;
-      final cached = _lookupCached(url);
-      if (cached != null) {
-        _isPortrait = cached;
-      } else {
-        _checkAspectRatio();
-      }
-    }
+    _updateAspectProbe();
+    _schedulePosterWarm();
   }
 
   @override
   void didUpdateWidget(MediaHorizontalList oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!_shouldProbeAspectRatio) {
-      if (!_isPortrait) setState(() => _isPortrait = true);
-      return;
-    }
-    if (oldWidget.mediaList != widget.mediaList || oldWidget.forcePortrait) {
-      final url = widget.mediaList.first.posterImageUrl;
-      final cached = _lookupCached(url);
-      if (cached != null) {
-        if (_isPortrait != cached) {
-          setState(() => _isPortrait = cached);
-        }
-      } else {
-        _checkAspectRatio();
-      }
-    }
+    _updateAspectProbe();
+    _schedulePosterWarm();
   }
 
-  Future<void> _checkAspectRatio() async {
-    if (!_shouldProbeAspectRatio) return;
-    final url = widget.mediaList.first.posterImageUrl;
-    if (url.isEmpty) return;
-    final isPortrait = await ImageUtils.isImagePortrait(url);
-    _storeCached(url, isPortrait);
-    if (mounted && _isPortrait != isPortrait) {
-      setState(() {
-        _isPortrait = isPortrait;
-      });
+  void _schedulePosterWarm() {
+    if (!widget.warmProviderPosters ||
+        widget.mediaList.isEmpty ||
+        _posterWarmScheduled) {
+      return;
     }
+    _posterWarmScheduled = true;
+    // The sliver mounts rails near the viewport. Let their cards start
+    // normal image resolution before submitting speculative warm work.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _posterWarmScheduled = false;
+      if (!widget.warmProviderPosters) return;
+      warmPosters(widget.mediaList.take(12).map((item) => item.posterUrl));
+    });
+  }
+
+  void _updateAspectProbe() {
+    final firstUrl = _shouldProbeAspectRatio
+        ? widget.mediaList.first.posterImageUrl
+        : '';
+    final url = firstUrl.isEmpty ? null : firstUrl;
+    // Appending or replacing other items does not require a new decode probe.
+    if (_aspectProbeUrl == url) return;
+    _aspectProbeUrl = url;
+    final generation = ++_aspectProbeGeneration;
+    if (url == null) {
+      _isPortrait = true;
+      return;
+    }
+    final cached = _lookupCached(url);
+    if (cached != null) {
+      _isPortrait = cached;
+      return;
+    }
+    unawaited(_checkAspectRatio(url, generation));
+  }
+
+  Future<void> _checkAspectRatio(String url, int generation) async {
+    final isPortrait = await ImageUtils.isImagePortrait(url);
+    // An older source can complete after a replacement or an A -> B -> A
+    // transition. Only the current probe can choose the rail layout.
+    if (!mounted || _aspectProbeGeneration != generation) return;
+    _storeCached(url, isPortrait);
+    if (_isPortrait != isPortrait) setState(() => _isPortrait = isPortrait);
   }
 
   @override
@@ -139,30 +158,9 @@ class _MediaHorizontalListState extends State<MediaHorizontalList> {
     if (widget.mediaList.isEmpty && !widget.showWhenEmpty) {
       return const SizedBox.shrink();
     }
-    final isDesktop = context.isDesktop;
-    final isHandsetLandscape = context.isHandsetLandscape;
     final isPortrait = widget.forcePortrait || _isPortrait;
-    final double spacing = isDesktop
-        ? LayoutConstants.spacingLg
-        : isHandsetLandscape
-        ? ResponsiveBreakpoints.handsetLandscapeGridMaxSpacing
-        : LayoutConstants.spacingSm;
-    // Shared helper: rail, shimmer and grid all derive their poster width
-    // from MultimediaCardLayout so the reserved height always matches.
-    final double cardWidth = MultimediaCardLayout.cardWidth(
-      context,
-      isPortrait: isPortrait,
-      horizontalPadding: isDesktop
-          ? LayoutConstants.dashboardContentPadding
-          : LayoutConstants.spacingMd,
-      spacing: spacing,
-    );
-
-    final double listHeight = MultimediaCardLayout.listHeight(
-      cardWidth,
-      isPortrait: isPortrait,
-      isDesktop: isDesktop,
-    );
+    final (:cardWidth, :listHeight, :spacing, :horizontalPadding) =
+        homePosterRailLayout(context, isPortrait: isPortrait);
 
     return Directionality(
       textDirection: TextDirection.rtl,
@@ -200,11 +198,7 @@ class _MediaHorizontalListState extends State<MediaHorizontalList> {
                 controller: _scrollController,
                 itemExtent: cardWidth + spacing,
                 clipBehavior: Clip.none,
-                padding: EdgeInsets.symmetric(
-                  horizontal: isDesktop
-                      ? LayoutConstants.dashboardContentPadding
-                      : LayoutConstants.spacingMd,
-                ),
+                padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
                 itemCount: widget.mediaList.length,
                 itemBuilder: (context, index) {
                   final item = widget.mediaList[index];

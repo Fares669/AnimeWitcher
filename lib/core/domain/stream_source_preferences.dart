@@ -22,58 +22,43 @@ const List<String> defaultStreamQualityPriority = <String>[
 /// Video URLs and qualities are only resolved after the user chooses a server.
 List<StreamResult> commonBatchStreamServers(
   List<List<StreamResult>> episodeSources,
-) {
-  if (episodeSources.isEmpty) return const <StreamResult>[];
-  final shared = episodeSources
-      .skip(1)
-      .map(
-        (sources) => sources
-            .where((source) => source.url.trim().isNotEmpty)
-            .map(
-              (source) =>
-                  streamServerPreferenceKey(source.source).toLowerCase(),
-            )
-            .toSet(),
-      )
-      .toList();
-  final seen = <String>{};
-  return episodeSources.first
-      .where((source) {
-        final key = streamServerPreferenceKey(source.source).toLowerCase();
-        return source.url.trim().isNotEmpty &&
-            key.isNotEmpty &&
-            seen.add(key) &&
-            shared.every((keys) => keys.contains(key));
-      })
-      .toList(growable: false);
-}
+) => _commonBatchOptions<String>(episodeSources, (source) {
+  if (source.url.trim().isEmpty) return null;
+  final key = streamServerPreferenceKey(source.source).toLowerCase();
+  return key.isEmpty ? null : key;
+});
 
 /// A pair is offered for a batch only if *every* episode provides it.
 /// Keep the first episode's original source for the existing picker UI.
 List<StreamResult> commonBatchStreamSources(
   List<List<StreamResult>> episodeSources,
+) => _commonBatchOptions<(String, String)>(episodeSources, (source) {
+  final key = batchStreamSourceKey(source);
+  return key.$2.isEmpty ? null : key;
+});
+
+List<StreamResult> _commonBatchOptions<K extends Object>(
+  List<List<StreamResult>> episodes,
+  K? Function(StreamResult source) keyOf,
 ) {
-  if (episodeSources.isEmpty) return const <StreamResult>[];
-  final shared = episodeSources
-      .skip(1)
-      .map(
-        (sources) => sources
-            .where(
-              (source) => batchStreamSourceKey(source).$2.trim().isNotEmpty,
-            )
-            .map(batchStreamSourceKey)
-            .toSet(),
-      )
-      .toList();
-  final seen = <(String, String)>{};
-  return episodeSources.first
-      .where((source) {
-        final key = batchStreamSourceKey(source);
-        return key.$2.trim().isNotEmpty &&
-            seen.add(key) &&
-            shared.every((keys) => keys.contains(key));
-      })
-      .toList(growable: false);
+  if (episodes.isEmpty) return const <StreamResult>[];
+
+  // Keep first-episode order and the first representative of each option.
+  final common = <K, StreamResult>{};
+  for (final source in episodes.first) {
+    final key = keyOf(source);
+    if (key != null) common.putIfAbsent(key, () => source);
+  }
+  for (final episode in episodes.skip(1)) {
+    if (common.isEmpty) break;
+    final available = <K>{};
+    for (final source in episode) {
+      final key = keyOf(source);
+      if (key != null) available.add(key);
+    }
+    common.removeWhere((key, _) => !available.contains(key));
+  }
+  return common.values.toList(growable: false);
 }
 
 (String, String) batchStreamSourceKey(StreamResult source) => (
@@ -137,41 +122,45 @@ List<StreamResult> orderStreamSourcesByPreference(
   required List<String> serverPriority,
 }) {
   if (sources.isEmpty) return const <StreamResult>[];
-  final ordered = List<({StreamResult source, int index})>.generate(
-    sources.length,
-    (index) => (source: sources[index], index: index),
-    growable: false,
-  );
+  if (sources.length == 1) return List<StreamResult>.unmodifiable(sources);
 
-  int rank(List<String> priority, String value) {
-    final wanted = value.toLowerCase();
-    final index = priority.indexWhere((entry) => entry.toLowerCase() == wanted);
-    return index < 0 ? priority.length : index;
+  Map<String, int> ranks(List<String> priority) {
+    final result = <String, int>{};
+    for (final (index, name) in priority.indexed) {
+      result.putIfAbsent(name.toLowerCase(), () => index);
+    }
+    return result;
   }
 
+  final qualityRanks = ranks(qualityPriority);
+  final serverRanks = ranks(serverPriority);
+  final unlistedQuality = qualityPriority.length;
+  final ordered = sources.indexed
+      .map((entry) {
+        final (index, source) = entry;
+        final quality = _streamQuality(source.quality);
+        final server = streamServerPreferenceKey(source.source).toLowerCase();
+        return (
+          source: source,
+          index: index,
+          qualityRank:
+              qualityRanks[quality.key.toLowerCase()] ?? unlistedQuality,
+          score: quality.score,
+          serverRank: serverRanks[server] ?? serverPriority.length,
+        );
+      })
+      .toList(growable: false);
   ordered.sort((a, b) {
-    final qualityA = streamQualityPreferenceKey(a.source.quality);
-    final qualityB = streamQualityPreferenceKey(b.source.quality);
-    final rankA = rank(qualityPriority, qualityA);
-    final rankB = rank(qualityPriority, qualityB);
-    final qualityCompare = rankA.compareTo(rankB);
+    final qualityCompare = a.qualityRank.compareTo(b.qualityRank);
     if (qualityCompare != 0) return qualityCompare;
 
-    if (rankA == qualityPriority.length) {
-      final scoreCompare = _qualityScore(b.source.quality)
-          .compareTo(_qualityScore(a.source.quality));
+    if (a.qualityRank == unlistedQuality) {
+      final scoreCompare = b.score.compareTo(a.score);
       if (scoreCompare != 0) return scoreCompare;
     }
 
-    final serverA = streamServerPreferenceKey(a.source.source);
-    final serverB = streamServerPreferenceKey(b.source.source);
-    final serverCompare = rank(
-      serverPriority,
-      serverA,
-    ).compareTo(rank(serverPriority, serverB));
-    if (serverCompare != 0) return serverCompare;
-
-    return a.index.compareTo(b.index);
+    final serverCompare = a.serverRank.compareTo(b.serverRank);
+    return serverCompare != 0 ? serverCompare : a.index.compareTo(b.index);
   });
 
   return List<StreamResult>.unmodifiable(ordered.map((entry) => entry.source));
@@ -221,8 +210,11 @@ StreamResult? selectPreferredStreamSource(
   return ordered.isEmpty ? null : ordered.first;
 }
 
+final _nonServerKeyCharacter = RegExp(r'[^A-Z0-9]');
+
 String streamServerPreferenceKey(String source) {
-  final normalized = source.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+  final upper = source.toUpperCase();
+  final normalized = upper.replaceAll(_nonServerKeyCharacter, '');
   if (normalized.startsWith('PD') || normalized.contains('PIXELDRAIN')) {
     return 'PD';
   }
@@ -235,32 +227,33 @@ String streamServerPreferenceKey(String source) {
     return 'ST';
   }
   if (normalized.startsWith('SF')) return 'SF';
-  return source.trim().toUpperCase();
+  return upper.trim();
 }
 
-String streamQualityPreferenceKey(String? quality) {
-  final score = _qualityScore(quality);
-  if (score > 0) return '${score}p';
+String streamQualityPreferenceKey(String? quality) =>
+    _streamQuality(quality).key;
 
+({String key, int score}) _streamQuality(String? quality) {
   final raw = quality?.trim() ?? '';
   final lower = raw.toLowerCase();
+  final score = _qualityScore(lower);
+  if (score > 0) return (key: '${score}p', score: score);
   if (raw.contains('متعدد') ||
       lower.contains('multi') ||
       lower.contains('auto')) {
-    return 'متعدد';
+    return (key: 'متعدد', score: score);
   }
-  return raw;
+  return (key: raw, score: score);
 }
 
-int _qualityScore(String? quality) {
-  final raw = quality?.trim();
-  if (raw == null || raw.isEmpty) return -1;
-  final lower = raw.toLowerCase();
-  final numeric = RegExp(r'(\d{3,4})').firstMatch(lower);
+final _qualityNumber = RegExp(r'(\d{3,4})');
+
+int _qualityScore(String lower) {
+  final numeric = _qualityNumber.firstMatch(lower);
   if (numeric != null) return int.tryParse(numeric.group(1)!) ?? -1;
   if (lower.contains('4k') || lower.contains('uhd')) return 2160;
   if (lower.contains('fhd') || lower.contains('fullhd')) return 1080;
-  if (lower == 'hd' || lower.contains('hd')) return 720;
+  if (lower.contains('hd')) return 720;
   if (lower.contains('sd')) return 480;
   return -1;
 }

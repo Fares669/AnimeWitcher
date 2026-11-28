@@ -10,6 +10,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../../core/domain/entity/manga.dart';
 import '../../../core/network/dio_client_provider.dart';
+import 'manga_image_signatures.dart';
 
 final mangaReaderImageActionsProvider = Provider<MangaReaderImageActions>(
   (ref) => MangaReaderImageActions(ref.watch(dioClientProvider)),
@@ -112,27 +113,9 @@ String mangaReaderImageExtension(Uint8List bytes) {
       bytes[3] == 0x47) {
     return '.png';
   }
-  if (bytes.length >= 3 &&
-      bytes[0] == 0xff &&
-      bytes[1] == 0xd8 &&
-      bytes[2] == 0xff) {
-    return '.jpg';
-  }
-  if (bytes.length >= 12 &&
-      bytes[0] == 0x52 &&
-      bytes[1] == 0x49 &&
-      bytes[2] == 0x46 &&
-      bytes[3] == 0x46 &&
-      bytes[8] == 0x57 &&
-      bytes[9] == 0x45 &&
-      bytes[10] == 0x42 &&
-      bytes[11] == 0x50) {
-    return '.webp';
-  }
-  if (bytes.length >= 6) {
-    final header = String.fromCharCodes(bytes.take(6));
-    if (header == 'GIF87a' || header == 'GIF89a') return '.gif';
-  }
+  if (hasJpegSignature(bytes)) return '.jpg';
+  if (hasWebPSignature(bytes)) return '.webp';
+  if (hasGifSignature(bytes)) return '.gif';
   return '.jpg';
 }
 

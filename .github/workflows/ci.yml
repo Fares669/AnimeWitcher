@@ -44,6 +44,15 @@ jobs:
       - name: Validate build configuration serialization
         run: python3 -m unittest discover -s test/tools -p 'test_*.py'
 
+      - name: Install Linux test prerequisites
+        # Flutter test builds native assets. cnativeapi resolves the GTK, X11
+        # and Xi headers via pkg-config; some tests also spawn cc or Ruby.
+        run: |
+          sudo apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30
+          sudo apt-get install -y --no-install-recommends \
+            clang build-essential pkg-config libgtk-3-dev libx11-dev libxi-dev ruby
+          pkg-config --print-errors --exists gtk+-3.0 x11 xi
+
       - name: Focused V2 tests
         # Keep the V2 architecture/reliability gate visible independently from
         # the repository-wide baseline so a known unrelated suite failure can
@@ -55,6 +64,24 @@ jobs:
         # harmless value satisfies its build-time configuration guard; it is
         # never sent to an external service by the test suite.
         run: flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+      - name: Validate opt-in Rust download digest on Linux x64
+        shell: bash
+        run: |
+          cargo test --locked --manifest-path native/download_sha256/Cargo.toml
+          cp pubspec.yaml "$RUNNER_TEMP/animewitcher-default-pubspec.yaml"
+          trap 'cp "$RUNNER_TEMP/animewitcher-default-pubspec.yaml" pubspec.yaml' EXIT
+          cat >> pubspec.yaml <<'YAML'
+
+          hooks:
+            user_defines:
+              animewitcher:
+                rust_download_sha256: true
+          YAML
+          flutter pub get --enforce-lockfile
+          flutter test --no-pub test/core/utils/download_file_digest_test.dart \
+            --dart-define=ANIMEWITCHER_RUST_DOWNLOAD_SHA256=true \
+            --dart-define=ANIMEWITCHER_EXPECT_RUST_DOWNLOAD_SHA256=true
 
   android-v2-build:
     if: >-

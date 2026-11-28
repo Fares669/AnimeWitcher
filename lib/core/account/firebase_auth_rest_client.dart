@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import 'animewitcher_account_config.dart';
 import 'animewitcher_account_models.dart';
+import 'animewitcher_account_payload.dart';
 
 class FirebaseAuthRestClient {
   FirebaseAuthRestClient({Dio? dio, String? apiKey})
@@ -116,7 +117,7 @@ class FirebaseAuthRestClient {
       displayName:
           _optionalString(payload['displayName']) ?? previous.displayName,
       photoUrl: _optionalString(payload['photoUrl']) ?? previous.photoUrl,
-      providerIds: _providerIds(payload['providerUserInfo']),
+      providerIds: readFirebaseProviderIds(payload['providerUserInfo']),
     );
     updated = _mergeUser(updated, await lookup(updated.idToken));
     return updated;
@@ -249,7 +250,7 @@ class FirebaseAuthRestClient {
     Map<String, dynamic> payload,
     AnimeWitcherSignInMethod method,
   ) {
-    final providerIds = _providerIds(payload['providerUserInfo']);
+    final providerIds = readFirebaseProviderIds(payload['providerUserInfo']);
     final session = AnimeWitcherSession(
       uid: (payload['localId'] ?? '').toString(),
       idToken: (payload['idToken'] ?? '').toString(),
@@ -278,7 +279,7 @@ class FirebaseAuthRestClient {
     AnimeWitcherSession session,
     Map<String, dynamic> user,
   ) {
-    final providerIds = _providerIds(user['providerUserInfo']);
+    final providerIds = readFirebaseProviderIds(user['providerUserInfo']);
     return session.copyWith(
       email: _optionalString(user['email']),
       displayName: _optionalString(user['displayName']),
@@ -302,17 +303,6 @@ String? _optionalString(dynamic raw) {
 int _intValue(dynamic raw, int fallback) {
   if (raw is num) return raw.toInt();
   return int.tryParse(raw?.toString() ?? '') ?? fallback;
-}
-
-List<String> _providerIds(dynamic raw) {
-  if (raw is! Iterable) return const <String>[];
-  final providers = <String>{};
-  for (final entry in raw) {
-    if (entry is! Map) continue;
-    final provider = _optionalString(entry['providerId']);
-    if (provider != null) providers.add(provider);
-  }
-  return providers.toList(growable: false);
 }
 
 AnimeWitcherAccountException _firebaseException(DioException error) {

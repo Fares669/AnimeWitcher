@@ -85,6 +85,46 @@ void main() {
     expect(target?.chapter.id, 'a');
   });
 
+  test('resume only queries progress until the target is definitive', () {
+    final observed = <String>[];
+    final progress = {'1': _progress('1', read: true), '2': _progress('2')};
+    final target = mangaResumeTarget(chapters, (chapter) {
+      observed.add(chapter.id);
+      return progress[chapter.id];
+    });
+
+    expect(observed, ['1', '2']);
+    expect(target?.chapter.id, '2');
+    expect(target?.kind, MangaResumeKind.resume);
+  });
+
+  test('equal chapter numbers still offer the unfinished chapter', () {
+    final firstEdition = _chapter('1a', 1);
+    final secondEdition = _chapter('1b', 1);
+    final editions = [_chapter('2', 2), firstEdition, secondEdition];
+    final progress = {'1a': _progress('1a', read: true), '1b': _progress('1b')};
+    final target = mangaResumeTarget(
+      editions,
+      (chapter) => progress[chapter.id],
+    );
+
+    expect(target?.chapter, same(secondEdition));
+    expect(target?.kind, MangaResumeKind.resume);
+  });
+
+  test('mixed numbering retains source order after a read special', () {
+    final special = _chapter('special', null);
+    final firstNumbered = _chapter('9', 9);
+    final target = mangaResumeTarget(
+      [special, firstNumbered, _chapter('1', 1)],
+      (chapter) =>
+          identical(chapter, special) ? _progress('special', read: true) : null,
+    );
+
+    expect(target?.chapter, same(firstNumbered));
+    expect(target?.kind, MangaResumeKind.next);
+  });
+
   test('no chapters, nothing to read', () {
     expect(mangaResumeTarget(const <MangaChapter>[], (_) => null), isNull);
   });

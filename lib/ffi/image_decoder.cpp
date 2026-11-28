@@ -85,53 +85,43 @@ static void find_margins_rgba(unsigned char* pixels, int w, int h, int* out_left
         return false;
     };
 
-    // Scan Top
-    int top = 0;
-    for (int y = 0; y < h; y++) {
-        int non_bg_count = 0;
+    // We need only enough non-background pixels to accept a row or column.
+    auto row_has_content = [&](int y) {
+        int remaining = w / 100 + 2;
         for (int x = 0; x < w; x++) {
-            if (!is_bg(x, y)) non_bg_count++;
+            if (!is_bg(x, y) && --remaining == 0) return true;
         }
-        if (non_bg_count > w / 100 + 1) {
+        return false;
+    };
+    auto column_has_content = [&](int x) {
+        int remaining = h / 100 + 2;
+        for (int y = 0; y < h; y++) {
+            if (!is_bg(x, y) && --remaining == 0) return true;
+        }
+        return false;
+    };
+
+    int top = 0, bottom = h, left = 0, right = w;
+    for (int y = 0; y < h; y++) {
+        if (row_has_content(y)) {
             top = y;
             break;
         }
     }
-
-    // Scan Bottom
-    int bottom = h;
     for (int y = h - 1; y >= 0; y--) {
-        int non_bg_count = 0;
-        for (int x = 0; x < w; x++) {
-            if (!is_bg(x, y)) non_bg_count++;
-        }
-        if (non_bg_count > w / 100 + 1) {
+        if (row_has_content(y)) {
             bottom = y + 1;
             break;
         }
     }
-
-    // Scan Left
-    int left = 0;
     for (int x = 0; x < w; x++) {
-        int non_bg_count = 0;
-        for (int y = 0; y < h; y++) {
-            if (!is_bg(x, y)) non_bg_count++;
-        }
-        if (non_bg_count > h / 100 + 1) {
+        if (column_has_content(x)) {
             left = x;
             break;
         }
     }
-
-    // Scan Right
-    int right = w;
     for (int x = w - 1; x >= 0; x--) {
-        int non_bg_count = 0;
-        for (int y = 0; y < h; y++) {
-            if (!is_bg(x, y)) non_bg_count++;
-        }
-        if (non_bg_count > h / 100 + 1) {
+        if (column_has_content(x)) {
             right = x + 1;
             break;
         }
@@ -162,7 +152,7 @@ struct BmpDecoderContext {
     bool is_top_down;
 };
 
-static BmpDecoderContext* init_bmp_decoder(const char* file_path, int* out_width, int* out_height) {
+static BmpDecoderContext* init_bmp_decoder(const char* file_path) {
     FILE* f = fopen(file_path, "rb");
     if (!f) return NULL;
 
@@ -195,14 +185,16 @@ static BmpDecoderContext* init_bmp_decoder(const char* file_path, int* out_width
     }
 
     BmpDecoderContext* ctx = (BmpDecoderContext*)malloc(sizeof(BmpDecoderContext));
+    if (!ctx) {
+        fclose(f);
+        return NULL;
+    }
     ctx->file = f;
     ctx->width = width;
     ctx->height = height;
     ctx->pixel_offset = pixel_offset;
     ctx->is_top_down = is_top_down;
 
-    *out_width = width;
-    *out_height = height;
     return ctx;
 }
 
@@ -284,6 +276,17 @@ struct WinNativeContext {
 typedef struct AImageDecoder AImageDecoder;
 #endif
 
+#if !defined(__APPLE__) && !defined(__ANDROID__) && !defined(_WIN32)
+typedef struct _GdkPixbuf GdkPixbuf;
+struct LinuxPixels {
+    unsigned char* owned_rgba;  // Non-GTK codec owns a malloc'd RGBA buffer.
+    GdkPixbuf* pixbuf;           // Otherwise the pixbuf owns the borrowed bytes.
+    const unsigned char* bytes;
+    size_t row_stride;
+    int channels;
+};
+#endif
+
 struct ImageDecoderContext {
     DecoderType type;
     int width;
@@ -312,52 +315,47 @@ struct ImageDecoderContext {
         WinNativeContext win_ctx;
         #endif
         #if !defined(__APPLE__) && !defined(__ANDROID__) && !defined(_WIN32)
-        struct {
-            unsigned char* full_rgba;  // Full decoded RGBA image held in RAM for tile extraction
-        } linux_ctx;
+        LinuxPixels linux_ctx;
         #endif
     };
 };
 
-static void perform_bmp_autocrop(ImageDecoderContext* ctx) {
-    int w = ctx->width;
-    int h = ctx->height;
-    int sample = 16;
-    int dest_w = w / sample;
-    int dest_h = h / sample;
+// All platform selectors try the same BMP fast path before their native codecs.
+static ImageDecoderContext* try_bmp_decoder(const char* file_path, bool crop_borders, int* out_width, int* out_height) {
+    BmpDecoderContext* bmp = init_bmp_decoder(file_path);
+    if (!bmp) return NULL;
 
-    if (dest_w <= 0 || dest_h <= 0) {
-        ctx->crop_left = 0;
-        ctx->crop_top = 0;
-        ctx->crop_width = w;
-        ctx->crop_height = h;
-        return;
+    ImageDecoderContext* ctx = (ImageDecoderContext*)malloc(sizeof(ImageDecoderContext));
+    if (!ctx) {
+        free_bmp_decoder(bmp);
+        return NULL;
     }
+    ctx->type = TYPE_BMP;
+    ctx->bmp_ctx = bmp;
+    ctx->width = ctx->crop_width = bmp->width;
+    ctx->height = ctx->crop_height = bmp->height;
+    ctx->crop_left = ctx->crop_top = 0;
 
-    unsigned char* temp_buf = (unsigned char*)malloc(dest_w * dest_h * 4);
-    if (!temp_buf) {
-        ctx->crop_left = 0;
-        ctx->crop_top = 0;
-        ctx->crop_width = w;
-        ctx->crop_height = h;
-        return;
+    const int sample = 16;
+    const int dest_w = ctx->width / sample;
+    const int dest_h = ctx->height / sample;
+    if (crop_borders && dest_w > 0 && dest_h > 0) {
+        unsigned char* temp_buf = (unsigned char*)malloc((size_t)dest_w * dest_h * 4);
+        if (temp_buf) {
+            if (decode_bmp_region(bmp, 0, 0, ctx->width, ctx->height, sample, temp_buf)) {
+                int left, top, right, bottom;
+                find_margins_rgba(temp_buf, dest_w, dest_h, &left, &top, &right, &bottom);
+                ctx->crop_left = left * sample;
+                ctx->crop_top = top * sample;
+                ctx->crop_width = (right - left) * sample;
+                ctx->crop_height = (bottom - top) * sample;
+            }
+            free(temp_buf);
+        }
     }
-
-    if (decode_bmp_region(ctx->bmp_ctx, 0, 0, w, h, sample, temp_buf)) {
-        int left = 0, top = 0, right = dest_w, bottom = dest_h;
-        find_margins_rgba(temp_buf, dest_w, dest_h, &left, &top, &right, &bottom);
-
-        ctx->crop_left = left * sample;
-        ctx->crop_top = top * sample;
-        ctx->crop_width = (right - left) * sample;
-        ctx->crop_height = (bottom - top) * sample;
-    } else {
-        ctx->crop_left = 0;
-        ctx->crop_top = 0;
-        ctx->crop_width = w;
-        ctx->crop_height = h;
-    }
-    free(temp_buf);
+    *out_width = ctx->crop_width;
+    *out_height = ctx->crop_height;
+    return ctx;
 }
 
 // ============================================================================
@@ -436,27 +434,7 @@ static void perform_apple_autocrop(ImageDecoderContext* ctx) {
 }
 
 ImageDecoderContext* init_decoder(const char* file_path, bool crop_borders, int* out_width, int* out_height) {
-    BmpDecoderContext* bmp = init_bmp_decoder(file_path, out_width, out_height);
-    if (bmp) {
-        ImageDecoderContext* ctx = (ImageDecoderContext*)malloc(sizeof(ImageDecoderContext));
-        ctx->type = TYPE_BMP;
-        ctx->width = *out_width;
-        ctx->height = *out_height;
-        ctx->bmp_ctx = bmp;
-        
-        if (crop_borders) {
-            perform_bmp_autocrop(ctx);
-        } else {
-            ctx->crop_left = 0;
-            ctx->crop_top = 0;
-            ctx->crop_width = ctx->width;
-            ctx->crop_height = ctx->height;
-        }
-
-        *out_width = ctx->crop_width;
-        *out_height = ctx->crop_height;
-        return ctx;
-    }
+    if (auto* bmp = try_bmp_decoder(file_path, crop_borders, out_width, out_height)) return bmp;
 
     CFStringRef path_str = CFStringCreateWithCString(NULL, file_path, kCFStringEncodingUTF8);
     if (!path_str) return NULL;
@@ -720,27 +698,7 @@ static void perform_android_autocrop(ImageDecoderContext* ctx) {
 }
 
 ImageDecoderContext* init_decoder(const char* file_path, bool crop_borders, int* out_width, int* out_height) {
-    BmpDecoderContext* bmp = init_bmp_decoder(file_path, out_width, out_height);
-    if (bmp) {
-        ImageDecoderContext* ctx = (ImageDecoderContext*)malloc(sizeof(ImageDecoderContext));
-        ctx->type = TYPE_BMP;
-        ctx->width = *out_width;
-        ctx->height = *out_height;
-        ctx->bmp_ctx = bmp;
-        
-        if (crop_borders) {
-            perform_bmp_autocrop(ctx);
-        } else {
-            ctx->crop_left = 0;
-            ctx->crop_top = 0;
-            ctx->crop_width = ctx->width;
-            ctx->crop_height = ctx->height;
-        }
-
-        *out_width = ctx->crop_width;
-        *out_height = ctx->crop_height;
-        return ctx;
-    }
+    if (auto* bmp = try_bmp_decoder(file_path, crop_borders, out_width, out_height)) return bmp;
 
     if (!load_imagedecoder_symbols()) {
         return NULL;
@@ -1019,27 +977,7 @@ static void perform_win_autocrop(ImageDecoderContext* ctx) {
 }
 
 ImageDecoderContext* init_decoder(const char* file_path, bool crop_borders, int* out_width, int* out_height) {
-    BmpDecoderContext* bmp = init_bmp_decoder(file_path, out_width, out_height);
-    if (bmp) {
-        ImageDecoderContext* ctx = (ImageDecoderContext*)malloc(sizeof(ImageDecoderContext));
-        ctx->type = TYPE_BMP;
-        ctx->width = *out_width;
-        ctx->height = *out_height;
-        ctx->bmp_ctx = bmp;
-        
-        if (crop_borders) {
-            perform_bmp_autocrop(ctx);
-        } else {
-            ctx->crop_left = 0;
-            ctx->crop_top = 0;
-            ctx->crop_width = ctx->width;
-            ctx->crop_height = ctx->height;
-        }
-
-        *out_width = ctx->crop_width;
-        *out_height = ctx->crop_height;
-        return ctx;
-    }
+    if (auto* bmp = try_bmp_decoder(file_path, crop_borders, out_width, out_height)) return bmp;
 
     HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
@@ -1204,6 +1142,73 @@ void free_decoder(ImageDecoderContext* ctx) {
 // Fallback / LINUX (libjpeg + libpng + BMP native support)
 // ============================================================================
 #if !defined(__APPLE__) && !defined(__ANDROID__) && !defined(_WIN32)
+
+#include <dlfcn.h>
+#include <limits.h>
+#include <pthread.h>
+
+// The Linux Flutter runner already requires GTK 3. Use its stable pixbuf ABI
+// for JPEG/PNG when the optional native codecs aren't available. No codec
+// headers, codec-specific ABI guesses, or extra Cairo/GTK initialization.
+typedef struct _GError GError;
+struct PixbufApi {
+    GdkPixbuf* (*open_file)(const char*, GError**);
+    const unsigned char* (*read_pixels)(const GdkPixbuf*);
+    int (*width)(const GdkPixbuf*);
+    int (*height)(const GdkPixbuf*);
+    int (*row_stride)(const GdkPixbuf*);
+    int (*channels)(const GdkPixbuf*);
+    void (*unref)(void*);
+};
+
+static PixbufApi pixbuf_api = {};
+static pthread_once_t pixbuf_api_once = PTHREAD_ONCE_INIT;
+
+static void load_pixbuf_api() {
+    void* handle = dlopen("libgdk_pixbuf-2.0.so.0", RTLD_NOW | RTLD_LOCAL);
+    if (!handle) return;
+    PixbufApi api = {
+        reinterpret_cast<decltype(pixbuf_api.open_file)>(dlsym(handle, "gdk_pixbuf_new_from_file")),
+        reinterpret_cast<decltype(pixbuf_api.read_pixels)>(dlsym(handle, "gdk_pixbuf_read_pixels")),
+        reinterpret_cast<decltype(pixbuf_api.width)>(dlsym(handle, "gdk_pixbuf_get_width")),
+        reinterpret_cast<decltype(pixbuf_api.height)>(dlsym(handle, "gdk_pixbuf_get_height")),
+        reinterpret_cast<decltype(pixbuf_api.row_stride)>(dlsym(handle, "gdk_pixbuf_get_rowstride")),
+        reinterpret_cast<decltype(pixbuf_api.channels)>(dlsym(handle, "gdk_pixbuf_get_n_channels")),
+        reinterpret_cast<decltype(pixbuf_api.unref)>(dlsym(handle, "g_object_unref"))
+    };
+    if (!api.open_file || !api.read_pixels || !api.width || !api.height ||
+        !api.row_stride || !api.channels || !api.unref) {
+        dlclose(handle);
+        return;
+    }
+    // Keep the library resident while the cached function pointers are in use.
+    pixbuf_api = api;
+}
+
+static LinuxPixels decode_with_pixbuf(const char* path, int* width, int* height) {
+    pthread_once(&pixbuf_api_once, load_pixbuf_api);
+    if (!pixbuf_api.open_file) return {};
+    auto* pixbuf = pixbuf_api.open_file(path, NULL);
+    if (!pixbuf) return {};
+    const int w = pixbuf_api.width(pixbuf);
+    const int h = pixbuf_api.height(pixbuf);
+    const int channels = pixbuf_api.channels(pixbuf);
+    const int stride = pixbuf_api.row_stride(pixbuf);
+    const auto* bytes = pixbuf_api.read_pixels(pixbuf);
+    if (!bytes || w <= 0 || h <= 0 || stride <= 0 ||
+        (channels != 3 && channels != 4) || w > stride / channels) {
+        pixbuf_api.unref(pixbuf);
+        return {};
+    }
+    *width = w;
+    *height = h;
+    return {NULL, pixbuf, bytes, (size_t)stride, channels};
+}
+
+static void free_linux_pixels(const LinuxPixels& pixels) {
+    if (pixels.pixbuf) pixbuf_api.unref(pixels.pixbuf);
+    else free(pixels.owned_rgba);
+}
 
 // ---------------------------------------------------------------------------
 // JPEG decoding via libjpeg (dynamically loaded via dlopen for cross-distro compatibility)
@@ -1693,36 +1698,22 @@ static unsigned char* decode_avif_rgba(const char* file_path, int* out_w, int* o
 // init_decoder() give a specific "you're missing libX-dev" message rather
 // than a generic one, no matter which combination of libjpeg/libpng/libavif
 // was found at configure time.
-static int linux_is_jpeg(const char* file_path) {
-    FILE* f = fopen(file_path, "rb");
-    if (!f) return 0;
-    unsigned char magic[2] = {0, 0};
-    fread(magic, 1, 2, f);
-    fclose(f);
-    return (magic[0] == 0xFF && magic[1] == 0xD8);
-}
+struct LinuxImageSignatures {
+    bool jpeg, png, avif;
+};
 
-static int linux_is_png(const char* file_path) {
+static LinuxImageSignatures linux_image_signatures(const char* file_path) {
     FILE* f = fopen(file_path, "rb");
-    if (!f) return 0;
-    unsigned char magic[8] = {0};
-    size_t n = fread(magic, 1, 8, f);
+    if (!f) return {};
+    unsigned char header[12];
+    const size_t n = fread(header, 1, sizeof(header), f);
     fclose(f);
-    return (n == 8 && memcmp(magic, "\x89PNG\r\n\x1a\n", 8) == 0);
-}
-
-static int linux_is_avif(const char* file_path) {
-    FILE* f = fopen(file_path, "rb");
-    if (!f) return 0;
-    unsigned char header[12] = {0};
-    size_t n = fread(header, 1, 12, f);
-    fclose(f);
-    if (n != 12) return 0;
-
-    // ISOBMFF: bytes 4-7 must be "ftyp"; the major brand (bytes 8-11) tells us
-    // whether this is an AVIF still image ("avif") or AVIF image sequence ("avis").
-    if (memcmp(header + 4, "ftyp", 4) != 0) return 0;
-    return (memcmp(header + 8, "avif", 4) == 0 || memcmp(header + 8, "avis", 4) == 0);
+    return {
+        n >= 2 && header[0] == 0xFF && header[1] == 0xD8,
+        n >= 8 && memcmp(header, "\x89PNG\r\n\x1a\n", 8) == 0,
+        n >= 12 && memcmp(header + 4, "ftyp", 4) == 0 &&
+            (memcmp(header + 8, "avif", 4) == 0 || memcmp(header + 8, "avis", 4) == 0),
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -1732,18 +1723,15 @@ static void perform_linux_autocrop(ImageDecoderContext* ctx) {
     int w = ctx->width;
     int h = ctx->height;
 
-    if (!ctx->linux_ctx.full_rgba) {
-        ctx->crop_left = 0; ctx->crop_top = 0;
-        ctx->crop_width = w; ctx->crop_height = h;
-        return;
-    }
-
-    // Downscale to 256-wide thumbnail using nearest-neighbour for fast analysis
-    int thumb_w = 256;
-    int thumb_h = (h * thumb_w) / w;
+    // Downscale without adding pixels to narrow pages. The margin finder indexes
+    // an RGBA thumbnail using int, so constrain the scratch image to that range.
+    int thumb_w = w < 256 ? w : 256;
+    int thumb_h = (int)((long long)h * thumb_w / w);
     if (thumb_h <= 0) thumb_h = 1;
 
-    unsigned char* temp = (unsigned char*)malloc((size_t)thumb_w * thumb_h * 4);
+    const auto& pixels = ctx->linux_ctx;
+    unsigned char* temp = thumb_h <= INT_MAX / (thumb_w * 4)
+        ? (unsigned char*)malloc((size_t)thumb_w * thumb_h * 4) : NULL;
     if (!temp) {
         ctx->crop_left = 0; ctx->crop_top = 0;
         ctx->crop_width = w; ctx->crop_height = h;
@@ -1751,12 +1739,14 @@ static void perform_linux_autocrop(ImageDecoderContext* ctx) {
     }
 
     for (int dy = 0; dy < thumb_h; dy++) {
-        int sy = (dy * h) / thumb_h;
+        int sy = (int)((long long)dy * h / thumb_h);
+        const auto* row = pixels.bytes + (size_t)sy * pixels.row_stride;
         for (int dx = 0; dx < thumb_w; dx++) {
-            int sx = (dx * w) / thumb_w;
-            const unsigned char* src = ctx->linux_ctx.full_rgba + ((size_t)sy * w + sx) * 4;
+            int sx = (int)((long long)dx * w / thumb_w);
+            const unsigned char* src = row + (size_t)sx * pixels.channels;
             unsigned char* dst = temp + ((size_t)dy * thumb_w + dx) * 4;
-            dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; dst[3] = src[3];
+            dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2];
+            dst[3] = pixels.channels == 4 ? src[3] : 255;
         }
     }
 
@@ -1764,34 +1754,17 @@ static void perform_linux_autocrop(ImageDecoderContext* ctx) {
     find_margins_rgba(temp, thumb_w, thumb_h, &left, &top, &right, &bottom);
     free(temp);
 
-    ctx->crop_left   = (left   * w) / thumb_w;
-    ctx->crop_top    = (top    * h) / thumb_h;
-    ctx->crop_width  = ((right  - left)   * w) / thumb_w;
-    ctx->crop_height = ((bottom - top)    * h) / thumb_h;
+    ctx->crop_left   = (int)((long long)left * w / thumb_w);
+    ctx->crop_top    = (int)((long long)top * h / thumb_h);
+    ctx->crop_width  = (int)((long long)(right - left) * w / thumb_w);
+    ctx->crop_height = (int)((long long)(bottom - top) * h / thumb_h);
 }
 
 // ---------------------------------------------------------------------------
 // Public API — init / decode_region / free
 // ---------------------------------------------------------------------------
 ImageDecoderContext* init_decoder(const char* file_path, bool crop_borders, int* out_width, int* out_height) {
-    // BMP is decoded natively without any external library
-    BmpDecoderContext* bmp = init_bmp_decoder(file_path, out_width, out_height);
-    if (bmp) {
-        ImageDecoderContext* ctx = (ImageDecoderContext*)malloc(sizeof(ImageDecoderContext));
-        ctx->type = TYPE_BMP;
-        ctx->width = *out_width;
-        ctx->height = *out_height;
-        ctx->bmp_ctx = bmp;
-        if (crop_borders) {
-            perform_bmp_autocrop(ctx);
-        } else {
-            ctx->crop_left = 0; ctx->crop_top = 0;
-            ctx->crop_width = ctx->width; ctx->crop_height = ctx->height;
-        }
-        *out_width  = ctx->crop_width;
-        *out_height = ctx->crop_height;
-        return ctx;
-    }
+    if (auto* bmp = try_bmp_decoder(file_path, crop_borders, out_width, out_height)) return bmp;
 
     // Try JPEG / PNG / AVIF via system libraries
     int w = 0, h = 0;
@@ -1800,44 +1773,38 @@ ImageDecoderContext* init_decoder(const char* file_path, bool crop_borders, int*
     // Sniffing is unconditional (cheap header check, no library dependency),
     // so we know the file's actual format even if we can't decode it — this
     // is what lets the error path below name the specific missing package.
-    int is_jpeg = linux_is_jpeg(file_path);
-    int is_png  = linux_is_png(file_path);
-    int is_avif = linux_is_avif(file_path);
+    const auto format = linux_image_signatures(file_path);
 
 #ifdef HAVE_LIBJPEG
-    if (!rgba && is_jpeg) {
+    if (!rgba && format.jpeg) {
         rgba = decode_jpeg_rgba(file_path, &w, &h);
     }
 #endif
 
 #ifdef HAVE_LIBPNG
-    if (!rgba && is_png) {
+    if (!rgba && format.png) {
         rgba = decode_png_rgba(file_path, &w, &h);
     }
 #endif
 
 #ifdef HAVE_LIBAVIF
-    if (!rgba && is_avif) {
+    if (!rgba && format.avif) {
         rgba = decode_avif_rgba(file_path, &w, &h);
     }
 #endif
 
-    if (!rgba) {
-        if (is_jpeg) {
-#ifdef HAVE_LIBJPEG
-            printf("ImageDecoder: Failed to decode JPEG file (it may be corrupt or truncated): %s\n", file_path);
-#else
-            printf("ImageDecoder: JPEG file detected, but libjpeg support was not compiled in."
-                   " Install libjpeg-dev, then rebuild the app to enable JPEG support.\n");
-#endif
-        } else if (is_png) {
-#ifdef HAVE_LIBPNG
-            printf("ImageDecoder: Failed to decode PNG file (it may be corrupt or truncated): %s\n", file_path);
-#else
-            printf("ImageDecoder: PNG file detected, but libpng support was not compiled in."
-                   " Install libpng-dev, then rebuild the app to enable PNG support.\n");
-#endif
-        } else if (is_avif) {
+    LinuxPixels pixels = {};
+    if (rgba) {
+        pixels = {rgba, NULL, rgba, (size_t)w * 4, 4};
+    } else if (format.jpeg || format.png) {
+        pixels = decode_with_pixbuf(file_path, &w, &h);
+    }
+
+    if (!pixels.bytes) {
+        if (format.jpeg || format.png) {
+            printf("ImageDecoder: Could not decode %s (invalid file or system codec unavailable): %s\n",
+                   format.jpeg ? "JPEG" : "PNG", file_path);
+        } else if (format.avif) {
 #ifdef HAVE_LIBAVIF
             printf("ImageDecoder: Failed to decode AVIF file (it may be corrupt or use an unsupported profile): %s\n", file_path);
 #else
@@ -1851,10 +1818,14 @@ ImageDecoderContext* init_decoder(const char* file_path, bool crop_borders, int*
     }
 
     ImageDecoderContext* ctx = (ImageDecoderContext*)malloc(sizeof(ImageDecoderContext));
+    if (!ctx) {
+        free_linux_pixels(pixels);
+        return NULL;
+    }
     ctx->type = TYPE_NATIVE;
     ctx->width  = w;
     ctx->height = h;
-    ctx->linux_ctx.full_rgba = rgba;
+    ctx->linux_ctx = pixels;
 
     if (crop_borders) {
         perform_linux_autocrop(ctx);
@@ -1870,7 +1841,9 @@ ImageDecoderContext* init_decoder(const char* file_path, bool crop_borders, int*
 
 bool decode_region(ImageDecoderContext* ctx, int left, int top, int right, int bottom,
                    int sample_size, unsigned char* out_rgba_buffer) {
-    if (!ctx || !out_rgba_buffer) return false;
+    if (!ctx || !out_rgba_buffer || sample_size <= 0 ||
+        left < 0 || top < 0 || right > ctx->crop_width || bottom > ctx->crop_height ||
+        right <= left || bottom <= top) return false;
 
     // Translate coordinates from cropped space to original image space
     int raw_left   = left   + ctx->crop_left;
@@ -1883,23 +1856,30 @@ bool decode_region(ImageDecoderContext* ctx, int left, int top, int right, int b
                                   sample_size, out_rgba_buffer);
     }
 
-    if (!ctx->linux_ctx.full_rgba) return false;
-
     int dest_w = (raw_right  - raw_left) / sample_size;
     int dest_h = (raw_bottom - raw_top)  / sample_size;
     if (dest_w <= 0 || dest_h <= 0) return false;
 
-    int src_w = ctx->width;
+    const auto& pixels = ctx->linux_ctx;
 
     for (int dy = 0; dy < dest_h; dy++) {
         int sy = raw_top + dy * sample_size;
-        const unsigned char* src_row = ctx->linux_ctx.full_rgba + (size_t)sy * src_w * 4;
+        const unsigned char* src_row = pixels.bytes + (size_t)sy * pixels.row_stride;
         unsigned char* dst_row = out_rgba_buffer + (size_t)dy * dest_w * 4;
         for (int dx = 0; dx < dest_w; dx++) {
             int sx = raw_left + dx * sample_size;
-            const unsigned char* src = src_row + sx * 4;
+            const unsigned char* src = src_row + (size_t)sx * pixels.channels;
             unsigned char* dst = dst_row + dx * 4;
-            dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; dst[3] = src[3];
+            const unsigned char alpha = pixels.channels == 4 ? src[3] : 255;
+            // Pixbuf uses straight alpha; Flutter's rgba8888 input is premultiplied.
+            if (pixels.pixbuf && alpha != 255) {
+                dst[0] = (unsigned char)((src[0] * alpha + 127) / 255);
+                dst[1] = (unsigned char)((src[1] * alpha + 127) / 255);
+                dst[2] = (unsigned char)((src[2] * alpha + 127) / 255);
+            } else {
+                dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2];
+            }
+            dst[3] = alpha;
         }
     }
 
@@ -1911,9 +1891,7 @@ void free_decoder(ImageDecoderContext* ctx) {
         if (ctx->type == TYPE_BMP) {
             free_bmp_decoder(ctx->bmp_ctx);
         } else {
-            if (ctx->linux_ctx.full_rgba) {
-                free(ctx->linux_ctx.full_rgba);
-            }
+            free_linux_pixels(ctx->linux_ctx);
         }
         free(ctx);
     }

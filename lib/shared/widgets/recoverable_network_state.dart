@@ -20,24 +20,16 @@ class RecoverableNetworkState extends StatefulWidget {
       _RecoverableNetworkStateState();
 }
 
-class _RecoverableNetworkStateState extends State<RecoverableNetworkState> {
-  bool _isRetrying = false;
-
-  Future<void> _retry() async {
-    if (_isRetrying) return;
-    setState(() => _isRetrying = true);
-    try {
-      await widget.onRetry();
-    } finally {
-      if (mounted) setState(() => _isRetrying = false);
-    }
-  }
+class _RecoverableNetworkStateState extends State<RecoverableNetworkState>
+    with NetworkRetryState<RecoverableNetworkState> {
+  @override
+  Future<void> Function() get onRetry => widget.onRetry;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return RefreshIndicator.adaptive(
-      onRefresh: _retry,
+      onRefresh: retry,
       child: LayoutBuilder(
         builder: (context, constraints) {
           return SingleChildScrollView(
@@ -88,24 +80,7 @@ class _RecoverableNetworkStateState extends State<RecoverableNetworkState> {
                         spacing: 12,
                         runSpacing: 12,
                         children: [
-                          FilledButton.icon(
-                            onPressed: _isRetrying ? null : _retry,
-                            icon: _isRetrying
-                                ? const SizedBox.square(
-                                    dimension: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : const Icon(Icons.refresh_rounded),
-                            label: Text(
-                              appText(
-                                context,
-                                english: 'Retry',
-                                arabic: 'إعادة المحاولة',
-                              ),
-                            ),
-                          ),
+                          buildRetryButton(context),
                           OutlinedButton.icon(
                             onPressed: widget.onOpenDownloads,
                             icon: const Icon(
@@ -129,6 +104,36 @@ class _RecoverableNetworkStateState extends State<RecoverableNetworkState> {
           );
         },
       ),
+    );
+  }
+}
+
+/// Shares the in-flight retry guard between the button and any refresh gesture.
+mixin NetworkRetryState<T extends StatefulWidget> on State<T> {
+  bool _isRetrying = false;
+
+  Future<void> Function() get onRetry;
+
+  Future<void> retry() async {
+    if (_isRetrying) return;
+    setState(() => _isRetrying = true);
+    try {
+      await onRetry();
+    } finally {
+      if (mounted) setState(() => _isRetrying = false);
+    }
+  }
+
+  Widget buildRetryButton(BuildContext context) {
+    return FilledButton.icon(
+      onPressed: _isRetrying ? null : retry,
+      icon: _isRetrying
+          ? const SizedBox.square(
+              dimension: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.refresh_rounded),
+      label: Text(appText(context, english: 'Retry', arabic: 'إعادة المحاولة')),
     );
   }
 }

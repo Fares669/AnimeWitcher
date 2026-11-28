@@ -2,7 +2,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 // [ScrollDirection] is defined in the rendering layer and is not re-exported
 // by material.dart, so it must be imported explicitly.
-import 'package:flutter/rendering.dart' show ScrollDirection;
+import 'package:flutter/rendering.dart' show ScrollCacheExtent, ScrollDirection;
 
 /// A horizontal list whose cards snap into view whenever the user lifts
 /// their finger.
@@ -49,6 +49,9 @@ class PagedRail extends StatefulWidget {
   /// bleed outside the viewport bounds.
   final Clip clipBehavior;
 
+  /// Logical pixels of items to build ahead of each viewport edge.
+  final double cacheExtent;
+
   /// Duration of the snap-back animation after a drag release.
   final Duration snapDuration;
 
@@ -66,6 +69,7 @@ class PagedRail extends StatefulWidget {
     this.physics = const BouncingScrollPhysics(),
     this.reverse = false,
     this.clipBehavior = Clip.hardEdge,
+    this.cacheExtent = 1200,
     this.snapDuration = const Duration(milliseconds: 280),
     this.snapCurve = Curves.easeOutCubic,
   });
@@ -76,7 +80,6 @@ class PagedRail extends StatefulWidget {
 
 class _PagedRailState extends State<PagedRail> {
   late ScrollController _controller;
-  bool _ownsController = false;
 
   /// True while a programmatic snap-back animation is in flight. Without
   /// this flag, the snap-back would trigger another snap-back (because
@@ -88,7 +91,6 @@ class _PagedRailState extends State<PagedRail> {
   @override
   void initState() {
     super.initState();
-    _ownsController = widget.controller == null;
     _controller = widget.controller ?? ScrollController();
   }
 
@@ -96,19 +98,14 @@ class _PagedRailState extends State<PagedRail> {
   void didUpdateWidget(PagedRail oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.controller != oldWidget.controller) {
-      if (_ownsController) _controller.dispose();
-      _ownerReset(newController: widget.controller ?? ScrollController());
+      if (oldWidget.controller == null) _controller.dispose();
+      _controller = widget.controller ?? ScrollController();
     }
-  }
-
-  void _ownerReset({required ScrollController newController}) {
-    _controller = newController;
-    _ownsController = widget.controller == null;
   }
 
   @override
   void dispose() {
-    if (_ownsController) _controller.dispose();
+    if (widget.controller == null) _controller.dispose();
     super.dispose();
   }
 
@@ -121,18 +118,7 @@ class _PagedRailState extends State<PagedRail> {
     final px = position.pixels;
 
     final stride = widget.itemExtent;
-    final pageIdx = px / stride;
-    final rounded = pageIdx.roundToDouble();
-    final frac = pageIdx - rounded;
-
-    final double targetIdx;
-    if (frac.abs() > 0.5) {
-      targetIdx = frac.isNegative ? rounded - 1 : rounded + 1;
-    } else {
-      targetIdx = rounded;
-    }
-
-    final rawPx = targetIdx * stride;
+    final rawPx = (px / stride).roundToDouble() * stride;
     final clamped = rawPx.clamp(
       position.minScrollExtent,
       position.maxScrollExtent,
@@ -202,10 +188,6 @@ class _PagedRailState extends State<PagedRail> {
     });
   }
 
-  /// Cards this far past either edge are built, so their posters are on
-  /// their way before the rail is scrolled to them.
-  static const double _aheadExtent = 1200;
-
   @override
   Widget build(BuildContext context) {
     final Widget listView = widget.separatorBuilder != null
@@ -218,7 +200,7 @@ class _PagedRailState extends State<PagedRail> {
             physics: widget.physics,
             reverse: widget.reverse,
             clipBehavior: widget.clipBehavior,
-            cacheExtent: _aheadExtent,
+            scrollCacheExtent: ScrollCacheExtent.pixels(widget.cacheExtent),
             itemBuilder: widget.itemBuilder,
           )
         : ListView.builder(
@@ -230,7 +212,7 @@ class _PagedRailState extends State<PagedRail> {
             physics: widget.physics,
             reverse: widget.reverse,
             clipBehavior: widget.clipBehavior,
-            cacheExtent: _aheadExtent,
+            scrollCacheExtent: ScrollCacheExtent.pixels(widget.cacheExtent),
             itemBuilder: widget.itemBuilder,
           );
 

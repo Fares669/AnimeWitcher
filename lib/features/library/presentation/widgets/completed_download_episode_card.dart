@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -15,6 +16,8 @@ import 'package:animewitcher/features/details/presentation/widgets/episode_actio
 import 'package:animewitcher/features/library/presentation/history_provider.dart'
     show watchHistoryProvider;
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+import 'package:animewitcher/shared/widgets/episode_filler_badge.dart';
+import 'package:animewitcher/shared/widgets/episode_watch_presentation.dart';
 import 'package:animewitcher/shared/widgets/thumbnail_error_placeholder.dart';
 
 import '../download_episode_artwork.dart';
@@ -49,12 +52,19 @@ class CompletedDownloadEpisodeCard extends ConsumerStatefulWidget {
 
 class _CompletedDownloadEpisodeCardState
     extends ConsumerState<CompletedDownloadEpisodeCard> {
+  static const _thumbnailWidth = 140.0;
+  static const _localArtworkGrace = Duration(milliseconds: 60);
+
   late Future<File?> _artwork;
+  Timer? _artworkGraceTimer;
+  String? _episodePosterUrl;
+  String? _thumbnailFallbackUrl;
+  bool _mayShowPendingFallback = false;
 
   @override
   void initState() {
     super.initState();
-    _artwork = _loadArtwork();
+    _loadArtwork();
   }
 
   @override
@@ -67,24 +77,68 @@ class _CompletedDownloadEpisodeCardState
         oldWidget.item.episode?.posterUrl != widget.item.episode?.posterUrl ||
         oldWidget.item.item.bannerUrl != widget.item.item.bannerUrl ||
         oldWidget.item.item.posterUrl != widget.item.item.posterUrl) {
-      _artwork = _loadArtwork();
+      _loadArtwork();
     }
   }
 
-  Future<File?> _loadArtwork() => ensureDownloadedEpisodeArtwork(
-    taskId: widget.item.id,
-    logicalId: widget.item.logicalId,
-    episode: widget.item.episode,
-    item: widget.item.item,
-    allowMetadataBackfill: widget.item.artworkMetadataVerified,
-  );
+  @override
+  void dispose() {
+    _artworkGraceTimer?.cancel();
+    super.dispose();
+  }
 
-  _EpisodeWatchPresentation _watchPresentation(
+  void _loadArtwork() {
+    _artworkGraceTimer?.cancel();
+    _artworkGraceTimer = null;
+    _mayShowPendingFallback = false;
+    final item = widget.item;
+    final episodePosterUrl = _episodePosterUrl = AppImageFallbacks.optional(
+      item.episode?.posterUrl,
+    );
+    _thumbnailFallbackUrl =
+        episodePosterUrl ??
+        AppImageFallbacks.episode(
+          bannerUrl: item.item.bannerUrl,
+          posterUrl: item.item.posterUrl,
+        );
+    final artwork = _artwork = ensureDownloadedEpisodeArtwork(
+      taskId: item.id,
+      logicalId: item.logicalId,
+      episode: item.episode,
+      item: item.item,
+      allowMetadataBackfill: item.artworkMetadataVerified,
+    );
+
+    if (_thumbnailFallbackUrl == null) return;
+    // Prefer the owned offline thumbnail without opening another image
+    // stream. A miss releases the fallback immediately; slow storage only
+    // holds it for the same grace period as the completed-group poster.
+    _artworkGraceTimer = Timer(_localArtworkGrace, () {
+      _artworkGraceTimer = null;
+      if (mounted) setState(() => _mayShowPendingFallback = true);
+    });
+    void cancelGrace() {
+      if (!identical(_artwork, artwork)) return;
+      _artworkGraceTimer?.cancel();
+      _artworkGraceTimer = null;
+    }
+
+    unawaited(
+      artwork.then<void>(
+        (_) => cancelGrace(),
+        onError: (Object _, StackTrace _) {
+          cancelGrace();
+        },
+      ),
+    );
+  }
+
+  EpisodeWatchPresentation _watchPresentation(
     BuildContext context,
     HistoryItem? historyItem,
   ) {
     final episode = widget.item.episode;
-    if (episode == null) return const _EpisodeWatchPresentation();
+    if (episode == null) return noEpisodeWatch;
 
     HistoryRepository? historyRepo;
     EpisodeWatchRepository? episodeWatchRepo;
@@ -106,68 +160,35 @@ class _CompletedDownloadEpisodeCardState
       episodeWatchRepo = ref.watch(episodeWatchRepositoryProvider);
     } catch (_) {}
 
-    if (historyRepo == null) return const _EpisodeWatchPresentation();
+    if (historyRepo == null) return noEpisodeWatch;
 
-    final epPos = historyPositionForItem(historyRepo,
-      widget.item.item,
-      episodeUrl: episode.url,
-      season: episode.season,
-      episode: episode.episode,
-    );
-    final epDur = historyDurationForItem(historyRepo,
-      widget.item.item,
-      episodeUrl: episode.url,
-      season: episode.season,
-      episode: episode.episode,
-    );
-    final progress = epDur > 0 ? (epPos / epDur).clamp(0.0, 1.0) : 0.0;
+    final history = episode.historyProgress(historyRepo, widget.item.item);
+    final progress = history.progress;
 
     final explicitWatchState = episodeWatchRepo == null ? null : episodeExplicitStateFor(
       episodeWatchRepo, widget.item.item, episode,
     );
     final isWatched =
         (episodeWatchRepo == null ? null : episodeIsWatchedFor(episodeWatchRepo, widget.item.item, episode)) ??
-        (epDur > 0 && progress >= 0.90);
-    final displayedProgress = isWatched ? 1.0 : progress;
-
-    final l10n = AppLocalizations.of(context)!;
-    String? statusBadge;
-    if (isWatched) {
-      statusBadge = l10n.watched.toUpperCase();
-    } else if (progress > 0.02) {
-      statusBadge = l10n.watching.toUpperCase();
-    }
-
-    if (historyItem != null &&
-        statusBadge == null &&
-        explicitWatchState != false) {
-      final hSeason = historyItem.season ?? 1;
-      final hEpisode = historyItem.episode ?? 1;
-      if (episode.season == hSeason && episode.episode == hEpisode) {
-        statusBadge = l10n.lastWatched.toUpperCase();
-      }
-    }
-
-    return _EpisodeWatchPresentation(
+        (history.duration > 0 && progress >= 0.90);
+    return episode.watchPresentation(
+      AppLocalizations.of(context)!,
+      historyItem,
+      progress,
       isWatched: isWatched,
-      progress: displayedProgress,
-      statusBadge: statusBadge,
+      explicitWatchState: explicitWatchState,
     );
   }
 
   HistoryItem? _historyItemForSeries() {
-    List<HistoryItem> history = const <HistoryItem>[];
     try {
       ref.watch(watchHistoryProvider);
-      history = historyForItem(ref.watch(historyRepositoryProvider), widget.item.item);
+      return ref.watch(historyRepositoryProvider).getWatchHistoryItem(
+        widget.item.item,
+      );
     } catch (_) {
       return null;
     }
-    for (final item in history) {
-      if (item.item.url == widget.item.item.url &&
-          sameDownloadProvider(item.item, widget.item.item)) return item;
-    }
-    return null;
   }
 
   @override
@@ -256,7 +277,7 @@ class _CompletedDownloadEpisodeCardState
                               ),
                             if (episode?.isFiller == true) ...[
                               const SizedBox(width: 8),
-                              _buildFillerBadge(),
+                              buildEpisodeFillerBadge(),
                             ],
                           ],
                         ),
@@ -330,38 +351,14 @@ class _CompletedDownloadEpisodeCardState
     );
   }
 
-  Widget _buildFillerBadge() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(
-        color: const Color(0xFFD32F2F),
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Text(
-        'فلر',
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 10,
-          fontWeight: FontWeight.w800,
-        ),
-      ),
-    );
-  }
-
   Widget _buildThumbnail(
     BuildContext context,
     double progress,
     String? statusBadge, {
     required bool isWatched,
   }) {
-    final episode = widget.item.episode;
-    final episodePosterUrl = AppImageFallbacks.optional(episode?.posterUrl);
-    final fallbackUrl =
-        episodePosterUrl ??
-        AppImageFallbacks.episode(
-          bannerUrl: widget.item.item.bannerUrl,
-          posterUrl: widget.item.item.posterUrl,
-        );
+    final episodePosterUrl = _episodePosterUrl;
+    final fallbackUrl = _thumbnailFallbackUrl;
     final placeholderColor = Theme.of(context)
         .colorScheme
         .surfaceContainerHighest;
@@ -371,7 +368,7 @@ class _CompletedDownloadEpisodeCardState
         ClipRRect(
           borderRadius: BorderRadius.circular(8),
           child: SizedBox(
-            width: 140,
+            width: _thumbnailWidth,
             child: AspectRatio(
               aspectRatio: 16 / 9,
               child: FutureBuilder<File?>(
@@ -380,7 +377,10 @@ class _CompletedDownloadEpisodeCardState
                   final local = snapshot.data;
                   if (local != null) {
                     return ArtworkDecode(
-                      paintedWidth: 140,
+                      // Retain the saved original on disk, but size its
+                      // in-memory decode to the fixed episode tile.
+                      paintedWidth: _thumbnailWidth,
+                      sizeHighQualityToDisplay: true,
                       builder: (context, decodeWidth) => Image.file(
                         local,
                         fit: BoxFit.cover,
@@ -395,6 +395,11 @@ class _CompletedDownloadEpisodeCardState
                         ),
                       ),
                     );
+                  }
+                  if (fallbackUrl != null &&
+                      !_mayShowPendingFallback &&
+                      snapshot.connectionState != ConnectionState.done) {
+                    return ColoredBox(color: placeholderColor);
                   }
                   return _networkThumbnail(
                     fallbackUrl,
@@ -466,7 +471,8 @@ class _CompletedDownloadEpisodeCardState
       return const ThumbnailErrorPlaceholder();
     }
     return ArtworkDecode(
-      paintedWidth: 140,
+      paintedWidth: _thumbnailWidth,
+      sizeHighQualityToDisplay: true,
       builder: (context, decodeWidth) => CachedNetworkImage(
         imageUrl: imageUrl,
         fit: BoxFit.cover,
@@ -484,16 +490,4 @@ class _CompletedDownloadEpisodeCardState
       ),
     );
   }
-}
-
-class _EpisodeWatchPresentation {
-  const _EpisodeWatchPresentation({
-    this.isWatched = false,
-    this.progress = 0,
-    this.statusBadge,
-  });
-
-  final bool isWatched;
-  final double progress;
-  final String? statusBadge;
 }

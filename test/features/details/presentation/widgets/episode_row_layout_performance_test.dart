@@ -37,28 +37,38 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     var intrinsicCalls = 0;
+    var configurations = 0;
     await tester.pumpWidget(
       MaterialApp(
         home: CustomScrollView(
           slivers: [
             SliverEpisodeCardGrid(
-              children: [
-                for (var i = 0; i < 1000; i++) _Probe(() => intrinsicCalls++),
-              ],
+              itemCount: 1000,
+              itemBuilder: (_, _) {
+                configurations++;
+                return _Probe(() => intrinsicCalls++);
+              },
             ),
           ],
         ),
       ),
     );
-    expect(find.byType(_Probe).evaluate().length, lessThan(30));
+    final mounted = find.byType(_Probe).evaluate().length;
+    expect(mounted, lessThan(30));
+    expect(configurations, inInclusiveRange(mounted, 30));
+    final initialConfigurations = configurations;
     expect(intrinsicCalls, 0);
     await tester.drag(find.byType(CustomScrollView), const Offset(0, -600));
     await tester.pump();
+    expect(configurations, greaterThan(initialConfigurations));
+    expect(configurations, lessThan(60));
     expect(intrinsicCalls, 0);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('landscape rows retain equal-height cards', (tester) async {
+  testWidgets('landscape rows retain equal height with an odd final card', (
+    tester,
+  ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
     tester.view.physicalSize = const Size(800, 400);
@@ -70,7 +80,9 @@ void main() {
         home: CustomScrollView(
           slivers: [
             SliverEpisodeCardGrid(
-              children: [_Probe(() {}, height: 80), _Probe(() {}, height: 120)],
+              itemCount: 3,
+              itemBuilder: (_, index) =>
+                  _Probe(() {}, height: const [80.0, 120.0, 64.0][index]),
             ),
           ],
         ),
@@ -79,7 +91,8 @@ void main() {
     final boxes = tester
         .renderObjectList<RenderBox>(find.byType(_Probe))
         .toList();
-    expect(boxes.map((box) => box.size.height), [120, 120]);
+    expect(boxes.map((box) => box.size.height), [120, 120, 64]);
+    expect(boxes.last.size.width, closeTo(boxes.first.size.width, 1));
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
   });

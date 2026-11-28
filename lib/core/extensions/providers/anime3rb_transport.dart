@@ -120,7 +120,11 @@ class Anime3rbHttpResponse {
     return lower.contains('just a moment') ||
         lower.contains('challenges.cloudflare.com') ||
         lower.contains('cf-browser-verification') ||
-        lower.contains('cf-turnstile');
+        lower.contains('cf-turnstile') ||
+        lower.contains('performing security verification') ||
+        lower.contains('verifies you are not a bot') ||
+        lower.contains('/cdn-cgi/challenge-platform/') ||
+        lower.contains('_cf_chl_opt');
   }
 
   bool get hasMediaContent {
@@ -196,6 +200,35 @@ typedef Anime3rbChallengeResolver =
       Map<String, String> currentCookies,
     });
 
+typedef Anime3rbWebViewFetcher =
+    Future<Anime3rbHttpResponse?> Function(
+      Uri uri, {
+      String method,
+      Map<String, String> headers,
+      Object? body,
+      bool followRedirects,
+    });
+
+/// Normalizes a native embedded WebView User-Agent into its authentic browser
+/// counterpart without faking the OS or rendering engine.
+///
+/// - On Android `WebView`, strips the `; wv` and `Version/4.0 ` markers while
+///   preserving the exact device model and installed `Chrome/XXX` version.
+/// - On iOS `WKWebView`, preserves the genuine system User-Agent untouched so
+///   Safari version tokens never contradict frozen iOS 26 OS tokens.
+String? normalizeAnime3rbWebViewUserAgent(String? raw) {
+  if (raw == null) return null;
+  var ua = raw.trim();
+  if (ua.isEmpty) return null;
+
+  if (ua.contains('; wv)')) {
+    ua = ua.replaceFirst('; wv)', ')').replaceFirst('Version/4.0 ', '');
+    return ua;
+  }
+
+  return ua;
+}
+
 typedef Anime3rbSessionHeaderProvider = Future<Map<String, String>> Function(
   Uri uri,
 );
@@ -207,6 +240,7 @@ class DioAnime3rbTransport implements Anime3rbTransport {
     Dio? dio,
     this._sessionHeaders,
     Anime3rbChallengeResolver? challengeResolver,
+    this._webViewFetcher,
   }) : _challengeResolver = challengeResolver,
        _dio =
            dio ??
@@ -228,9 +262,20 @@ class DioAnime3rbTransport implements Anime3rbTransport {
   final bool _ownsDio;
   final Anime3rbSessionHeaderProvider? _sessionHeaders;
   final Anime3rbChallengeResolver? _challengeResolver;
+  final Anime3rbWebViewFetcher? _webViewFetcher;
   final Map<String, Map<String, String>> _cookiesByDomain = {};
   final Map<String, String?> _lastAuthCookies = {};
+  final Map<String, Future<({Uri uri, Anime3rbChallengeSolution? solution})>>
+  _inFlightChallenges = {};
+  final Map<String, DateTime> _challengeDismissedUntil = {};
+  final Map<String, DateTime> _preferWebViewFetchUntil = {};
+  final Map<String, int> _challengeGenerationByDomain = {};
   String? _overrideUserAgent;
+
+  int _challengeGeneration(Uri uri) {
+    final domainKey = _cookieDomain(uri) ?? uri.host.toLowerCase();
+    return _challengeGenerationByDomain[domainKey] ?? 0;
+  }
 
   String get effectiveUserAgent =>
       (_overrideUserAgent != null && _overrideUserAgent!.isNotEmpty)
@@ -238,6 +283,78 @@ class DioAnime3rbTransport implements Anime3rbTransport {
       : kDefaultBrowserUserAgent;
 
   static const _hostRequestTimeout = Duration(seconds: 10);
+  static const _dismissCooldown = Duration(seconds: 20);
+  static const _webViewFetchPreferenceTtl = Duration(minutes: 20);
+
+  /// Clears any temporary cooldown set after a dismissed Cloudflare prompt so
+  /// an explicit user retry can trigger verification again immediately.
+  void resetChallengeCooldown() {
+    _challengeDismissedUntil.clear();
+    _preferWebViewFetchUntil.clear();
+  }
+
+  bool _shouldPreferWebViewFetch(Uri uri) {
+    if (_webViewFetcher == null) return false;
+    final domainKey = _cookieDomain(uri);
+    if (domainKey == null) return false;
+    final until = _preferWebViewFetchUntil[domainKey];
+    if (until == null) return false;
+    if (DateTime.now().isAfter(until)) {
+      _preferWebViewFetchUntil.remove(domainKey);
+      return false;
+    }
+    return true;
+  }
+
+  void _markPreferWebViewFetch(Uri uri) {
+    if (_webViewFetcher == null) return;
+    final domainKey = _cookieDomain(uri);
+    if (domainKey == null) return;
+    _preferWebViewFetchUntil[domainKey] = DateTime.now().add(
+      _webViewFetchPreferenceTtl,
+    );
+  }
+
+  Future<Anime3rbHttpResponse?> _tryWebViewFetch(
+    Uri uri, {
+    required String method,
+    required Map<String, String> headers,
+    Object? body,
+    required bool followRedirects,
+    required bool inspectMedia,
+    required String operation,
+  }) async {
+    final fetcher = _webViewFetcher;
+    if (fetcher == null ||
+        !followRedirects ||
+        inspectMedia ||
+        (body != null && body is! String)) {
+      return null;
+    }
+    final elapsed = Stopwatch()..start();
+    final response = await fetcher(
+      uri,
+      method: method,
+      headers: headers,
+      body: body,
+      followRedirects: followRedirects,
+    );
+    if (response == null) return null;
+    _absorbSetCookies(uri, response.headers);
+    recordAnime3rbDiagnostic(
+      '${operation}_wv',
+      status: response.statusCode >= 400 ? 'http_error' : 'ok',
+      durationMs: elapsed.elapsedMilliseconds,
+      reason: response.statusCode >= 400 ? 'http_${response.statusCode}' : null,
+    );
+    if (response.isCloudflareChallenge) {
+      final domainKey = _cookieDomain(uri);
+      if (domainKey != null) {
+        _preferWebViewFetchUntil.remove(domainKey);
+      }
+    }
+    return response;
+  }
 
   static String? _cookieDomain(Uri uri) {
     final host = uri.host.toLowerCase();
@@ -389,7 +506,8 @@ class DioAnime3rbTransport implements Anime3rbTransport {
     }
   }
 
-  Future<Anime3rbChallengeSolution?> _resolveChallengeIfPossible(
+  Future<({Uri uri, Anime3rbChallengeSolution solution})?>
+  _resolveChallengeIfPossible(
     Uri uri,
     Anime3rbHttpResponse blockedResponse,
     CancelToken? cancelToken,
@@ -399,19 +517,73 @@ class DioAnime3rbTransport implements Anime3rbTransport {
         cancelToken?.isCancelled == true) {
       return null;
     }
+    final domainKey = _cookieDomain(uri) ?? uri.host.toLowerCase();
+    final outcome = await _getOrStartChallenge(uri, domainKey);
+    final solution = outcome.solution;
+    return solution == null ? null : (uri: outcome.uri, solution: solution);
+  }
+
+  Future<({Uri uri, Anime3rbChallengeSolution? solution})>
+  _getOrStartChallenge(Uri uri, String domainKey) {
+    final existing = _inFlightChallenges[domainKey];
+    if (existing != null) return existing;
+
+    final dismissedUntil = _challengeDismissedUntil[domainKey];
+    if (dismissedUntil != null && DateTime.now().isBefore(dismissedUntil)) {
+      return Future<({Uri uri, Anime3rbChallengeSolution? solution})>.value((
+        uri: uri,
+        solution: null,
+      ));
+    }
+
+    late final Future<({Uri uri, Anime3rbChallengeSolution? solution})> future;
+    future = _runChallenge(uri, domainKey).whenComplete(() {
+      if (identical(_inFlightChallenges[domainKey], future)) {
+        _inFlightChallenges.remove(domainKey);
+      }
+    });
+    _inFlightChallenges[domainKey] = future;
+    return future;
+  }
+
+  Future<({Uri uri, Anime3rbChallengeSolution? solution})> _runChallenge(
+    Uri uri,
+    String domainKey,
+  ) async {
     final domain = _cookieDomain(uri);
     final current = domain == null
         ? const <String, String>{}
         : Map<String, String>.unmodifiable(
             _cookiesByDomain[domain] ?? const <String, String>{},
           );
-    final solution = await _challengeResolver(uri, currentCookies: current);
-    if (solution == null) return null;
+    final solution = await _challengeResolver!(uri, currentCookies: current);
+    if (solution == null) {
+      _challengeDismissedUntil[domainKey] = DateTime.now().add(
+        _dismissCooldown,
+      );
+      return (uri: uri, solution: null);
+    }
+    _challengeDismissedUntil.remove(domainKey);
     absorbCookies(uri, solution.cookies);
     if (solution.userAgent != null && solution.userAgent!.trim().isNotEmpty) {
       _overrideUserAgent = solution.userAgent!.trim();
     }
-    return solution;
+    _challengeGenerationByDomain[domainKey] =
+        (_challengeGenerationByDomain[domainKey] ?? 0) + 1;
+    return (uri: uri, solution: solution);
+  }
+
+  Future<Anime3rbChallengeSolution?> _fetchSpecificUriAfterClearance(
+    Uri uri,
+  ) async {
+    if (_challengeResolver == null) return null;
+    final domainKey = _cookieDomain(uri) ?? uri.host.toLowerCase();
+    final dismissedUntil = _challengeDismissedUntil[domainKey];
+    if (dismissedUntil != null && DateTime.now().isBefore(dismissedUntil)) {
+      return null;
+    }
+    final outcome = await _runChallenge(uri, domainKey);
+    return outcome.solution;
   }
 
   ({CancelToken? token, Timer? timer}) _requestCancellation(
@@ -450,6 +622,21 @@ class DioAnime3rbTransport implements Anime3rbTransport {
     CancelToken? cancelToken,
     String operation = 'get',
   }) async {
+    if (_shouldPreferWebViewFetch(uri) && cancelToken?.isCancelled != true) {
+      final wvResp = await _tryWebViewFetch(
+        uri,
+        method: 'GET',
+        headers: headers,
+        followRedirects: followRedirects,
+        inspectMedia: inspectMedia,
+        operation: operation,
+      );
+      if (wvResp != null && !wvResp.isCloudflareChallenge) {
+        return wvResp;
+      }
+    }
+
+    final genBefore = _challengeGeneration(uri);
     final first = await _getOnce(
       uri,
       headers: headers,
@@ -458,8 +645,65 @@ class DioAnime3rbTransport implements Anime3rbTransport {
       cancelToken: cancelToken,
       operation: operation,
     );
-    final solution = await _resolveChallengeIfPossible(uri, first, cancelToken);
-    if (solution == null) return first;
+    // If another request cleared Cloudflare on this domain while `first` was
+    // already in flight, reuse that clearance directly instead of opening a
+    // second WebView prompt.
+    if (first.isCloudflareChallenge &&
+        _challengeGeneration(uri) != genBefore &&
+        cancelToken?.isCancelled != true) {
+      if (_shouldPreferWebViewFetch(uri)) {
+        final wvResp = await _tryWebViewFetch(
+          uri,
+          method: 'GET',
+          headers: headers,
+          followRedirects: followRedirects,
+          inspectMedia: inspectMedia,
+          operation: operation,
+        );
+        if (wvResp != null && !wvResp.isCloudflareChallenge) {
+          return wvResp;
+        }
+      }
+      final retried = await _getOnce(
+        uri,
+        headers: headers,
+        followRedirects: followRedirects,
+        inspectMedia: inspectMedia,
+        cancelToken: cancelToken,
+        operation: '${operation}_cf_retry',
+      );
+      if (!retried.isCloudflareChallenge) {
+        return retried;
+      }
+      if (followRedirects && !inspectMedia) {
+        _markPreferWebViewFetch(uri);
+        final viaParked = await _tryWebViewFetch(
+          uri,
+          method: 'GET',
+          headers: headers,
+          followRedirects: followRedirects,
+          inspectMedia: inspectMedia,
+          operation: operation,
+        );
+        if (viaParked != null && !viaParked.isCloudflareChallenge) {
+          return viaParked;
+        }
+        final direct = await _fetchSpecificUriAfterClearance(uri);
+        if (direct?.html != null && direct!.html!.trim().isNotEmpty) {
+          final webViewResp = Anime3rbHttpResponse(
+            statusCode: 200,
+            body: direct.html!,
+            finalUri: uri,
+          );
+          if (!webViewResp.isCloudflareChallenge) {
+            return webViewResp;
+          }
+        }
+      }
+      return retried;
+    }
+    final resolved = await _resolveChallengeIfPossible(uri, first, cancelToken);
+    if (resolved == null) return first;
 
     final retried = await _getOnce(
       uri,
@@ -469,18 +713,47 @@ class DioAnime3rbTransport implements Anime3rbTransport {
       cancelToken: cancelToken,
       operation: '${operation}_cf_retry',
     );
-    if (retried.isCloudflareChallenge &&
-        followRedirects &&
-        !inspectMedia &&
-        solution.html != null &&
-        solution.html!.trim().isNotEmpty) {
-      final webViewResp = Anime3rbHttpResponse(
-        statusCode: 200,
-        body: solution.html!,
-        finalUri: uri,
-      );
-      if (!webViewResp.isCloudflareChallenge) {
-        return webViewResp;
+    if (retried.isCloudflareChallenge && followRedirects && !inspectMedia) {
+      _markPreferWebViewFetch(uri);
+      if (resolved.uri == uri &&
+          resolved.solution.html != null &&
+          resolved.solution.html!.trim().isNotEmpty) {
+        final webViewResp = Anime3rbHttpResponse(
+          statusCode: 200,
+          body: resolved.solution.html!,
+          finalUri: uri,
+        );
+        if (!webViewResp.isCloudflareChallenge) {
+          return webViewResp;
+        }
+      }
+      if (cancelToken?.isCancelled != true) {
+        final viaParked = await _tryWebViewFetch(
+          uri,
+          method: 'GET',
+          headers: headers,
+          followRedirects: followRedirects,
+          inspectMedia: inspectMedia,
+          operation: operation,
+        );
+        if (viaParked != null && !viaParked.isCloudflareChallenge) {
+          return viaParked;
+        }
+      }
+      if (resolved.uri != uri &&
+          cancelToken?.isCancelled != true &&
+          resolved.solution.cookies.isNotEmpty) {
+        final direct = await _fetchSpecificUriAfterClearance(uri);
+        if (direct?.html != null && direct!.html!.trim().isNotEmpty) {
+          final webViewResp = Anime3rbHttpResponse(
+            statusCode: 200,
+            body: direct.html!,
+            finalUri: uri,
+          );
+          if (!webViewResp.isCloudflareChallenge) {
+            return webViewResp;
+          }
+        }
       }
     }
     return retried;
@@ -647,6 +920,21 @@ class DioAnime3rbTransport implements Anime3rbTransport {
     CancelToken? cancelToken,
     required String operation,
   }) async {
+    if (_shouldPreferWebViewFetch(uri) && cancelToken?.isCancelled != true) {
+      final wvResp = await _tryWebViewFetch(
+        uri,
+        method: method,
+        headers: headers,
+        body: body,
+        followRedirects: followRedirects,
+        inspectMedia: false,
+        operation: operation,
+      );
+      if (wvResp != null && !wvResp.isCloudflareChallenge) {
+        return wvResp;
+      }
+    }
+
     final first = await _sendWithBodyOnce(
       method,
       uri,
@@ -662,7 +950,7 @@ class DioAnime3rbTransport implements Anime3rbTransport {
       cancelToken,
     );
     if (solution == null) return first;
-    return _sendWithBodyOnce(
+    final retried = await _sendWithBodyOnce(
       method,
       uri,
       body: body,
@@ -671,6 +959,24 @@ class DioAnime3rbTransport implements Anime3rbTransport {
       cancelToken: cancelToken,
       operation: '${operation}_cf_retry',
     );
+    if (retried.isCloudflareChallenge &&
+        followRedirects &&
+        cancelToken?.isCancelled != true) {
+      _markPreferWebViewFetch(uri);
+      final viaParked = await _tryWebViewFetch(
+        uri,
+        method: method,
+        headers: headers,
+        body: body,
+        followRedirects: followRedirects,
+        inspectMedia: false,
+        operation: operation,
+      );
+      if (viaParked != null && !viaParked.isCloudflareChallenge) {
+        return viaParked;
+      }
+    }
+    return retried;
   }
 
   Future<Anime3rbHttpResponse> _sendWithBodyOnce(
