@@ -140,6 +140,8 @@ class HistoryRepository {
   List<Map<String, dynamic>>? _historySnapshot;
   List<HistoryItem> _projectedHistory = const [];
   Map<(String, String?), HistoryItem>? _historyByItem;
+  Object? _continueWatchingProjectionIdentity;
+  List<HistoryItem> _projectedContinueWatching = const [];
 
   HistoryRepository(this._storageService, this._accountService);
 
@@ -324,10 +326,23 @@ class HistoryRepository {
   }
 
   List<HistoryItem> getContinueWatching() {
-    return _storageService
-        .getContinueWatching()
-        .map(HistoryItem.fromMap)
-        .toList(growable: false);
+    final rows = _storageService.getContinueWatching();
+    // An account revision can concern something other than playback. Reuse
+    // the projection only when storage still owns the same immutable rows.
+    if (rows is! ContinueWatchingStorageSnapshot) {
+      _continueWatchingProjectionIdentity = null;
+      _projectedContinueWatching = const [];
+      return rows.map(HistoryItem.fromMap).toList(growable: false);
+    }
+
+    final identity = rows.projectionIdentity;
+    if (!identical(identity, _continueWatchingProjectionIdentity)) {
+      _projectedContinueWatching = UnmodifiableListView(
+        rows.map(HistoryItem.fromMap).toList(growable: false),
+      );
+      _continueWatchingProjectionIdentity = identity;
+    }
+    return _projectedContinueWatching;
   }
 
   Future<void> syncRecentWatched() async {

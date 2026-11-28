@@ -2,6 +2,7 @@ import 'package:crypto/crypto.dart';
 
 import '../network/poster_cache.dart';
 
+import 'dart:collection';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -28,6 +29,17 @@ part 'storage_service.g.dart';
 @Riverpod(keepAlive: true)
 StorageService storageService(Ref ref) {
   throw UnimplementedError('StorageService must be initialized');
+}
+
+/// An owned, read-only copy of the ordered resume rows. Neither overrides
+/// nor callers can mutate it behind the history repository's projection.
+final class ContinueWatchingStorageSnapshot
+    extends UnmodifiableListView<Map<String, dynamic>> {
+  ContinueWatchingStorageSnapshot._(super.source);
+
+  // Hold only this token in the repository. A dormant view need not retain
+  // an old copy of all wire rows after storage publishes a newer snapshot.
+  final Object projectionIdentity = Object();
 }
 
 typedef _StoredLibraryCard = ({
@@ -1105,7 +1117,7 @@ class StorageService {
 
   static const String _kContinueWatchingMigrationV1 =
       'continue_watching_storage_v1_migrated';
-  List<Map<String, dynamic>>? _cachedContinueWatching;
+  ContinueWatchingStorageSnapshot? _cachedContinueWatching;
   bool _continueWatchingCacheDirty = true;
   int _continueWatchingWritesInFlight = 0;
 
@@ -1460,16 +1472,17 @@ class StorageService {
       final key = _continueWatchingBox.keyAt(i);
       if (key is String && key.startsWith('EP_')) continue;
       final raw = _continueWatchingBox.getAt(i);
-      if (raw is Map) items.add(Map<String, dynamic>.from(raw));
+      if (raw is Map) items.add(Map<String, dynamic>.unmodifiable(raw));
     }
     items.sort(
       (a, b) => ((b['timestamp'] as int?) ?? 0).compareTo(
         (a['timestamp'] as int?) ?? 0,
       ),
     );
-    _cachedContinueWatching = items;
+    final snapshot = ContinueWatchingStorageSnapshot._(items);
+    _cachedContinueWatching = snapshot;
     _continueWatchingCacheDirty = false;
-    return items;
+    return snapshot;
   }
 
   Future<void> markHistoryItemSynced(

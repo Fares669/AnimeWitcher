@@ -762,11 +762,13 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       // On a phone, a box of the first results drops under the field; the
       // page stays in view below it.
       if (!phone || suggestionState.query.trim().length < 2) return base;
-      final everything = <MultimediaItem>[
-        ...suggestionState.items,
-        ...suggestionState.animation,
-        ...suggestionState.manga,
-      ];
+      // The phone preview only needs six cards. Traverse the category
+      // lists in order without copying every result into a combined list.
+      final everything = [
+        suggestionState.items,
+        suggestionState.animation,
+        suggestionState.manga,
+      ].expand((category) => category);
       return Stack(
         fit: StackFit.expand,
         children: [

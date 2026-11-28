@@ -35,6 +35,7 @@ class _PendingFirstNewsPage {
 class _NewsListScreenState extends State<NewsListScreen> {
   late final ScrollController _scrollController;
   late List<NewsItem> _items;
+  bool _canAppendInPlace = false;
   bool _hasMore = true;
   bool _isLoading = false;
   int _nextOffset = 0;
@@ -100,12 +101,8 @@ class _NewsListScreenState extends State<NewsListScreen> {
     try {
       final page = await _requestPage(_nextOffset);
       if (!mounted) return;
-      final merged = <String, NewsItem>{
-        for (final item in _items) item.id: item,
-        for (final item in page.items) item.id: item,
-      };
       setState(() {
-        _items = merged.values.toList(growable: false);
+        _appendItems(page.items);
         _nextOffset = page.nextOffset;
         _hasMore = page.hasMore;
       });
@@ -116,12 +113,46 @@ class _NewsListScreenState extends State<NewsListScreen> {
     }
   }
 
+  void _appendItems(List<NewsItem> incoming) {
+    if (!_canAppendInPlace) {
+      // A Home seed or refresh result may contain duplicate IDs. Keep it
+      // visible as delivered until pagination, then keep the first position
+      // and latest payload, just as for duplicates in subsequent pages.
+      final merged = <String, NewsItem>{
+        for (final item in _items) item.id: item,
+        for (final item in incoming) item.id: item,
+      };
+      _items = merged.values.toList();
+      _canAppendInPlace = true;
+      return;
+    }
+
+    if (incoming.isEmpty) return;
+    // Index only the new page. Keep the owned list across appends rather than
+    // temporarily indexing and copying the entire accumulated feed.
+    final pending = <String, NewsItem>{
+      for (final item in incoming) item.id: item,
+    };
+    List<(int, NewsItem)>? replacements;
+    for (var i = 0; i < _items.length && pending.isNotEmpty; i++) {
+      final item = pending.remove(_items[i].id);
+      if (item != null) (replacements ??= []).add((i, item));
+    }
+    if (replacements != null) {
+      for (final (index, item) in replacements) {
+        _items[index] = item;
+      }
+    }
+    _items.addAll(pending.values);
+  }
+
   Future<void> _refresh() async {
     try {
       final page = await _requestPage(0);
       if (!mounted) return;
       setState(() {
         _items = page.items;
+        _canAppendInPlace = false;
         _nextOffset = page.nextOffset;
         _hasMore = page.hasMore;
       });

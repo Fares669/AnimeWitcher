@@ -54,26 +54,22 @@ String _providerRatingLabel(AnimeDetailsRatings ratings) {
   return 'تقييم انمي ويتشر';
 }
 
-bool hasDetailsRatingsSummary(MultimediaItem item) {
-  final ratings = AnimeDetailsRatings.fromItem(item);
-  return ratings.witcherScore != null ||
-      (ratings.externalSource != null && ratings.externalScore != null);
-}
+bool hasDetailsRatingsSummary(MultimediaItem item) =>
+    AnimeDetailsRatings.fromItem(item).hasSummary;
 
 class DetailsRatingsSummary extends StatelessWidget {
-  const DetailsRatingsSummary({super.key, required this.item});
+  const DetailsRatingsSummary({super.key, required this.ratings});
 
-  final MultimediaItem item;
+  final AnimeDetailsRatings ratings;
 
   @override
   Widget build(BuildContext context) {
-    final ratings = AnimeDetailsRatings.fromItem(item);
     final witcherScore = ratings.witcherScore;
     final externalScore = ratings.externalScore;
     final source = ratings.externalSource;
     final showWitcher = witcherScore != null;
     final showExternal = source != null && externalScore != null;
-    if (!hasDetailsRatingsSummary(item)) return const SizedBox.shrink();
+    if (!showWitcher && !showExternal) return const SizedBox.shrink();
 
     final theme = Theme.of(context);
     final colors = theme.colorScheme;

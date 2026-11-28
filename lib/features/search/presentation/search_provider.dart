@@ -842,21 +842,28 @@ class SearchSuggestionController extends _$SearchSuggestionController {
           SearchDomain.manga => mangaItems,
           _ => anime,
         };
-        final suggestions = results
-            .map((item) => item.title.trim())
-            .where((title) => title.isNotEmpty)
-            .toSet()
-            .take(10)
-            .toList(growable: false);
-        final seen = <String>{};
-        final items = results
-            .where((item) => item.title.trim().isNotEmpty && seen.add(item.url))
-            .take(30)
-            .toList(growable: false);
+        const suggestionLimit = 10;
+        const itemLimit = 30;
+        final titles = <String>{};
+        final seenUrls = <String>{};
+        final items = <MultimediaItem>[];
+        // The labels and cards have independent first winners. Read each
+        // title once and stop only after both visible quotas are filled.
+        for (final item in results) {
+          final title = item.title.trim();
+          if (title.isEmpty) continue;
+          if (titles.length < suggestionLimit) titles.add(title);
+          if (items.length < itemLimit && seenUrls.add(item.url)) {
+            items.add(item);
+          }
+          if (titles.length == suggestionLimit && items.length == itemLimit) {
+            break;
+          }
+        }
         if (ref.mounted && generation == _generation && state.query == query) {
           state = state.copyWith(
-            suggestions: suggestions,
-            items: items,
+            suggestions: titles.toList(growable: false),
+            items: items.toList(growable: false),
             animation: everything ? animation : const [],
             manga: everything ? mangaItems : const [],
             characters: characters.take(12).toList(growable: false),

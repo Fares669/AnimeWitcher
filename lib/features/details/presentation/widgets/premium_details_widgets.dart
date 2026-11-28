@@ -6,6 +6,7 @@ import 'package:animewitcher/core/utils/digit_normalization.dart';
 import 'package:animewitcher/shared/widgets/shimmer_placeholder.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
+import '../details_ratings.dart';
 import 'countdown_unit_visibility.dart';
 import 'details_ratings_row.dart';
 
@@ -214,6 +215,8 @@ class MetadataBar extends ConsumerWidget {
       );
     }
 
+    // Visibility and the rendered badges share one fresh projection.
+    final ratings = AnimeDetailsRatings.fromItem(item);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -222,9 +225,9 @@ class MetadataBar extends ConsumerWidget {
           const SizedBox(height: 2),
           _buildMetadataRow(secondRow, separatorStyle),
         ],
-        if (hasDetailsRatingsSummary(item)) ...[
+        if (ratings.hasSummary) ...[
           const SizedBox(height: 2),
-          DetailsRatingsSummary(item: item),
+          DetailsRatingsSummary(ratings: ratings),
         ],
       ],
     );

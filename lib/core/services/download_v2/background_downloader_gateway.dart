@@ -304,17 +304,25 @@ List<String> mangaChildTaskIdsForParentV2(
 ) {
   final parent = _mangaParentIdentity(parentTaskId);
   if (parent == null) return [];
-  final ids = <String>[
-    for (final record in records)
-      if ((record.task.group == kDownloadV2SilentPackageGroup ||
-              record.task.group == kDownloadV2PackageGroup) &&
-          record.taskId.startsWith('${parentTaskId}_p') &&
-          parseDownloadTaskIdentityV2(record.taskId)?.pageIndex != null &&
-          parseDownloadTaskIdentityV2(record.taskId)?.logicalId == parent.logicalId &&
-          parseDownloadTaskIdentityV2(record.taskId)?.generation == parent.generation)
-        record.taskId,
-  ]..sort();
-  return ids;
+  final prefix = '${parentTaskId}_p';
+  final ids = <String>[];
+  for (final record in records) {
+    final group = record.task.group;
+    if (group != kDownloadV2SilentPackageGroup &&
+        group != kDownloadV2PackageGroup) {
+      continue;
+    }
+    final id = record.taskId;
+    if (!id.startsWith(prefix)) continue;
+    final child = parseDownloadTaskIdentityV2(id);
+    if (child != null &&
+        child.pageIndex != null &&
+        child.logicalId == parent.logicalId &&
+        child.generation == parent.generation) {
+      ids.add(id);
+    }
+  }
+  return ids..sort();
 }
 
 Future<void> configurePackageNotificationsV2(
@@ -934,7 +942,10 @@ final class PackageBackgroundDownloaderGateway
         .map((task) => task.taskId).toSet();
     final nativeIds = (await _downloader.allTasks(allGroups: true))
         .map((task) => task.taskId).where((id) => !pausedIds.contains(id)).toSet();
-    for (final record in records.where((record) => ids.contains(record.taskId))) {
+    // Inspect every matching record, including duplicate IDs under legacy
+    // filenames, without a linear search through all of the chapter's IDs.
+    final childIds = ids.toSet();
+    for (final record in records.where((r) => childIds.contains(r.taskId))) {
       final transfer = _downloader.transfers.forId(record.taskId);
       final status = transfer?.status ?? record.status;
       if (nativeIds.contains(record.taskId) ||

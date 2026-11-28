@@ -58,6 +58,10 @@ class AnimeDetailsRatings {
     return null;
   }
 
+  /// Whether the compact metadata summary has a visible score.
+  bool get hasSummary =>
+      witcherScore != null || (externalSource != null && externalScore != null);
+
   bool get showExternalColumn => externalSource != null;
   bool get showMalColumn => externalSource == ExternalRatingSource.mal;
   bool get showImdbColumn => externalSource == ExternalRatingSource.imdb;
@@ -79,8 +83,7 @@ class AnimeDetailsRatings {
   int? get displayedExternalScoringUsers =>
       showMalColumn ? displayedMalScoringUsers : null;
 
-  bool get canRate =>
-      !isUnaired && (isAnime3rb || animeId.isNotEmpty);
+  bool get canRate => !isUnaired && (isAnime3rb || animeId.isNotEmpty);
 
   factory AnimeDetailsRatings.fromItem(MultimediaItem item) {
     final data = item.syncData ?? const <String, String>{};
@@ -104,9 +107,7 @@ class AnimeDetailsRatings {
       isWitanime: isWitanime,
       witcherScore: isWitcherItem
           ? _positiveScore(data['awScore'])
-          : ((isAnime3rb || isWitanime) &&
-                    item.score != null &&
-                    item.score! > 0
+          : ((isAnime3rb || isWitanime) && item.score != null && item.score! > 0
                 ? item.score
                 : null),
       witcherVoteCount: isWitcherItem

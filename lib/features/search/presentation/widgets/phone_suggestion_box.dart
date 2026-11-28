@@ -19,7 +19,7 @@ class PhoneSuggestionBox extends StatelessWidget {
   });
 
   final String query;
-  final List<MultimediaItem> items;
+  final Iterable<MultimediaItem> items;
   final bool loading;
   final ValueChanged<MultimediaItem> onOpen;
   final VoidCallback onSeeAll;
