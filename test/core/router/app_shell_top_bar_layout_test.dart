@@ -31,6 +31,7 @@ import 'package:animewitcher/features/settings/presentation/general_settings_pro
 import 'package:animewitcher/features/settings/presentation/settings_screen.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/shared/widgets/app_navigation_bars.dart';
+import 'package:animewitcher/shared/widgets/app_scaffold.dart';
 import 'package:animewitcher/shared/widgets/app_search_field.dart';
 import 'package:animewitcher/shared/widgets/app_side_menu.dart';
 import 'package:background_downloader/background_downloader.dart';
@@ -298,7 +299,7 @@ void main() {
           ],
           child: MaterialApp.router(
             routerConfig: router,
-            locale: const Locale('en'),
+            locale: const Locale('ar'),
             localizationsDelegates: AppLocalizations.localizationsDelegates,
             supportedLocales: AppLocalizations.supportedLocales,
             builder: (context, child) {
@@ -393,6 +394,54 @@ void main() {
       focus.requestFocus();
       await _pumpNavigation(tester);
       expect(focus.hasFocus, isTrue);
+
+      if (layout == AppLayoutStyle.topBar && tablet) {
+        // The actual Search route owns focus as the Android tablet keyboard
+        // opens and closes. Only the body should resize at each metrics tick.
+        const keyboardInsets = <double>[40, 120, 226, 260, 194, 88, 24, 0];
+        final topBar = find.byType(AppTopBar);
+        final chrome = find.byType(AppSideMenuShell);
+        final scaffold = find.byType(AppScaffold);
+        final pane = find.byKey(const ValueKey('/search')).hitTestable();
+        final topBarBounds = tester.getRect(topBar);
+        expect(Directionality.of(tester.element(topBar)), TextDirection.rtl);
+        var topBarReplacements = 0;
+        var shellReplacements = 0;
+        for (final bottom in keyboardInsets) {
+          final oldTopBar = tester.widget<AppTopBar>(topBar);
+          final oldShell = tester.widget<AppSideMenuShell>(chrome);
+          tester.view.viewInsets = FakeViewPadding(bottom: bottom);
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 48));
+          if (!identical(oldTopBar, tester.widget<AppTopBar>(topBar))) {
+            topBarReplacements++;
+          }
+          if (!identical(oldShell, tester.widget<AppSideMenuShell>(chrome))) {
+            shellReplacements++;
+          }
+          expect(
+            tester
+                .element(scaffold)
+                .getInheritedWidgetOfExactType<MediaQuery>()!
+                .data
+                .viewInsets
+                .bottom,
+            bottom,
+          );
+          expect(tester.getRect(topBar), topBarBounds);
+          expect(tester.getSize(pane).height, 860 - inset - bottom);
+          expect(tester.state(find.byType(SearchScreen)), same(search));
+          expect(tester.widget<AppSearchField>(field).focusNode, same(focus));
+          expect(focus.hasFocus, isTrue);
+        }
+        debugPrint(
+          'C22_TABLET_IME steps=${keyboardInsets.length} '
+          'topBar=$topBarReplacements shell=$shellReplacements',
+        );
+        expect((topBarReplacements, shellReplacements), (0, 0));
+        tester.view.resetViewInsets();
+        await _pumpNavigation(tester);
+      }
 
       final container = ProviderScope.containerOf(tester.element(field));
       final domains = container.read(searchDomainProvider.notifier);

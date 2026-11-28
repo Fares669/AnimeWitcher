@@ -180,10 +180,6 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
       isDesktopPlatform: layoutsAvailable,
     );
 
-    final bottomInset = CustomBottomNavBar.bottomInsetFor(context);
-    final navBarTotalHeight = CustomBottomNavBar.height + bottomInset;
-    final mq = MediaQuery.of(context);
-
     void onDestination(TaskbarDestination destination) =>
         _onItemTapped(destination.branchIndex);
     final currentIndex = widget.navigationShell.currentIndex;
@@ -231,6 +227,7 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
     );
 
     if (layout == AppLayoutStyle.sideRail) {
+      final mq = MediaQuery.of(context);
       return withSideMenu(
         Scaffold(
           backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -301,6 +298,12 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
       );
     }
 
+    // The dock rewrites the full page MediaQuery. The top bar only uses
+    // window size and its top safe area, so leave keyboard/view-inset updates
+    // to its Scaffold and pages instead of rebuilding the navigation shell.
+    final bottomInset = CustomBottomNavBar.bottomInsetFor(context);
+    final navBarTotalHeight = CustomBottomNavBar.height + bottomInset;
+    final mq = MediaQuery.of(context);
     final dock = Scaffold(
       resizeToAvoidBottomInset: false,
       extendBody: true,

@@ -852,6 +852,8 @@ class _GroupedDownloadTile extends ConsumerStatefulWidget {
 class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
   late Future<File?> _poster;
   late Future<bool> _showNetworkFallback;
+  Widget? _posterWidget;
+  (String?, Color)? _posterInputs;
   bool _deleteInFlight = false;
   List<DownloadItem> get items => widget.items;
 
@@ -883,6 +885,7 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
   }
 
   void _startPosterLookup() {
+    _posterWidget = null;
     final input = items;
     final local = _findLocalPoster(input);
     _poster = local.then((saved) => saved ?? _restorePoster(input));
@@ -918,12 +921,66 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
     return null;
   }
 
-  Widget _posterPlaceholder(ThemeData theme) => Container(
-    width: 80,
-    height: 120,
-    color: theme.dividerColor,
-    child: const Icon(Icons.movie_outlined),
-  );
+  Widget _posterFor(String? rawUrl, Color dividerColor) {
+    final inputs = (rawUrl, dividerColor);
+    final previous = _posterWidget;
+    if (previous != null && _posterInputs == inputs) return previous;
+    _posterInputs = inputs;
+
+    Widget placeholder() => Container(
+      width: 80,
+      height: 120,
+      color: dividerColor,
+      child: const Icon(Icons.movie_outlined),
+    );
+
+    final url = AppImageFallbacks.poster(rawUrl);
+    final poster = _poster;
+    final showNetworkFallback = _showNetworkFallback;
+    // Keep the mounted image builders out of selection and transfer updates.
+    // ArtworkDecode still owns its quality and device pixel ratio dependencies.
+    return _posterWidget = ClipRRect(
+      borderRadius: BorderRadius.circular(LayoutConstants.radiusMd),
+      child: ArtworkDecode(
+        paintedWidth: 80,
+        sizeHighQualityToDisplay: true,
+        builder: (BuildContext context, int? decodeWidth) =>
+            FutureBuilder<File?>(
+              key: ObjectKey(poster),
+              future: poster,
+              builder: (context, snapshot) {
+                final saved = snapshot.data;
+                if (saved != null) {
+                  return Image.file(
+                    saved,
+                    width: 80,
+                    height: 120,
+                    fit: BoxFit.cover,
+                    cacheWidth: decodeWidth,
+                    filterQuality: FilterQuality.medium,
+                    errorBuilder: (_, _, _) => placeholder(),
+                  );
+                }
+                if (url == null) return placeholder();
+                return FutureBuilder<bool>(
+                  future: showNetworkFallback,
+                  builder: (context, fallback) => fallback.data != true
+                      ? placeholder()
+                      : CachedNetworkImage(
+                          imageUrl: url,
+                          width: 80,
+                          height: 120,
+                          fit: BoxFit.cover,
+                          memCacheWidth: decodeWidth,
+                          filterQuality: FilterQuality.medium,
+                          errorWidget: (_, _, _) => placeholder(),
+                        ),
+                );
+              },
+            ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -969,53 +1026,7 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
           child: Row(
             textDirection: TextDirection.ltr,
             children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(LayoutConstants.radiusMd),
-                child: ArtworkDecode(
-                  paintedWidth: 80,
-                  sizeHighQualityToDisplay: true,
-                  builder: (BuildContext context, int? decodeWidth) =>
-                      FutureBuilder<File?>(
-                        key: ObjectKey(_poster),
-                        future: _poster,
-                        builder: (context, snapshot) {
-                          final saved = snapshot.data;
-                          if (saved != null) {
-                            return Image.file(
-                              saved,
-                              width: 80,
-                              height: 120,
-                              fit: BoxFit.cover,
-                              cacheWidth: decodeWidth,
-                              filterQuality: FilterQuality.medium,
-                              errorBuilder: (_, _, _) =>
-                                  _posterPlaceholder(theme),
-                            );
-                          }
-                          final url = AppImageFallbacks.poster(
-                            firstItem.item.posterUrl,
-                          );
-                          if (url == null) return _posterPlaceholder(theme);
-                          return FutureBuilder<bool>(
-                            future: _showNetworkFallback,
-                            builder: (context, fallback) =>
-                                fallback.data != true
-                                ? _posterPlaceholder(theme)
-                                : CachedNetworkImage(
-                                    imageUrl: url,
-                                    width: 80,
-                                    height: 120,
-                                    fit: BoxFit.cover,
-                                    memCacheWidth: decodeWidth,
-                                    filterQuality: FilterQuality.medium,
-                                    errorWidget: (_, _, _) =>
-                                        _posterPlaceholder(theme),
-                                  ),
-                          );
-                        },
-                      ),
-                ),
-              ),
+              _posterFor(firstItem.item.posterUrl, theme.dividerColor),
               const SizedBox(width: LayoutConstants.spacingMd),
               Expanded(
                 child: Column(

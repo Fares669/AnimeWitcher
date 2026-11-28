@@ -53,6 +53,15 @@ String episodeRangeLabel(List<Episode> range) {
   return first == last ? '$first' : '$first–$last';
 }
 
+/// The rows of [ordered] whose URLs appear in [block], in display order.
+Iterable<Episode> episodeRowsInRange(
+  List<Episode> ordered,
+  List<Episode> block,
+) {
+  final urls = {for (final episode in block) episode.url};
+  return ordered.where((episode) => urls.contains(episode.url));
+}
+
 /// [ordered] cut to the block at [rangeIndex] and to [filter], its order
 /// kept. A block past the end, as after a season change, means every one.
 List<Episode> browseEpisodes({
@@ -63,21 +72,20 @@ List<Episode> browseEpisodes({
   required bool Function(Episode) isWatched,
   required bool Function(Episode) isDownloaded,
 }) {
-  Set<String>? inRange;
+  Iterable<Episode> candidates = ordered;
   if (rangeIndex != null && episodeRangesApply(ordered.length)) {
     final blocks = ranges ?? episodeRanges(ordered);
     if (rangeIndex >= 0 && rangeIndex < blocks.length) {
-      inRange = {for (final episode in blocks[rangeIndex]) episode.url};
+      candidates = episodeRowsInRange(ordered, blocks[rangeIndex]);
     }
   }
   return <Episode>[
-    for (final episode in ordered)
-      if ((inRange == null || inRange.contains(episode.url)) &&
-          switch (filter) {
-            EpisodeListFilter.all => true,
-            EpisodeListFilter.unwatched => !isWatched(episode),
-            EpisodeListFilter.downloaded => isDownloaded(episode),
-          })
+    for (final episode in candidates)
+      if (switch (filter) {
+        EpisodeListFilter.all => true,
+        EpisodeListFilter.unwatched => !isWatched(episode),
+        EpisodeListFilter.downloaded => isDownloaded(episode),
+      })
         episode,
   ];
 }

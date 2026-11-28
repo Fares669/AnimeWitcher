@@ -202,6 +202,29 @@ final class _ProjectionWatch extends Fake implements EpisodeWatchRepository {
       watched.contains(episode.url) ? true : null;
 }
 
+final class _EpisodeUrlReads {
+  int count = 0;
+}
+
+final class _CountedRangeEpisode extends Episode {
+  _CountedRangeEpisode({
+    required super.name,
+    required super.url,
+    required super.season,
+    required super.episode,
+    required super.dubStatus,
+    required this.probe,
+  });
+
+  final _EpisodeUrlReads probe;
+
+  @override
+  String get url {
+    probe.count++;
+    return super.url;
+  }
+}
+
 final class _ProjectionDetails extends _ReadyDetailsController {
   _ProjectionDetails(super.item);
   @override
@@ -271,15 +294,14 @@ List<int> _shownProjection(WidgetTester tester) {
 
 Finder _projectionKey(String value) => find.byKey(ValueKey(value));
 
-Finder _projectionScrollView() => find.descendant(
-  of: find.byKey(const PageStorageKey<String>('desktop-details-info-tab')),
-  matching: find.byType(Scrollable),
-).first;
+Finder _projectionScrollView() => find
+    .descendant(
+      of: find.byKey(const PageStorageKey<String>('desktop-details-info-tab')),
+      matching: find.byType(Scrollable),
+    )
+    .first;
 
-Future<void> _positionProjection(
-  WidgetTester tester,
-  Finder target,
-) async {
+Future<void> _positionProjection(WidgetTester tester, Finder target) async {
   expect(target, findsOneWidget);
   if (target.hitTestable().evaluate().isEmpty) {
     // The actual Details chrome floats above the scroll view. Aligning at
@@ -773,6 +795,137 @@ void main() {
   }
 
   testWidgets(
+    'Arabic desktop Details reuses the selected episode range during search',
+    (tester) async {
+      tester.view.physicalSize = const Size(1360, 1050);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      addTearDown(resetEpisodeBrowse);
+      addTearDown(() => episodeViewMode.value = EpisodeViewMode.list);
+      addTearDown(() => episodeSearchQuery.value = '');
+
+      final probe = _EpisodeUrlReads();
+      final item = MultimediaItem(
+        title: 'السلسلة الطويلة',
+        url: 'https://example.test/long-episode-range',
+        posterUrl: '',
+        contentType: MultimediaContentType.anime,
+        episodes: [
+          for (var i = 1; i <= 1200; i++)
+            if (i >= 301 && i <= 700)
+              _CountedRangeEpisode(
+                name: 'الأحداث $i',
+                url: 'https://example.test/long/$i',
+                season: 1,
+                episode: i,
+                dubStatus: DubStatus.subbed,
+                probe: probe,
+              )
+            else
+              Episode(
+                name: 'الأحداث $i',
+                url: 'https://example.test/long/$i',
+                season: 1,
+                episode: i,
+                dubStatus: DubStatus.subbed,
+              ),
+        ],
+      );
+      final details = _ProjectionDetails(item);
+      final watch = _ProjectionWatch();
+      final container = ProviderContainer(
+        overrides: [
+          storageServiceProvider.overrideWithValue(_Storage()),
+          detailsControllerProvider(item.url).overrideWith(() => details),
+          libraryProvider.overrideWith(_EmptyLibrary.new),
+          watchHistoryProvider.overrideWith(_ProjectionHistory.new),
+          episodeWatchRepositoryProvider.overrideWithValue(watch),
+          logicalDownloadStoreV2Provider.overrideWithValue(
+            InMemoryLogicalDownloadStoreV2(),
+          ),
+          downloadsProvider.overrideWith(_EmptyDownloads.new),
+          downloadedFilesProvider.overrideWith(_ProjectionFiles.new),
+          episodeSortAscendingProvider.overrideWith(_ProjectionSort.new),
+        ],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            locale: const Locale('ar'),
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            theme: ThemeData.dark(),
+            home: Builder(
+              builder: (context) => Scaffold(
+                body: TextButton(
+                  onPressed: () => Navigator.of(context).push<void>(
+                    MaterialPageRoute<void>(
+                      builder: (_) => DetailsScreen(item: item),
+                    ),
+                  ),
+                  child: const Text('افتح التفاصيل'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('افتح التفاصيل'));
+      await tester.pumpAndSettle();
+      await _tapProjection(tester, _projectionKey('details-episodes-toggle'));
+      await _tapProjection(tester, _projectionKey('episode-range-menu'));
+      // The menu shows up to the visible options; reveal range 8 if needed.
+      final range = _projectionKey('episode-range-8');
+      await tester.ensureVisible(range);
+      await _tapProjection(tester, range);
+      expect(find.text('الحلقات 801–900'), findsOneWidget);
+      await _tapProjection(tester, find.byIcon(Icons.search_rounded).last);
+      final field = find.byType(TextField).last;
+      final input = find
+          .descendant(of: field, matching: find.byType(EditableText))
+          .last;
+      expect(tester.widget<EditableText>(input).focusNode.hasFocus, isTrue);
+
+      probe.count = 0;
+      final shown = <List<int>>[];
+      final work = <int>[];
+      for (final query in ['٨٨', '٨٨٨', '٨٧', '٧٧٧', '٨٩١']) {
+        final before = probe.count;
+        await tester.enterText(field, query);
+        await tester.pumpAndSettle();
+        shown.add(_shownProjection(tester));
+        work.add(probe.count - before);
+        expect(tester.widget<EditableText>(input).focusNode.hasFocus, isTrue);
+      }
+      expect(shown, [
+        [for (var i = 880; i <= 889; i++) i],
+        [888],
+        [for (var i = 870; i <= 879; i++) i],
+        <int>[],
+        [891],
+      ]);
+      debugPrint('C22_DETAILS_RANGE outOfRangeUrlReads=$work results=$shown');
+      expect(work, List<int>.filled(5, 0));
+
+      await _tapProjection(tester, _projectionKey('episode-filter-unwatched'));
+      expect(_shownProjection(tester), [891]);
+      watch.watched.add('https://example.test/long/891');
+      container.read(episodeWatchRevisionProvider.notifier).bump();
+      await tester.pumpAndSettle();
+      expect(_shownProjection(tester), isEmpty);
+      await _tapProjection(tester, _projectionKey('episode-filter-all'));
+      expect(_shownProjection(tester), [891]);
+      expect(episodeRangeIndex.value, 8);
+      tester.state<NavigatorState>(find.byType(Navigator)).pop();
+      await tester.pumpAndSettle();
+      expect(find.text('افتح التفاصيل'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'episode selection bar downloads the selected episodes as a batch',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(390, 844));
@@ -922,8 +1075,9 @@ void main() {
         );
         expect(thumbnail, findsOneWidget);
         final paintedWidth = tester.getSize(thumbnail).width;
-        final decodeWidth =
-            tester.widget<CachedNetworkImage>(thumbnail).memCacheWidth;
+        final decodeWidth = tester
+            .widget<CachedNetworkImage>(thumbnail)
+            .memCacheWidth;
         expect(paintedWidth, greaterThan(140));
         expect(
           decodeWidth,
@@ -945,8 +1099,10 @@ void main() {
             .focusNode!;
         focus.requestFocus();
         await tester.pumpAndSettle();
-        expect(tester.widget<CachedNetworkImage>(thumbnail).memCacheWidth,
-            decodeWidth);
+        expect(
+          tester.widget<CachedNetworkImage>(thumbnail).memCacheWidth,
+          decodeWidth,
+        );
         expect(
           tester.takeException(),
           isNull,
@@ -1006,25 +1162,49 @@ void main() {
     }, variant: TargetPlatformVariant(<TargetPlatform>{platform}));
   }
 
-  testWidgets('episode selection circle is centered on the thumbnail', (tester) async {
+  testWidgets('episode selection circle is centered on the thumbnail', (
+    tester,
+  ) async {
     final episode = Episode(name: 'Episode 1', url: 'episode://1', episode: 1);
-    final item = MultimediaItem(title: 'Anime', url: 'anime://selection', posterUrl: '', episodes: [episode]);
-    final container = ProviderContainer(overrides: [
-      storageServiceProvider.overrideWithValue(_Storage()),
-      downloadsProvider.overrideWith(_EmptyDownloads.new),
-      logicalDownloadStoreV2Provider.overrideWithValue(InMemoryLogicalDownloadStoreV2()),
-      detailsControllerProvider(item.url).overrideWith(() => _ReadyDetailsController(item)),
-    ]);
+    final item = MultimediaItem(
+      title: 'Anime',
+      url: 'anime://selection',
+      posterUrl: '',
+      episodes: [episode],
+    );
+    final container = ProviderContainer(
+      overrides: [
+        storageServiceProvider.overrideWithValue(_Storage()),
+        downloadsProvider.overrideWith(_EmptyDownloads.new),
+        logicalDownloadStoreV2Provider.overrideWithValue(
+          InMemoryLogicalDownloadStoreV2(),
+        ),
+        detailsControllerProvider(item.url)
+            .overrideWith(() => _ReadyDetailsController(item)),
+      ],
+    );
     addTearDown(container.dispose);
-    await tester.pumpWidget(UncontrolledProviderScope(container: container,
-      child: MaterialApp(localizationsDelegates: AppLocalizations.localizationsDelegates,
-        supportedLocales: AppLocalizations.supportedLocales,
-        home: Scaffold(body: EpisodeCard(episode: episode, parentItem: item)))));
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: EpisodeCard(episode: episode, parentItem: item),
+          ),
+        ),
+      ),
+    );
     await tester.pumpAndSettle();
-    container.read(detailsControllerProvider(item.url).notifier).toggleEpisodeSelection(episode);
+    container
+        .read(detailsControllerProvider(item.url).notifier)
+        .toggleEpisodeSelection(episode);
     await tester.pumpAndSettle();
-    expect(tester.getCenter(find.byIcon(Icons.check_circle_rounded)).dy,
-      closeTo(tester.getCenter(find.byType(AspectRatio).first).dy, 1));
+    expect(
+      tester.getCenter(find.byIcon(Icons.check_circle_rounded)).dy,
+      closeTo(tester.getCenter(find.byType(AspectRatio).first).dy, 1),
+    );
   });
 
   testWidgets('episode comments use the anime outline and retain their target', (

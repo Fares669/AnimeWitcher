@@ -117,6 +117,101 @@ void main() {
     },
   );
 
+  for (final bridgeCount in [1, 2]) {
+    test(
+      'large range snapshot keeps $bridgeCount native bridge inputs',
+      () async {
+        final directory = await Directory.systemTemp.createTemp(
+          'parallel-snapshot-',
+        );
+        final parent = ParallelDownloadTask(
+          taskId: 'large-aggregate-$bridgeCount',
+          url: 'https://fixture.invalid/episode',
+          filename: 'episode.bin',
+          directory: directory.path,
+          baseDirectory: BaseDirectory.root,
+          chunks: 16,
+        );
+        final records = <String, TaskRecord>{};
+        final starts = <DownloadTask>[];
+        final parentUpdates = <TaskProgressUpdate>[];
+        final heartbeats = <Map<String, Object?>>[];
+        const expectedSize = 512 * 1024 * 1024; // 128 persistent ranges.
+        const firstBytes = 525313;
+        const secondBytes = 777219;
+        const firstSpeed = 256000.0;
+        const secondSpeed = 384000.0;
+        final coordinator = PersistentParallelDownload(
+          startPart: (task, progress, size) async {
+            starts.add(task);
+            return true;
+          },
+          pausePart: (_) async {},
+          cancelParts: (_) async {},
+          saveRecord: (record) async => records[record.task.taskId] = record,
+          recordForId: (id) async => records[id],
+          onUpdate: (update) {
+            if (update is TaskProgressUpdate &&
+                update.task.taskId == parent.taskId) {
+              parentUpdates.add(update);
+            }
+          },
+          onPartProgress: (_, _, _) {},
+          diagnosticEvent: (event, fields) {
+            if (event == 'parallel.heartbeat') heartbeats.add(fields);
+          },
+        );
+        try {
+          expect(await coordinator.start(parent, expectedSize), isTrue);
+          expect(starts, hasLength(1));
+          await coordinator.handleNativeChunkUpdate(
+            parentTaskId: parent.taskId,
+            chunkTaskId: starts.first.taskId,
+            writtenBytes: firstBytes,
+            speedBytesPerSecond: firstSpeed,
+          );
+          if (bridgeCount == 2) {
+            await waitUntil(() => starts.length >= 2);
+            await coordinator.handleNativeChunkUpdate(
+              parentTaskId: parent.taskId,
+              chunkTaskId: starts[1].taskId,
+              writtenBytes: secondBytes,
+              speedBytesPerSecond: secondSpeed,
+            );
+          }
+
+          await waitUntil(() => parentUpdates.isNotEmpty);
+          final aggregate = parentUpdates.single;
+          final liveBytes = firstBytes + (bridgeCount == 2 ? secondBytes : 0);
+          expect(aggregate.progress, liveBytes / expectedSize);
+          expect(aggregate.expectedFileSize, expectedSize);
+          // Both inputs arrived before the first estimator sample. One native
+          // callback can supply its speed; two need a measured byte window.
+          expect(aggregate.networkSpeed, bridgeCount == 1 ? 0.256 : 0.0);
+          expect(
+            aggregate.timeRemaining,
+            bridgeCount == 1
+                ? Duration(
+                    milliseconds:
+                        ((expectedSize - liveBytes) / firstSpeed * 1000).ceil(),
+                  )
+                : Duration.zero,
+          );
+          final fields = heartbeats.single;
+          expect(fields['liveBytes'], liveBytes);
+          expect(fields['nativeWrittenBytes'], liveBytes);
+          expect(fields['durableBytes'], 0);
+          expect(fields['totalBytes'], expectedSize);
+          expect(fields['configuredConnections'], 16);
+          expect(fields['activeConnections'], inInclusiveRange(1, 16));
+        } finally {
+          await coordinator.dispose();
+          await directory.delete(recursive: true);
+        }
+      },
+    );
+  }
+
   test('parent progress is not blocked by slow record persistence', () async {
     final directory = await Directory.systemTemp.createTemp(
       'parallel-progress-nonblocking-',

@@ -42,6 +42,24 @@ void main() {
       expect(shown.last.episode, 801);
     });
 
+    test('a block includes URL aliases outside its numeric span', () {
+      final ordered = _episodes(202, newestFirst: true);
+      final match = ordered.singleWhere((episode) => episode.episode == 160);
+      final index = ordered.indexOf(match);
+      ordered[index] = match.copyWith(url: 'ep://60');
+      final shown = browseEpisodes(
+        ordered: ordered,
+        rangeIndex: 0,
+        filter: EpisodeListFilter.all,
+        isWatched: (_) => false,
+        isDownloaded: (_) => false,
+      );
+      expect(shown.map((episode) => episode.episode), [
+        160,
+        for (var n = 100; n >= 1; n--) n,
+      ]);
+    });
+
     test('a block past the end shows every episode', () {
       final ordered = _episodes(150);
       final shown = browseEpisodes(
@@ -85,9 +103,7 @@ void main() {
   group('bar', () {
     Future<void> pump(WidgetTester tester, int count) => tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(
-          body: EpisodeBrowseBar(episodes: _episodes(count)),
-        ),
+        home: Scaffold(body: EpisodeBrowseBar(episodes: _episodes(count))),
       ),
     );
 

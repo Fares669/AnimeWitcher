@@ -580,6 +580,294 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets(
+    'completed poster subtree ignores transfer and selection updates',
+    (tester) async {
+      const rootKey = ValueKey('c21-download-art-frame');
+      const title = 'أرشيف محلي';
+      const originalUrl = 'https://artwork.invalid/original-poster';
+      const replacementUrl = 'https://artwork.invalid/replacement-poster';
+      const originalId = 'c21-owned-group-original';
+      const replacementId = 'c21-owned-group-replacement';
+      const originalColor = Color(0xff186a9e);
+      const replacementColor = Color(0xffab4765);
+      final quality = highQualityArtwork.value;
+      highQualityArtwork.value = true;
+      tester.view.physicalSize = const Size(850, 1688);
+      tester.view.devicePixelRatio = 2;
+      addTearDown(() {
+        highQualityArtwork.value = quality;
+        tester.view.reset();
+      });
+      await tester.runAsync(TestFonts.loadWalkthroughFonts);
+      await _prepareArtworkStorage(tester);
+
+      Future<File> savePoster(String id, Color color) async {
+        final folder = Directory(
+          p.join(
+            _artworkFixtureRoot.path,
+            'download_artwork_v2',
+            sha256.convert(utf8.encode(id)).toString(),
+          ),
+        );
+        return (await tester.runAsync(() async {
+          await folder.create(recursive: true);
+          final file = File(p.join(folder.path, 'poster.img'));
+          await file.writeAsBytes(await _episodeArtworkPng(color), flush: true);
+          return file;
+        }))!;
+      }
+
+      final original = await savePoster(originalId, originalColor);
+      final replacement = await savePoster(replacementId, replacementColor);
+      MultimediaItem media(String url) =>
+          _blackTorch().copyWith(title: title, posterUrl: url);
+      DownloadItem first(String logicalId, String url) => _item(
+        taskId: 'c21-archive-nine',
+        timestamp: 8,
+        media: media(url),
+        logicalId: logicalId,
+      );
+      final originalRow = first(originalId, originalUrl);
+      final second = _item(
+        taskId: 'c21-archive-ten',
+        timestamp: 7,
+        metaData: 'https://animewitcher.test/black-torch/10',
+        episode: Episode(
+          name: 'الحلقة 10',
+          url: 'https://animewitcher.test/black-torch/10',
+          episode: 10,
+          serverName: 'الحلقة 10',
+        ),
+        media: media(''),
+        logicalId: 'c21-archive-ten',
+      );
+      DownloadItem active(double progress) => DownloadItem(
+        task: _task(taskId: 'c21-live', filename: 'active.mp4'),
+        status: TaskStatus.running,
+        progress: progress,
+        item: _blackTorch(),
+        episode: _episode9(),
+        timestamp: 9,
+        logicalId: 'c21-art-live',
+      );
+      final notifier = _StubDownloadsNotifier([
+        active(.23),
+        originalRow,
+        second,
+      ]);
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: rootKey,
+          child: _downloadsApp(
+            [],
+            notifier: notifier,
+            openDownloadsScreen: true,
+            progressData: const {},
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final live = find.byKey(const ValueKey('c21-live'));
+      expect(live, findsOneWidget);
+      expect(find.byType(DownloadsScreen), findsOneWidget);
+      await tester.tap(find.text('المكتملة'));
+      await tester.pumpAndSettle();
+
+      final headerDecode = find.byWidgetPredicate(
+        (w) => w is ArtworkDecode && w.paintedWidth == 80,
+      );
+      final remote = find.descendant(
+        of: headerDecode,
+        matching: find.byWidgetPredicate(
+          (w) =>
+              w is CachedNetworkImage &&
+              (w.imageUrl == originalUrl || w.imageUrl == replacementUrl),
+        ),
+      );
+      final posterImage = find.descendant(
+        of: headerDecode,
+        matching: find.byWidgetPredicate((w) {
+          if (w is! Image || w.width != 80 || w.height != 120) return false;
+          final provider = w.image;
+          return provider is ResizeImage && provider.imageProvider is FileImage;
+        }),
+      );
+      final posterRaw = find.descendant(
+        of: posterImage,
+        matching: find.byWidgetPredicate(
+          (w) => w is RawImage && w.image != null,
+        ),
+      );
+      Future<void> checkPoster(File source, int rgba, int decodedWidth) async {
+        await _awaitArtworkLookups(tester);
+        await _pumpEpisodeArtRealTime(tester, () {
+          return posterRaw.evaluate().any(
+            (element) =>
+                (element.widget as RawImage).image?.width == decodedWidth,
+          );
+        });
+        expect(posterImage, findsOneWidget);
+        expect(posterRaw, findsOneWidget);
+        expect(tester.getSize(posterRaw), const Size(80, 120));
+        final file =
+            (tester.widget<Image>(posterImage).image as ResizeImage)
+                    .imageProvider
+                as FileImage;
+        expect(file.file.path, source.path);
+        final image = tester.widget<RawImage>(posterRaw).image!;
+        expect(image.width, decodedWidth);
+        final pixels = (await tester.runAsync(image.toByteData))!;
+        expect(pixels.getUint32(0), rgba);
+        expect(remote, findsNothing);
+      }
+
+      final frames = <String>[];
+      Future<void> captureFrame() async {
+        final boundary = tester.renderObject<RenderRepaintBoundary>(
+          find.byKey(rootKey),
+        );
+        frames.add(
+          (await tester.runAsync(() async {
+            final image = await boundary.toImage();
+            final data = (await image.toByteData())!;
+            image.dispose();
+            return sha256
+                .convert(
+                  data.buffer.asUint8List(
+                    data.offsetInBytes,
+                    data.lengthInBytes,
+                  ),
+                )
+                .toString();
+          }))!,
+        );
+      }
+
+      await checkPoster(original, 0x186a9eff, 256);
+      expect(
+        Directionality.of(tester.element(find.byType(DownloadsScreen))),
+        TextDirection.rtl,
+      );
+      await captureFrame();
+      final otherEpisode = find.descendant(
+        of: find.byKey(const ValueKey('c21-archive-ten')),
+        matching: find.text('الحلقة 10'),
+      );
+      await tester.tap(find.text(title));
+      await tester.pumpAndSettle();
+      await _awaitArtworkLookups(tester);
+      expect(otherEpisode, findsOneWidget);
+      await captureFrame();
+
+      (ArtworkDecode, Image) snapshot() => (
+        tester.widget<ArtworkDecode>(headerDecode),
+        tester.widget<Image>(posterImage),
+      );
+      var decodeChanges = 0;
+      var fileImageChanges = 0;
+      void countChanges((ArtworkDecode, Image) before) {
+        final after = snapshot();
+        if (!identical(before.$1, after.$1)) decodeChanges++;
+        if (!identical(before.$2, after.$2)) fileImageChanges++;
+        expect(remote, findsNothing);
+      }
+
+      final originalRect = tester.getRect(posterRaw);
+      for (var i = 0; i < 3; i++) {
+        var before = snapshot();
+        await tester.longPress(otherEpisode);
+        await tester.pumpAndSettle();
+        countChanges(before);
+        expect(
+          find.byKey(const ValueKey('downloads-selection-bar')),
+          findsOneWidget,
+        );
+        final selectedRect = tester.getRect(posterRaw);
+        expect(selectedRect.size, originalRect.size);
+        expect(
+          (selectedRect.topLeft - originalRect.topLeft).distance,
+          lessThanOrEqualTo(2),
+        );
+        if (i == 0) await captureFrame();
+
+        before = snapshot();
+        await tester.tap(
+          find.byKey(const ValueKey('downloads-clear-selection')),
+        );
+        await tester.pumpAndSettle();
+        countChanges(before);
+        expect(
+          find.byKey(const ValueKey('downloads-selection-bar')),
+          findsNothing,
+        );
+        expect(tester.getRect(posterRaw), originalRect);
+      }
+      final selectionChanges = (decodeChanges, fileImageChanges);
+      final rowFocus = Focus.of(tester.element(otherEpisode));
+      rowFocus.requestFocus();
+      await tester.pumpAndSettle();
+      expect(rowFocus.hasFocus, isTrue);
+      decodeChanges = fileImageChanges = 0;
+      for (var i = 0; i < 6; i++) {
+        final before = snapshot();
+        notifier.publish([active(.30 + i * .09), originalRow, second]);
+        await tester.pumpAndSettle();
+        countChanges(before);
+        expect(otherEpisode, findsOneWidget);
+        expect(Focus.of(tester.element(otherEpisode)), same(rowFocus));
+        expect(rowFocus.hasFocus, isTrue);
+        expect(tester.getRect(posterRaw), originalRect);
+      }
+      final transferChanges = (decodeChanges, fileImageChanges);
+
+      highQualityArtwork.value = false;
+      await tester.pumpAndSettle();
+      await checkPoster(original, 0x186a9eff, 160);
+      highQualityArtwork.value = true;
+      tester.view.devicePixelRatio = 3;
+      tester.view.physicalSize = const Size(1275, 2532);
+      await tester.pumpAndSettle();
+      await checkPoster(original, 0x186a9eff, 320);
+      tester.view.devicePixelRatio = 2;
+      tester.view.physicalSize = const Size(850, 1688);
+      await tester.pumpAndSettle();
+      await checkPoster(original, 0x186a9eff, 256);
+
+      notifier.publish([
+        active(.89),
+        first(replacementId, replacementUrl),
+        second,
+      ]);
+      await tester.pumpAndSettle();
+      expect(otherEpisode, findsOneWidget);
+      await checkPoster(replacement, 0xab4765ff, 256);
+      await captureFrame();
+      await tester.tap(
+        find.descendant(
+          of: find.byType(FilterStyleTabBar),
+          matching: find.text('التنزيلات'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(live, findsOneWidget);
+      await tester.tap(find.text('المكتملة'));
+      await tester.pumpAndSettle();
+      await checkPoster(replacement, 0xab4765ff, 256);
+      await captureFrame();
+
+      debugPrint(
+        'C21_DOWNLOAD_ART selection=$selectionChanges '
+        'transfer=$transferChanges rgba=$frames',
+      );
+      const expected = (0, 0);
+      expect(selectionChanges, expected);
+      expect(transferChanges, expected);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   testWidgets('completed route gives retained episode art priority', (
     tester,
   ) async {

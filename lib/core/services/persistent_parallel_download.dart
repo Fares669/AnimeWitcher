@@ -1669,14 +1669,13 @@ class PersistentParallelDownload {
     });
   }
 
-  int _activeConnectionsForSession(_ParallelSession session) => session.parts
-      .where(
-        (part) =>
-            part.launched &&
-            !part.complete &&
-            _activeConnectionIds.contains(part.task.taskId),
-      )
-      .length;
+  bool _ownsActiveConnection(_DownloadPart part) =>
+      part.launched &&
+      !part.complete &&
+      _activeConnectionIds.contains(part.task.taskId);
+
+  int _activeConnectionsForSession(_ParallelSession session) =>
+      session.parts.where(_ownsActiveConnection).length;
 
   bool _hasActiveNativeClaimOffer(_DownloadPart part) {
     final offer = _nativeClaimOffers[part.task.taskId];
@@ -3055,42 +3054,50 @@ class PersistentParallelDownload {
   void _emitAggregateProgress(_ParallelSession session) {
     if (_disposed || !session.active || session.deleted) return;
     final task = session.task;
-    final progress = session.progress;
     final expectedBytes = session.size;
-    // Speed is presentation telemetry, not recovery authority. On iOS the
-    // exact bytes currently arriving live in URLSession's temporary file and
-    // therefore advance credibleProgress before they can advance durableBytes.
-    // Feeding only durableBytes into the speed estimator made progress move
-    // while the UI stayed at 0 MB/s until a whole Range finalized.
-    final observedBytes = session.parts.fold<int>(0, (sum, part) {
-      final credible = part.credibleProgress.clamp(0.0, 1.0).toDouble();
-      final bytes = (part.size * credible).round().clamp(0, part.size).toInt();
-      return sum + bytes;
-    });
-    final childSpeedBytesPerSecond = session.parts.fold<double>(0, (sum, part) {
-      if (!part.launched || part.complete || part.speed <= 0) return sum;
-      return sum + part.speed * 1000 * 1000;
-    });
+    // Live byte evidence can lead durable part files. Keep the raw weighted
+    // progress and rounded/clamped transfer evidence distinct, but compute
+    // both along with child speed in the same ordered scan.
+    var weightedProgress = 0.0;
+    var observedBytes = 0;
+    var childSpeedBytesPerSecond = 0.0;
+    for (final part in session.parts) {
+      final size = part.size;
+      final credible = part.credibleProgress;
+      weightedProgress += size * credible;
+      observedBytes += (size * credible.clamp(0.0, 1.0).toDouble())
+          .round()
+          .clamp(0, size)
+          .toInt();
+      if (!part.launched || part.complete || part.speed <= 0) continue;
+      childSpeedBytesPerSecond += part.speed * 1000 * 1000;
+    }
+    final progress = expectedBytes <= 0
+        ? 0.0
+        : weightedProgress / expectedBytes;
     final timestamp = DateTime.now();
-    final nativeBridgeContributors = session.parts
-        .where(
-          (part) =>
-              part.lastNativeBridgeAt != null &&
-              timestamp.difference(part.lastNativeBridgeAt!) <
-                  const Duration(seconds: 2) &&
-              part.speed > 0,
-        )
-        .toList(growable: false);
-    final nativeBridgeSpeedBytesPerSecond = nativeBridgeContributors
-        .fold<double>(0, (sum, part) => sum + part.speed * 1000 * 1000);
-    // Child-reported speed is only a fallback when byte totals are unavailable.
-    // Once credible bytes exist, use it only for one fresh native byte bridge;
-    // multiple child callbacks need the estimator's minimum observation window.
-    final fallbackSpeedBytesPerSecond = observedBytes <= 0
-        ? childSpeedBytesPerSecond
-        : nativeBridgeContributors.length == 1
-        ? nativeBridgeSpeedBytesPerSecond
-        : 0.0;
+    // Only an unambiguous, fresh native byte bridge can be the fallback once
+    // there are observed bytes. Stop at a second match without a temporary
+    // list: its presence already rules out that fallback.
+    var fallbackSpeedBytesPerSecond = childSpeedBytesPerSecond;
+    if (observedBytes > 0) {
+      fallbackSpeedBytesPerSecond = 0.0;
+      var hasFreshBridge = false;
+      for (final part in session.parts) {
+        final at = part.lastNativeBridgeAt;
+        if (at == null ||
+            timestamp.difference(at) >= const Duration(seconds: 2) ||
+            !(part.speed > 0)) {
+          continue;
+        }
+        if (hasFreshBridge) {
+          fallbackSpeedBytesPerSecond = 0.0;
+          break;
+        }
+        hasFreshBridge = true;
+        fallbackSpeedBytesPerSecond = part.speed * 1000 * 1000;
+      }
+    }
     final telemetry = _speedTelemetry.observe(
       taskId: task.taskId,
       transferredBytes: observedBytes,
@@ -3119,8 +3126,13 @@ class PersistentParallelDownload {
 
     DateTime? latestNativeAt;
     var nativeWrittenBytes = 0;
+    var activeConnections = 0;
+    var durableBytes = 0;
     var hasNativeByteEvidence = false;
+    // This diagnostic snapshot still happens after the host sample callback.
     for (final part in session.parts) {
+      if (_ownsActiveConnection(part)) activeConnections++;
+      durableBytes += part.durableBytes;
       final at = part.lastNativeBridgeAt;
       if (at != null &&
           (latestNativeAt == null || at.isAfter(latestNativeAt))) {
@@ -3136,9 +3148,7 @@ class PersistentParallelDownload {
     int? ageMs(DateTime? at) => at == null
         ? null
         : timestamp.difference(at).inMilliseconds.clamp(0, 1 << 30).toInt();
-    final activeConnections = _activeConnectionsForSession(session);
     final liveBytes = observedBytes;
-    final durableBytes = session.creditedBytes;
 
     if (liveBytes > session.lastDiagnosticLiveBytes) {
       session.lastDiagnosticAdvanceAt = timestamp;
@@ -5500,7 +5510,9 @@ class _ParallelSession {
   int sourceReplacementEpoch = 0;
   bool sourceReplacementActive = false;
 
-  int get size => parts.fold(0, (sum, part) => sum + part.size);
+  // Ranges are fixed for the life of this session, including across source
+  // replacement and child retries. Only their task handles/state can mutate.
+  late final int size = parts.fold(0, (sum, part) => sum + part.size);
   int get creditedBytes =>
       parts.fold<int>(0, (sum, part) => sum + part.durableBytes);
   double get progress => size <= 0

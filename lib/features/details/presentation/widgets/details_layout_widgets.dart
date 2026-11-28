@@ -62,6 +62,28 @@ class _EpisodePresentation {
   late final List<List<Episode>> ranges = episodeRangesApply(ordered.length)
       ? episodeRanges(ordered)
       : const <List<Episode>>[];
+
+  int? _projectedRangeIndex;
+  List<Episode>? _projectedRange;
+
+  // Range membership uses the static list and display order only. Searching
+  // and live watch/download filters can reuse it without revisiting the
+  // entire season. Retain only the current range, never its live results.
+  List<Episode> rowsInBrowseRange(int? index) {
+    if (index == null || index < 0 || index >= ranges.length) {
+      _projectedRangeIndex = null;
+      _projectedRange = null;
+      return ordered;
+    }
+    if (index != _projectedRangeIndex) {
+      _projectedRange = episodeRowsInRange(
+        ordered,
+        ranges[index],
+      ).toList(growable: false);
+      _projectedRangeIndex = index;
+    }
+    return _projectedRange!;
+  }
 }
 
 bool _sameEpisodeRows(List<Episode> first, List<Episode> second) {
@@ -123,10 +145,8 @@ List<Episode> _browseDetailsEpisodes(
   required _EpisodePresentation presentation,
 }) {
   final filter = episodeListFilter.value;
-  final range = episodeRangeIndex.value;
-  if (filter == EpisodeListFilter.all && range == null) {
-    return presentation.ordered;
-  }
+  final candidates = presentation.rowsInBrowseRange(episodeRangeIndex.value);
+  if (filter == EpisodeListFilter.all) return candidates;
   EpisodeWatchRepository? watchRepository;
   EpisodeDownloadMembership? completed;
   if (filter == EpisodeListFilter.unwatched) {
@@ -139,9 +159,8 @@ List<Episode> _browseDetailsEpisodes(
     );
   }
   return browseEpisodes(
-    ordered: presentation.ordered,
-    rangeIndex: range,
-    ranges: presentation.ranges,
+    ordered: candidates,
+    rangeIndex: null,
     filter: filter,
     isWatched: (episode) =>
         episodeIsWatchedFor(watchRepository!, parentItem, episode),
