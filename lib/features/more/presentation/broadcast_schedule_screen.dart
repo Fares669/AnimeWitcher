@@ -4,8 +4,6 @@ import 'more_sidebar_shell.dart';
 
 import 'dart:async';
 
-import 'package:animewitcher/shared/widgets/app_page_header.dart';
-import 'package:animewitcher/shared/widgets/underline_segment_tabs.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
@@ -269,58 +267,24 @@ class _BroadcastScheduleScreenState
       }
     });
 
-    final embedded = MorePaneScope.of(context);
-    final headerTop = appPageHeaderContentTopInset(context);
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppPageAppBar(
-        title: 'جدول البث',
-        canPop: !embedded && Navigator.of(context).canPop(),
-        onBack: () => Navigator.of(context).pop(),
-      ),
-      body: Padding(
-        padding: EdgeInsets.only(top: headerTop),
-        child: Column(
-          children: [
-            _DayTabs(controller: _tabController),
-            Expanded(
-              child: TabBarView(
-                controller: _tabController,
-                children: [
-                  for (final day in animeWitcherBroadcastDays)
-                    // A hidden request may finish while another day is in
-                    // view. Update only its pane, not the visible grid/cards.
-                    ValueListenableBuilder<_BroadcastScheduleDayState>(
-                      valueListenable: _dayStates[day]!,
-                      builder: (context, state, _) => _ScheduleDayBody(
-                        day: day,
-                        state: state,
-                        onRefresh: () => _loadDay(day, refresh: true),
-                        onLoadMore: () => _loadDay(day, refresh: false),
-                      ),
-                    ),
-                ],
-              ),
+    return buildMoreCatalogTabs(
+      context,
+      title: 'جدول البث',
+      controller: _tabController,
+      tabLabels: animeWitcherBroadcastDays,
+      tabChildren: () => [
+        for (final day in animeWitcherBroadcastDays)
+          // A hidden request may finish while another day is in
+          // view. Update only its pane, not the visible grid/cards.
+          ValueListenableBuilder<_BroadcastScheduleDayState>(
+            valueListenable: _dayStates[day]!,
+            builder: (context, state, _) => _ScheduleDayBody(
+              day: day,
+              state: state,
+              onRefresh: () => _loadDay(day, refresh: true),
+              onLoadMore: () => _loadDay(day, refresh: false),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _DayTabs extends StatelessWidget {
-  const _DayTabs({required this.controller});
-
-  final TabController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    return FilterStyleTabBar(
-      controller: controller,
-      tabs: [
-        for (var i = 0; i < animeWitcherBroadcastDays.length; i++)
-          FilterStyleTab(label: animeWitcherBroadcastDays[i]),
+          ),
       ],
     );
   }

@@ -8,7 +8,6 @@
 library;
 
 import 'dart:collection';
-import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -128,19 +127,8 @@ class AnimeIdMappings {
     }
   }
 
-  AnimeIds? _readStored(int malId) {
-    final storage = _storage;
-    if (storage == null) return null;
-    try {
-      final raw = storage.getString(_storageKey);
-      if (raw == null || raw.trim().isEmpty) return null;
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map) return null;
-      return AnimeIds.fromJson(decoded['$malId']);
-    } catch (_) {
-      return null;
-    }
-  }
+  AnimeIds? _readStored(int malId) =>
+      readSkipId(_storage, _storageKey, '$malId', AnimeIds.fromJson);
 
   Future<void> _store(int malId, AnimeIds ids) =>
       saveSkipId(_storage, _storageKey, '$malId', _diskMax, ids.toJson);

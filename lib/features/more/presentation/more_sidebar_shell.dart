@@ -10,8 +10,10 @@ import 'package:flutter/material.dart';
 
 import '../../../core/utils/account_profile_avatar.dart';
 import '../../../core/utils/localized_text.dart';
+import '../../../shared/widgets/app_page_header.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
 import '../../../shared/widgets/desktop_sidebar_row.dart';
+import '../../../shared/widgets/underline_segment_tabs.dart';
 
 /// Marks the subtree as a pane inside [MoreSidebarShell].
 ///
@@ -28,6 +30,40 @@ class MorePaneScope extends InheritedWidget {
 
   @override
   bool updateShouldNotify(MorePaneScope oldWidget) => false;
+}
+
+/// The same frame for pushed and embedded More pages that show a tab group.
+Widget buildMoreCatalogTabs(
+  BuildContext context, {
+  required String title,
+  required TabController controller,
+  required Iterable<String> tabLabels,
+  required List<Widget> Function() tabChildren,
+}) {
+  final embedded = MorePaneScope.of(context);
+  final headerTop = appPageHeaderContentTopInset(context);
+  return Scaffold(
+    extendBodyBehindAppBar: true,
+    appBar: AppPageAppBar(
+      title: title,
+      canPop: !embedded && Navigator.of(context).canPop(),
+      onBack: () => Navigator.of(context).pop(),
+    ),
+    body: Padding(
+      padding: EdgeInsets.only(top: headerTop),
+      child: Column(
+        children: [
+          FilterStyleTabBar(
+            controller: controller,
+            tabs: [for (final label in tabLabels) FilterStyleTab(label: label)],
+          ),
+          Expanded(
+            child: TabBarView(controller: controller, children: tabChildren()),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 /// One destination in the sidebar.

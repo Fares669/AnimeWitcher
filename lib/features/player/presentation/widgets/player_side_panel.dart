@@ -64,16 +64,14 @@ DownloadItem? _activeEpisodeDownload(
   });
 }
 
-String _playerEpisodeDownloadTitle(MultimediaItem item, Episode episode) {
-  final label = formatEpisodeLabel(
-    episode: episode.episode,
-    title: episode.name,
-    isFinal: episode.isFinal,
-    serverName: episode.serverName,
-  );
-  // The dialog names the episode only ("الحلقة X"), like manga chapters.
-  return label.isEmpty ? item.title : label;
-}
+String _playerEpisodeDownloadTitle(MultimediaItem item, Episode episode) =>
+    formatEpisodeLabel(
+      episode: episode.episode,
+      title: episode.name,
+      isFinal: episode.isFinal,
+      serverName: episode.serverName,
+      whenEmpty: () => item.title,
+    );
 
 void _showPendingEpisodeDownloadProgress(
   BuildContext context,

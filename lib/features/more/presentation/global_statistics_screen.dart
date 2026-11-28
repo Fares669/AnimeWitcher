@@ -6,7 +6,6 @@ import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:animewitcher/shared/widgets/underline_segment_tabs.dart';
 
 import '../../../core/account/account_providers.dart';
@@ -71,51 +70,36 @@ class _GlobalStatisticsScreenState extends ConsumerState<GlobalStatisticsScreen>
   Widget build(BuildContext context) {
     final accountRevision = ref.watch(accountDataRevisionProvider);
 
-    final embedded = MorePaneScope.of(context);
-    final headerTop = appPageHeaderContentTopInset(context);
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppPageAppBar(
-        title: 'الإحصائيات العالمية',
-        canPop: !embedded && Navigator.of(context).canPop(),
-        onBack: () => Navigator.of(context).pop(),
+    return buildMoreCatalogTabs(
+      context,
+      title: 'الإحصائيات العالمية',
+      controller: _tabController,
+      tabLabels: AnimeWitcherGlobalRanking.values.map(
+        (ranking) => ranking.arabicTitle,
       ),
-      body: Padding(
-        padding: EdgeInsets.only(top: headerTop),
-        child: Column(
-          children: [
-            _RankingTabs(controller: _tabController),
-            Expanded(
-              child: TabBarView(
-                controller: _tabController,
-                children: [
-                  for (
-                    var index = 0;
-                    index < AnimeWitcherGlobalRanking.values.length;
-                    index++
-                  )
-                    LazyTabChild(
-                      controller: _tabController,
-                      index: index,
-                      builder: (context) {
-                        final ranking = AnimeWitcherGlobalRanking.values[index];
-                        return _RankingPage(
-                          key: ValueKey<String>(
-                            'global-ranking-page-${ranking.queryType}-$accountRevision',
-                          ),
-                          ranking: ranking,
-                          loadPage: _loadPage,
-                          tabs: _tabController,
-                          tabIndex: index,
-                        );
-                      },
-                    ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
+      tabChildren: () => [
+        for (
+          var index = 0;
+          index < AnimeWitcherGlobalRanking.values.length;
+          index++
+        )
+          LazyTabChild(
+            controller: _tabController,
+            index: index,
+            builder: (context) {
+              final ranking = AnimeWitcherGlobalRanking.values[index];
+              return _RankingPage(
+                key: ValueKey<String>(
+                  'global-ranking-page-${ranking.queryType}-$accountRevision',
+                ),
+                ranking: ranking,
+                loadPage: _loadPage,
+                tabs: _tabController,
+                tabIndex: index,
+              );
+            },
+          ),
+      ],
     );
   }
 }
@@ -368,24 +352,6 @@ class _RankingPageState extends State<_RankingPage>
       loadMoreError: _loadMoreError != null,
       onLoadMoreRetry: _loadMore,
       onRefresh: _loadInitial,
-    );
-  }
-}
-
-class _RankingTabs extends StatelessWidget {
-  const _RankingTabs({required this.controller});
-
-  final TabController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    const rankings = AnimeWitcherGlobalRanking.values;
-    return FilterStyleTabBar(
-      controller: controller,
-      tabs: [
-        for (final ranking in rankings)
-          FilterStyleTab(label: ranking.arabicTitle),
-      ],
     );
   }
 }

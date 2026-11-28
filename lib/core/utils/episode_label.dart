@@ -164,20 +164,22 @@ String formatEpisodePrimaryLabel({
   ).primary;
 }
 
-/// The exact server name, or a legacy display fallback when it is missing.
+/// The server name or legacy display label; calls [whenEmpty] only for no label.
 String formatEpisodeLabel({
   required int episode,
   String? title,
   bool isFinal = false,
   String? serverName,
+  String Function()? whenEmpty,
 }) {
   if (serverName?.trim().isNotEmpty ?? false) return serverName!;
-  return resolveEpisodeLabel(
+  final label = resolveEpisodeLabel(
     episode: episode,
     title: title,
     serverName: serverName,
     isFinal: isFinal,
   ).full;
+  return whenEmpty != null && label.isEmpty ? whenEmpty() : label;
 }
 
 /// Episode number or catalog label followed by the title in the player header.

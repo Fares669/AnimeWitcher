@@ -48,13 +48,9 @@ Future<void> showTaskbarCustomizationDialog(
                   child: ReorderableListView.builder(
                     buildDefaultDragHandles: false,
                     itemCount: order.length,
-                    onReorder: (oldIndex, newIndex) {
-                      setState(() {
-                        if (newIndex > oldIndex) newIndex -= 1;
-                        final item = order.removeAt(oldIndex);
-                        order.insert(newIndex, item);
-                      });
-                    },
+                    onReorderItem: (oldIndex, newIndex) => setState(
+                      () => order.insert(newIndex, order.removeAt(oldIndex)),
+                    ),
                     itemBuilder: (context, index) {
                       final destination = order[index];
                       final visible = !hidden.contains(destination.id);

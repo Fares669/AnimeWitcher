@@ -75,13 +75,9 @@ Future<void> _showStreamPriorityDialog(
                   child: ReorderableListView.builder(
                     buildDefaultDragHandles: false,
                     itemCount: order.length,
-                    onReorder: (oldIndex, newIndex) {
-                      setState(() {
-                        if (newIndex > oldIndex) newIndex -= 1;
-                        final value = order.removeAt(oldIndex);
-                        order.insert(newIndex, value);
-                      });
-                    },
+                    onReorderItem: (oldIndex, newIndex) => setState(
+                      () => order.insert(newIndex, order.removeAt(oldIndex)),
+                    ),
                     itemBuilder: (context, index) => Card(
                       key: ValueKey<String>('stream-priority-${order[index]}'),
                       margin: const EdgeInsets.only(bottom: 8),

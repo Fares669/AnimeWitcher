@@ -40,18 +40,14 @@ import 'download_management_dialog.dart';
 import 'witanime_report_dialog.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 
-/// `{series} - {episode}` for download dialogs, keeping the name of numberless
-/// rows (specials, OVAs, مترجم/مدبلج) instead of an empty trailing dash.
-String _downloadDialogTitle(MultimediaItem parentItem, Episode episode) {
-  final label = formatEpisodeLabel(
-    episode: episode.episode,
-    title: episode.name,
-    isFinal: episode.isFinal,
-    serverName: episode.serverName,
-  );
-  // The dialog names the episode only ("الحلقة X"), like manga chapters.
-  return label.isEmpty ? parentItem.title : label;
-}
+String _downloadDialogTitle(MultimediaItem parentItem, Episode episode) =>
+    formatEpisodeLabel(
+      episode: episode.episode,
+      title: episode.name,
+      isFinal: episode.isFinal,
+      serverName: episode.serverName,
+      whenEmpty: () => parentItem.title,
+    );
 
 class EpisodeCard extends HookConsumerWidget {
   static const double _thumbnailAspectRatio = 16 / 9;

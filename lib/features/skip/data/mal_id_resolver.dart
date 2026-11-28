@@ -1,5 +1,4 @@
 import 'dart:collection';
-import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -462,20 +461,12 @@ query ($search: String) {
     }
   }
 
-  int? _readStored(String key) {
-    final storage = _storage;
-    if (storage == null) return null;
-    try {
-      final raw = storage.getString(_storageKey);
-      if (raw == null || raw.trim().isEmpty) return null;
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map) return null;
-      final value = decoded[key];
-      return (value is num && value > 0) ? value.toInt() : null;
-    } catch (_) {
-      return null;
-    }
-  }
+  int? _readStored(String key) => readSkipId(
+    _storage,
+    _storageKey,
+    key,
+    (value) => (value is num && value > 0) ? value.toInt() : null,
+  );
 
   Future<void> _store(String key, int malId) =>
       saveSkipId(_storage, _storageKey, key, _diskMax, () => malId);

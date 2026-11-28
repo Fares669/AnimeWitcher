@@ -52,157 +52,148 @@ class PlayerBottomSheets {
                 .clamp(120.0, availableHeight)
                 .toDouble();
 
-            return Dialog(
-              backgroundColor: HotstarPlayerStyle.background,
-              insetPadding: EdgeInsets.symmetric(
-                horizontal: isCompact ? 14 : 16,
-                vertical: isCompact ? 16 : 24,
-              ),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(isCompact ? 14 : 20),
-              ),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: maxWidth,
-                  maxHeight: compactHeight,
-                ),
-                child: Theme(
-                  data: Theme.of(context).copyWith(
-                    brightness: Brightness.dark,
-                    colorScheme: ColorScheme.dark(
-                      primary: Theme.of(context).colorScheme.primary,
-                      surface: HotstarPlayerStyle.background,
-                      onSurface: HotstarPlayerStyle.primaryText,
+            return HotstarPlayerStyle.dialogFrame(
+              compact: isCompact,
+              radius: isCompact ? 14 : 20,
+              size: Size(maxWidth, compactHeight),
+              body: Theme(
+                data: Theme.of(context).copyWith(
+                  brightness: Brightness.dark,
+                  colorScheme: ColorScheme.dark(
+                    primary: Theme.of(context).colorScheme.primary,
+                    surface: HotstarPlayerStyle.background,
+                    onSurface: HotstarPlayerStyle.primaryText,
+                  ),
+                  chipTheme: ChipThemeData(
+                    backgroundColor: Colors.white.withValues(alpha: 0.06),
+                    selectedColor: Theme.of(context).colorScheme.primary
+                        .withValues(alpha: 0.22),
+                    disabledColor: Colors.white.withValues(alpha: 0.04),
+                    labelStyle: const TextStyle(
+                      color: HotstarPlayerStyle.secondaryText,
                     ),
-                    chipTheme: ChipThemeData(
-                      backgroundColor: Colors.white.withValues(alpha: 0.06),
-                      selectedColor: Theme.of(context).colorScheme.primary.withValues(
-                        alpha: 0.22,
-                      ),
-                      disabledColor: Colors.white.withValues(alpha: 0.04),
-                      labelStyle: const TextStyle(
-                        color: HotstarPlayerStyle.secondaryText,
-                      ),
-                      secondaryLabelStyle: const TextStyle(
-                        color: HotstarPlayerStyle.primaryText,
-                      ),
-                      side: BorderSide.none,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(6),
-                      ),
+                    secondaryLabelStyle: const TextStyle(
+                      color: HotstarPlayerStyle.primaryText,
+                    ),
+                    side: BorderSide.none,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
                     ),
                   ),
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      isCompact ? 16 : 24,
-                      isCompact ? 12 : 18,
-                      isCompact ? 16 : 24,
-                      isCompact ? 16 : 24,
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                l10n.playbackSpeed,
-                                style: TextStyle(
-                                  color: HotstarPlayerStyle.primaryText,
-                                  fontSize: isCompact ? 15 : 18,
-                                  fontWeight: FontWeight.w800,
-                                ),
+                ),
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    isCompact ? 16 : 24,
+                    isCompact ? 12 : 18,
+                    isCompact ? 16 : 24,
+                    isCompact ? 16 : 24,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              l10n.playbackSpeed,
+                              style: TextStyle(
+                                color: HotstarPlayerStyle.primaryText,
+                                fontSize: isCompact ? 15 : 18,
+                                fontWeight: FontWeight.w800,
                               ),
                             ),
-                            IconButton(
-                              onPressed: () => Navigator.pop(ctx),
-                              icon: const Icon(Icons.close),
-                              color: HotstarPlayerStyle.secondaryText,
-                              autofocus: true,
-                            ),
-                          ],
-                        ),
-                        SizedBox(height: isCompact ? 10 : 20),
-                        Text(
-                          _formatSpeed(selectedSpeed),
-                          style: TextStyle(
-                            color: HotstarPlayerStyle.primaryText,
-                            fontSize: isCompact ? 23 : 28,
-                            fontWeight: FontWeight.w500,
                           ),
+                          IconButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            icon: const Icon(Icons.close),
+                            color: HotstarPlayerStyle.secondaryText,
+                            autofocus: true,
+                          ),
+                        ],
+                      ),
+                      SizedBox(height: isCompact ? 10 : 20),
+                      Text(
+                        _formatSpeed(selectedSpeed),
+                        style: TextStyle(
+                          color: HotstarPlayerStyle.primaryText,
+                          fontSize: isCompact ? 23 : 28,
+                          fontWeight: FontWeight.w500,
                         ),
-                        SizedBox(height: isCompact ? 14 : 24),
-                        Row(
-                          children: [
-                            _speedStepButton(
-                              icon: Icons.remove,
-                              onPressed: () => setSpeed(selectedSpeed - 0.1),
-                              compact: isCompact,
-                            ),
-                            SizedBox(width: isCompact ? 10 : 18),
-                            Expanded(
-                              child: SliderTheme(
-                                data: SliderThemeData(
-                                  trackHeight: isCompact ? 10 : 18,
-                                  activeTrackColor:
-                                      Theme.of(context).colorScheme.primary,
-                                  inactiveTrackColor: Theme.of(context)
-                                      .colorScheme
-                                      .primary
-                                      .withValues(alpha: 0.20),
-                                  thumbColor:
-                                      Theme.of(context).colorScheme.primary,
-                                  overlayColor: Theme.of(context).colorScheme.primary
-                                      .withValues(alpha: 0.12),
-                                  thumbShape: const RoundSliderThumbShape(
-                                    enabledThumbRadius: 4,
-                                  ),
-                                  trackShape:
-                                      const RoundedRectSliderTrackShape(),
+                      ),
+                      SizedBox(height: isCompact ? 14 : 24),
+                      Row(
+                        children: [
+                          _speedStepButton(
+                            icon: Icons.remove,
+                            onPressed: () => setSpeed(selectedSpeed - 0.1),
+                            compact: isCompact,
+                          ),
+                          SizedBox(width: isCompact ? 10 : 18),
+                          Expanded(
+                            child: SliderTheme(
+                              data: SliderThemeData(
+                                trackHeight: isCompact ? 10 : 18,
+                                activeTrackColor: Theme.of(context)
+                                    .colorScheme
+                                    .primary,
+                                inactiveTrackColor: Theme.of(context)
+                                    .colorScheme
+                                    .primary
+                                    .withValues(alpha: 0.20),
+                                thumbColor: Theme.of(context)
+                                    .colorScheme
+                                    .primary,
+                                overlayColor: Theme.of(context)
+                                    .colorScheme
+                                    .primary
+                                    .withValues(alpha: 0.12),
+                                thumbShape: const RoundSliderThumbShape(
+                                  enabledThumbRadius: 4,
                                 ),
-                                child: CustomSlider(
-                                  value: selectedSpeed,
-                                  min: 0.25,
-                                  max: sliderMax,
-                                  step: 0.05,
-                                  divisions: sliderDivisions > 0
-                                      ? sliderDivisions
-                                      : null,
-                                  // Pure visual indicator on TV — the −/+
-                                  // buttons adjust it. Keeping it out of focus
-                                  // traversal means D-pad Up/Down isn't trapped
-                                  // and moves between the buttons and presets.
-                                  focusable: false,
-                                  onChanged: setSpeed,
-                                ),
+                                trackShape: const RoundedRectSliderTrackShape(),
+                              ),
+                              child: CustomSlider(
+                                value: selectedSpeed,
+                                min: 0.25,
+                                max: sliderMax,
+                                step: 0.05,
+                                divisions: sliderDivisions > 0
+                                    ? sliderDivisions
+                                    : null,
+                                // Pure visual indicator on TV — the −/+
+                                // buttons adjust it. Keeping it out of focus
+                                // traversal means D-pad Up/Down isn't trapped
+                                // and moves between the buttons and presets.
+                                focusable: false,
+                                onChanged: setSpeed,
                               ),
                             ),
-                            SizedBox(width: isCompact ? 10 : 18),
-                            _speedStepButton(
-                              icon: Icons.add,
-                              onPressed: () => setSpeed(selectedSpeed + 0.1),
-                              compact: isCompact,
-                            ),
-                          ],
-                        ),
-                        SizedBox(height: isCompact ? 14 : 24),
-                        Wrap(
-                          alignment: WrapAlignment.center,
-                          spacing: isCompact ? 7 : 10,
-                          runSpacing: isCompact ? 7 : 10,
-                          children: speeds.map((speed) {
-                            final isSelected =
-                                (selectedSpeed - speed).abs() < 0.01;
-                            return _SpeedPresetChip(
-                              speed: speed,
-                              isSelected: isSelected,
-                              isCompact: isCompact,
-                              onTap: () => setSpeed(speed),
-                            );
-                          }).toList(),
-                        ),
-                      ],
-                    ),
+                          ),
+                          SizedBox(width: isCompact ? 10 : 18),
+                          _speedStepButton(
+                            icon: Icons.add,
+                            onPressed: () => setSpeed(selectedSpeed + 0.1),
+                            compact: isCompact,
+                          ),
+                        ],
+                      ),
+                      SizedBox(height: isCompact ? 14 : 24),
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: isCompact ? 7 : 10,
+                        runSpacing: isCompact ? 7 : 10,
+                        children: speeds.map((speed) {
+                          final isSelected =
+                              (selectedSpeed - speed).abs() < 0.01;
+                          return _SpeedPresetChip(
+                            speed: speed,
+                            isSelected: isSelected,
+                            isCompact: isCompact,
+                            onTap: () => setSpeed(speed),
+                          );
+                        }).toList(),
+                      ),
+                    ],
                   ),
                 ),
               ),
