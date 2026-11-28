@@ -512,45 +512,31 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     };
 
     final colors = Theme.of(context).colorScheme;
-    final background = colors.primary;
     final foreground = colors.onPrimary;
-    return Semantics(
-      button: true,
+    return buildDetailsHeroPrimaryPill(
       label: label,
-      child: Material(
-        key: const ValueKey<String>('manga-read-pill'),
-        color: target != null ? background : background.withValues(alpha: 0.38),
-        borderRadius: BorderRadius.circular(kDetailsHeroActionHeight / 2),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: target == null ? null : () => open(target.chapter),
-          child: SizedBox(
-            height: kDetailsHeroActionHeight,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 22),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Icon(Icons.menu_book_rounded, size: 22, color: foreground),
-                  const SizedBox(width: 8),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 320),
-                    child: Text(
-                      label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: foreground,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
+      background: colors.primary,
+      materialKey: const ValueKey<String>('manga-read-pill'),
+      onTap: target == null ? null : () => open(target.chapter),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(Icons.menu_book_rounded, size: 22, color: foreground),
+          const SizedBox(width: 8),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 320),
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: foreground,
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }

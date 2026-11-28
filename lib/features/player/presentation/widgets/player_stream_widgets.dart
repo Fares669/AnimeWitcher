@@ -144,16 +144,8 @@ class _PlayerProgressBarState extends ConsumerState<PlayerProgressBar> {
     super.dispose();
   }
 
-  String _formatDuration(Duration duration) {
-    final absDuration = duration.abs();
-    final hours = absDuration.inHours;
-    final minutes = absDuration.inMinutes.remainder(60);
-    final seconds = absDuration.inSeconds.remainder(60);
-    if (hours > 0) {
-      return '$hours:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
-    }
-    return '$minutes:${seconds.toString().padLeft(2, '0')}';
-  }
+  String _formatDuration(Duration duration) =>
+      formatPlayerDuration(duration.abs());
 
   String _formatRemaining(Duration duration, Duration position) {
     final remaining = duration - position;
@@ -1110,18 +1102,7 @@ class _SeekBarState extends State<_SeekBar> {
 
   String _formatDuration(double ms) {
     if (ms.isNaN || ms.isInfinite) return '0:00';
-    final duration = Duration(milliseconds: ms.toInt());
-    final int hours = duration.inHours;
-    final int minutes = duration.inMinutes.remainder(60);
-    final int seconds = duration.inSeconds.remainder(60);
-
-    final String secondsStr = seconds.toString().padLeft(2, '0');
-    if (hours > 0) {
-      final String minutesStr = minutes.toString().padLeft(2, '0');
-      return '$hours:$minutesStr:$secondsStr';
-    } else {
-      return '$minutes:$secondsStr';
-    }
+    return formatPlayerDuration(Duration(milliseconds: ms.toInt()));
   }
 
   @override

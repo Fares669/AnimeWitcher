@@ -168,6 +168,15 @@ Widget _ratingDialogBody(
 }) {
   // A width to aim for, not one to insist on: a narrow window would
   // otherwise be handed a 420px row of buttons and overflow it.
+  final parts = buildAnimeRatingDialogParts(
+    context,
+    dialogContext: dialogContext,
+    initialRating: initialRating,
+    rating: rating,
+    textAlign: TextAlign.center,
+    onConfirm: () => Navigator.pop(dialogContext, rating),
+    onChanged: onChanged,
+  );
   return ConstrainedBox(
     constraints: const BoxConstraints(maxWidth: 420),
     child: Column(
@@ -181,45 +190,55 @@ Widget _ratingDialogBody(
               ?.copyWith(fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 10),
-        Text(
-          '$rating /10',
-          textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.headlineSmall
-              ?.copyWith(fontWeight: FontWeight.w800),
-        ),
-        const SizedBox(height: 12),
-        FittedBox(
-          fit: BoxFit.scaleDown,
-          child: ScaleRatingBar(
-            rating: rating,
-            starSize: 30,
-            onChanged: onChanged,
-          ),
-        ),
+        ...parts.inputs,
         const SizedBox(height: 14),
         Wrap(
           alignment: WrapAlignment.end,
           spacing: 4,
           runSpacing: 4,
-          children: [
-            if (initialRating > 0)
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, 0),
-                child: const Text('مسح التقييم'),
-              ),
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('إلغاء'),
-            ),
-            FilledButton(
-              onPressed: rating <= 0
-                  ? null
-                  : () => Navigator.pop(dialogContext, rating),
-              child: const Text('تأكيد'),
-            ),
-          ],
+          children: parts.buttons,
         ),
       ],
     ),
   );
 }
+
+/// Both rating dialog designs return null on cancel and zero on removal.
+({List<Widget> inputs, List<Widget> buttons}) buildAnimeRatingDialogParts(
+  BuildContext context, {
+  required BuildContext dialogContext,
+  required int initialRating,
+  required int rating,
+  required VoidCallback onConfirm,
+  required ValueChanged<int> onChanged,
+  TextAlign? textAlign,
+}) => (
+  inputs: [
+    Text(
+      '$rating /10',
+      textAlign: textAlign,
+      style: Theme.of(context).textTheme.headlineSmall
+          ?.copyWith(fontWeight: FontWeight.w800),
+    ),
+    const SizedBox(height: 12),
+    FittedBox(
+      fit: BoxFit.scaleDown,
+      child: ScaleRatingBar(rating: rating, starSize: 30, onChanged: onChanged),
+    ),
+  ],
+  buttons: [
+    if (initialRating > 0)
+      TextButton(
+        onPressed: () => Navigator.pop(dialogContext, 0),
+        child: const Text('مسح التقييم'),
+      ),
+    TextButton(
+      onPressed: () => Navigator.pop(dialogContext),
+      child: const Text('إلغاء'),
+    ),
+    FilledButton(
+      onPressed: rating <= 0 ? null : onConfirm,
+      child: const Text('تأكيد'),
+    ),
+  ],
+);

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'comment_pager.dart';
-import 'comment_screen_messages.dart';
+import 'comment_thread_state.dart';
 import '../../../core/utils/relative_time.dart';
 
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
@@ -42,17 +41,15 @@ class AnimeWitcherRepliesScreen extends ConsumerStatefulWidget {
 }
 
 class _AnimeWitcherRepliesScreenState
-    extends ConsumerState<AnimeWitcherRepliesScreen>
-    with CommentScreenMessages<AnimeWitcherRepliesScreen> {
+    extends CommentThreadState<AnimeWitcherRepliesScreen> {
+  _AnimeWitcherRepliesScreenState()
+    : super(AnimeWitcherCommentSort.repliesDefault, _replyErrorText);
+
   static const int _pageSize = 20;
 
   final TextEditingController _replyController = TextEditingController();
   final FocusNode _replyFocusNode = FocusNode();
   final Set<String> _pendingLikes = <String>{};
-  late final ScrollController _scrollController;
-
-  final CommentPager _pager = CommentPager();
-  AnimeWitcherCommentSort _sort = AnimeWitcherCommentSort.repliesDefault;
   bool _publishing = false;
   bool _parentRevealed = false;
   String? _userTagId;
@@ -60,19 +57,15 @@ class _AnimeWitcherRepliesScreenState
   @override
   void initState() {
     super.initState();
-    _scrollController = ScrollController()..addListener(_onScroll);
+    initThreadScroll();
     _replyController.addListener(_onReplyTextChanged);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _loadInitial();
-    });
+    loadThreadAfterFirstFrame();
   }
 
   @override
   void dispose() {
     applePersistentGlassHeaderController.hide(this);
-    _scrollController
-      ..removeListener(_onScroll)
-      ..dispose();
+    disposeThreadScroll();
     _replyController
       ..removeListener(_onReplyTextChanged)
       ..dispose();
@@ -80,12 +73,9 @@ class _AnimeWitcherRepliesScreenState
     super.dispose();
   }
 
-  void _onScroll() {
-    if (_pager.shouldLoadMore(_scrollController)) _loadMore();
-  }
-
-  Future<AnimeWitcherCommentPage> _fetchPage(FirestoreDocument? cursor) {
-    final sort = _sort;
+  @override
+  Future<AnimeWitcherCommentPage> fetchThreadPage(FirestoreDocument? cursor) {
+    final sort = threadSort;
     return ref
         .read(animeWitcherAccountServiceProvider)
         .loadReplies(
@@ -94,27 +84,6 @@ class _AnimeWitcherRepliesScreenState
           cursor: cursor,
           limit: _pageSize,
         );
-  }
-
-  Future<void> _loadInitial() async {
-    if (!mounted) return;
-    final future = _pager.loadInitial(_fetchPage);
-    setState(() {});
-    if (await future && mounted) setState(() {});
-  }
-
-  Future<void> _loadMore() async {
-    if (_pager.loadingInitial || _pager.loadingMore || !_pager.hasMore) {
-      return;
-    }
-    final future = _pager.loadMore(
-      _fetchPage,
-      onError: (error) {
-        if (mounted) showCommentMessage(_replyErrorText(error), isError: true);
-      },
-    );
-    setState(() {});
-    if (await future && mounted) setState(() {});
   }
 
   Future<void> _toggleLike(AnimeWitcherComment reply) async {
@@ -131,8 +100,8 @@ class _AnimeWitcherRepliesScreenState
     try {
       final updated = await service.toggleCommentLike(reply);
       if (!mounted) return;
-      final index = _pager.items.indexWhere((item) => item.path == reply.path);
-      if (index >= 0) setState(() => _pager.replaceAt(index, updated));
+      final index = pager.items.indexWhere((item) => item.path == reply.path);
+      if (index >= 0) setState(() => pager.replaceAt(index, updated));
     } catch (error) {
       if (mounted) {
         showCommentMessage(_replyErrorText(error), isError: true);
@@ -157,7 +126,7 @@ class _AnimeWitcherRepliesScreenState
       _replyController.clear();
       setState(() => _userTagId = null);
       showCommentMessage('تم إرسال الرد.');
-      await _loadInitial();
+      await reloadThread();
     } catch (error) {
       if (mounted) {
         showCommentMessage(_replyErrorText(error), isError: true);
@@ -209,16 +178,6 @@ class _AnimeWitcherRepliesScreenState
     }
   }
 
-  Future<void> _applyReplySort(String value) async {
-    final selected = AnimeWitcherCommentSort.fromNameOr(value, _sort);
-    if (selected == _sort || !mounted) return;
-    setState(() => _sort = selected);
-    if (_scrollController.hasClients) {
-      _scrollController.jumpTo(0);
-    }
-    await _loadInitial();
-  }
-
   @override
   Widget build(BuildContext context) {
     final accountState = ref.watch(animeWitcherAccountControllerProvider);
@@ -240,8 +199,8 @@ class _AnimeWitcherRepliesScreenState
             trailingButtons: AnimeWitcherCommentSortControl.persistentButtons(
               context: context,
               tooltip: 'ترتيب الردود',
-              sort: _sort,
-              onSelected: _applyReplySort,
+              sort: threadSort,
+              onSelected: selectThreadSort,
             ),
           ),
         );
@@ -257,9 +216,9 @@ class _AnimeWitcherRepliesScreenState
             ? const <Widget>[]
             : AnimeWitcherCommentSortControl.appBarActions(
                 tooltip: 'ترتيب الردود',
-                selectedValue: _sort.name,
+                selectedValue: threadSort.name,
                 items: AnimeWitcherCommentSortControl.menuItems(),
-                onSelected: _applyReplySort,
+                onSelected: selectThreadSort,
               ),
       ),
       body: Column(
@@ -273,10 +232,10 @@ class _AnimeWitcherRepliesScreenState
 
   Widget _buildRepliesBody(BuildContext context) {
     if (widget.showParent) return _buildNotificationThread(context);
-    if (_pager.loadingInitial) {
+    if (pager.loadingInitial) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (_pager.loadError != null && _pager.items.isEmpty) {
+    if (pager.loadError != null && pager.items.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -288,7 +247,7 @@ class _AnimeWitcherRepliesScreenState
               Text('تعذر تحميل الردود.'),
               const SizedBox(height: 10),
               FilledButton.tonalIcon(
-                onPressed: _loadInitial,
+                onPressed: reloadThread,
                 icon: const Icon(Icons.refresh_rounded),
                 label: Text('إعادة المحاولة'),
               ),
@@ -297,9 +256,9 @@ class _AnimeWitcherRepliesScreenState
         ),
       );
     }
-    if (_pager.items.isEmpty) {
+    if (pager.items.isEmpty) {
       return MouseDragRefreshIndicator(
-        onRefresh: _loadInitial,
+        onRefresh: reloadThread,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: EdgeInsets.only(top: appPageHeaderContentTopInset(context)),
@@ -318,9 +277,9 @@ class _AnimeWitcherRepliesScreenState
     }
 
     return MouseDragRefreshIndicator(
-      onRefresh: _loadInitial,
+      onRefresh: reloadThread,
       child: ListView.separated(
-        controller: _scrollController,
+        controller: threadScroll,
         physics: const AlwaysScrollableScrollPhysics(),
         padding: EdgeInsets.fromLTRB(
           12,
@@ -329,11 +288,10 @@ class _AnimeWitcherRepliesScreenState
           24,
         ),
         itemCount:
-            _pager.items.length +
-            (_pager.hasMore || _pager.loadingMore ? 1 : 0),
+            pager.items.length + (pager.hasMore || pager.loadingMore ? 1 : 0),
         separatorBuilder: (_, __) => const SizedBox(height: 8),
         itemBuilder: (context, index) {
-          if (index >= _pager.items.length) {
+          if (index >= pager.items.length) {
             return const Padding(
               padding: EdgeInsets.symmetric(vertical: 18),
               child: Center(
@@ -345,7 +303,7 @@ class _AnimeWitcherRepliesScreenState
               ),
             );
           }
-          return _buildReplyCard(context, _pager.items[index]);
+          return _buildReplyCard(context, pager.items[index]);
         },
       ),
     );
@@ -355,9 +313,9 @@ class _AnimeWitcherRepliesScreenState
     final parent = widget.parentComment;
     final showText = !parent.spoiler || _parentRevealed;
     return MouseDragRefreshIndicator(
-      onRefresh: _loadInitial,
+      onRefresh: reloadThread,
       child: ListView(
-        controller: _scrollController,
+        controller: threadScroll,
         physics: const AlwaysScrollableScrollPhysics(),
         padding: EdgeInsets.fromLTRB(
           12,
@@ -381,21 +339,21 @@ class _AnimeWitcherRepliesScreenState
               label: const Text('تعليق يحتوي على حرق — اضغط للعرض'),
             ),
           const SizedBox(height: 16),
-          if (_pager.loadingInitial)
+          if (pager.loadingInitial)
             const Center(child: CircularProgressIndicator())
           else ...[
-            if (_pager.loadError != null)
+            if (pager.loadError != null)
               TextButton(
-                onPressed: _loadInitial,
+                onPressed: reloadThread,
                 child: const Text('تعذر تحميل الردود. إعادة المحاولة'),
               ),
-            if (_pager.items.isEmpty && _pager.loadError == null)
+            if (pager.items.isEmpty && pager.loadError == null)
               const Text('لا توجد ردود بعد.', textAlign: TextAlign.center),
-            for (final reply in _pager.items) ...[
+            for (final reply in pager.items) ...[
               _buildReplyCard(context, reply),
               const SizedBox(height: 8),
             ],
-            if (_pager.loadingMore)
+            if (pager.loadingMore)
               const Center(child: CircularProgressIndicator()),
           ],
         ],

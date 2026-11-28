@@ -15,6 +15,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../../core/network/dio_client_provider.dart';
 import '../../../../core/storage/storage_service.dart';
+import 'skip_id_persistence.dart';
 
 part 'anime_id_mappings.g.dart';
 
@@ -141,25 +142,8 @@ class AnimeIdMappings {
     }
   }
 
-  Future<void> _store(int malId, AnimeIds ids) async {
-    final storage = _storage;
-    if (storage == null) return;
-    try {
-      final raw = storage.getString(_storageKey);
-      final decoded = raw == null || raw.trim().isEmpty
-          ? <String, dynamic>{}
-          : jsonDecode(raw);
-      final all = decoded is Map
-          ? decoded.map((k, v) => MapEntry(k.toString(), v))
-          : <String, dynamic>{};
-      all.remove('$malId');
-      all['$malId'] = ids.toJson();
-      while (all.length > _diskMax) {
-        all.remove(all.keys.first);
-      }
-      await storage.setString(_storageKey, jsonEncode(all));
-    } catch (_) {}
-  }
+  Future<void> _store(int malId, AnimeIds ids) =>
+      saveSkipId(_storage, _storageKey, '$malId', _diskMax, ids.toJson);
 }
 
 @riverpod

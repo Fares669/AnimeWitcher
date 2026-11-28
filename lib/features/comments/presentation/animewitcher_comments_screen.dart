@@ -1,8 +1,7 @@
 import 'dart:async';
 
 import 'comment_edit_dialog.dart';
-import 'comment_pager.dart';
-import 'comment_screen_messages.dart';
+import 'comment_thread_state.dart';
 import '../../../core/utils/relative_time.dart';
 import '../../../shared/widgets/confirm_dialog.dart';
 
@@ -32,8 +31,10 @@ class AnimeWitcherCommentsScreen extends ConsumerStatefulWidget {
 }
 
 class _AnimeWitcherCommentsScreenState
-    extends ConsumerState<AnimeWitcherCommentsScreen>
-    with CommentScreenMessages<AnimeWitcherCommentsScreen> {
+    extends CommentThreadState<AnimeWitcherCommentsScreen> {
+  _AnimeWitcherCommentsScreenState()
+    : super(AnimeWitcherCommentSort.commentsDefault, _commentErrorText);
+
   int get _pageSize => _isReviews ? kAnimeWitcherReviewsPageSize : 20;
 
   bool get _isReviews => widget.target.isReviews;
@@ -66,38 +67,27 @@ class _AnimeWitcherCommentsScreenState
   final Set<String> _revealedSpoilers = <String>{};
   final Set<String> _pendingLikes = <String>{};
   final Set<String> _pendingCommentActions = <String>{};
-  late final ScrollController _scrollController;
-
-  final CommentPager _pager = CommentPager();
-  AnimeWitcherCommentSort _sort = AnimeWitcherCommentSort.commentsDefault;
   bool _spoiler = false;
   bool _publishing = false;
 
   @override
   void initState() {
     super.initState();
-    _scrollController = ScrollController()..addListener(_onScroll);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _loadInitial();
-    });
+    initThreadScroll();
+    loadThreadAfterFirstFrame();
   }
 
   @override
   void dispose() {
     applePersistentGlassHeaderController.hide(this);
-    _scrollController
-      ..removeListener(_onScroll)
-      ..dispose();
+    disposeThreadScroll();
     _commentController.dispose();
     super.dispose();
   }
 
-  void _onScroll() {
-    if (_pager.shouldLoadMore(_scrollController)) _loadMore();
-  }
-
-  Future<AnimeWitcherCommentPage> _fetchPage(FirestoreDocument? cursor) {
-    final sort = _sort;
+  @override
+  Future<AnimeWitcherCommentPage> fetchThreadPage(FirestoreDocument? cursor) {
+    final sort = threadSort;
     return ref
         .read(animeWitcherAccountServiceProvider)
         .loadComments(
@@ -106,27 +96,6 @@ class _AnimeWitcherCommentsScreenState
           cursor: cursor,
           limit: _pageSize,
         );
-  }
-
-  Future<void> _loadInitial() async {
-    if (!mounted) return;
-    final future = _pager.loadInitial(_fetchPage);
-    setState(() {});
-    if (await future && mounted) setState(() {});
-  }
-
-  Future<void> _loadMore() async {
-    if (_pager.loadingInitial || _pager.loadingMore || !_pager.hasMore) {
-      return;
-    }
-    final future = _pager.loadMore(
-      _fetchPage,
-      onError: (error) {
-        if (mounted) showCommentMessage(_commentErrorText(error), isError: true);
-      },
-    );
-    setState(() {});
-    if (await future && mounted) setState(() {});
   }
 
   Future<void> _publish() async {
@@ -147,7 +116,7 @@ class _AnimeWitcherCommentsScreenState
       _commentController.clear();
       setState(() => _spoiler = false);
       showCommentMessage(_publishedMessage());
-      await _loadInitial();
+      await reloadThread();
     } catch (error) {
       if (!mounted) return;
       showCommentMessage(_commentErrorText(error), isError: true);
@@ -172,11 +141,9 @@ class _AnimeWitcherCommentsScreenState
     try {
       final updated = await service.toggleCommentLike(comment);
       if (!mounted) return;
-      final index = _pager.items.indexWhere(
-        (item) => item.path == comment.path,
-      );
+      final index = pager.items.indexWhere((item) => item.path == comment.path);
       if (index >= 0) {
-        setState(() => _pager.replaceAt(index, updated));
+        setState(() => pager.replaceAt(index, updated));
       }
     } catch (error) {
       if (mounted) {
@@ -191,16 +158,6 @@ class _AnimeWitcherCommentsScreenState
   // the comments and their scroll position without a reload.
   Future<void> _openReplies(AnimeWitcherComment comment) =>
       AnimeWitcherRepliesScreen.open(context, comment);
-
-  Future<void> _applyCommentSort(String value) async {
-    final selected = AnimeWitcherCommentSort.fromNameOr(value, _sort);
-    if (selected == _sort || !mounted) return;
-    setState(() => _sort = selected);
-    if (_scrollController.hasClients) {
-      _scrollController.jumpTo(0);
-    }
-    await _loadInitial();
-  }
 
   Future<void> _handleOwnCommentAction(
     AnimeWitcherComment comment,
@@ -262,7 +219,7 @@ class _AnimeWitcherCommentsScreenState
           .deleteOwnComment(comment);
       if (!mounted) return;
       setState(() {
-        _pager.removePath(comment.path);
+        pager.removePath(comment.path);
       });
       showCommentMessage('تم حذف التعليق.');
     } catch (error) {
@@ -304,9 +261,9 @@ class _AnimeWitcherCommentsScreenState
   }
 
   void _replaceComment(AnimeWitcherComment updated) {
-    final index = _pager.items.indexWhere((item) => item.path == updated.path);
+    final index = pager.items.indexWhere((item) => item.path == updated.path);
     if (index < 0) return;
-    setState(() => _pager.replaceAt(index, updated));
+    setState(() => pager.replaceAt(index, updated));
   }
 
   void _setCommentActionPending(String path, bool pending) {
@@ -343,8 +300,8 @@ class _AnimeWitcherCommentsScreenState
             trailingButtons: AnimeWitcherCommentSortControl.persistentButtons(
               context: context,
               tooltip: _sortTooltip(),
-              sort: _sort,
-              onSelected: _applyCommentSort,
+              sort: threadSort,
+              onSelected: selectThreadSort,
             ),
           ),
         );
@@ -360,9 +317,9 @@ class _AnimeWitcherCommentsScreenState
             ? const <Widget>[]
             : AnimeWitcherCommentSortControl.appBarActions(
                 tooltip: _sortTooltip(),
-                selectedValue: _sort.name,
+                selectedValue: threadSort.name,
                 items: AnimeWitcherCommentSortControl.menuItems(),
-                onSelected: _applyCommentSort,
+                onSelected: selectThreadSort,
               ),
       ),
       body: Column(
@@ -375,15 +332,15 @@ class _AnimeWitcherCommentsScreenState
   }
 
   Widget _buildCommentsBody(BuildContext context) {
-    if (_pager.loadingInitial) {
+    if (pager.loadingInitial) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (_pager.loadError != null && _pager.items.isEmpty) {
-      return _CommentsLoadError(isReviews: _isReviews, onRetry: _loadInitial);
+    if (pager.loadError != null && pager.items.isEmpty) {
+      return _CommentsLoadError(isReviews: _isReviews, onRetry: reloadThread);
     }
-    if (_pager.items.isEmpty) {
+    if (pager.items.isEmpty) {
       return MouseDragRefreshIndicator(
-        onRefresh: _loadInitial,
+        onRefresh: reloadThread,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: EdgeInsets.only(top: appPageHeaderContentTopInset(context)),
@@ -405,9 +362,9 @@ class _AnimeWitcherCommentsScreenState
     }
 
     return MouseDragRefreshIndicator(
-      onRefresh: _loadInitial,
+      onRefresh: reloadThread,
       child: ListView.separated(
-        controller: _scrollController,
+        controller: threadScroll,
         physics: const AlwaysScrollableScrollPhysics(),
         padding: EdgeInsets.fromLTRB(
           12,
@@ -416,11 +373,10 @@ class _AnimeWitcherCommentsScreenState
           24,
         ),
         itemCount:
-            _pager.items.length +
-            (_pager.hasMore || _pager.loadingMore ? 1 : 0),
+            pager.items.length + (pager.hasMore || pager.loadingMore ? 1 : 0),
         separatorBuilder: (_, __) => const SizedBox(height: 8),
         itemBuilder: (context, index) {
-          if (index >= _pager.items.length) {
+          if (index >= pager.items.length) {
             return const Padding(
               padding: EdgeInsets.symmetric(vertical: 18),
               child: Center(
@@ -432,7 +388,7 @@ class _AnimeWitcherCommentsScreenState
               ),
             );
           }
-          return _buildCommentCard(context, _pager.items[index]);
+          return _buildCommentCard(context, pager.items[index]);
         },
       ),
     );

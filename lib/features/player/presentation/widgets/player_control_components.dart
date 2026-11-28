@@ -7,6 +7,15 @@ import '../../../../shared/widgets/custom_widgets.dart';
 import 'hotstar_player_style.dart';
 import 'player_key_activation.dart';
 
+/// Formats the raw duration. Callers choose whether to normalize its sign.
+String formatPlayerDuration(Duration duration) {
+  final hours = duration.inHours;
+  final minutes = duration.inMinutes.remainder(60);
+  final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+  if (hours > 0) return '$hours:${minutes.toString().padLeft(2, '0')}:$seconds';
+  return '$minutes:$seconds';
+}
+
 /// A ±N second seek glyph: lucide's rotate arrows with the configured
 /// duration inside them, the way Harbor draws its seek buttons.
 ///

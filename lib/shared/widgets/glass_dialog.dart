@@ -33,6 +33,67 @@ Future<T?> showGlassDialog<T>({
   );
 }
 
+/// A staged choice: only Apply commits, and first run requires a choice.
+Future<void> showGlassPreferencePicker({
+  required BuildContext context,
+  required bool firstRun,
+  required double maxWidth,
+  bool scrollable = false,
+  required String title,
+  required String description,
+  required Widget Function(StateSetter setState, double width) buildChoices,
+  required VoidCallback onConfirm,
+}) {
+  return showGlassDialog<void>(
+    context: context,
+    barrierDismissible: !firstRun,
+    builder: (dialogContext) => PopScope(
+      canPop: !firstRun,
+      child: StatefulBuilder(
+        builder: (context, setState) {
+          final width = (MediaQuery.sizeOf(context).width - 64)
+              .clamp(280.0, maxWidth)
+              .toDouble();
+          return AlertDialog(
+            surfaceTintColor: Colors.transparent,
+            scrollable: scrollable,
+            title: Text(title),
+            content: SizedBox(
+              width: width,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    description,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 16),
+                  buildChoices(setState, width),
+                ],
+              ),
+            ),
+            actions: [
+              if (!firstRun)
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('إلغاء'),
+                ),
+              FilledButton(
+                onPressed: () {
+                  onConfirm();
+                  Navigator.of(dialogContext).pop();
+                },
+                child: const Text('تطبيق'),
+              ),
+            ],
+          );
+        },
+      ),
+    ),
+  );
+}
+
 /// Makes the dialogs below it translucent, so the blur behind shows through.
 ///
 /// Applied by [showGlassDialog] to whatever it is given, which is why the
